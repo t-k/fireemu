@@ -215,13 +215,13 @@ impl Session {
         self.closed.load(Ordering::SeqCst)
     }
 
-    /// Ends the session: the stream task sees EOF, waiters wake up and exit.
+    /// Ends the session: the stream task sees EOF; the attached back channel delivers what
+    /// is still queued (a stream error, typically) and then exits.
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
         if let Ok(mut inbound) = self.inbound.lock() {
             inbound.take();
         }
-        self.backchannel_generation.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_waiters();
         self.notify.notify_one();
     }

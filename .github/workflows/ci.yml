@@ -41,6 +41,10 @@ jobs:
         run: cargo run -p traceability-check
       - name: canonical config schema and examples
         run: cargo run -p config-schema-check
+      - name: generated protobuf code matches vendored protos
+        run: |
+          sudo apt-get install -y protobuf-compiler
+          cargo run -p proto-gen -- check
       - name: loom scenarios
         run: cargo test -p ftd-verification-loom --release
         env:

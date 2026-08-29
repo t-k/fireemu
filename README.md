@@ -18,7 +18,7 @@ deterministic state machine that:
 
 ## Status
 
-Milestone A (verification-ready core), the pure-core half of Milestone B (strict Firestore gateway) and Milestone H0 (Auth core + TOTP) are implemented. Nothing here serves network traffic yet; gRPC / REST shells come next.
+Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation with an optional upstream proxy), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset) and the native Rules evaluator subset are implemented. Local Firestore execution (Milestone E) is not; validated requests are proxied or answered with `UNIMPLEMENTED`.
 
 | Crate | Purpose | Dependencies |
 |---|---|---|
@@ -28,7 +28,10 @@ Milestone A (verification-ready core), the pure-core half of Milestone B (strict
 | `ftd-core-events` | event state machine, retry policy, outbox | none |
 | `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator | none |
 | `ftd-core-rules` | Security Rules parser and static limit linter (`RULES-LINT-1`) | none |
-| `ftd-core-auth` | users, custom claims, ID token claims, TOTP second factor (RFC 6238) | none |
+| `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens, TOTP second factor (RFC 6238) | none |
+| `ftd-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
+| `ftd-adapter-grpc` | Firestore v1 wire decoding, strict gateway, optional upstream proxy | tonic, tokio |
+| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh) | hyper, tokio, serde_json |
 
 `ftd-core-*` crates are `std`-only and forbid `unsafe` (ADR-001, ADR-007).
 
@@ -53,6 +56,7 @@ cargo nextest run --workspace --profile pr
 cargo run -p limit-catalog-gen -- check
 cargo run -p traceability-check
 cargo run -p config-schema-check
+cargo run -p proto-gen -- check            # needs protoc
 RUSTFLAGS="--cfg loom" cargo test -p ftd-verification-loom --release
 TLA2TOOLS_JAR=/path/to/tla2tools.jar verification/tla/run-tlc.sh
 ```
@@ -62,6 +66,12 @@ TLC needs Java 21 and TLA+ Tools 1.8.0
 Kani harnesses live in `verification/kani` and run with `cargo kani`. Harnesses that allocate
 on the heap currently fail on macOS with Kani 0.67 ("Function `malloc` with missing definition
 is unreachable"); the allocation-free harnesses verify. Tracked as a known environment issue.
+
+## Protobuf
+
+`crates/ftd-proto-firestore/proto/` vendors the Firestore v1 protos from googleapis at the commit
+in `proto/UPSTREAM_COMMIT`; `tools/proto-gen` regenerates the checked-in Rust code (ADR-008).
+A normal build never runs `protoc`.
 
 ## Limit catalogs
 

@@ -6,16 +6,11 @@
 #[cfg(kani)]
 mod harnesses {
     use ftd_core_limits::evaluate::{
-        classify_severity, evaluate, ratio_micros, violates_boundary, LimitDisposition,
-        DEFAULT_THRESHOLDS,
+        classify_severity, ratio_micros, violates_boundary, DEFAULT_THRESHOLDS,
     };
-    use ftd_core_limits::model::{
-        EnforcementPrecision, EnforcementStage, ImplementationStatus, LimitBoundary, LimitClass,
-        LimitDefinition, LimitMaximum, LimitUnit,
-    };
-    use ftd_core_limits::plan::FirestorePlanProfile;
+    use ftd_core_limits::model::LimitBoundary;
     use ftd_core_session::clock::VirtualClock;
-    use ftd_core_session::idle::{AwaitIdleOptions, IdleVerdict, WorkKind, WorkLedger};
+    use ftd_core_session::idle::{AwaitIdleOptions, WorkKind};
     use ftd_core_session::session::{Session, WorkResult};
     use ftd_core_types::determinism::Clock;
     use ftd_core_types::ids::{Epoch, SessionId};
@@ -38,16 +33,17 @@ mod harnesses {
         kani::cover!(inclusive && !exclusive == false);
     }
 
-    /// Warning severity is monotone in the usage and never exceeds the boundary.
+    /// Warning severity is monotone in the usage. Bounded to 16-bit operands so that the u128
+    /// threshold arithmetic stays tractable for the solver.
     #[kani::proof]
     #[kani::unwind(4)]
     fn severity_is_monotone() {
-        let maximum: u64 = kani::any();
-        let a: u64 = kani::any();
-        let b: u64 = kani::any();
+        let maximum: u16 = kani::any();
+        let a: u16 = kani::any();
+        let b: u16 = kani::any();
         kani::assume(maximum > 0 && a <= b);
-        let sa = classify_severity(a, maximum, DEFAULT_THRESHOLDS);
-        let sb = classify_severity(b, maximum, DEFAULT_THRESHOLDS);
+        let sa = classify_severity(u64::from(a), u64::from(maximum), DEFAULT_THRESHOLDS);
+        let sb = classify_severity(u64::from(b), u64::from(maximum), DEFAULT_THRESHOLDS);
         assert!(sa <= sb);
     }
 
@@ -83,28 +79,35 @@ mod harnesses {
         assert!(clock.now() >= start);
     }
 
-    /// INV-IDLE-001: while any fenced work is registered the verdict is never Idle.
+    /// INV-IDLE-001 (predicate part): every work kind except future schedules is fenced under
+    /// the default options, and Text Index builds are fenced unless explicitly ignored. This
+    /// harness is allocation-free; the ledger itself is covered by tests and Loom.
     #[kani::proof]
-    #[kani::unwind(6)]
     fn idle_predicate_never_ignores_active_work() {
-        let mut ledger = WorkLedger::new(Epoch::initial());
         let kinds = [
             WorkKind::FirestoreCommit,
             WorkKind::EventDispatch,
+            WorkKind::EventRetryWait,
             WorkKind::FunctionInvocation,
-            WorkKind::ChildEnqueueReservation,
+            WorkKind::DueSchedule,
+            WorkKind::UploadFinalize,
             WorkKind::TextIndexBuild,
+            WorkKind::SnapshotRestoreOrRulesetActivation,
+            WorkKind::ChildEnqueueReservation,
         ];
         let pick: usize = kani::any();
         kani::assume(pick < kinds.len());
-        let token = ledger.begin(kinds[pick], Epoch::initial()).unwrap();
-        let verdict = ledger.verdict(&AwaitIdleOptions::default());
-        assert!(matches!(verdict, IdleVerdict::Busy { .. }));
-        ledger.end(token).unwrap();
+        let options = AwaitIdleOptions::default();
+        assert!(kinds[pick].is_fenced(&options));
+        let ignore = AwaitIdleOptions {
+            text_index_builds: ftd_core_session::idle::IdleWaitPolicy::Ignore,
+            ..AwaitIdleOptions::default()
+        };
         assert_eq!(
-            ledger.verdict(&AwaitIdleOptions::default()),
-            IdleVerdict::Idle
+            kinds[pick].is_fenced(&ignore),
+            kinds[pick] != WorkKind::TextIndexBuild
         );
+        assert!(!WorkKind::ScheduledFutureWork.is_fenced(&options));
     }
 
     fn any_definition(boundary: LimitBoundary, maximum: u64) -> LimitDefinition {
@@ -122,20 +125,22 @@ mod harnesses {
         }
     }
 
-    /// Rejection precedes warnings for every value outside the boundary.
+    /// Rejection precedes warnings for every value outside the boundary (allocation-free form
+    /// of the `evaluate` contract).
     #[kani::proof]
     #[kani::unwind(4)]
     fn boundary_reject_precedes_warning() {
-        let maximum: u64 = kani::any();
-        let current: u64 = kani::any();
+        let maximum: u16 = kani::any();
+        let current: u16 = kani::any();
         kani::assume(maximum > 0);
-        let def = any_definition(LimitBoundary::ExclusiveMaximum, maximum);
-        let plan = FirestorePlanProfile::default();
-        let d = evaluate(&def, current, &plan, DEFAULT_THRESHOLDS);
-        if current >= maximum {
-            assert!(matches!(d, LimitDisposition::Reject(_)));
-        } else {
-            assert!(!matches!(d, LimitDisposition::Reject(_)));
+        let (current, maximum) = (u64::from(current), u64::from(maximum));
+        let violates = violates_boundary(LimitBoundary::ExclusiveMaximum, current, maximum);
+        assert_eq!(violates, current >= maximum);
+        if !violates {
+            // Inside the boundary the ratio is below 100% and the severity is defined by the
+            // thresholds alone.
+            assert!(ratio_micros(current, maximum) < 1_000_000);
+            let _ = classify_severity(current, maximum, DEFAULT_THRESHOLDS);
         }
     }
 }

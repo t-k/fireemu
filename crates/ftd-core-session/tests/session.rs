@@ -144,3 +144,15 @@ fn a_session_stuck_in_resetting_can_still_be_closed() {
         WorkResult::SessionNotActive(SessionState::Closed)
     );
 }
+
+#[test]
+fn seed_accessor_and_error_display() {
+    let s = Session::create(SessionId::new(3), 99, LogicalInstant::UNIX_EPOCH);
+    assert_eq!(s.seed(), 99);
+    assert_eq!(s.id(), SessionId::new(3));
+    let err = SessionTransitionError {
+        from: SessionState::Creating,
+        action: SessionAction::BeginReset,
+    };
+    assert!(err.to_string().contains("BeginReset") && err.to_string().contains("Creating"));
+}

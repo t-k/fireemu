@@ -126,3 +126,30 @@ fn path_segments_reject_nul_and_control_characters() {
     assert!(DocumentId::try_new("か\u{3099}").is_ok());
     assert!(DocumentId::try_new("\u{1F600}").is_ok());
 }
+
+#[test]
+fn project_id_length_boundary_and_messages() {
+    assert!(ProjectId::try_new("a".repeat(63)).is_ok());
+    assert_eq!(
+        ProjectId::try_new("a".repeat(64)),
+        Err(IdSyntaxError::TooManyBytes {
+            bytes: 64,
+            maximum: 63
+        })
+    );
+    assert!(IdSyntaxError::Empty.to_string().contains("empty"));
+    assert!(IdSyntaxError::TooManyBytes {
+        bytes: 64,
+        maximum: 63
+    }
+    .to_string()
+    .contains("64"));
+    assert!(IdSyntaxError::InvalidCharacter { offset: 3 }
+        .to_string()
+        .contains('3'));
+    assert!(IdSyntaxError::ControlCharacter { offset: 2 }
+        .to_string()
+        .contains("control"));
+    assert!(IdSyntaxError::ReservedDunder.to_string().contains("__"));
+    assert_eq!(Epoch::new(7).to_string(), "7");
+}

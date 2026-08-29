@@ -73,3 +73,35 @@ fn edition_and_mode_have_stable_config_names() {
     );
     assert_eq!(FirestoreEdition::parse_config_str("strict"), None);
 }
+
+#[test]
+fn config_names_round_trip_and_errors_display() {
+    for e in [FirestoreEdition::Standard, FirestoreEdition::Enterprise] {
+        assert_eq!(
+            FirestoreEdition::parse_config_str(e.as_config_str()),
+            Some(e)
+        );
+        assert_eq!(e.to_string(), e.as_config_str());
+    }
+    for m in [
+        FirestoreApiMode::Native,
+        FirestoreApiMode::MongoDbCompatible,
+    ] {
+        assert_eq!(
+            FirestoreApiMode::parse_config_str(m.as_config_str()),
+            Some(m)
+        );
+        assert_eq!(m.to_string(), m.as_config_str());
+    }
+    assert_eq!(FirestoreApiMode::parse_config_str("grpc"), None);
+    let err = EditionError::InvalidCombination {
+        edition: FirestoreEdition::Standard,
+        api_mode: FirestoreApiMode::MongoDbCompatible,
+    };
+    assert!(err.to_string().contains("standard") && err.to_string().contains("mongodb-compatible"));
+    let err = EditionError::CatalogEditionMismatch {
+        edition: FirestoreEdition::Enterprise,
+        catalog: LimitCatalogId::try_new("firestore-standard-2026-08-25").unwrap(),
+    };
+    assert!(err.to_string().contains("firestore-standard-2026-08-25"));
+}

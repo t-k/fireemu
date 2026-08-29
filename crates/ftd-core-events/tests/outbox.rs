@@ -74,3 +74,66 @@ fn reset_discards_every_non_terminal_event_from_old_epochs() {
     );
     assert!(outbox.dispatchable().next().is_none());
 }
+
+#[test]
+fn len_is_empty_has_active_and_retries_due() {
+    use ftd_core_events::retry::RetryPolicy;
+    use ftd_core_types::time::LogicalDuration;
+    let mut outbox = Outbox::new();
+    assert!(outbox.is_empty());
+    assert_eq!(outbox.len(), 0);
+    assert!(!outbox.has_active());
+    outbox.enqueue(event(1, 0)).unwrap();
+    outbox.enqueue(event(2, 0)).unwrap();
+    assert!(!outbox.is_empty());
+    assert_eq!(outbox.len(), 2);
+    assert!(outbox.has_active());
+    let policy = RetryPolicy::try_new(
+        3,
+        LogicalDuration::from_seconds(10),
+        LogicalDuration::from_seconds(10),
+    )
+    .unwrap();
+    for id in [1, 2] {
+        let r = outbox.record_mut(EventId::new(id)).unwrap();
+        r.lease().unwrap();
+        r.start().unwrap();
+        r.fail(
+            &policy,
+            LogicalInstant::from_unix_seconds(100 + i64::try_from(id).unwrap()),
+        )
+        .unwrap();
+    }
+    // Failures happen at 101 / 102 with a 10 s backoff: retry_at = 111 for event 1, 112 for 2.
+    assert!(outbox
+        .retries_due(LogicalInstant::from_unix_seconds(110))
+        .is_empty());
+    assert_eq!(
+        outbox.retries_due(LogicalInstant::from_unix_seconds(111)),
+        vec![EventId::new(1)]
+    );
+    assert_eq!(
+        outbox.retries_due(LogicalInstant::from_unix_seconds(112)),
+        vec![EventId::new(1), EventId::new(2)]
+    );
+    outbox
+        .record_mut(EventId::new(1))
+        .unwrap()
+        .cancel()
+        .unwrap();
+    outbox
+        .record_mut(EventId::new(2))
+        .unwrap()
+        .cancel()
+        .unwrap();
+    assert!(!outbox.has_active());
+    assert_eq!(
+        outbox.enqueue(event(1, 0)).unwrap_err().to_string(),
+        "duplicate event id 1"
+    );
+    assert!(outbox
+        .record_mut(EventId::new(9))
+        .unwrap_err()
+        .to_string()
+        .contains("unknown"));
+}

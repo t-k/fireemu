@@ -49,3 +49,41 @@ fn splitmix64_is_deterministic_and_bounded() {
     assert_eq!(a.next_below(0), 0);
     assert_eq!(a.next_below(1), 0);
 }
+
+// Known-answer vectors computed independently (Python) for the SplitMix64 reference algorithm
+// and the ID mixing function. Deterministic IDs are a reproducibility contract: fixtures and
+// canonical traces depend on these exact values across versions.
+#[test]
+fn splitmix64_known_answers() {
+    let mut g = SplitMix64::new(1234);
+    assert_eq!(g.next_u64(), 0xbb0c_f61b_2f18_1cdb);
+    assert_eq!(g.next_u64(), 0x97c7_a136_4df0_6524);
+    assert_eq!(g.next_u64(), 0x33be_fae4_9bc0_25da);
+}
+
+#[test]
+fn next_below_known_answers() {
+    let mut g = SplitMix64::new(99);
+    let got: Vec<u64> = (0..5).map(|_| g.next_below(10)).collect();
+    assert_eq!(got, vec![3, 4, 7, 7, 6]);
+}
+
+#[test]
+fn id_mixing_known_answers() {
+    let mut s = DeterministicIdSource::new(SessionId::new(42), 7);
+    assert_eq!(
+        s.next_event_id().value(),
+        0x77a5_4de3_3214_a4c4_673b_4b0e_3c37_0993
+    );
+    assert_eq!(
+        s.next_event_id().value(),
+        0x77a5_4de3_3214_a4c4_837c_1146_7056_2923
+    );
+    assert_eq!(
+        s.next_invocation_id().value(),
+        0x7582_1d60_379c_71d6_06f2_05c9_b09d_ac3a
+    );
+    // High 64 bits depend on the session: a different high word changes the stream.
+    let mut hi = DeterministicIdSource::new(SessionId::new(42u128 << 64), 7);
+    assert_ne!(hi.next_event_id().value() >> 64, 0x77a5_4de3_3214_a4c4);
+}

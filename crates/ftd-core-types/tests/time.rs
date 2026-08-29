@@ -140,3 +140,63 @@ proptest! {
         prop_assert_eq!(LogicalInstant::parse_rfc3339(&s).unwrap(), t);
     }
 }
+
+#[test]
+fn leap_year_rules_including_century_boundaries() {
+    assert!(LogicalInstant::parse_rfc3339("2024-02-29T00:00:00Z").is_ok());
+    assert!(LogicalInstant::parse_rfc3339("2023-02-29T00:00:00Z").is_err());
+    assert!(
+        LogicalInstant::parse_rfc3339("1900-02-29T00:00:00Z").is_err(),
+        "1900 is not a leap year"
+    );
+    assert!(
+        LogicalInstant::parse_rfc3339("2000-02-29T00:00:00Z").is_ok(),
+        "2000 is a leap year"
+    );
+    assert!(LogicalInstant::parse_rfc3339("2100-02-29T00:00:00Z").is_err());
+    assert!(LogicalInstant::parse_rfc3339("2024-04-31T00:00:00Z").is_err());
+    assert!(LogicalInstant::parse_rfc3339("2024-04-30T00:00:00Z").is_ok());
+    assert!(LogicalInstant::parse_rfc3339("2024-02-00T00:00:00Z").is_err());
+}
+
+#[test]
+fn numeric_offset_boundaries_and_minutes() {
+    assert!(LogicalInstant::parse_rfc3339("2026-08-29T12:01:00+23:59").is_ok());
+    assert!(LogicalInstant::parse_rfc3339("2026-08-29T12:01:00+24:00").is_err());
+    assert!(LogicalInstant::parse_rfc3339("2026-08-29T12:01:00+00:60").is_err());
+    let half = LogicalInstant::parse_rfc3339("2026-08-29T12:31:00+00:30").unwrap();
+    assert_eq!(
+        half,
+        LogicalInstant::parse_rfc3339("2026-08-29T12:01:00Z").unwrap()
+    );
+    let neg = LogicalInstant::parse_rfc3339("2026-08-29T11:31:00-00:30").unwrap();
+    assert_eq!(
+        neg,
+        LogicalInstant::parse_rfc3339("2026-08-29T12:01:00Z").unwrap()
+    );
+    assert!(LogicalInstant::parse_rfc3339("2026-08-29T12:01:00Z junk").is_err());
+}
+
+#[test]
+fn duration_seconds_and_checked_add() {
+    assert_eq!(LogicalDuration::from_millis(2_500).as_seconds(), 2);
+    assert_eq!(LogicalDuration::from_millis(-2_500).as_seconds(), -2);
+    assert_eq!(
+        LogicalDuration::from_seconds(3).checked_add(LogicalDuration::from_seconds(4)),
+        Some(LogicalDuration::from_seconds(7))
+    );
+    assert_eq!(
+        LogicalDuration::from_nanos(i128::MAX).checked_add(LogicalDuration::from_nanos(1)),
+        None
+    );
+}
+
+#[test]
+fn error_messages_carry_their_facts() {
+    let err = LogicalInstant::parse_rfc3339("2026-13-01T00:00:00Z").unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("month"), "{text}");
+    assert!(text.contains(&err.offset.to_string()));
+    let fmt = LogicalInstant::MAX.to_rfc3339().unwrap_err().to_string();
+    assert!(fmt.contains("0000-9999"), "{fmt}");
+}

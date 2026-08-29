@@ -234,3 +234,62 @@ fn retry_policy_rejects_zero_attempts_negative_and_inverted_backoffs() {
     );
     assert_eq!(r.state(), &EventState::DeadLettered { attempts: 1 });
 }
+
+#[test]
+fn event_type_accessors_length_boundary_and_names() {
+    let t = EventType::try_new("a.b").unwrap();
+    assert_eq!(t.as_str(), "a.b");
+    assert_eq!(t.to_string(), "a.b");
+    assert!(EventType::try_new("x".repeat(256)).is_ok());
+    assert!(EventType::try_new("x".repeat(257)).is_err());
+    assert!(EventType::try_new("a\u{0}b")
+        .unwrap_err()
+        .to_string()
+        .contains("invalid character"));
+    assert!(EventType::try_new("")
+        .unwrap_err()
+        .to_string()
+        .contains("empty"));
+    assert_eq!(EventState::Pending.name(), "Pending");
+    assert_eq!(
+        EventState::RetryWaiting {
+            retry_at: LogicalInstant::UNIX_EPOCH
+        }
+        .name(),
+        "RetryWaiting"
+    );
+    assert_eq!(
+        EventState::DeadLettered { attempts: 3 }.name(),
+        "DeadLettered"
+    );
+    let err = EventTransitionError::InvalidTransition {
+        from: "Pending",
+        action: "start",
+    };
+    assert!(err.to_string().contains("Pending") && err.to_string().contains("start"));
+    assert!(EventTransitionError::RetryNotDue
+        .to_string()
+        .contains("due"));
+}
+
+#[test]
+fn retry_policy_accessors_and_edge_values() {
+    use ftd_core_events::retry::RetryPolicyError;
+    let one = LogicalDuration::from_seconds(1);
+    let p = RetryPolicy::try_new(3, one, LogicalDuration::from_seconds(60)).unwrap();
+    assert_eq!(p.max_attempts(), 3);
+    assert_eq!(p.base_backoff(), one);
+    assert_eq!(p.max_backoff(), LogicalDuration::from_seconds(60));
+    assert!(
+        RetryPolicy::try_new(1, one, one).is_ok(),
+        "base == max is allowed"
+    );
+    assert!(RetryPolicy::try_new(1, LogicalDuration::ZERO, LogicalDuration::ZERO).is_ok());
+    assert_eq!(
+        RetryPolicy::try_new(1, one, LogicalDuration::from_seconds(-1)),
+        Err(RetryPolicyError::NegativeBackoff)
+    );
+    assert!(RetryPolicyError::ZeroAttempts.to_string().contains('1'));
+    assert!(p.allows_retry_after(2));
+    assert!(!p.allows_retry_after(3));
+}

@@ -237,3 +237,80 @@ fn truncating_maximum_warns_but_never_rejects() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn boundary_helpers_and_zero_maximum_edges() {
+    use ftd_core_limits::evaluate::{ratio_micros, reaches_threshold, violates_boundary};
+    assert!(!violates_boundary(LimitBoundary::Exact, 5, 5));
+    assert!(violates_boundary(LimitBoundary::Exact, 4, 5));
+    assert!(violates_boundary(LimitBoundary::Exact, 6, 5));
+    assert!(!violates_boundary(LimitBoundary::RangeInclusive, 5, 5));
+    assert!(violates_boundary(LimitBoundary::RangeInclusive, 6, 5));
+    assert!(reaches_threshold(1, 0, 1));
+    assert!(!reaches_threshold(0, 0, 1));
+    assert_eq!(ratio_micros(0, 0), 0);
+    assert_eq!(ratio_micros(1, 0), u32::MAX);
+    assert_eq!(ratio_micros(1, 1), 1_000_000);
+    assert_eq!(WarningSeverity::Notice.stable_code(), "LIMIT_APPROACHING");
+    assert_eq!(WarningSeverity::Warning.stable_code(), "LIMIT_NEAR");
+    assert_eq!(WarningSeverity::Critical.stable_code(), "LIMIT_CRITICAL");
+}
+
+#[test]
+fn remediation_depends_on_limit_class() {
+    use ftd_core_limits::evaluate::RemediationCode;
+    let plan = FirestorePlanProfile::default();
+    let remediation = |class: LimitClass, maximum: LimitMaximum| {
+        let mut d = def(LimitBoundary::InclusiveMaximum, maximum);
+        d.class = class;
+        match evaluate(&d, 95, &plan, DEFAULT_THRESHOLDS) {
+            LimitDisposition::AllowWithWarnings(ws) => ws[0].remediation,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(
+        remediation(
+            LimitClass::PlanCapacity,
+            LimitMaximum::PlanDependent {
+                billing_disabled: 100,
+                billing_enabled: 100
+            }
+        ),
+        RemediationCode::UpgradePlan
+    );
+    assert_eq!(
+        remediation(LimitClass::HardResource, LimitMaximum::Fixed(100)),
+        RemediationCode::Split
+    );
+    assert_eq!(
+        remediation(LimitClass::RuntimeBudget, LimitMaximum::Fixed(100)),
+        RemediationCode::Split
+    );
+    assert_eq!(
+        remediation(LimitClass::BackendOpaque, LimitMaximum::Fixed(100)),
+        RemediationCode::SeeOfficialDocumentation
+    );
+    assert_eq!(
+        remediation(LimitClass::TimeBudget, LimitMaximum::Fixed(100)),
+        RemediationCode::ReduceUsage
+    );
+    assert_eq!(
+        remediation(LimitClass::PlanCapacity, LimitMaximum::Fixed(100)),
+        RemediationCode::ReduceUsage
+    );
+}
+
+#[test]
+fn violation_display_names_the_limit_and_values() {
+    let d = def(LimitBoundary::InclusiveMaximum, LimitMaximum::Fixed(7));
+    match evaluate(&d, 9, &FirestorePlanProfile::default(), DEFAULT_THRESHOLDS) {
+        LimitDisposition::Reject(v) => {
+            let text = v.to_string();
+            assert!(
+                text.contains("TEST-LIMIT") && text.contains('9') && text.contains('7'),
+                "{text}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}

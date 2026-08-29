@@ -73,3 +73,23 @@ fn tick_is_one_nanosecond_for_fixture_ordering() {
         Some(LogicalDuration::from_nanos(1))
     );
 }
+
+#[test]
+fn zero_advance_and_equal_set_are_not_backwards() {
+    let mut clock = VirtualClock::new(LogicalInstant::from_unix_seconds(100));
+    assert!(clock.advance(LogicalDuration::ZERO).is_ok());
+    assert!(clock.set(LogicalInstant::from_unix_seconds(100)).is_ok());
+    clock.set_allow_backwards(LogicalInstant::from_unix_seconds(100));
+    assert_eq!(
+        clock.backwards_sets(),
+        0,
+        "setting the same instant is not a backwards move"
+    );
+    clock.set_allow_backwards(LogicalInstant::from_unix_seconds(50));
+    clock.set_allow_backwards(LogicalInstant::from_unix_seconds(40));
+    assert_eq!(clock.backwards_sets(), 2);
+    assert!(ClockError::NegativeDuration
+        .to_string()
+        .contains("negative"));
+    assert!(ClockError::Overflow.to_string().contains("overflow"));
+}

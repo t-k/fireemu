@@ -168,3 +168,30 @@ fn stale_epoch_work_cannot_be_registered_and_reset_drops_old_work() {
         })
     );
 }
+
+#[test]
+fn active_total_counts_every_registration_and_errors_display() {
+    let mut ledger = WorkLedger::new(Epoch::initial());
+    assert_eq!(ledger.active_total(), 0);
+    let a = ledger
+        .begin(WorkKind::FirestoreCommit, Epoch::initial())
+        .unwrap();
+    let _b = ledger
+        .begin(WorkKind::ScheduledFutureWork, Epoch::initial())
+        .unwrap();
+    assert_eq!(ledger.active_total(), 2);
+    ledger.end(a).unwrap();
+    assert_eq!(ledger.active_total(), 1);
+    assert!(IdleLedgerError::UnknownToken(a)
+        .to_string()
+        .contains("token"));
+    assert!(IdleLedgerError::StaleEpoch {
+        current: Epoch::new(1),
+        requested: Epoch::new(0)
+    }
+    .to_string()
+    .contains("epoch"));
+    assert!(IdleLedgerError::TokenExhausted
+        .to_string()
+        .contains("exhausted"));
+}

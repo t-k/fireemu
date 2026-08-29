@@ -136,6 +136,23 @@ impl GatewayService {
         }
     }
 
+    fn stream_context(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<crate::streams::StreamContext, Status> {
+        let Some(local) = self.local_backend() else {
+            return Err(Status::unimplemented(
+                "streaming RPCs are only served by the local backend",
+            ));
+        };
+        Ok(crate::streams::StreamContext {
+            local: local.clone(),
+            gateway: self.gateway.clone(),
+            rules: self.rules.clone(),
+            principal: self.principal(metadata)?,
+        })
+    }
+
     fn local_backend(&self) -> Option<&Arc<LocalBackend>> {
         match &self.backend {
             Backend::Local(l) => Some(l),
@@ -432,19 +449,27 @@ impl Firestore for GatewayService {
     type WriteStream = BoxStream<pb::WriteResponse>;
     async fn write(
         &self,
-        _request: Request<Streaming<pb::WriteRequest>>,
+        request: Request<Streaming<pb::WriteRequest>>,
     ) -> Result<Response<Self::WriteStream>, Status> {
-        Err(Status::unimplemented(
-            "streaming Write is not part of FS-GW-1",
-        ))
+        let ctx = self.stream_context(request.metadata())?;
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(crate::streams::write_stream(ctx, request.into_inner(), tx));
+        Ok(Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        )))
     }
 
     type ListenStream = BoxStream<pb::ListenResponse>;
     async fn listen(
         &self,
-        _request: Request<Streaming<pb::ListenRequest>>,
+        request: Request<Streaming<pb::ListenRequest>>,
     ) -> Result<Response<Self::ListenStream>, Status> {
-        Err(Status::unimplemented("Listen is FS-LSN-1 (1.x)"))
+        let ctx = self.stream_context(request.metadata())?;
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(crate::streams::listen_stream(ctx, request.into_inner(), tx));
+        Ok(Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        )))
     }
 
     async fn list_collection_ids(

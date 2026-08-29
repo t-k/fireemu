@@ -12,3 +12,4 @@ pub mod gateway;
 pub mod local;
 pub mod rules;
 pub mod service;
+pub mod streams;

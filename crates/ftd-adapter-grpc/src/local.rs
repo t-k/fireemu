@@ -9,9 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use ftd_core_firestore::field_path::FieldPath;
 use ftd_core_firestore::path::DocumentPath;
+use ftd_core_firestore::query::Query;
 use ftd_core_firestore::store::{
-    Aggregation, CommitResult, Document, FirestoreState, Precondition, TransactionId, Write,
-    WriteOp,
+    Aggregation, CommitResult, CommitVersion, Document, FirestoreState, Precondition,
+    TransactionId, Write, WriteOp,
 };
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
@@ -33,6 +34,18 @@ pub struct LocalBackend {
     clock: Arc<Mutex<VirtualClock>>,
     databases: Mutex<BTreeMap<(String, String), FirestoreState>>,
     ids: Mutex<SplitMix64>,
+    commits: tokio::sync::broadcast::Sender<CommitEvent>,
+}
+
+/// Published after every successful commit (drives `Listen` streams).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitEvent {
+    /// Project.
+    pub project: String,
+    /// Database.
+    pub database: String,
+    /// Version after the commit.
+    pub version: u64,
 }
 
 fn status(e: DecodeError) -> Status {
@@ -61,7 +74,48 @@ impl LocalBackend {
             clock,
             databases: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
+            commits: tokio::sync::broadcast::channel(1024).0,
         }
+    }
+
+    /// Subscribes to commit events.
+    #[must_use]
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<CommitEvent> {
+        self.commits.subscribe()
+    }
+
+    fn publish(&self, parent: &Parent, version: CommitVersion) {
+        let _ = self.commits.send(CommitEvent {
+            project: parent.project.as_str().to_owned(),
+            database: parent.database.as_str().to_owned(),
+            version: version.value(),
+        });
+    }
+
+    /// Commits `writes` outside a transaction (used by the `Write` stream).
+    pub fn commit_writes(
+        &self,
+        parent: &Parent,
+        writes: &[Write],
+    ) -> Result<crate::streams::WireCommit, Status> {
+        let now = self.now();
+        let result = self.with_db(parent, |db| {
+            db.commit(writes, None, now)
+                .map_err(|e| status_from_error(&e))
+        })?;
+        self.publish(parent, result.version);
+        Ok(crate::streams::WireCommit::from_result(&result))
+    }
+
+    /// Runs an accepted query at the latest version and returns core documents.
+    pub fn run_query_latest(
+        &self,
+        parent: &Parent,
+        query: &Query,
+    ) -> Result<Vec<Document>, Status> {
+        self.with_db(parent, |db| {
+            db.run_query(query, None).map_err(|e| status_from_error(&e))
+        })
     }
 
     /// Current logical time of the backend clock.
@@ -128,7 +182,7 @@ impl LocalBackend {
     }
 
     /// Rejects document names outside the request's database.
-    fn check_database(parent: &Parent, name: &str) -> Result<DocumentPath, Status> {
+    pub fn check_database(parent: &Parent, name: &str) -> Result<DocumentPath, Status> {
         let path = decode_document_name(name).map_err(status)?;
         if path.project() != &parent.project || path.database() != &parent.database {
             return Err(Status::invalid_argument(format!(
@@ -320,13 +374,18 @@ impl LocalBackend {
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.now();
-        self.with_db(parent, |db| {
-            db.commit(&[write], None, now)
+        let (doc, version) = self.with_db(parent, |db| {
+            let result = db
+                .commit(&[write], None, now)
                 .map_err(|e| status_from_error(&e))?;
-            db.get(&path)
+            let doc = db
+                .get(&path)
                 .map(|d| encode_masked(d, mask.as_deref()))
-                .ok_or_else(|| Status::internal("document vanished after commit"))
-        })
+                .ok_or_else(|| Status::internal("document vanished after commit"))?;
+            Ok((doc, result.version))
+        })?;
+        self.publish(parent, version);
+        Ok(doc)
     }
 
     /// Decodes an `UpdateDocument` request into its write.
@@ -371,11 +430,13 @@ impl LocalBackend {
     pub fn delete_document(&self, req: &pb::DeleteDocumentRequest) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
         let now = self.now();
-        self.with_db(&parent, |db| {
+        let version = self.with_db(&parent, |db| {
             db.commit(&[write], None, now)
-                .map(|_| ())
+                .map(|r| r.version)
                 .map_err(|e| status_from_error(&e))
-        })
+        })?;
+        self.publish(&parent, version);
+        Ok(())
     }
 
     /// Decodes the writes of a `Commit` request (also used for authorization).
@@ -427,12 +488,12 @@ impl LocalBackend {
         let (parent, writes) = Self::plan_commit(req)?;
         let txn = Self::txn(&parent, &req.transaction)?;
         let now = self.now();
-        self.with_db(&parent, |db| {
-            let result = db
-                .commit(&writes, txn.as_ref(), now)
-                .map_err(|e| status_from_error(&e))?;
-            Ok(encode_commit(&result))
-        })
+        let result = self.with_db(&parent, |db| {
+            db.commit(&writes, txn.as_ref(), now)
+                .map_err(|e| status_from_error(&e))
+        })?;
+        self.publish(&parent, result.version);
+        Ok(encode_commit(&result))
     }
 
     /// `Rollback`.
@@ -724,15 +785,24 @@ impl LocalBackend {
                     }
                 }
             }
-            Ok(pb::BatchWriteResponse {
-                write_results,
-                status: statuses,
-            })
+            Ok((
+                pb::BatchWriteResponse {
+                    write_results,
+                    status: statuses,
+                },
+                db.current_version(),
+            ))
+        })
+        .map(|(response, version)| {
+            self.publish(&parent, version);
+            response
         })
     }
 }
 
-fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
+/// Core commit result → wire.
+#[must_use]
+pub fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
     pb::CommitResponse {
         write_results: result
             .write_results

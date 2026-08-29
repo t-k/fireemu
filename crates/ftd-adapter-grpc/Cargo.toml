@@ -20,6 +20,8 @@ prost-types = "0.13"
 tonic = { version = "0.13", features = ["transport", "codegen", "prost"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync"] }
 
+tokio-stream = "0.1"
+
 [dev-dependencies]
 tokio-stream = { version = "0.1", features = ["net"] }
 

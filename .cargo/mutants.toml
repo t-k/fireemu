@@ -1,0 +1,12 @@
+# cargo-mutants configuration (spec 27). Generated code, tools and verification crates are
+# excluded; retries are never used (ADR-006).
+exclude_globs = [
+    "crates/ftd-core-limits/src/generated/**",
+    "tools/**",
+    "verification/**",
+]
+# Only core crates are mutated by default.
+examine_globs = ["crates/**"]
+test_tool = "nextest"
+timeout_multiplier = 3.0
+minimum_test_timeout = 20.0

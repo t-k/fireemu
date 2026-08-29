@@ -112,8 +112,10 @@ EpochIsolation == \A a \in applied: a.work = a.session
 \* INV-TIME-001 (model clock): the epoch never decreases.
 EpochNeverDecreases == [][epoch' >= epoch]_vars
 
-\* LIVE-RESET-001
-ResetEventuallyActivatesNewEpoch == (state = "Resetting") ~> (state = "Active")
+\* LIVE-RESET-001: a started reset eventually publishes the new epoch as Active, unless the
+\* session is being closed (closing from Resetting is the explicit escape hatch).
+ResetEventuallyActivatesNewEpoch ==
+    (state = "Resetting") ~> (state \in {"Active", "Closing", "Closed"})
 
 \* Non-vacuity: each of these must be reachable (TLC reports coverage).
 StaleWorkExists == \E w \in Workers: workEpoch[w] # NoWork /\ workEpoch[w] # epoch

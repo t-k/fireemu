@@ -18,7 +18,7 @@ deterministic state machine that:
 
 ## Status
 
-Milestone A (verification-ready core) is in progress. Nothing here serves network traffic yet.
+Milestone A (verification-ready core), the pure-core half of Milestone B (strict Firestore gateway) and Milestone H0 (Auth core + TOTP) are implemented. Nothing here serves network traffic yet; gRPC / REST shells come next.
 
 | Crate | Purpose | Dependencies |
 |---|---|---|
@@ -26,6 +26,9 @@ Milestone A (verification-ready core) is in progress. Nothing here serves networ
 | `ftd-core-limits` | versioned limit catalogs and the warning / rejection engine | none |
 | `ftd-core-session` | session lifecycle, epoch isolation, virtual clock, idle ledger | none |
 | `ftd-core-events` | event state machine, retry policy, outbox | none |
+| `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator | none |
+| `ftd-core-rules` | Security Rules parser and static limit linter (`RULES-LINT-1`) | none |
+| `ftd-core-auth` | users, custom claims, ID token claims, TOTP second factor (RFC 6238) | none |
 
 `ftd-core-*` crates are `std`-only and forbid `unsafe` (ADR-001, ADR-007).
 
@@ -56,7 +59,9 @@ TLA2TOOLS_JAR=/path/to/tla2tools.jar verification/tla/run-tlc.sh
 
 TLC needs Java 21 and TLA+ Tools 1.8.0
 (`sha256 eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a`).
-Kani harnesses live in `verification/kani` and run with `cargo kani`.
+Kani harnesses live in `verification/kani` and run with `cargo kani`. Harnesses that allocate
+on the heap currently fail on macOS with Kani 0.67 ("Function `malloc` with missing definition
+is unreachable"); the allocation-free harnesses verify. Tracked as a known environment issue.
 
 ## Limit catalogs
 

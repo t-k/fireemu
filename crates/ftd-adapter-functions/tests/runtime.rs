@@ -70,6 +70,9 @@ async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
             location: "nam5".into(),
             session: SessionId::new(7),
             max_running: 4,
+            retry_attempts: 4,
+            max_catch_up_runs: 1000,
+            runner_secret: "s".into(),
         },
         clock.clone(),
         Arc::new(runner),
@@ -196,7 +199,6 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
     for bad in [
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "nope", "document": "a/{b}"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "a"}}]}),
-        json!({"functions": [{"name": "x", "trigger": {"type": "schedule", "schedule": "every 7 minutes"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "schedule", "schedule": "* * * * *", "timeZone": "America/New_York"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "pubsub"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "http"}}, {"name": "x", "trigger": {"type": "http"}}]}),

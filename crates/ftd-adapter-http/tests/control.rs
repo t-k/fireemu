@@ -25,6 +25,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
             counter.fetch_add(1, Ordering::SeqCst);
         })],
         functions: None,
+        control_token: "test-token".to_owned(),
     }
 }
 
@@ -85,6 +86,52 @@ fn session_reset_runs_every_hook_and_foreign_origins_are_refused() {
     };
     assert_eq!(
         handle_with(&s, "GET", "/health/live", &local, &json!({})).status,
+        200
+    );
+}
+
+#[test]
+fn browser_requests_need_the_control_token_on_privileged_routes() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let s = state(counter.clone());
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    // A page on localhost cannot reset or move the clock without the token.
+    let r = handle_with(&s, "POST", "/v1/sessions/default/reset", &page, &json!({}));
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    let r = handle_with(
+        &s,
+        "POST",
+        "/v1/sessions/default/clock:advance",
+        &page,
+        &json!({"seconds": 1}),
+    );
+    assert_eq!(r.status, 403);
+    // Reads stay open to pages; the token unlocks the rest.
+    assert_eq!(
+        handle_with(&s, "GET", "/v1/sessions/default", &page, &json!({})).status,
+        200
+    );
+    let with_token = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let r = handle_with(
+        &s,
+        "POST",
+        "/v1/sessions/default/reset",
+        &with_token,
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    // Command-line clients on loopback (no Origin) are not asked for it.
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
         200
     );
 }

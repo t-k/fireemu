@@ -198,8 +198,19 @@ fn cron_schedules_compute_the_next_run_in_a_fixed_offset_zone() {
         t("2026-08-31T09:30:00Z")
     );
     assert!(Schedule::parse("@hourly").is_ok());
+    // App Engine intervals are anchored at the epoch, not synchronized to the wall clock.
+    let every7 = Schedule::parse("every 7 minutes").unwrap();
+    assert_eq!(
+        every7.next_after(t("2026-08-30T12:00:00Z"), 0).unwrap(),
+        t("2026-08-30T12:07:00Z"),
+        "1788091200 is a multiple of 420: the next run is one interval later"
+    );
+    assert_eq!(
+        every7.next_after(t("2026-08-30T12:01:00Z"), 0).unwrap(),
+        t("2026-08-30T12:07:00Z")
+    );
     assert!(matches!(
-        Schedule::parse("every 7 minutes").unwrap_err(),
+        Schedule::parse("every 0 minutes").unwrap_err(),
         ScheduleError::Malformed(_)
     ));
     assert!(matches!(

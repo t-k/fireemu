@@ -20,6 +20,8 @@ use crate::runtime::FunctionsRuntime;
 
 /// Maximum request body forwarded to a function.
 pub const MAX_FUNCTION_BODY_BYTES: usize = 32 * 1024 * 1024;
+/// Maximum response body accepted from a function (responses are buffered).
+pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
 fn simple(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
     Response::builder()
@@ -82,10 +84,20 @@ pub async fn forward(
     stream.flush().await.map_err(|e| e.to_string())?;
     let mut raw = Vec::new();
     stream
+        .take(MAX_FUNCTION_RESPONSE_BYTES + 1)
         .read_to_end(&mut raw)
         .await
         .map_err(|e| format!("reading the runner's response: {e}"))?;
-    parse_response(&raw)
+    if raw.len() as u64 > MAX_FUNCTION_RESPONSE_BYTES {
+        return Err(format!(
+            "function response exceeds {MAX_FUNCTION_RESPONSE_BYTES} bytes"
+        ));
+    }
+    let mut response = parse_response(&raw)?;
+    if method.eq_ignore_ascii_case("HEAD") {
+        response.body.clear();
+    }
+    Ok(response)
 }
 
 /// Parses a complete HTTP/1.1 response (`Content-Length`, chunked or close-delimited body).
@@ -121,9 +133,14 @@ pub fn parse_response(raw: &[u8]) -> Result<ProxiedResponse, String> {
     let body = if chunked {
         decode_chunked(rest)?
     } else if let Some(n) = content_length {
-        rest.get(..n)
-            .ok_or_else(|| "truncated response body".to_owned())?
-            .to_vec()
+        // A HEAD response (or 204 / 304) legitimately carries no body.
+        if rest.is_empty() {
+            Vec::new()
+        } else {
+            rest.get(..n)
+                .ok_or_else(|| "truncated response body".to_owned())?
+                .to_vec()
+        }
     } else {
         rest.to_vec()
     };
@@ -162,25 +179,13 @@ async fn respond(
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
-    if req.method() == hyper::Method::OPTIONS {
-        // Browser preflight for callable functions.
-        let requested = req
-            .headers()
-            .get("access-control-request-headers")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("authorization, content-type")
-            .to_owned();
-        return Ok(Response::builder()
-            .status(204)
-            .header("access-control-allow-origin", "*")
-            .header(
-                "access-control-allow-methods",
-                "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            )
-            .header("access-control-allow-headers", requested)
-            .header("access-control-max-age", "3600")
-            .body(Full::new(Bytes::new()))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+    // Like the other ports: a page on another site must not drive this loopback runtime.
+    // Preflights and CORS answers belong to the function's own handler (onRequest / onCall
+    // implement their configured policy), so they are forwarded, not fabricated.
+    if let Some(origin) = req.headers().get("origin").and_then(|v| v.to_str().ok()) {
+        if !origin_is_local(origin) {
+            return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
+        }
     }
     let segments: Vec<&str> = path.trim_start_matches('/').splitn(4, '/').collect();
     let (project, region, function) = match segments.as_slice() {
@@ -239,6 +244,23 @@ async fn respond(
         }
         Err(e) => Ok(simple(StatusCode::BAD_GATEWAY, &e)),
     }
+}
+
+/// Whether a browser `Origin` is a loopback origin.
+#[must_use]
+pub fn origin_is_local(origin: &str) -> bool {
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return origin == "null";
+    };
+    let host = rest.split('/').next().unwrap_or("");
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.split(']').next())
+        .unwrap_or_else(|| host.split(':').next().unwrap_or(host));
+    host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 /// Serves the functions port.

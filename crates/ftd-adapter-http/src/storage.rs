@@ -30,6 +30,40 @@ use ftd_core_types::determinism::Clock;
 use ftd_core_types::time::LogicalInstant;
 use serde_json::{json, Map, Value};
 
+/// Observer of Storage object events (see [`StorageState::events`]).
+pub type StorageEventSink = Arc<dyn Fn(&StorageEvent) + Send + Sync>;
+
+/// A locked object store that hands the events of its critical section to the sink when
+/// it is released (still inside the lock, so events leave in commit order).
+pub struct StoreGuard<'a> {
+    guard: std::sync::MutexGuard<'a, ObjectStore>,
+    sink: Option<&'a StorageEventSink>,
+}
+
+impl std::ops::Deref for StoreGuard<'_> {
+    type Target = ObjectStore;
+    fn deref(&self) -> &ObjectStore {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for StoreGuard<'_> {
+    fn deref_mut(&mut self) -> &mut ObjectStore {
+        &mut self.guard
+    }
+}
+
+impl Drop for StoreGuard<'_> {
+    fn drop(&mut self) {
+        let events = self.guard.drain_events();
+        if let Some(sink) = self.sink {
+            for event in &events {
+                sink(event);
+            }
+        }
+    }
+}
+
 /// Shared Storage state behind the HTTP surface.
 pub struct StorageState {
     /// Object store.
@@ -42,8 +76,9 @@ pub struct StorageState {
     pub rules: Arc<RwLock<LoadedRules>>,
     /// Project (default buckets `{project}.appspot.com` / `{project}.firebasestorage.app`).
     pub project: String,
-    /// Where object events go (Storage triggers); `None` drops them.
-    pub events: Option<tokio::sync::mpsc::UnboundedSender<StorageEvent>>,
+    /// Observer of object events (Storage triggers), called inside the store's critical
+    /// section in commit order; `None` drops them.
+    pub events: Option<StorageEventSink>,
 }
 
 /// One HTTP request of the Storage surface.
@@ -578,6 +613,18 @@ fn prospective_rules_value(m: &ObjectMetadata) -> RulesValue {
 }
 
 impl StorageState {
+    /// Locks the object store; events produced while locked reach the sink on release.
+    pub fn store(&self) -> Result<StoreGuard<'_>, (u16, String)> {
+        let guard = self
+            .store
+            .lock()
+            .map_err(|_| (500, "store poisoned".to_owned()))?;
+        Ok(StoreGuard {
+            guard,
+            sink: self.events.as_ref(),
+        })
+    }
+
     fn now(&self) -> LogicalInstant {
         self.clock
             .lock()
@@ -993,14 +1040,6 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
             &host,
         ),
     };
-    // Events of the request go out after its critical section, in commit order.
-    if let Some(sink) = &state.events {
-        if let Ok(mut store) = state.store.lock() {
-            for event in store.drain_events() {
-                let _ = sink.send(event);
-            }
-        }
-    }
     match outcome {
         Ok(r) => r,
         Err((status, message)) => error_response(dialect, status, &message),
@@ -1066,10 +1105,7 @@ fn list(
             None,
         )
         .map_err(deny)?;
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| (500, "store poisoned".to_owned()))?;
+    let store = state.store()?;
     let page = store.list(
         &b,
         &prefix,
@@ -1185,9 +1221,7 @@ fn upload(
             Principal::User(_) => req.header("authorization").map(str::to_owned),
         };
         let id = state
-            .store
-            .lock()
-            .map_err(|_| (500, "store poisoned".to_owned()))?
+            .store()?
             .begin_upload_with(
                 &b,
                 &n,
@@ -1264,10 +1298,7 @@ fn commit_bytes(
     now: LogicalInstant,
     host: &str,
 ) -> Outcome {
-    let mut store = state
-        .store
-        .lock()
-        .map_err(|_| (500, "store poisoned".to_owned()))?;
+    let mut store = state.store()?;
     let existing = store.get(b, n).cloned();
     let method = if existing.is_some() {
         Method::Update
@@ -1363,10 +1394,7 @@ fn resumable_continue(
 ) -> Outcome {
     let id = UploadId::from_str_unchecked(upload_id);
     let now = state.now();
-    let mut store = state
-        .store
-        .lock()
-        .map_err(|_| (500, "store poisoned".to_owned()))?;
+    let mut store = state.store()?;
     // Firebase X-Goog-Upload protocol.
     if let Some(command) = req.header("x-goog-upload-command") {
         let commands: Vec<&str> = command.split(',').map(str::trim).collect();
@@ -1580,10 +1608,7 @@ fn object(
     let now = state.now();
     match req.method.as_str() {
         "GET" => {
-            let store = state
-                .store
-                .lock()
-                .map_err(|_| (500, "store poisoned".to_owned()))?;
+            let store = state.store()?;
             let meta = select_generation(store.get(&b, &n).cloned(), params, "generation")?;
             let media = params.get("alt").map(String::as_str) == Some("media")
                 || req.path.starts_with("/download/");
@@ -1688,10 +1713,7 @@ fn object(
                     .map_err(|e| (400, format!("metadata JSON: {e}")))?
             };
             let pre = precondition(params)?;
-            let mut store = state
-                .store
-                .lock()
-                .map_err(|_| (500, "store poisoned".to_owned()))?;
+            let mut store = state.store()?;
             let existing = select_generation(store.get(&b, &n).cloned(), params, "generation")?
                 .ok_or_else(|| (404, "Not Found. Could not update object".to_owned()))?;
             let patch = patch_from_json(&body);
@@ -1717,10 +1739,7 @@ fn object(
         }
         "DELETE" => {
             let pre = precondition(params)?;
-            let mut store = state
-                .store
-                .lock()
-                .map_err(|_| (500, "store poisoned".to_owned()))?;
+            let mut store = state.store()?;
             let existing = select_generation(store.get(&b, &n).cloned(), params, "generation")?;
             state
                 .authorize(
@@ -1774,10 +1793,7 @@ fn rewrite(
             .filter(|v| v.as_object().is_some_and(|o| !o.is_empty()))
             .map(|v| new_metadata_from_json(&v, None))
     };
-    let mut store = state
-        .store
-        .lock()
-        .map_err(|_| (500, "store poisoned".to_owned()))?;
+    let mut store = state.store()?;
     let source_pre = precondition_named(params, "ifSource")?;
     let pre = precondition(params)?;
     let selected = select_generation(store.get(&b, &n).cloned(), params, "sourceGeneration")?;

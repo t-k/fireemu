@@ -52,6 +52,12 @@ pub struct RuntimeConfig {
     pub functions_manifest: Option<String>,
     /// Maximum invocations running at once (`functions.maxGlobalConcurrency`).
     pub functions_max_running: usize,
+    /// Attempts per event for functions declared with `retry` (`events.maxAttempts`).
+    pub events_max_attempts: u32,
+    /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
+    pub scheduler_max_catch_up_runs: usize,
+    /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
+    pub scheduler_default_time_zone: Option<String>,
 }
 
 impl Default for RuntimeConfig {
@@ -76,6 +82,9 @@ impl Default for RuntimeConfig {
             functions_runner: None,
             functions_manifest: None,
             functions_max_running: 8,
+            events_max_attempts: 4,
+            scheduler_max_catch_up_runs: 1000,
+            scheduler_default_time_zone: None,
         }
     }
 }
@@ -178,6 +187,69 @@ impl RuntimeConfig {
                 "rules.executionMode {other:?} is declared but not implemented; use \"native\" or \"disabled\""
             ))),
         }
+    }
+
+    fn parse_events(e: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
+        for key in e.keys() {
+            if !["delivery", "maxAttempts"].contains(&key.as_str()) {
+                return Err(ConfigError(format!("unknown config key events.{key}")));
+            }
+        }
+        match e.get("delivery").and_then(Value::as_str) {
+            None | Some("exactly-once-test") => {}
+            Some(other) => {
+                return Err(ConfigError(format!(
+                    "events.delivery {other:?} is declared but not implemented; use \"exactly-once-test\""
+                )))
+            }
+        }
+        if let Some(n) = e.get("maxAttempts").and_then(Value::as_u64) {
+            cfg.events_max_attempts = u32::try_from(n).unwrap_or(u32::MAX).max(1);
+        }
+        Ok(())
+    }
+
+    fn parse_scheduler(
+        s: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        for key in s.keys() {
+            if ![
+                "clock",
+                "defaultTimeZone",
+                "catchUp",
+                "maxCatchUpRuns",
+                "overlap",
+            ]
+            .contains(&key.as_str())
+            {
+                return Err(ConfigError(format!("unknown config key scheduler.{key}")));
+            }
+        }
+        for (key, allowed) in [
+            ("clock", "virtual"),
+            ("catchUp", "all"),
+            ("overlap", "allow"),
+        ] {
+            match s.get(key).and_then(Value::as_str) {
+                None => {}
+                Some(v) if v == allowed => {}
+                Some(other) => {
+                    return Err(ConfigError(format!(
+                        "scheduler.{key} {other:?} is declared but not implemented; use {allowed:?}"
+                    )))
+                }
+            }
+        }
+        if let Some(n) = s.get("maxCatchUpRuns").and_then(Value::as_u64) {
+            cfg.scheduler_max_catch_up_runs = usize::try_from(n).unwrap_or(usize::MAX).max(1);
+        }
+        if let Some(tz) = s.get("defaultTimeZone").and_then(Value::as_str) {
+            ftd_core_functions::cron::fixed_offset_seconds(Some(tz))
+                .map_err(|e| ConfigError(format!("scheduler.defaultTimeZone: {e}")))?;
+            cfg.scheduler_default_time_zone = Some(tz.to_owned());
+        }
+        Ok(())
     }
 
     fn parse_functions(
@@ -286,6 +358,12 @@ impl RuntimeConfig {
         }
         if let Some(functions) = obj.get("functions").and_then(Value::as_object) {
             Self::parse_functions(functions, &mut cfg)?;
+        }
+        if let Some(events) = obj.get("events").and_then(Value::as_object) {
+            Self::parse_events(events, &mut cfg)?;
+        }
+        if let Some(scheduler) = obj.get("scheduler").and_then(Value::as_object) {
+            Self::parse_scheduler(scheduler, &mut cfg)?;
         }
         if let Some(auth) = obj.get("auth").and_then(Value::as_object) {
             if let Some(mode) = auth.get("idTokenSigning").and_then(Value::as_str) {

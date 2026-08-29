@@ -21,6 +21,9 @@ impl FieldSet {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schedule {
     source: String,
+    /// App Engine interval (`every N minutes|hours`): runs every N units from the schedule's
+    /// start, unrelated to the wall clock (`Some(seconds)`); `None` = cron fields.
+    interval_seconds: Option<i64>,
     minutes: FieldSet,
     hours: FieldSet,
     days_of_month: FieldSet,
@@ -146,6 +149,19 @@ impl Schedule {
     /// Parses a cron expression or an App Engine text schedule.
     pub fn parse(text: &str) -> Result<Self, ScheduleError> {
         let text = text.trim();
+        if let Some(seconds) = app_engine_interval(text)? {
+            return Ok(Self {
+                source: text.to_owned(),
+                interval_seconds: Some(seconds),
+                minutes: FieldSet(0),
+                hours: FieldSet(0),
+                days_of_month: FieldSet(0),
+                months: FieldSet(0),
+                days_of_week: FieldSet(0),
+                dom_restricted: false,
+                dow_restricted: false,
+            });
+        }
         let expanded = match text {
             "@hourly" => "0 * * * *".to_owned(),
             "@daily" | "@midnight" => "0 0 * * *".to_owned(),
@@ -172,6 +188,7 @@ impl Schedule {
         }
         Ok(Self {
             source: text.to_owned(),
+            interval_seconds: None,
             minutes,
             hours,
             days_of_month,
@@ -206,14 +223,20 @@ impl Schedule {
     }
 
     /// The first run strictly after `after` in the zone with `offset_seconds` from UTC.
-    /// `None` when no run exists within the next 400 days (an unsatisfiable date).
+    /// Intervals are anchored at the Unix epoch; cron fields are searched over the next
+    /// eight years (a leap-day schedule waits at most that long), after which the schedule
+    /// is treated as unsatisfiable.
     #[must_use]
     pub fn next_after(&self, after: LogicalInstant, offset_seconds: i64) -> Option<LogicalInstant> {
         let after_secs = after.as_nanos().div_euclid(1_000_000_000);
         let after_secs = i64::try_from(after_secs).ok()?;
+        if let Some(interval) = self.interval_seconds {
+            let next = after_secs.div_euclid(interval) * interval + interval;
+            return Some(LogicalInstant::from_unix_seconds(next));
+        }
         // Start at the next whole minute of local time.
         let mut local = (after_secs + offset_seconds).div_euclid(60) * 60 + 60;
-        let limit = local + 400 * 86_400;
+        let limit = local + 8 * 366 * 86_400;
         while local < limit {
             let c = Civil::from_unix(local);
             if !self.months.contains(c.month) {
@@ -275,32 +298,30 @@ impl Schedule {
     }
 }
 
-/// `every N minutes|hours`, `every day HH:MM`, `every monday HH:MM` → cron.
-fn app_engine_to_cron(text: &str) -> Result<String, ScheduleError> {
+/// `every N minutes|hours` (App Engine interval form): the interval in seconds.
+fn app_engine_interval(text: &str) -> Result<Option<i64>, ScheduleError> {
     let lower = text.to_ascii_lowercase();
     let words: Vec<&str> = lower.split_whitespace().collect();
     let malformed = || ScheduleError::Malformed(text.to_owned());
     match words.as_slice() {
         ["every", n, unit] if n.chars().all(|c| c.is_ascii_digit()) => {
-            let n: u32 = n.parse().map_err(|_| malformed())?;
+            let n: i64 = n.parse().map_err(|_| malformed())?;
             match *unit {
-                "minutes" | "mins" | "minute" if (1..=59).contains(&n) => {
-                    if 60 % n == 0 {
-                        Ok(format!("*/{n} * * * *"))
-                    } else {
-                        Err(malformed())
-                    }
-                }
-                "hours" | "hour" if (1..=23).contains(&n) => {
-                    if 24 % n == 0 {
-                        Ok(format!("0 */{n} * * *"))
-                    } else {
-                        Err(malformed())
-                    }
-                }
+                "minutes" | "mins" | "minute" if (1..=1440).contains(&n) => Ok(Some(n * 60)),
+                "hours" | "hour" if (1..=24).contains(&n) => Ok(Some(n * 3_600)),
                 _ => Err(malformed()),
             }
         }
+        _ => Ok(None),
+    }
+}
+
+/// `every day HH:MM`, `every monday HH:MM` → cron.
+fn app_engine_to_cron(text: &str) -> Result<String, ScheduleError> {
+    let lower = text.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let malformed = || ScheduleError::Malformed(text.to_owned());
+    match words.as_slice() {
         ["every", day, time] => {
             let (h, m) = time.split_once(':').ok_or_else(malformed)?;
             let h: u32 = h.parse().map_err(|_| malformed())?;
@@ -407,26 +428,24 @@ impl fmt::Display for TimeZoneError {
 
 impl std::error::Error for TimeZoneError {}
 
-/// UTC offset in seconds of a zone without daylight saving time.
+/// UTC offset in seconds of a zone that has had a single fixed offset since 1992 (the
+/// virtual clock defaults to the 2020s; earlier instants in these zones are not modelled).
+/// Every other zone, daylight-saving ones included, is refused rather than approximated.
 pub fn fixed_offset_seconds(zone: Option<&str>) -> Result<i64, TimeZoneError> {
     let Some(zone) = zone else { return Ok(0) };
     let offset = match zone {
-        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT" | "Europe/London-UTC" => 0,
+        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT" => 0,
         "Asia/Tokyo" | "Asia/Seoul" | "Japan" => 32_400,
-        "Asia/Shanghai" | "Asia/Singapore" | "Asia/Hong_Kong" | "Asia/Taipei" | "Asia/Manila"
-        | "Australia/Perth" | "Asia/Kuala_Lumpur" => 28_800,
+        "Asia/Shanghai" | "Asia/Singapore" | "Asia/Hong_Kong" | "Asia/Taipei"
+        | "Asia/Kuala_Lumpur" => 28_800,
         "Asia/Bangkok" | "Asia/Jakarta" | "Asia/Ho_Chi_Minh" => 25_200,
         "Asia/Kolkata" | "Asia/Calcutta" => 19_800,
         "Asia/Dubai" => 14_400,
-        "Asia/Karachi" => 18_000,
-        "Asia/Dhaka" => 21_600,
-        "Africa/Johannesburg" | "Africa/Cairo-fixed" => 7_200,
+        "Africa/Johannesburg" => 7_200,
         "Africa/Lagos" => 3_600,
-        "Africa/Nairobi" | "Europe/Moscow" | "Asia/Riyadh" => 10_800,
+        "Africa/Nairobi" | "Asia/Riyadh" => 10_800,
         "America/Phoenix" => -25_200,
         "Pacific/Honolulu" => -36_000,
-        "America/Sao_Paulo" | "America/Argentina/Buenos_Aires" => -10_800,
-        "Pacific/Auckland-fixed" => 43_200,
         _ => return Err(TimeZoneError::Unsupported(zone.to_owned())),
     };
     Ok(offset)

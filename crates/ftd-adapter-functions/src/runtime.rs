@@ -30,9 +30,10 @@ use crate::events::{change_kind, firestore_event, schedule_event, storage_event}
 use crate::http::{forward, ProxiedResponse};
 use crate::runner::{InvokeOutcome, Runner};
 
-/// Maximum schedule runs enqueued by one clock advance (spec 11.6).
+/// Default maximum schedule runs enqueued per clock advance and job (spec 11.6); the rest
+/// stays due and is enqueued as invocations complete, so nothing is discarded.
 pub const MAX_CATCH_UP_RUNS: usize = 1000;
-/// Retries of a failed event for functions declared with `retry` (attempts in total).
+/// Default attempts (first delivery included) for functions declared with `retry`.
 pub const RETRY_MAX_ATTEMPTS: u32 = 4;
 /// Base backoff of the first retry (virtual time).
 pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
@@ -61,6 +62,12 @@ pub struct FunctionsConfig {
     pub session: SessionId,
     /// Maximum invocations running at once across every function.
     pub max_running: usize,
+    /// Attempts (first delivery included) for functions declared with `retry`.
+    pub retry_attempts: u32,
+    /// Schedule runs enqueued per clock change and job before the rest waits its turn.
+    pub max_catch_up_runs: usize,
+    /// Secret the runner's HTTP server requires (`x-ftd-runner-secret`).
+    pub runner_secret: String,
 }
 
 struct ScheduledJob {
@@ -94,6 +101,8 @@ struct Inner {
     jobs: Vec<ScheduledJob>,
     history: Vec<InvocationRecord>,
     dead_letters: Vec<InvocationRecord>,
+    /// Schedule runs became due beyond the catch-up cap and still have to be enqueued.
+    catch_up_pending: bool,
 }
 
 /// The runtime.
@@ -133,7 +142,7 @@ impl FunctionsRuntime {
             })
             .collect();
         let retry = RetryPolicy::try_new(
-            RETRY_MAX_ATTEMPTS,
+            config.retry_attempts.max(1),
             LogicalDuration::from_seconds(RETRY_BASE_BACKOFF_SECONDS),
             LogicalDuration::from_seconds(RETRY_MAX_BACKOFF_SECONDS),
         )
@@ -159,6 +168,7 @@ impl FunctionsRuntime {
                 jobs,
                 history: Vec::new(),
                 dead_letters: Vec::new(),
+                catch_up_pending: false,
             }),
             wake: Notify::new(),
             idle: Arc::new(Notify::new()),
@@ -330,24 +340,35 @@ impl FunctionsRuntime {
             return;
         };
         let mut enqueued = false;
+        let cap = self.config.max_catch_up_runs.max(1);
+        let mut pending = false;
         let runs: Vec<(String, String, LogicalInstant)> = inner
             .jobs
             .iter_mut()
             .flat_map(|job| {
-                let runs = job.schedule.runs_between(
-                    job.cursor,
-                    now,
-                    job.offset_seconds,
-                    MAX_CATCH_UP_RUNS,
-                );
-                if now.as_nanos() > job.cursor.as_nanos() {
-                    job.cursor = now;
+                let runs = job
+                    .schedule
+                    .runs_between(job.cursor, now, job.offset_seconds, cap + 1);
+                if runs.len() > cap {
+                    // Beyond the cap: enqueue `cap` runs now and leave the cursor at the last
+                    // one so the rest stays due (keeping the session busy) instead of vanishing.
+                    let kept: Vec<LogicalInstant> = runs.into_iter().take(cap).collect();
+                    job.cursor = kept.last().copied().unwrap_or(job.cursor);
+                    pending = true;
+                    kept.into_iter()
+                        .map(|t| (job.function.clone(), job.region.clone(), t))
+                        .collect::<Vec<_>>()
+                } else {
+                    if now.as_nanos() > job.cursor.as_nanos() {
+                        job.cursor = now;
+                    }
+                    runs.into_iter()
+                        .map(|t| (job.function.clone(), job.region.clone(), t))
+                        .collect::<Vec<_>>()
                 }
-                runs.into_iter()
-                    .map(|t| (job.function.clone(), job.region.clone(), t))
-                    .collect::<Vec<_>>()
             })
             .collect();
+        inner.catch_up_pending = pending;
         for (function, region, at) in runs {
             let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
             let payload = schedule_event(&id, &self.config.project, &region, &function, at);
@@ -405,15 +426,18 @@ impl FunctionsRuntime {
         Ok(())
     }
 
-    /// Session reset: every non-terminal event is discarded, schedules restart from now.
+    /// Session reset: every non-terminal event is discarded and schedules restart from now.
+    /// Invocations already running keep their slots until they finish (their results are
+    /// ignored), so `await-idle` does not return while old handlers can still write.
     pub fn reset(&self) {
         let now = self.now();
         if let Ok(mut inner) = self.inner.lock() {
             inner.epoch = inner.epoch.next().unwrap_or(inner.epoch);
             let epoch = inner.epoch;
             inner.outbox.discard_stale(epoch);
-            inner.payloads.clear();
-            inner.running.clear();
+            let running: Vec<EventId> = inner.running.keys().copied().collect();
+            inner.payloads.retain(|id, _| running.contains(id));
+            inner.catch_up_pending = false;
             for job in &mut inner.jobs {
                 job.cursor = now;
             }
@@ -428,13 +452,21 @@ impl FunctionsRuntime {
         self.idle.clone()
     }
 
-    /// Whether any causal work is outstanding (spec 10.5 quiescence for events).
+    /// Whether any causal work is outstanding (spec 10.5 quiescence for events): no event
+    /// pending / leased / running / retry-waiting, no HTTP invocation running, no schedule
+    /// run due beyond the catch-up cap.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.inner
             .lock()
-            .map(|i| !i.outbox.has_active() && i.running.is_empty())
+            .map(|i| !i.outbox.has_active() && i.running.is_empty() && !i.catch_up_pending)
             .unwrap_or(true)
+    }
+
+    /// Whether the runner process is alive (a dead runner leaves queued work pending).
+    #[must_use]
+    pub fn runner_alive(&self) -> bool {
+        self.runner.is_alive()
     }
 
     /// Outstanding work, for `await-idle` timeouts and status output.
@@ -468,6 +500,8 @@ impl FunctionsRuntime {
             "retryWaiting": retry_waiting,
             "succeeded": succeeded,
             "deadLettered": dead,
+            "catchUpPending": inner.catch_up_pending,
+            "runnerAlive": self.runner.is_alive(),
             "epoch": inner.epoch.value(),
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
         })
@@ -538,22 +572,38 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<ProxiedResponse, String> {
-        let timeout = self
-            .manifest
-            .get(&target.function)
-            .map_or(60, |f| u64::from(f.timeout_seconds));
+        let (timeout, concurrency) = self.manifest.get(&target.function).map_or((60, 1), |f| {
+            (u64::from(f.timeout_seconds), f.concurrency as usize)
+        });
         let id = {
             let Ok(mut inner) = self.inner.lock() else {
                 return Err("runtime poisoned".into());
             };
+            // HTTP invocations share the admission limits of event invocations.
+            let running_here = inner
+                .running
+                .values()
+                .filter(|f| **f == target.function)
+                .count();
+            if inner.running.len() >= self.config.max_running || running_here >= concurrency {
+                return Err(format!(
+                    "function {} is at its concurrency limit; retry later",
+                    target.function
+                ));
+            }
             inner.next_event += 1;
             let id = EventId::new(u128::from(inner.next_event));
             inner.running.insert(id, target.function.clone());
             id
         };
+        let mut forwarded: Vec<(String, String)> = headers.to_vec();
+        forwarded.push((
+            "x-ftd-runner-secret".to_owned(),
+            self.config.runner_secret.clone(),
+        ));
         let result = tokio::time::timeout(
             Duration::from_secs(timeout),
-            forward(&target.addr, method, path_and_query, headers, body),
+            forward(&target.addr, method, path_and_query, &forwarded, body),
         )
         .await;
         let outcome = match &result {
@@ -571,6 +621,8 @@ impl FunctionsRuntime {
             });
         }
         self.idle.notify_waiters();
+        // The freed slot may unblock a pending event.
+        self.wake.notify_one();
         match result {
             Ok(r) => r,
             Err(_) => Err(format!(
@@ -589,6 +641,11 @@ impl FunctionsRuntime {
     }
 
     fn dispatch_ready(self: &Arc<Self>) {
+        if !self.runner.is_alive() {
+            // Queued work stays pending and visible in the status; nothing is retried
+            // against a dead process.
+            return;
+        }
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
@@ -656,7 +713,7 @@ impl FunctionsRuntime {
             Trigger::Http { .. } => "http",
         };
         json!({
-            "invocationId": id.value().to_string(),
+            "invocationId": format!("{}-{attempt}", id.value()),
             "function": spec.name,
             "entryPoint": spec.entry_point,
             "trigger": trigger,
@@ -724,6 +781,14 @@ impl FunctionsRuntime {
                     }
                 }
             }
+        }
+        let more_due = self
+            .inner
+            .lock()
+            .map(|i| i.catch_up_pending)
+            .unwrap_or(false);
+        if more_due {
+            self.on_clock_changed();
         }
         self.idle.notify_waiters();
         self.wake.notify_one();

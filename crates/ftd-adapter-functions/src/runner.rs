@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -36,6 +37,36 @@ pub enum InvokeOutcome {
     RunnerGone(String),
 }
 
+/// Environment variables a runner inherits from the daemon (everything else, credentials
+/// such as `GOOGLE_APPLICATION_CREDENTIALS`, `FIREBASE_TOKEN` or `CLOUDSDK_*` included, is
+/// withheld; the emulator variables are added explicitly). `HOME` stays: Node version
+/// managers (Volta, nvm, mise, asdf, fnm) resolve `node` through it and their own
+/// variables, which are inherited by prefix ([`INHERITED_ENV_PREFIXES`]).
+pub const INHERITED_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "COMSPEC",
+    "NODE_PATH",
+    "NODE_OPTIONS",
+    "NODE_EXTRA_CA_CERTS",
+    "NVM_DIR",
+    "NVM_BIN",
+];
+
+/// Variable prefixes inherited by a runner (tool managers, XDG directories).
+pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_", "XDG_"];
+
 /// A running runner.
 pub struct Runner {
     child: AsyncMutex<Option<Child>>,
@@ -44,6 +75,21 @@ pub struct Runner {
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
     logs: Arc<Mutex<Vec<String>>>,
     label: String,
+    alive: Arc<AtomicBool>,
+}
+
+/// The environment of a runner child: the inherited allowlist, then `extra` (emulator
+/// endpoints and project settings).
+#[must_use]
+pub fn child_env(extra: &[(String, String)]) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| {
+            INHERITED_ENV.contains(&k.as_str())
+                || INHERITED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
+        })
+        .collect();
+    env.extend(extra.iter().cloned());
+    env
 }
 
 impl Runner {
@@ -60,6 +106,7 @@ impl Runner {
             .ok_or_else(|| "functions runner: empty command".to_owned())?;
         let mut cmd = Command::new(program);
         cmd.args(args)
+            .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -67,7 +114,7 @@ impl Runner {
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        for (k, v) in env {
+        for (k, v) in child_env(env) {
             cmd.env(k, v);
         }
         let mut child = cmd
@@ -108,11 +155,13 @@ impl Runner {
         }
         let waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let alive = Arc::new(AtomicBool::new(true));
         let (hello_tx, hello_rx) = oneshot::channel::<Hello>();
         {
             let waiters = waiters.clone();
             let label = label.clone();
             let logs = logs.clone();
+            let alive = alive.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut hello_tx = Some(hello_tx);
@@ -185,7 +234,12 @@ impl Runner {
                         _ => {}
                     }
                 }
-                // The runner is gone: every waiter learns it.
+                // The runner is gone: every waiter learns it and the runtime stops
+                // dispatching.
+                alive.store(false, Ordering::SeqCst);
+                eprintln!(
+                    "{label} runner exited; functions are unavailable until the daemon restarts"
+                );
                 if let Ok(mut w) = waiters.lock() {
                     for (_, tx) in w.drain() {
                         let _ = tx.send(InvokeOutcome::RunnerGone("runner exited".into()));
@@ -214,7 +268,14 @@ impl Runner {
             waiters,
             logs,
             label,
+            alive,
         })
+    }
+
+    /// Whether the runner process is still alive.
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
     }
 
     /// The runner's `hello`.
@@ -229,8 +290,14 @@ impl Runner {
         self.logs.lock().map(|l| l.clone()).unwrap_or_default()
     }
 
-    /// Sends an `invoke` and waits for its result or the timeout.
+    /// Sends an `invoke` and waits for its result. One deadline covers the stdin lock, the
+    /// frame write (a runner that stopped reading its stdin cannot block others forever) and
+    /// the result; a timed-out invocation's late result is discarded (the `invocationId` is
+    /// unique per attempt).
     pub async fn invoke(&self, request: Value, timeout: Duration) -> InvokeOutcome {
+        if !self.is_alive() {
+            return InvokeOutcome::RunnerGone("runner exited".into());
+        }
         let id = request
             .get("invocationId")
             .and_then(Value::as_str)
@@ -240,30 +307,31 @@ impl Runner {
         if let Ok(mut w) = self.waiters.lock() {
             w.insert(id.clone(), tx);
         }
-        {
-            let mut stdin = self.stdin.lock().await;
-            let Some(stdin) = stdin.as_mut() else {
-                return InvokeOutcome::RunnerGone("runner stdin closed".into());
-            };
-            let mut frame = request;
-            frame["type"] = Value::String("invoke".into());
-            if let Err(e) = write_frame(stdin, &frame).await {
-                if let Ok(mut w) = self.waiters.lock() {
-                    w.remove(&id);
+        let send_and_wait = async {
+            {
+                let mut stdin = self.stdin.lock().await;
+                let Some(stdin) = stdin.as_mut() else {
+                    return InvokeOutcome::RunnerGone("runner stdin closed".into());
+                };
+                let mut frame = request;
+                frame["type"] = Value::String("invoke".into());
+                if let Err(e) = write_frame(stdin, &frame).await {
+                    return InvokeOutcome::RunnerGone(format!("cannot write to runner: {e}"));
                 }
-                return InvokeOutcome::RunnerGone(format!("cannot write to runner: {e}"));
             }
-        }
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => InvokeOutcome::RunnerGone("runner exited".into()),
-            Err(_) => {
-                if let Ok(mut w) = self.waiters.lock() {
-                    w.remove(&id);
-                }
-                InvokeOutcome::TimedOut
+            match rx.await {
+                Ok(outcome) => outcome,
+                Err(_) => InvokeOutcome::RunnerGone("runner exited".into()),
             }
+        };
+        let outcome = match tokio::time::timeout(timeout, send_and_wait).await {
+            Ok(outcome) => outcome,
+            Err(_) => InvokeOutcome::TimedOut,
+        };
+        if let Ok(mut w) = self.waiters.lock() {
+            w.remove(&id);
         }
+        outcome
     }
 
     /// Asks the runner to exit, then kills it.

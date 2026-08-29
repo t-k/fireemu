@@ -94,8 +94,10 @@ function describe(name, fn) {
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: { type: "http", callable: true } };
     if (ep.scheduleTrigger) {
+      const retryCount = Number(ep.scheduleTrigger.retryConfig?.retryCount || 0);
       return {
         ...base,
+        retry: retryCount > 0,
         trigger: {
           type: "schedule",
           schedule: ep.scheduleTrigger.schedule,
@@ -154,16 +156,29 @@ function makeHttpServer(functions, manifest) {
   const major = Number.parseInt(String(require("express/package.json").version).split(".")[0], 10);
   // Express 5 (path-to-regexp 8) and Express 4 spell the optional rest differently.
   const route = major >= 5 ? "/:project/:region/:name{/*rest}" : "/:project/:region/:name*";
+  const secret = process.env.FTD_RUNNER_SECRET || "";
+  const project = process.env.GCLOUD_PROJECT || "";
   app.all(route, (req, res, next) => {
-    const spec = manifest.functions.find((f) => f.name === req.params.name && f.trigger?.type === "http");
-    const fn = spec && functions.get(spec.entryPoint);
-    if (!fn) {
-      res.status(404).send(`no HTTP function ${req.params.name}`);
+    // Only the daemon's proxy may reach this server (it carries the per-runner secret and has
+    // already applied timeouts, concurrency and idle accounting).
+    if (secret && req.get("x-ftd-runner-secret") !== secret) {
+      res.status(403).send("not the firebase-testd proxy");
       return;
     }
-    // The function sees the path relative to its mount point.
-    req.url = req.url.slice(req.url.indexOf(`/${req.params.name}`) + req.params.name.length + 1) || "/";
-    if (!req.url.startsWith("/")) req.url = `/${req.url}`;
+    const spec = manifest.functions.find((f) => f.name === req.params.name && f.trigger?.type === "http");
+    const fn = spec && functions.get(spec.entryPoint);
+    const region = spec?.region || "us-central1";
+    if (!fn || (project && req.params.project !== project) || req.params.region !== region) {
+      res.status(404).send(`no HTTP function ${req.params.project}/${req.params.region}/${req.params.name}`);
+      return;
+    }
+    // The function sees the path relative to its mount point: drop the three route segments.
+    const original = req.url;
+    const queryAt = original.indexOf("?");
+    const pathPart = queryAt >= 0 ? original.slice(0, queryAt) : original;
+    const query = queryAt >= 0 ? original.slice(queryAt) : "";
+    const rest = pathPart.split("/").slice(4).join("/");
+    req.url = `/${rest}${query}`;
     Promise.resolve()
       .then(() => fn(req, res))
       .catch((e) => {

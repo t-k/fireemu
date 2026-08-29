@@ -190,7 +190,7 @@ fn storage_state(
     clock: &Arc<Mutex<VirtualClock>>,
     auth_store: &Arc<Mutex<AuthStore>>,
     storage_rules: &Arc<RwLock<LoadedRules>>,
-    events: Option<tokio::sync::mpsc::UnboundedSender<ftd_core_storage::store::StorageEvent>>,
+    events: Option<ftd_adapter_http::storage::StorageEventSink>,
 ) -> Arc<ftd_adapter_http::storage::StorageState> {
     Arc::new(ftd_adapter_http::storage::StorageState {
         store: Mutex::new(ftd_core_storage::store::StorageState::new(cfg.seed ^ 0x57)),
@@ -259,6 +259,33 @@ fn print_banner(
     println!("  edition: {}   clock: {}", cfg.edition, cfg.clock_start);
 }
 
+/// Resolves on SIGTERM (so a killed daemon still stops its runner); never on platforms
+/// without it.
+async fn terminate_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    }
+    #[cfg(not(unix))]
+    std::future::pending::<()>().await;
+}
+
+/// A 128-bit secret from the seed mixed with the process id and wall-clock time.
+fn random_secret(seed: u64) -> String {
+    use ftd_core_types::determinism::DeterministicRng;
+    let mut mix = seed ^ u64::from(std::process::id());
+    if let Ok(elapsed) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        mix ^= u64::try_from(elapsed.as_nanos() & u128::from(u64::MAX)).unwrap_or(0);
+    }
+    let mut rng = SplitMix64::new(mix);
+    format!("{:016x}{:016x}", rng.next_u64(), rng.next_u64())
+}
+
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     match (cfg.rules_enforced, loaded) {
         (false, _) => println!("  rules: disabled by config (every request is allowed)"),
@@ -282,6 +309,7 @@ fn control_state(
     auth_store: &Arc<Mutex<AuthStore>>,
     storage: &Arc<ftd_adapter_http::storage::StorageState>,
     functions: Option<&Arc<ftd_adapter_functions::runtime::FunctionsRuntime>>,
+    control_token: String,
 ) -> ftd_adapter_http::control::ControlState {
     let storage_reset = {
         let storage = storage.clone();
@@ -320,6 +348,7 @@ fn control_state(
             Arc::new(functions::Hook(r.clone()))
                 as Arc<dyn ftd_adapter_http::control::FunctionsHook>
         }),
+        control_token,
     }
 }
 
@@ -368,14 +397,10 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
         let functions_addr = functions_listener
             .as_ref()
             .and_then(|l| l.local_addr().ok());
-        let (storage_events_tx, storage_events_rx) = tokio::sync::mpsc::unbounded_channel();
-        let storage = storage_state(
-            &cfg,
-            &clock,
-            &auth_store,
-            &storage_rules,
-            functions_listener.as_ref().map(|_| storage_events_tx),
-        );
+        // Random secrets: the control token browsers must present, and the secret that ties
+        // the runner's HTTP server to this daemon's proxy.
+        let control_token = random_secret(cfg.seed ^ 0xC0_11);
+        let runner_secret = random_secret(cfg.seed ^ 0x5E_C2);
         let functions_runtime = match functions_listener.as_ref() {
             Some(_) => Some(
                 functions::start(
@@ -387,12 +412,19 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
                         auth: http_addr.to_string(),
                         storage: storage_addr.to_string(),
                     },
-                    storage_events_rx,
+                    &runner_secret,
                 )
                 .await?,
             ),
             None => None,
         };
+        let storage = storage_state(
+            &cfg,
+            &clock,
+            &auth_store,
+            &storage_rules,
+            functions_runtime.as_ref().map(functions::storage_sink),
+        );
         let control = Arc::new(control_state(
             &cfg,
             &clock,
@@ -402,8 +434,10 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             &auth_store,
             &storage,
             functions_runtime.as_ref(),
+            control_token.clone(),
         ));
         print_banner(&cfg, grpc_addr, http_addr, storage_addr, functions_addr);
+        println!("  control token:    FTD_CONTROL_TOKEN={control_token}   (browser requests to privileged control routes must send Authorization: Bearer <token>)");
         print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
         if let Some(runtime) = &functions_runtime {
             let names: Vec<&str> = runtime
@@ -461,6 +495,10 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             r = functions_server => Err(format!("Functions server stopped: {r:?}")),
             _ = tokio::signal::ctrl_c() => {
                 println!("shutting down");
+                Ok::<(), String>(())
+            }
+            () = terminate_signal() => {
+                println!("shutting down (SIGTERM)");
                 Ok::<(), String>(())
             }
         };

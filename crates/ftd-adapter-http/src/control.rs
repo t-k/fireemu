@@ -60,6 +60,11 @@ pub struct ControlState {
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<dyn FunctionsHook>>,
+    /// Control token (spec 15.2): browser requests (those carrying an `Origin`) must present
+    /// it as `Authorization: Bearer <token>` on privileged routes, so a page on localhost
+    /// cannot reset state, move the clock or change rules; command-line clients on loopback
+    /// need not.
+    pub control_token: String,
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -102,6 +107,18 @@ pub fn handle_with(
     if let Some(origin) = &headers.origin {
         if !crate::identity_toolkit::origin_is_local(origin) {
             return error(403, "FORBIDDEN_ORIGIN");
+        }
+        let privileged = method != "GET" && !path.starts_with("/health/");
+        let presented = headers
+            .authorization
+            .as_deref()
+            .and_then(|a| a.strip_prefix("Bearer "))
+            .map(str::trim);
+        if privileged && presented != Some(state.control_token.as_str()) {
+            return error(
+                403,
+                "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token> (printed at start, FTD_CONTROL_TOKEN)",
+            );
         }
     }
     let path = path.split('?').next().unwrap_or(path);

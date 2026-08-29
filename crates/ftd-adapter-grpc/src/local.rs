@@ -43,7 +43,14 @@ pub struct LocalBackend {
     commits: tokio::sync::broadcast::Sender<CommitEvent>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
+    /// Called for every commit inside the database critical section, in commit order and
+    /// before the commit's response is returned (event triggers): nothing is lost or
+    /// reordered, and `await-idle` sees the event as soon as the write returns.
+    change_sink: Mutex<Option<ChangeSink>>,
 }
+
+/// Synchronous observer of commits (see [`LocalBackend::set_change_sink`]).
+pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
 
 /// Published after every successful commit (drives `Listen` streams).
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +162,14 @@ impl LocalBackend {
             ids: Mutex::new(SplitMix64::new(seed)),
             commits: tokio::sync::broadcast::channel(1024).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
+            change_sink: Mutex::new(None),
+        }
+    }
+
+    /// Installs the synchronous commit observer (at most one).
+    pub fn set_change_sink(&self, sink: ChangeSink) {
+        if let Ok(mut slot) = self.change_sink.lock() {
+            *slot = Some(sink);
         }
     }
 
@@ -192,14 +207,20 @@ impl LocalBackend {
         self.commits.subscribe()
     }
 
+    /// Publishes a commit: the change sink first (synchronously, inside the database
+    /// critical section the caller holds), then the `Listen` broadcast.
     fn publish(&self, parent: &Parent, result: &CommitResult) {
-        let _ = self.commits.send(CommitEvent {
+        let event = CommitEvent {
             project: parent.project.as_str().to_owned(),
             database: parent.database.as_str().to_owned(),
             version: result.version.value(),
             commit_time: Some(result.commit_time),
             changes: Arc::new(result.changes.clone()),
-        });
+        };
+        if let Some(sink) = self.change_sink.lock().ok().and_then(|s| s.clone()) {
+            sink(&event);
+        }
+        let _ = self.commits.send(event);
     }
 
     /// Commits `writes` outside a transaction (used by the `Write` stream).
@@ -212,10 +233,12 @@ impl LocalBackend {
         let now = self.now();
         let result = self.with_db(parent, |db| {
             guard(db, writes, now)?;
-            db.commit(writes, None, now)
-                .map_err(|e| status_from_error(&e))
+            let result = db
+                .commit(writes, None, now)
+                .map_err(|e| status_from_error(&e))?;
+            self.publish(parent, &result);
+            Ok(result)
         })?;
-        self.publish(parent, &result);
         Ok(crate::streams::WireCommit::from_result(&result))
     }
 
@@ -649,7 +672,7 @@ impl LocalBackend {
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.now();
-        let (doc, result) = self.with_db(parent, |db| {
+        let doc = self.with_db(parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
             let result = db
                 .commit(&[write], None, now)
@@ -658,9 +681,9 @@ impl LocalBackend {
                 .get(&path)
                 .map(|d| encode_masked(d, mask.as_deref()))
                 .ok_or_else(|| Status::internal("document vanished after commit"))?;
-            Ok((doc, result))
+            self.publish(parent, &result);
+            Ok(doc)
         })?;
-        self.publish(parent, &result);
         Ok(doc)
     }
 
@@ -715,13 +738,14 @@ impl LocalBackend {
     ) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
         let now = self.now();
-        let result = self.with_db(&parent, |db| {
+        self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
-            db.commit(&[write], None, now)
-                .map_err(|e| status_from_error(&e))
-        })?;
-        self.publish(&parent, &result);
-        Ok(())
+            let result = db
+                .commit(&[write], None, now)
+                .map_err(|e| status_from_error(&e))?;
+            self.publish(&parent, &result);
+            Ok(())
+        })
     }
 
     /// Decodes the writes of a `Commit` request (also used for authorization).
@@ -793,10 +817,12 @@ impl LocalBackend {
         let now = self.now();
         let result = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
-            db.commit(&writes, txn.as_ref(), now)
-                .map_err(|e| status_from_error(&e))
+            let result = db
+                .commit(&writes, txn.as_ref(), now)
+                .map_err(|e| status_from_error(&e))?;
+            self.publish(&parent, &result);
+            Ok(result)
         })?;
-        self.publish(&parent, &result);
         Ok(encode_commit(&result))
     }
 
@@ -1193,7 +1219,6 @@ impl LocalBackend {
         self.with_db(&parent, |db| {
             let mut write_results = Vec::with_capacity(req.writes.len());
             let mut statuses = Vec::with_capacity(req.writes.len());
-            let mut combined: Option<CommitResult> = None;
             for decoded in decoded {
                 let outcome = decoded.and_then(|write| {
                     guard(db, std::slice::from_ref(&write), now)?;
@@ -1203,14 +1228,9 @@ impl LocalBackend {
                 match outcome {
                     Ok(result) => {
                         let encoded = encode_commit(&result);
-                        match &mut combined {
-                            Some(c) => {
-                                c.version = result.version;
-                                c.commit_time = result.commit_time;
-                                c.changes.extend(result.changes.iter().cloned());
-                            }
-                            None => combined = Some(result.clone()),
-                        }
+                        // Every successful write is its own commit and is published as such,
+                        // in write order, with its own commit time.
+                        self.publish(&parent, &result);
                         write_results
                             .push(encoded.write_results.into_iter().next().unwrap_or_default());
                         statuses.push(ftd_proto_firestore::google::rpc::Status {
@@ -1229,19 +1249,10 @@ impl LocalBackend {
                     }
                 }
             }
-            Ok((
-                pb::BatchWriteResponse {
-                    write_results,
-                    status: statuses,
-                },
-                combined,
-            ))
-        })
-        .map(|(response, combined)| {
-            if let Some(result) = combined {
-                self.publish(&parent, &result);
-            }
-            response
+            Ok(pb::BatchWriteResponse {
+                write_results,
+                status: statuses,
+            })
         })
     }
 }

@@ -888,3 +888,58 @@ async fn read_time_selectors_serve_historical_snapshots() {
     assert_eq!(docs[0].fields.get("v"), Some(&i(1)));
     handle.abort();
 }
+
+#[tokio::test]
+async fn list_documents_inside_a_transaction_records_the_scan() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("scan/a", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let listed = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "scan".to_owned(),
+            consistency_selector: Some(
+                pb::list_documents_request::ConsistencySelector::Transaction(txn.clone()),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(listed.documents.len(), 1);
+    // A document added to the scanned collection after the read aborts the transaction.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("scan/b", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let err = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("scan/a", &[("v", i(3))])],
+            transaction: txn,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Aborted);
+    handle.abort();
+}

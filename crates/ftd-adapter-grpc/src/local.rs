@@ -948,7 +948,7 @@ impl LocalBackend {
         })
     }
 
-    /// `ListDocuments` (no pagination tokens yet: the whole collection is returned).
+    /// `ListDocuments`: paged by name; transaction and `read_time` snapshots supported.
     pub fn list_documents(
         &self,
         req: &pb::ListDocumentsRequest,
@@ -969,22 +969,31 @@ impl LocalBackend {
                 .map_err(|_| Status::invalid_argument("malformed page_token"))?;
             Some(name)
         };
-        let read_at = match &req.consistency_selector {
+        let (txn, read_at) = match &req.consistency_selector {
             Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                Some(crate::encode::decode_instant(ts))
+                (None, Some(crate::encode::decode_instant(ts)))
             }
-            Some(pb::list_documents_request::ConsistencySelector::Transaction(_)) => {
-                // Never serve live data for a snapshot request.
-                return Err(Status::unimplemented(
-                    "ListDocuments inside a transaction is not implemented",
-                ));
+            Some(pb::list_documents_request::ConsistencySelector::Transaction(t)) => {
+                (Self::txn(&parent, t)?, None)
             }
-            None => None,
+            None => (None, None),
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let accepted = self.accepted_query(&parent, &list_query(req))?;
+        let now = self.now();
         self.with_db(&parent, |db| {
-            let version = read_at.map(|t| db.version_at(t));
+            let version = match (&txn, read_at) {
+                (Some(t), _) => {
+                    db.touch_transaction(t, now)
+                        .map_err(|e| status_from_error(&e))?;
+                    Some(
+                        db.transaction_read_version(t)
+                            .map_err(|e| status_from_error(&e))?,
+                    )
+                }
+                (None, Some(at)) => Some(db.version_at(at)),
+                (None, None) => None,
+            };
             guard(
                 db,
                 version,
@@ -993,8 +1002,14 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
-            let mut docs =
-                db.list_documents_at(parent.document.as_ref(), &req.collection_id, version);
+            // Inside a transaction the scan is recorded like a query, so a concurrent
+            // change to the collection aborts the commit.
+            let mut docs = match &txn {
+                Some(t) => db
+                    .run_query_in_transaction(t, &accepted.query)
+                    .map_err(|e| status_from_error(&e))?,
+                None => db.list_documents_at(parent.document.as_ref(), &req.collection_id, version),
+            };
             if let Some(after) = &after {
                 docs.retain(|d| d.path.resource_name() > *after);
             }

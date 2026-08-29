@@ -144,9 +144,10 @@ fn call_depth_19_20_21() {
 
 fn nested_matches(depth: usize) -> String {
     // The wrapper already contributes one match level (/databases/{db}/documents).
+    use std::fmt::Write as _;
     let mut s = String::new();
     for i in 0..depth {
-        s.push_str(&format!("match /c{i}/{{d{i}}} {{\n"));
+        writeln!(s, "match /c{i}/{{d{i}}} {{").unwrap();
     }
     s.push_str("allow read: if true;\n");
     for _ in 0..depth {
@@ -215,7 +216,7 @@ fn padded_to(bytes: usize) -> String {
     let base = wrap("    allow read: if true;");
     // Pad with a trailing comment; multibyte padding checks UTF-8 counting.
     let prefix = format!("{base}// ");
-    assert!(bytes >= prefix.len() + 1);
+    assert!(bytes > prefix.len());
     let remaining = bytes - prefix.len() - 1; // final newline
     let mut pad = String::new();
     while pad.len() + 3 <= remaining {

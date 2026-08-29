@@ -75,6 +75,7 @@ const BOUNDARIES: &[(&str, &str)] = &[
     ("exact", "Exact"),
     ("range-inclusive", "RangeInclusive"),
     ("syntax-constraint", "SyntaxConstraint"),
+    ("truncating-maximum", "TruncatingMaximum"),
 ];
 const UNITS: &[(&str, &str)] = &[
     ("count", "Count"),

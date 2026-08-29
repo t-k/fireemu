@@ -96,6 +96,8 @@ pub enum EventTransitionError {
     EpochIsCurrent,
     /// Attempt counter overflow.
     AttemptOverflow,
+    /// The retry instant is not representable in logical time.
+    RetryInstantOverflow,
 }
 
 impl fmt::Display for EventTransitionError {
@@ -108,6 +110,7 @@ impl fmt::Display for EventTransitionError {
             Self::RetryNotDue => f.write_str("retry is not due yet"),
             Self::EpochIsCurrent => f.write_str("event epoch is not older than the given epoch"),
             Self::AttemptOverflow => f.write_str("attempt counter overflow"),
+            Self::RetryInstantOverflow => f.write_str("retry instant overflows logical time"),
         }
     }
 }
@@ -219,7 +222,7 @@ impl EventRecord {
         if policy.allows_retry_after(self.attempt) {
             let retry_at = now
                 .checked_add(policy.backoff_for_attempt(self.attempt))
-                .unwrap_or(LogicalInstant::MAX);
+                .ok_or(EventTransitionError::RetryInstantOverflow)?;
             self.state = EventState::RetryWaiting { retry_at };
             Ok(FailureOutcome::RetryScheduled { retry_at })
         } else {

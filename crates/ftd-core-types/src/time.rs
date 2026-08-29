@@ -123,17 +123,43 @@ impl LogicalInstant {
 
     /// Formats the instant as RFC 3339 in UTC. Fractional nanoseconds are printed with nine
     /// digits only when non-zero so that canonical output stays stable.
-    #[must_use]
-    pub fn to_rfc3339(self) -> String {
+    ///
+    /// RFC 3339 only covers years 0000-9999; instants outside that range return
+    /// [`TimeFormatError`] instead of a string the parser would reject.
+    pub fn to_rfc3339(self) -> Result<String, TimeFormatError> {
         rfc3339::format(self)
     }
 }
 
+/// `Display` prints RFC 3339 when representable and an explicit `nanos=<i128>` form
+/// otherwise, so that diagnostics never carry a malformed timestamp.
 impl fmt::Display for LogicalInstant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_rfc3339())
+        match self.to_rfc3339() {
+            Ok(s) => f.write_str(&s),
+            Err(_) => write!(f, "nanos={}", self.0),
+        }
     }
 }
+
+/// Error returned when an instant cannot be represented as RFC 3339.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeFormatError {
+    /// Proleptic Gregorian year of the instant, outside 0..=9999.
+    pub year: i128,
+}
+
+impl fmt::Display for TimeFormatError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "year {} is outside the RFC 3339 range 0000-9999",
+            self.year
+        )
+    }
+}
+
+impl std::error::Error for TimeFormatError {}
 
 /// Error returned when an RFC 3339 string cannot be parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,7 +183,7 @@ impl fmt::Display for TimeParseError {
 impl std::error::Error for TimeParseError {}
 
 mod rfc3339 {
-    use super::{LogicalInstant, TimeParseError};
+    use super::{LogicalInstant, TimeFormatError, TimeParseError};
 
     const NANOS_PER_SEC: i128 = 1_000_000_000;
     const SECS_PER_DAY: i64 = 86_400;
@@ -312,20 +338,23 @@ mod rfc3339 {
         Ok(LogicalInstant(i128::from(utc_secs) * NANOS_PER_SEC + nanos))
     }
 
-    pub(super) fn format(instant: LogicalInstant) -> String {
+    pub(super) fn format(instant: LogicalInstant) -> Result<String, TimeFormatError> {
         let secs = instant.0.div_euclid(NANOS_PER_SEC);
         let nanos = instant.0.rem_euclid(NANOS_PER_SEC);
         let days = secs.div_euclid(i128::from(SECS_PER_DAY));
         let sod = secs.rem_euclid(i128::from(SECS_PER_DAY));
         let (year, month, day) = civil_from_days(days);
+        if !(0..=9_999).contains(&year) {
+            return Err(TimeFormatError { year });
+        }
         let hour = sod / 3_600;
         let minute = (sod % 3_600) / 60;
         let second = sod % 60;
-        if nanos == 0 {
+        Ok(if nanos == 0 {
             format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
         } else {
             format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z")
-        }
+        })
     }
 
     fn is_leap(y: i64) -> bool {

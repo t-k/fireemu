@@ -1,6 +1,7 @@
 //! Logical time: nanoseconds since the Unix epoch with checked arithmetic only.
 
-use ftd_core_types::time::{LogicalDuration, LogicalInstant, TimeParseError};
+use ftd_core_types::time::{LogicalDuration, LogicalInstant, TimeFormatError, TimeParseError};
+use proptest::prelude::*;
 
 #[test]
 fn instant_arithmetic_is_checked() {
@@ -24,11 +25,11 @@ fn instant_arithmetic_is_checked() {
 fn rfc3339_round_trips_utc_with_nanoseconds() {
     let t = LogicalInstant::parse_rfc3339("2026-08-29T12:01:00Z").unwrap();
     assert_eq!(t, LogicalInstant::from_unix_seconds(1_788_004_860));
-    assert_eq!(t.to_rfc3339(), "2026-08-29T12:01:00Z");
+    assert_eq!(t.to_rfc3339().unwrap(), "2026-08-29T12:01:00Z");
 
     let frac = LogicalInstant::parse_rfc3339("2026-08-29T12:01:00.000000123Z").unwrap();
     assert_eq!(frac.as_nanos(), t.as_nanos() + 123);
-    assert_eq!(frac.to_rfc3339(), "2026-08-29T12:01:00.000000123Z");
+    assert_eq!(frac.to_rfc3339().unwrap(), "2026-08-29T12:01:00.000000123Z");
 }
 
 #[test]
@@ -50,9 +51,9 @@ fn rfc3339_handles_epoch_and_negative_instants() {
     );
     let before = LogicalInstant::parse_rfc3339("1969-12-31T23:59:59Z").unwrap();
     assert_eq!(before, LogicalInstant::from_unix_seconds(-1));
-    assert_eq!(before.to_rfc3339(), "1969-12-31T23:59:59Z");
+    assert_eq!(before.to_rfc3339().unwrap(), "1969-12-31T23:59:59Z");
     let leap = LogicalInstant::parse_rfc3339("2000-02-29T00:00:00Z").unwrap();
-    assert_eq!(leap.to_rfc3339(), "2000-02-29T00:00:00Z");
+    assert_eq!(leap.to_rfc3339().unwrap(), "2000-02-29T00:00:00Z");
 }
 
 #[test]
@@ -89,4 +90,53 @@ fn duration_conversions() {
     assert_eq!(LogicalDuration::from_seconds(2).as_millis(), 2_000);
     assert!(LogicalDuration::from_seconds(1).is_positive());
     assert!(!LogicalDuration::ZERO.is_positive());
+}
+
+#[test]
+fn formatting_outside_rfc3339_year_range_is_an_error_not_a_bogus_string() {
+    let before_year_zero = LogicalInstant::from_unix_seconds(-62_167_219_201);
+    assert_eq!(
+        before_year_zero.to_rfc3339(),
+        Err(TimeFormatError { year: -1 })
+    );
+    assert!(matches!(
+        LogicalInstant::MAX.to_rfc3339(),
+        Err(TimeFormatError { .. })
+    ));
+    assert!(matches!(
+        LogicalInstant::MIN.to_rfc3339(),
+        Err(TimeFormatError { .. })
+    ));
+    // Display never panics and never emits something that looks like RFC 3339 but is not.
+    assert_eq!(
+        LogicalInstant::MAX.to_string(),
+        format!("nanos={}", i128::MAX)
+    );
+    // Year 0000 and 9999 are the inclusive edges.
+    assert_eq!(
+        LogicalInstant::parse_rfc3339("0000-01-01T00:00:00Z")
+            .unwrap()
+            .to_rfc3339()
+            .unwrap(),
+        "0000-01-01T00:00:00Z"
+    );
+    assert_eq!(
+        LogicalInstant::parse_rfc3339("9999-12-31T23:59:59.999999999Z")
+            .unwrap()
+            .to_rfc3339()
+            .unwrap(),
+        "9999-12-31T23:59:59.999999999Z"
+    );
+}
+
+proptest! {
+    #[test]
+    fn rfc3339_round_trips_over_the_representable_domain(
+        // 0000-01-01T00:00:00Z .. 9999-12-31T23:59:59.999999999Z in nanoseconds.
+        nanos in -62_167_219_200_000_000_000i128..=253_402_300_799_999_999_999i128
+    ) {
+        let t = LogicalInstant::from_nanos(nanos);
+        let s = t.to_rfc3339().unwrap();
+        prop_assert_eq!(LogicalInstant::parse_rfc3339(&s).unwrap(), t);
+    }
 }

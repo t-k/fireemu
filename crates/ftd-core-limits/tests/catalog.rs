@@ -4,7 +4,8 @@ use std::collections::BTreeSet;
 
 use ftd_core_limits::catalogs::{self, ALL_CATALOGS};
 use ftd_core_limits::model::{
-    EnforcementPrecision, ImplementationStatus, LimitBoundary, LimitMaximum, LimitUnit,
+    EnforcementPrecision, EnforcementStage, ImplementationStatus, LimitBoundary, LimitMaximum,
+    LimitUnit,
 };
 use ftd_core_types::ids::{LimitCatalogId, MAX_ID_UTF8_BYTES};
 
@@ -84,6 +85,13 @@ fn standard_catalog_matches_spec_table() {
     let entry_sum = c.find("FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT").unwrap();
     assert_eq!(entry_sum.maximum, LimitMaximum::Fixed(8 * 1024 * 1024));
     assert!(c.find("max_writes_per_commit").is_none());
+    // Production truncates indexed values instead of rejecting the write (spec 8.10.4).
+    let truncating = c.find("FS-LIMIT-INDEXED-FIELD-VALUE-BYTES").unwrap();
+    assert_eq!(truncating.boundary, LimitBoundary::TruncatingMaximum);
+    // Free quotas are observed, never enforced by default (spec 8.10.7).
+    for l in c.limits.iter().filter(|l| l.id.starts_with("FS-QUOTA-")) {
+        assert_eq!(l.enforcement_stage, EnforcementStage::Observe, "{}", l.id);
+    }
 }
 
 #[test]

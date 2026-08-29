@@ -57,6 +57,9 @@ pub enum LimitBoundary {
     RangeInclusive,
     /// A syntax constraint; the maximum, if any, is the UTF-8 byte cap.
     SyntaxConstraint,
+    /// Values above the maximum are truncated by the backend (for example indexed field
+    /// values), never rejected. Exceeding it yields a critical warning, not a violation.
+    TruncatingMaximum,
 }
 
 /// Unit in which `maximum` and observed values are expressed.

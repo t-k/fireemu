@@ -34,7 +34,7 @@ fn rank(d: &LimitDisposition) -> u8 {
             WarningSeverity::Warning => 2,
             WarningSeverity::Critical => 3,
         },
-        LimitDisposition::Reject(_) => 4,
+        LimitDisposition::Reject(_) | LimitDisposition::ObservedOverLimit(_) => 4,
     }
 }
 

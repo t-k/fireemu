@@ -27,7 +27,9 @@ fn severity(d: &LimitDisposition) -> Option<WarningSeverity> {
     match d {
         LimitDisposition::Allow => None,
         LimitDisposition::AllowWithWarnings(ws) => ws.first().map(|w| w.severity),
-        LimitDisposition::Reject(_) => panic!("unexpected rejection: {d:?}"),
+        LimitDisposition::Reject(_) | LimitDisposition::ObservedOverLimit(_) => {
+            panic!("unexpected over-limit disposition: {d:?}")
+        }
     }
 }
 
@@ -129,13 +131,14 @@ fn huge_values_do_not_overflow() {
 
 #[test]
 fn zero_maximum_rejects_any_usage_and_allows_zero() {
-    // RULES-RECURSION: maximum 0 cycles.
+    // RULES-RECURSION: maximum 0 cycles. A compliant ruleset (0 cycles) must not be flagged
+    // as near the limit; there is no approach zone below zero.
     let d = def(LimitBoundary::InclusiveMaximum, LimitMaximum::Fixed(0));
     let plan = FirestorePlanProfile::default();
-    assert!(matches!(
+    assert_eq!(
         evaluate(&d, 0, &plan, DEFAULT_THRESHOLDS),
-        LimitDisposition::AllowWithWarnings(_)
-    ));
+        LimitDisposition::Allow
+    );
     assert!(matches!(
         evaluate(&d, 1, &plan, DEFAULT_THRESHOLDS),
         LimitDisposition::Reject(_)
@@ -192,6 +195,45 @@ fn estimated_precision_is_carried_on_warnings_and_violations() {
         LimitDisposition::AllowWithWarnings(ws) => {
             assert_eq!(ws[0].precision, EnforcementPrecision::Estimated);
         }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn observe_stage_limits_report_but_never_reject() {
+    // FS-QUOTA-*: free quotas in `observe` accounting mode must not fail a test run.
+    let mut d = def(LimitBoundary::InclusiveMaximum, LimitMaximum::Fixed(50_000));
+    d.enforcement_stage = EnforcementStage::Observe;
+    let plan = FirestorePlanProfile::default();
+    match evaluate(&d, 50_001, &plan, DEFAULT_THRESHOLDS) {
+        LimitDisposition::ObservedOverLimit(v) => {
+            assert_eq!(v.current.value(), 50_001);
+            assert_eq!(v.maximum.value(), 50_000);
+        }
+        other => panic!("expected ObservedOverLimit, got {other:?}"),
+    }
+    assert_eq!(
+        severity(&evaluate(&d, 49_000, &plan, DEFAULT_THRESHOLDS)),
+        Some(WarningSeverity::Critical)
+    );
+}
+
+#[test]
+fn truncating_maximum_warns_but_never_rejects() {
+    // FS-LIMIT-INDEXED-FIELD-VALUE-BYTES: production truncates the indexed value at 1,500
+    // bytes; the full document value is kept and the write is not rejected.
+    let d = def(LimitBoundary::TruncatingMaximum, LimitMaximum::Fixed(1_500));
+    let plan = FirestorePlanProfile::default();
+    assert_eq!(
+        severity(&evaluate(&d, 1_501, &plan, DEFAULT_THRESHOLDS)),
+        Some(WarningSeverity::Critical)
+    );
+    assert_eq!(
+        severity(&evaluate(&d, 1_000, &plan, DEFAULT_THRESHOLDS)),
+        None
+    );
+    match evaluate(&d, 10_000, &plan, DEFAULT_THRESHOLDS) {
+        LimitDisposition::AllowWithWarnings(ws) => assert!(ws[0].ratio_micros > 1_000_000),
         other => panic!("{other:?}"),
     }
 }

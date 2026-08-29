@@ -6,7 +6,7 @@
 
 use core::fmt;
 
-use crate::model::{EnforcementPrecision, LimitBoundary, LimitDefinition};
+use crate::model::{EnforcementPrecision, EnforcementStage, LimitBoundary, LimitDefinition};
 use crate::plan::FirestorePlanProfile;
 
 /// An observed or maximum amount in the limit's unit.
@@ -171,6 +171,9 @@ pub enum LimitDisposition {
     AllowWithWarnings(Vec<LimitWarning>),
     /// Boundary violated; reject without any state change.
     Reject(LimitViolation),
+    /// Boundary violated on a limit whose enforcement stage is `Observe`: recorded and
+    /// reported, never rejected (free quotas in `observe` accounting mode, for example).
+    ObservedOverLimit(LimitViolation),
 }
 
 /// Revision of the wire error mapping (spec 8.10.10). Bumped when conformance fixtures change
@@ -187,6 +190,8 @@ pub const fn violates_boundary(boundary: LimitBoundary, current: u64, maximum: u
         | LimitBoundary::RangeInclusive => current > maximum,
         LimitBoundary::ExclusiveMaximum => current >= maximum,
         LimitBoundary::Exact => current != maximum,
+        // The backend truncates instead of rejecting; warnings still fire (spec 8.10.4).
+        LimitBoundary::TruncatingMaximum => false,
     }
 }
 
@@ -194,8 +199,9 @@ pub const fn violates_boundary(boundary: LimitBoundary, current: u64, maximum: u
 #[must_use]
 pub fn reaches_threshold(current: u64, maximum: u64, basis_points: u16) -> bool {
     if maximum == 0 {
-        // A zero maximum means any usage is at 100%.
-        return true;
+        // A zero maximum ("not permitted") has no approach zone: zero usage is fully
+        // compliant and anything above it is a boundary violation handled before warnings.
+        return current > 0;
     }
     u128::from(current) * 10_000 >= u128::from(maximum) * u128::from(basis_points)
 }
@@ -218,7 +224,7 @@ pub fn classify_severity(
 #[must_use]
 pub fn ratio_micros(current: u64, maximum: u64) -> u32 {
     if maximum == 0 {
-        return if current == 0 { 1_000_000 } else { u32::MAX };
+        return if current == 0 { 0 } else { u32::MAX };
     }
     let micros = u128::from(current) * 1_000_000 / u128::from(maximum);
     u32::try_from(micros).unwrap_or(u32::MAX)
@@ -236,14 +242,20 @@ pub fn evaluate(
         return LimitDisposition::Allow;
     };
     if violates_boundary(def.boundary, current, maximum) {
-        return LimitDisposition::Reject(LimitViolation {
+        let violation = LimitViolation {
             limit_id: def.id,
             current: LimitAmount(current),
             maximum: LimitAmount(maximum),
             boundary: def.boundary,
             precision: def.precision,
             wire_mapping_revision: WIRE_MAPPING_REVISION,
-        });
+        };
+        // Observe-stage limits (free quotas, drift monitors) never reject a request.
+        return if def.enforcement_stage == EnforcementStage::Observe {
+            LimitDisposition::ObservedOverLimit(violation)
+        } else {
+            LimitDisposition::Reject(violation)
+        };
     }
     match classify_severity(current, maximum, thresholds) {
         None => LimitDisposition::Allow,

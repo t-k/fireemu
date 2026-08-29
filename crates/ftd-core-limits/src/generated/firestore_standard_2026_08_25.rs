@@ -271,7 +271,7 @@ pub const CATALOG: LimitCatalog = LimitCatalog {
         LimitDefinition {
             id: "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
             class: LimitClass::HardResource,
-            boundary: LimitBoundary::InclusiveMaximum,
+            boundary: LimitBoundary::TruncatingMaximum,
             unit: LimitUnit::Bytes,
             maximum: LimitMaximum::Fixed(1500),
             precision: EnforcementPrecision::BoundaryConformance,

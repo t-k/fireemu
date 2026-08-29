@@ -194,3 +194,13 @@ fn event_type_rejects_empty_and_control_characters() {
     assert!(EventType::try_new("a b").is_err());
     assert!(EventType::try_new("google.cloud.storage.object.v1.finalized").is_ok());
 }
+
+#[test]
+fn retry_instant_overflow_is_a_typed_error_that_leaves_the_record_running() {
+    let mut r = EventRecord::new(event(Epoch::initial()));
+    r.lease().unwrap();
+    r.start().unwrap();
+    let result = r.fail(&policy(), LogicalInstant::MAX);
+    assert_eq!(result, Err(EventTransitionError::RetryInstantOverflow));
+    assert_eq!(r.state(), &EventState::Running);
+}

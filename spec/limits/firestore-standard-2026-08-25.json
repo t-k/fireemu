@@ -263,7 +263,7 @@
     {
       "id": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "class": "hard-resource",
-      "boundary": "inclusive-maximum",
+      "boundary": "truncating-maximum",
       "unit": "bytes",
       "maximum": 1500,
       "precision": "boundary-conformance",

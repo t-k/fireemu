@@ -356,6 +356,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-core-functions"
+version = "0.1.0"
+dependencies = [
+ "ftd-core-types",
+]
+
+[[package]]
 name = "ftd-core-limits"
 version = "0.1.0"
 dependencies = [

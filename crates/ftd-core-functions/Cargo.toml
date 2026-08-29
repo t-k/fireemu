@@ -1,0 +1,15 @@
+[package]
+name = "ftd-core-functions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only Cloud Functions core: function manifest, trigger matching, cron schedules, CloudEvent attributes"
+
+[dependencies]
+ftd-core-types = { path = "../ftd-core-types" }
+
+[lints]
+workspace = true

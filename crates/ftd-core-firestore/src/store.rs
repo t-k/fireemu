@@ -158,6 +158,17 @@ pub struct WriteResult {
     pub transform_results: Vec<Value>,
 }
 
+/// One document changed by a commit (event source).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentChange {
+    /// Path.
+    pub path: DocumentPath,
+    /// The document before the commit (`None` = absent).
+    pub before: Option<Document>,
+    /// The document after the commit (`None` = deleted).
+    pub after: Option<Document>,
+}
+
 /// Commit result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommitResult {
@@ -167,6 +178,8 @@ pub struct CommitResult {
     pub write_results: Vec<WriteResult>,
     /// Version assigned to the commit.
     pub version: CommitVersion,
+    /// Documents that actually changed, in path order (no-op writes are not listed).
+    pub changes: Vec<DocumentChange>,
 }
 
 /// Aggregation.
@@ -604,12 +617,19 @@ impl FirestoreState {
             .collect();
         // Every accepted commit consumes a commit time, changed documents or not.
         self.last_commit_time = Some(commit_time);
+        let mut document_changes = Vec::with_capacity(changed.len());
         let version = if changed.is_empty() {
             self.version
         } else {
             self.version = next_version;
             self.commit_times.push((next_version, commit_time));
             for (path, doc) in changed {
+                let before = self.get(&path).cloned();
+                document_changes.push(DocumentChange {
+                    path: path.clone(),
+                    before,
+                    after: doc.clone(),
+                });
                 self.history
                     .entry(path)
                     .or_default()
@@ -626,6 +646,7 @@ impl FirestoreState {
             commit_time,
             write_results: results,
             version,
+            changes: document_changes,
         })
     }
 

@@ -9,6 +9,7 @@ members = [
     "crates/ftd-core-rules",
     "crates/ftd-core-auth",
     "crates/ftd-core-storage",
+    "crates/ftd-core-functions",
     "crates/ftd-proto-firestore",
     "crates/ftd-adapter-grpc",
     "crates/ftd-adapter-http",

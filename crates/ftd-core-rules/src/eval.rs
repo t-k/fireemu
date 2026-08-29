@@ -1174,10 +1174,23 @@ fn method_call(
                 _ => return Err(soft("split() expects a string")),
             }
         }
-        (V::String(_), "matches" | "replace") => {
-            return Err(EvalError::Unsupported(format!(
-                "string.{name}() (regular expressions) is not implemented"
-            )))
+        (V::String(s), "matches") => {
+            arity(1)?;
+            let V::String(pattern) = &args[0] else {
+                return Err(soft("matches() expects a string pattern"));
+            };
+            let re = crate::regex::Regex::new(pattern)
+                .map_err(|e| EvalError::Unsupported(e.to_string()))?;
+            V::Bool(re.is_full_match(s))
+        }
+        (V::String(s), "replace") => {
+            arity(2)?;
+            let (V::String(pattern), V::String(replacement)) = (&args[0], &args[1]) else {
+                return Err(soft("replace() expects a pattern and a replacement"));
+            };
+            let re = crate::regex::Regex::new(pattern)
+                .map_err(|e| EvalError::Unsupported(e.to_string()))?;
+            V::String(re.replace_all(s, replacement))
         }
         (V::List(items), "size") => {
             arity(0)?;

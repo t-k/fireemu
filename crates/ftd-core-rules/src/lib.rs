@@ -5,5 +5,6 @@ pub mod ast;
 pub mod eval;
 pub mod lint;
 pub mod parse;
+pub mod regex;
 pub mod runtime;
 pub mod value;

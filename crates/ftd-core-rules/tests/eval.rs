@@ -620,3 +620,53 @@ service cloud.firestore {
         })
     ));
 }
+
+#[test]
+fn string_matches_and_replace_use_the_regex_engine() {
+    let rules = "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /images/{file} {
+      allow write: if request.resource.contentType.matches('image/.*')
+                   && file.matches('[^/]+\\\\.(png|jpg)')
+                   && file.replace('\\\\.png$', '') != 'forbidden';
+    }
+  }
+}";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let mut incoming = BTreeMap::new();
+    incoming.insert(
+        "contentType".to_owned(),
+        RulesValue::String("image/png".into()),
+    );
+    let ctx = |file: &str, ct: &str| {
+        let mut incoming = incoming.clone();
+        incoming.insert("contentType".to_owned(), RulesValue::String(ct.into()));
+        RequestContext {
+            service: ftd_core_rules::eval::RulesService::Storage,
+            method: Method::Create,
+            path: format!("/b/demo/o/images/{file}"),
+            auth: None,
+            resource: None,
+            request_resource: Some(RulesValue::Map(incoming)),
+            time_unix_nanos: 0,
+            abstract_path: false,
+        }
+    };
+    assert!(matches!(
+        evaluate_request(&ruleset, &ctx("cat.png", "image/png")).decision,
+        Decision::Allow
+    ));
+    assert!(matches!(
+        evaluate_request(&ruleset, &ctx("cat.png", "text/plain")).decision,
+        Decision::Deny(_)
+    ));
+    assert!(matches!(
+        evaluate_request(&ruleset, &ctx("cat.gif", "image/gif")).decision,
+        Decision::Deny(_)
+    ));
+    assert!(matches!(
+        evaluate_request(&ruleset, &ctx("forbidden.png", "image/png")).decision,
+        Decision::Deny(_)
+    ));
+}

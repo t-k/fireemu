@@ -149,12 +149,16 @@ mod scenarios {
         });
     }
 
-    /// M-IDLE-002: with the reservation held across the parent's completion, an observer can
-    /// never see idle between the parent's end and the child's begin.
+    /// M-IDLE-002: the parent -> child handoff is atomic. If an observer ever sees the ledger
+    /// idle, no fenced work may begin afterwards; the latch makes the scenario fail for a
+    /// ledger that lets the reservation lapse before the child is registered.
     #[test]
     fn await_idle_races_with_child_enqueue() {
+        use loom::sync::atomic::{AtomicBool, Ordering};
+
         loom::model(|| {
             let ledger = Arc::new(Mutex::new(WorkLedger::new(Epoch::initial())));
+            let saw_idle = Arc::new(AtomicBool::new(false));
             let parent = ledger
                 .lock()
                 .unwrap()
@@ -163,6 +167,7 @@ mod scenarios {
 
             let chain = {
                 let ledger = ledger.clone();
+                let saw_idle = saw_idle.clone();
                 thread::spawn(move || {
                     let reservation = ledger
                         .lock()
@@ -170,22 +175,23 @@ mod scenarios {
                         .begin(WorkKind::ChildEnqueueReservation, Epoch::initial())
                         .unwrap();
                     ledger.lock().unwrap().end(parent).unwrap();
-                    let child = ledger
-                        .lock()
-                        .unwrap()
-                        .begin(WorkKind::EventDispatch, Epoch::initial())
-                        .unwrap();
-                    ledger.lock().unwrap().end(reservation).unwrap();
+                    let child = {
+                        let mut l = ledger.lock().unwrap();
+                        let child = l.handoff(reservation, WorkKind::EventDispatch).unwrap();
+                        // Fenced work is starting: idle must not have been observed before.
+                        assert!(!saw_idle.load(Ordering::SeqCst), "false idle before child");
+                        child
+                    };
                     ledger.lock().unwrap().end(child).unwrap();
                 })
             };
             let observer = {
                 let ledger = ledger.clone();
+                let saw_idle = saw_idle.clone();
                 thread::spawn(move || {
                     let l = ledger.lock().unwrap();
-                    let verdict = l.verdict(&AwaitIdleOptions::default());
-                    // Idle is only acceptable once nothing at all is registered.
-                    if verdict == IdleVerdict::Idle {
+                    if l.verdict(&AwaitIdleOptions::default()) == IdleVerdict::Idle {
+                        saw_idle.store(true, Ordering::SeqCst);
                         assert_eq!(l.active_total(), 0);
                     }
                 })
@@ -195,6 +201,7 @@ mod scenarios {
             assert_eq!(ledger.lock().unwrap().active_total(), 0);
         });
     }
+
     /// INV-EVENT-001: a success and a retry-timer firing race on the same record; whichever
     /// wins, the record ends terminal-or-pending consistently and never regresses from
     /// Succeeded.
@@ -220,11 +227,12 @@ mod scenarios {
                 correlation_id: CorrelationId::new(1),
                 payload: Vec::new(),
             };
-            let policy = RetryPolicy {
-                max_attempts: 3,
-                base_backoff: LogicalDuration::from_seconds(1),
-                max_backoff: LogicalDuration::from_seconds(1),
-            };
+            let policy = RetryPolicy::try_new(
+                3,
+                LogicalDuration::from_seconds(1),
+                LogicalDuration::from_seconds(1),
+            )
+            .unwrap();
             let record = Arc::new(Mutex::new(EventRecord::new(event)));
             {
                 let mut r = record.lock().unwrap();

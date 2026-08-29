@@ -23,11 +23,12 @@ fn event(epoch: Epoch) -> LogicalEvent {
 }
 
 fn policy() -> RetryPolicy {
-    RetryPolicy {
-        max_attempts: 3,
-        base_backoff: LogicalDuration::from_seconds(1),
-        max_backoff: LogicalDuration::from_seconds(60),
-    }
+    RetryPolicy::try_new(
+        3,
+        LogicalDuration::from_seconds(1),
+        LogicalDuration::from_seconds(60),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -95,11 +96,12 @@ fn failure_retries_with_backoff_until_max_attempts_then_dead_letters() {
 
 #[test]
 fn backoff_is_capped_and_never_overflows() {
-    let p = RetryPolicy {
-        max_attempts: u32::MAX,
-        base_backoff: LogicalDuration::from_seconds(1),
-        max_backoff: LogicalDuration::from_seconds(60),
-    };
+    let p = RetryPolicy::try_new(
+        u32::MAX,
+        LogicalDuration::from_seconds(1),
+        LogicalDuration::from_seconds(60),
+    )
+    .unwrap();
     assert_eq!(p.backoff_for_attempt(1), LogicalDuration::from_seconds(1));
     assert_eq!(p.backoff_for_attempt(6), LogicalDuration::from_seconds(32));
     assert_eq!(p.backoff_for_attempt(7), LogicalDuration::from_seconds(60));
@@ -203,4 +205,32 @@ fn retry_instant_overflow_is_a_typed_error_that_leaves_the_record_running() {
     let result = r.fail(&policy(), LogicalInstant::MAX);
     assert_eq!(result, Err(EventTransitionError::RetryInstantOverflow));
     assert_eq!(r.state(), &EventState::Running);
+}
+
+#[test]
+fn retry_policy_rejects_zero_attempts_negative_and_inverted_backoffs() {
+    use ftd_core_events::retry::RetryPolicyError;
+    let one = LogicalDuration::from_seconds(1);
+    assert_eq!(
+        RetryPolicy::try_new(0, one, one),
+        Err(RetryPolicyError::ZeroAttempts)
+    );
+    assert_eq!(
+        RetryPolicy::try_new(1, LogicalDuration::from_seconds(-1), one),
+        Err(RetryPolicyError::NegativeBackoff)
+    );
+    assert_eq!(
+        RetryPolicy::try_new(1, LogicalDuration::from_seconds(2), one),
+        Err(RetryPolicyError::BaseExceedsMax)
+    );
+    // One attempt: the first failure dead-letters immediately (matches the TLA+ bound).
+    let no_retry = RetryPolicy::try_new(1, one, one).unwrap();
+    let mut r = EventRecord::new(event(Epoch::initial()));
+    r.lease().unwrap();
+    r.start().unwrap();
+    assert_eq!(
+        r.fail(&no_retry, LogicalInstant::UNIX_EPOCH).unwrap(),
+        FailureOutcome::DeadLettered
+    );
+    assert_eq!(r.state(), &EventState::DeadLettered { attempts: 1 });
 }

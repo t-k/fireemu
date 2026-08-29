@@ -96,6 +96,15 @@ pub enum IdleLedgerError {
     },
     /// Token space exhausted (practically unreachable).
     TokenExhausted,
+    /// `handoff` was given a token that is not a child-enqueue reservation.
+    NotAReservation(WorkToken),
+    /// `reset` was given an epoch that is not newer than the ledger epoch.
+    EpochNotNewer {
+        /// Ledger epoch.
+        current: Epoch,
+        /// Requested epoch.
+        requested: Epoch,
+    },
 }
 
 impl fmt::Display for IdleLedgerError {
@@ -109,6 +118,12 @@ impl fmt::Display for IdleLedgerError {
                 )
             }
             Self::TokenExhausted => f.write_str("work token space exhausted"),
+            Self::NotAReservation(t) => {
+                write!(f, "work token {} is not a child-enqueue reservation", t.0)
+            }
+            Self::EpochNotNewer { current, requested } => {
+                write!(f, "ledger epoch {requested} is not newer than {current}")
+            }
         }
     }
 }
@@ -176,11 +191,38 @@ impl WorkLedger {
             .ok_or(IdleLedgerError::UnknownToken(token))
     }
 
-    /// Switches to a new epoch, dropping every registration from the old one. Old-epoch work
-    /// is discarded by the epoch guard before it can mutate state, so it no longer fences.
-    pub fn reset(&mut self, new_epoch: Epoch) {
+    /// Atomically releases a child-enqueue reservation and registers the child it promised.
+    /// This is the only correct way to hand work from a parent to its child: between the two
+    /// halves no observer can see the ledger idle (M-IDLE-002).
+    pub fn handoff(
+        &mut self,
+        reservation: WorkToken,
+        child: WorkKind,
+    ) -> Result<WorkToken, IdleLedgerError> {
+        match self.active.get(&reservation) {
+            Some(WorkKind::ChildEnqueueReservation) => {}
+            Some(_) => return Err(IdleLedgerError::NotAReservation(reservation)),
+            None => return Err(IdleLedgerError::UnknownToken(reservation)),
+        }
+        // Register the child first so that the ledger is never momentarily empty.
+        let token = self.begin(child, self.epoch)?;
+        self.active.remove(&reservation);
+        Ok(token)
+    }
+
+    /// Switches to a strictly newer epoch, dropping every registration from the old one.
+    /// Old-epoch work is discarded by the epoch guard before it can mutate state, so it no
+    /// longer fences; tokens issued before the reset become unknown.
+    pub fn reset(&mut self, new_epoch: Epoch) -> Result<(), IdleLedgerError> {
+        if new_epoch <= self.epoch {
+            return Err(IdleLedgerError::EpochNotNewer {
+                current: self.epoch,
+                requested: new_epoch,
+            });
+        }
         self.epoch = new_epoch;
         self.active.clear();
+        Ok(())
     }
 
     /// Total registered work regardless of options.

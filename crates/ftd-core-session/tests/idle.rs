@@ -61,12 +61,54 @@ fn child_enqueue_reservation_counts_as_work() {
     ledger.end(parent).unwrap();
     assert!(matches!(ledger.verdict(&opts()), IdleVerdict::Busy { .. }));
     let child = ledger
-        .begin(WorkKind::EventDispatch, Epoch::initial())
+        .handoff(reservation, WorkKind::EventDispatch)
         .unwrap();
-    ledger.end(reservation).unwrap();
     assert!(matches!(ledger.verdict(&opts()), IdleVerdict::Busy { .. }));
+    assert_eq!(
+        ledger.end(reservation),
+        Err(IdleLedgerError::UnknownToken(reservation))
+    );
     ledger.end(child).unwrap();
     assert_eq!(ledger.verdict(&opts()), IdleVerdict::Idle);
+}
+
+#[test]
+fn handoff_requires_a_reservation_token() {
+    let mut ledger = WorkLedger::new(Epoch::initial());
+    let commit = ledger
+        .begin(WorkKind::FirestoreCommit, Epoch::initial())
+        .unwrap();
+    assert_eq!(
+        ledger.handoff(commit, WorkKind::EventDispatch),
+        Err(IdleLedgerError::NotAReservation(commit))
+    );
+    ledger.end(commit).unwrap();
+    assert_eq!(
+        ledger.handoff(commit, WorkKind::EventDispatch),
+        Err(IdleLedgerError::UnknownToken(commit))
+    );
+    assert_eq!(ledger.active_total(), 0);
+}
+
+#[test]
+fn ledger_reset_only_accepts_a_newer_epoch() {
+    let mut ledger = WorkLedger::new(Epoch::new(2));
+    assert_eq!(
+        ledger.reset(Epoch::new(2)),
+        Err(IdleLedgerError::EpochNotNewer {
+            current: Epoch::new(2),
+            requested: Epoch::new(2)
+        })
+    );
+    assert_eq!(
+        ledger.reset(Epoch::new(1)),
+        Err(IdleLedgerError::EpochNotNewer {
+            current: Epoch::new(2),
+            requested: Epoch::new(1)
+        })
+    );
+    ledger.reset(Epoch::new(3)).unwrap();
+    assert_eq!(ledger.epoch(), Epoch::new(3));
 }
 
 #[test]
@@ -116,7 +158,7 @@ fn stale_epoch_work_cannot_be_registered_and_reset_drops_old_work() {
         .begin(WorkKind::EventDispatch, Epoch::initial())
         .unwrap();
     let new_epoch = Epoch::new(1);
-    ledger.reset(new_epoch);
+    ledger.reset(new_epoch).unwrap();
     assert_eq!(ledger.verdict(&opts()), IdleVerdict::Idle);
     assert_eq!(
         ledger.begin(WorkKind::EventDispatch, Epoch::initial()),

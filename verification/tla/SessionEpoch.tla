@@ -59,8 +59,9 @@ CompleteReset ==
     /\ state' = "Active"
     /\ UNCHANGED <<epoch, workEpoch, applied>>
 
+\* A session is always closable, including from an unfinished reset.
 BeginClose ==
-    /\ state \in {"Creating", "Active"}
+    /\ state \in {"Creating", "Active", "Resetting"}
     /\ state' = "Closing"
     /\ UNCHANGED <<epoch, workEpoch, applied>>
 

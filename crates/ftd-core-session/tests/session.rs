@@ -129,3 +129,18 @@ fn clock_is_owned_by_the_session_and_survives_reset() {
     s.complete_reset().unwrap();
     assert_eq!(s.clock().now(), LogicalInstant::from_unix_seconds(5));
 }
+
+#[test]
+fn a_session_stuck_in_resetting_can_still_be_closed() {
+    let mut s = active_session();
+    s.begin_reset().unwrap();
+    assert_eq!(s.state(), SessionState::Resetting);
+    s.begin_close().unwrap();
+    assert_eq!(s.state(), SessionState::Closing);
+    s.complete_close().unwrap();
+    assert_eq!(s.state(), SessionState::Closed);
+    assert_eq!(
+        s.check_work_epoch(s.epoch()),
+        WorkResult::SessionNotActive(SessionState::Closed)
+    );
+}

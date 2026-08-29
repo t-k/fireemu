@@ -20,11 +20,24 @@ fn all_catalog_ids_are_valid_and_unique() {
 }
 
 #[test]
-fn limit_ids_are_unique_across_all_catalogs() {
-    let mut seen = BTreeSet::new();
+fn limit_ids_are_unique_within_a_catalog_and_within_a_family_across_revisions() {
+    // A later revision of the same (product, edition) family may carry the same IDs; two
+    // different families never share an ID.
+    let mut owner: std::collections::BTreeMap<&str, (&str, &str)> =
+        std::collections::BTreeMap::new();
     for c in ALL_CATALOGS {
+        let mut seen = BTreeSet::new();
         for l in c.limits {
-            assert!(seen.insert(l.id), "duplicate limit id {}", l.id);
+            assert!(
+                seen.insert(l.id),
+                "duplicate limit id {} in {}",
+                l.id,
+                c.meta.id
+            );
+            let family = (c.meta.product, c.meta.edition);
+            if let Some(prev) = owner.insert(l.id, family) {
+                assert_eq!(prev, family, "{} is shared across families", l.id);
+            }
         }
     }
 }

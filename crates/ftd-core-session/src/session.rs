@@ -40,7 +40,7 @@ pub enum SessionAction {
     BeginReset,
     /// `Resetting -> Active`.
     CompleteReset,
-    /// `Active | Creating -> Closing`.
+    /// `Creating | Active | Resetting -> Closing`.
     BeginClose,
     /// `Closing -> Closed`.
     CompleteClose,
@@ -206,11 +206,16 @@ impl Session {
         )
     }
 
-    /// `Creating | Active -> Closing`.
+    /// `Creating | Active | Resetting -> Closing`. A session must always be closable, even
+    /// when a reset was started and never completed.
     pub fn begin_close(&mut self) -> Result<(), SessionTransitionError> {
         self.transition(
             SessionAction::BeginClose,
-            &[SessionState::Creating, SessionState::Active],
+            &[
+                SessionState::Creating,
+                SessionState::Active,
+                SessionState::Resetting,
+            ],
             SessionState::Closing,
         )
     }

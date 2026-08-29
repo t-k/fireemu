@@ -392,7 +392,11 @@ fn load_catalogs(spec_dir: &Path) -> Result<Vec<(String, CatalogJson)>, String> 
     files.sort();
     let mut out = Vec::new();
     let mut ids = BTreeSet::new();
-    let mut limit_ids = BTreeSet::new();
+    // Limit IDs are unique within a catalog. Across catalogs the same ID may recur only in
+    // another revision of the same (product, edition) family: catalogs are immutable and a
+    // new official date adds a new catalog carrying the same IDs (ADR-016).
+    let mut limit_owner: std::collections::BTreeMap<String, (String, String)> =
+        std::collections::BTreeMap::new();
     for f in files {
         let text = fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
         let catalog: CatalogJson =
@@ -413,11 +417,17 @@ fn load_catalogs(spec_dir: &Path) -> Result<Vec<(String, CatalogJson)>, String> 
             return Err(format!("duplicate catalog id {}", catalog.id));
         }
         for l in &catalog.limits {
-            if !limit_ids.insert(l.id.clone()) {
-                return Err(format!(
-                    "limit id {} appears in more than one catalog",
-                    l.id
-                ));
+            let family = (catalog.product.clone(), catalog.edition.clone());
+            match limit_owner.get(&l.id) {
+                Some(owner) if *owner != family => {
+                    return Err(format!(
+                        "limit id {} appears in catalogs of different families ({}/{} and {}/{})",
+                        l.id, owner.0, owner.1, family.0, family.1
+                    ));
+                }
+                _ => {
+                    limit_owner.insert(l.id.clone(), family);
+                }
             }
         }
         out.push((format!("spec/limits/{stem}.json"), catalog));

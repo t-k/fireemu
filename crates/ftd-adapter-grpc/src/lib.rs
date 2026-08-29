@@ -7,5 +7,7 @@
 //! upstream they are answered with `UNIMPLEMENTED` (never a silent local success).
 
 pub mod decode;
+pub mod encode;
 pub mod gateway;
+pub mod local;
 pub mod service;

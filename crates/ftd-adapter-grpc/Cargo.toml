@@ -12,6 +12,7 @@ description = "gRPC shell: Firestore v1 wire decoding, strict gateway validation
 ftd-core-types = { path = "../ftd-core-types" }
 ftd-core-limits = { path = "../ftd-core-limits" }
 ftd-core-firestore = { path = "../ftd-core-firestore" }
+ftd-core-session = { path = "../ftd-core-session" }
 ftd-proto-firestore = { path = "../ftd-proto-firestore" }
 prost-types = "0.13"
 tonic = { version = "0.13", features = ["transport", "codegen", "prost"] }

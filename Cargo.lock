@@ -276,6 +276,7 @@ version = "0.1.0"
 dependencies = [
  "ftd-core-firestore",
  "ftd-core-limits",
+ "ftd-core-session",
  "ftd-core-types",
  "ftd-proto-firestore",
  "prost-types",

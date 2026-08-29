@@ -5,6 +5,7 @@ members = [
     "crates/ftd-core-limits",
     "crates/ftd-core-session",
     "crates/ftd-core-events",
+    "crates/ftd-core-firestore",
     "tools/limit-catalog-gen",
     "tools/traceability-check",
     "tools/config-schema-check",

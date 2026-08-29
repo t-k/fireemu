@@ -189,6 +189,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-core-firestore"
+version = "0.1.0"
+dependencies = [
+ "ftd-core-limits",
+ "ftd-core-types",
+ "proptest",
+]
+
+[[package]]
 name = "ftd-core-limits"
 version = "0.1.0"
 dependencies = [

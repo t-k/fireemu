@@ -23,6 +23,7 @@ const FORWARDED_HEADERS: &[&str] = &[
     "content-type",
     "content-range",
     "range",
+    "x-goog-hash",
     "x-goog-upload-protocol",
     "x-goog-upload-command",
     "x-goog-upload-offset",

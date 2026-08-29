@@ -154,10 +154,23 @@
         "secretMaterialization": { "enum": ["redact", "allow"] }
       }
     },
+    "daemon": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "firestorePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "httpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "storagePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "clockStart": { "type": "string", "format": "date-time" },
+        "seed": { "type": "integer", "minimum": 0 },
+        "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+      }
+    },
     "storage": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "rules": { "type": "string", "description": "Path of the Storage Security Rules file (service firebase.storage)." },
         "mode": { "enum": ["native"] },
         "objectNameNormalization": { "enum": ["preserve"] },
         "persistence": { "enum": ["memory", "snapshot-files", "redb"] }

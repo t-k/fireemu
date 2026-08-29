@@ -30,6 +30,7 @@ fn state(rules: Option<&str>) -> StorageState {
             LoadedRules::from_source(r).unwrap()
         }))),
         project: "demo-app".to_owned(),
+        upload_principals: Mutex::new(BTreeMap::new()),
     }
 }
 
@@ -679,4 +680,414 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
     assert_eq!(json_body(&r)["items"][0]["name"], "stream.bin");
     let r = handle(&s, &req("GET", &format!("/b/{BUCKET}"), &[], b""));
     assert_eq!(json_body(&r)["kind"], "storage#bucket");
+}
+
+fn user_token(s: &StorageState) -> (String, String) {
+    let mut store = s.auth.lock().unwrap();
+    let uid = store
+        .create_user(NewUser::email("u@example.com"), START)
+        .unwrap();
+    let claims = store.id_token_claims(&uid, None, START).unwrap();
+    (
+        uid.as_str().to_owned(),
+        format!("Firebase {}", ftd_core_auth::jwt::encode_unsigned(&claims)),
+    )
+}
+
+#[test]
+fn multipart_payloads_keep_their_trailing_line_breaks() {
+    let s = state(None);
+    for data in [
+        &b"line\n"[..],
+        b"crlf\r\n",
+        b"\r\n\r\n",
+        b"--ftd-boundary-ish\r\n",
+    ] {
+        let (ct, body) = multipart(&json!({"name": "t.txt"}), "text/plain", data);
+        let r = handle(
+            &s,
+            &req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?uploadType=multipart"),
+                &[("authorization", "Bearer owner"), ("content-type", &ct)],
+                &body,
+            ),
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        assert_eq!(json_body(&r)["size"], data.len().to_string());
+        let r = handle(
+            &s,
+            &req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/t.txt?alt=media"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        assert_eq!(r.body, data, "{data:?}");
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn resumable_uploads_are_authorized_at_finalization_against_the_received_bytes() {
+    let s = state(Some(
+        "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /small/{file} {
+      allow write: if request.resource.size < 5 && request.resource.md5Hash is string;
+    }
+  }
+}",
+    ));
+    let (_uid, auth) = user_token(&s);
+    // No declared length: the received bytes decide at finalization.
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=small%2Fx.bin"),
+            &[
+                ("authorization", &auth),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let session = header(&r, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    // Finalizing without credentials still uses the principal that started the session.
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"ten bytes!",
+        ),
+    );
+    assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        handle(
+            &s,
+            &req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/small%2Fx.bin"),
+                &[("authorization", "Bearer owner")],
+                b""
+            )
+        )
+        .status,
+        404,
+        "nothing was committed"
+    );
+    // A checksum mismatch is refused before commit.
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=small%2Fy.bin"),
+            &[
+                ("authorization", &auth),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    let session = header(&r, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+                ("x-goog-hash", "crc32c=AAAAAA=="),
+            ],
+            b"abc",
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    let r = handle(
+        &s,
+        &req("POST", &session, &[("x-goog-upload-command", "query")], b""),
+    );
+    assert_eq!(header(&r, "x-goog-upload-status"), Some("active"));
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-command", "finalize"),
+                ("x-goog-upload-offset", "3"),
+                (
+                    "x-goog-hash",
+                    &format!(
+                        "crc32c={}",
+                        ftd_core_storage::hash::base64(
+                            &ftd_core_storage::hash::crc32c(b"abc").to_be_bytes()
+                        )
+                    ),
+                ),
+            ],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    // The session reports the committed generation afterwards.
+    let r = handle(
+        &s,
+        &req("POST", &session, &[("x-goog-upload-command", "query")], b""),
+    );
+    assert_eq!(header(&r, "x-goog-upload-status"), Some("final"));
+    assert_eq!(header(&r, "x-goog-upload-size-received"), Some("3"));
+}
+
+#[test]
+fn metadata_updates_are_authorized_on_the_exact_result() {
+    let s = state(Some(
+        "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /docs/{file} {
+      allow read, create: if true;
+      allow update: if request.resource.contentType == 'text/plain'
+                    && request.resource.contentLanguage == 'en'
+                    && !('generation' in request.resource.keys());
+    }
+  }
+}",
+    ));
+    let (_uid, auth) = user_token(&s);
+    let (ct, body) = multipart(
+        &json!({"contentType": "text/plain", "contentLanguage": "en"}),
+        "text/plain",
+        b"hi",
+    );
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=docs%2Fa.txt&uploadType=multipart"),
+            &[("authorization", &auth), ("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let patch = |body: &[u8]| {
+        handle(
+            &s,
+            &req(
+                "PATCH",
+                &format!("/v0/b/{BUCKET}/o/docs%2Fa.txt"),
+                &[
+                    ("authorization", &auth),
+                    ("content-type", "application/json"),
+                ],
+                body,
+            ),
+        )
+    };
+    // Clearing the content type or changing the language is refused by the rule.
+    assert_eq!(patch(br#"{"contentType": null}"#).status, 403);
+    assert_eq!(patch(br#"{"contentLanguage": "fr"}"#).status, 403);
+    let r = patch(br#"{"cacheControl": "no-cache"}"#);
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(json_body(&r)["cacheControl"], "no-cache");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn json_api_preconditions_generations_and_ranges_are_strict() {
+    let s = state(None);
+    let (ct, body) = multipart(
+        &json!({"name": "g.bin"}),
+        "application/octet-stream",
+        b"0123456789",
+    );
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
+    let object = format!("/storage/v1/b/{BUCKET}/o/g.bin");
+    // Malformed preconditions are errors, not ignored.
+    let r = handle(
+        &s,
+        &req(
+            "DELETE",
+            &format!("{object}?ifGenerationMatch=garbage"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 400);
+    assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "invalid");
+    // A stale generation selector never targets the live object.
+    let r = handle(
+        &s,
+        &req("DELETE", &format!("{object}?generation=99999"), &[], b""),
+    );
+    assert_eq!(r.status, 404);
+    assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "notFound");
+    assert_eq!(
+        handle(
+            &s,
+            &req("GET", &format!("{object}?generation=99999"), &[], b"")
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle(
+            &s,
+            &req(
+                "GET",
+                &format!("{object}?generation={generation}"),
+                &[],
+                b""
+            )
+        )
+        .status,
+        200
+    );
+    // Not-match preconditions and the core error shape (single JSON envelope).
+    let r = handle(
+        &s,
+        &req(
+            "DELETE",
+            &format!("{object}?ifGenerationNotMatch={generation}"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 412, "{}", String::from_utf8_lossy(&r.body));
+    let err = json_body(&r);
+    assert_eq!(err["error"]["errors"][0]["reason"], "conditionNotMet");
+    assert!(err["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("ifGenerationNotMatch"));
+    // Ranges: suffix, open end, unsatisfiable.
+    let get = |range: &str| {
+        handle(
+            &s,
+            &req(
+                "GET",
+                &format!("{object}?alt=media"),
+                &[("range", range)],
+                b"",
+            ),
+        )
+    };
+    let r = get("bytes=-3");
+    assert_eq!((r.status, r.body.as_slice()), (206, &b"789"[..]));
+    assert_eq!(header(&r, "content-range"), Some("bytes 7-9/10"));
+    let r = get("bytes=8-");
+    assert_eq!((r.status, r.body.as_slice()), (206, &b"89"[..]));
+    let r = get("bytes=2-4");
+    assert_eq!((r.status, r.body.as_slice()), (206, &b"234"[..]));
+    assert_eq!(header(&r, "content-length"), Some("3"));
+    let r = get("bytes=10-");
+    assert_eq!(r.status, 416);
+    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    // Resumable JSON API: the declared span must match the body and the total.
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=r.bin"),
+            &[("content-type", "application/json")],
+            b"{}",
+        ),
+    );
+    let session = header(&r, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let r = handle(
+        &s,
+        &req(
+            "PUT",
+            &session,
+            &[("content-range", "bytes 0-99/100")],
+            b"x",
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    let r = handle(
+        &s,
+        &req("PUT", &session, &[("content-range", "bytes 0-2/6")], b"abc"),
+    );
+    assert_eq!(r.status, 308, "{}", String::from_utf8_lossy(&r.body));
+    let r = handle(
+        &s,
+        &req("PUT", &session, &[("content-range", "bytes 3-5/7")], b"def"),
+    );
+    assert_eq!(r.status, 400, "a different total is a size mismatch");
+    let r = handle(
+        &s,
+        &req("PUT", &session, &[("content-range", "bytes 3-5/6")], b"def"),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(json_body(&r)["size"], "6");
+}
+
+#[test]
+fn v1_rulesets_never_grant_lists() {
+    let s = state(Some(
+        "service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} { allow read; }
+  }
+}",
+    ));
+    let (_uid, auth) = user_token(&s);
+    assert_eq!(
+        handle(
+            &s,
+            &req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/x"),
+                &[("authorization", &auth)],
+                b""
+            )
+        )
+        .status,
+        404,
+        "get is allowed (and finds nothing)"
+    );
+    let r = handle(
+        &s,
+        &req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o"),
+            &[("authorization", &auth)],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
 }

@@ -17,6 +17,8 @@ pub const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_CUSTOM_METADATA_BYTES: usize = 8 * 1024;
 /// Resumable upload sessions expire after a week of virtual time (Cloud Storage: 7 days).
 pub const UPLOAD_SESSION_TTL_SECONDS: i64 = 7 * 24 * 3600;
+/// Maximum open upload sessions per store (abandoned sessions expire).
+pub const MAX_UPLOAD_SESSIONS: usize = 256;
 /// Default listing page size.
 pub const DEFAULT_LIST_PAGE_SIZE: usize = 1000;
 
@@ -142,6 +144,10 @@ pub struct Precondition {
     pub if_generation_match: Option<u64>,
     /// `ifMetagenerationMatch`.
     pub if_metageneration_match: Option<u64>,
+    /// `ifGenerationNotMatch`.
+    pub if_generation_not_match: Option<u64>,
+    /// `ifMetagenerationNotMatch`.
+    pub if_metageneration_not_match: Option<u64>,
 }
 
 /// Errors (the adapters map them to HTTP codes).
@@ -166,6 +172,8 @@ pub enum StorageError {
     UploadFinalized,
     /// Upload size differs from the declared total.
     UploadSizeMismatch,
+    /// Too many open upload sessions.
+    TooManyUploads,
 }
 
 impl fmt::Display for StorageError {
@@ -181,6 +189,7 @@ impl fmt::Display for StorageError {
             }
             Self::UploadFinalized => f.write_str("upload already finalized"),
             Self::UploadSizeMismatch => f.write_str("upload size differs from the declared total"),
+            Self::TooManyUploads => f.write_str("too many open upload sessions"),
         }
     }
 }
@@ -202,7 +211,7 @@ pub enum StorageEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum UploadState {
     Receiving,
-    Committed(u64),
+    Committed(Box<ObjectMetadata>),
     Aborted,
 }
 
@@ -216,6 +225,21 @@ struct UploadSession {
     received: Vec<u8>,
     state: UploadState,
     started_at: LogicalInstant,
+}
+
+/// The bytes and metadata an upload would commit (authorization before finalization).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingUpload<'a> {
+    /// Destination bucket.
+    pub bucket: &'a BucketName,
+    /// Destination name.
+    pub name: &'a ObjectName,
+    /// Declared metadata.
+    pub metadata: &'a NewMetadata,
+    /// Bytes received so far.
+    pub bytes: &'a [u8],
+    /// Declared total, if any.
+    pub total: Option<u64>,
 }
 
 /// Progress of a resumable upload after a chunk.
@@ -317,6 +341,22 @@ impl StorageState {
                 )));
             }
         }
+        if let Some(unexpected) = pre.if_generation_not_match {
+            let actual = current.map_or(0, |m| m.generation);
+            if actual == unexpected {
+                return Err(StorageError::PreconditionFailed(format!(
+                    "ifGenerationNotMatch {unexpected} but the current generation is {actual}"
+                )));
+            }
+        }
+        if let Some(unexpected) = pre.if_metageneration_not_match {
+            let actual = current.map_or(0, |m| m.metageneration);
+            if actual == unexpected {
+                return Err(StorageError::PreconditionFailed(format!(
+                    "ifMetagenerationNotMatch {unexpected} but the current metageneration is {actual}"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -386,41 +426,14 @@ impl StorageState {
         &mut self,
         bucket: &BucketName,
         name: &ObjectName,
-        patch: MetadataPatch,
+        patch: &MetadataPatch,
         pre: Precondition,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
         let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
-        let mut next = meta.clone();
-        if let Some(ct) = patch.content_type {
-            next.content_type = ct.unwrap_or_else(|| "application/octet-stream".to_owned());
-        }
-        if let Some(v) = patch.content_disposition {
-            next.content_disposition = v;
-        }
-        if let Some(v) = patch.content_encoding {
-            next.content_encoding = v;
-        }
-        if let Some(v) = patch.content_language {
-            next.content_language = v;
-        }
-        if let Some(v) = patch.cache_control {
-            next.cache_control = v;
-        }
-        if let Some(custom) = patch.custom {
-            for (k, v) in custom {
-                match v {
-                    Some(v) => {
-                        next.custom.insert(k, v);
-                    }
-                    None => {
-                        next.custom.remove(&k);
-                    }
-                }
-            }
-        }
+        let mut next = patch.apply(meta);
         if custom_metadata_size(&next.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
@@ -525,7 +538,9 @@ impl StorageState {
         let mut prefixes: Vec<String> = Vec::new();
         let mut next_page_token = None;
         let mut entries = 0usize;
-        let mut last_emitted_prefix: Option<String> = None;
+        // The token is the last raw object name consumed by the page (an object folded into
+        // an already emitted prefix counts as consumed), so the next page resumes after it.
+        let mut last_consumed: Option<&str> = None;
         for ((b, name), meta) in &self.objects {
             if b != bucket || !name.as_str().starts_with(prefix) {
                 continue;
@@ -537,31 +552,23 @@ impl StorageState {
             let folded = delimiter
                 .filter(|d| !d.is_empty())
                 .and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])));
+            if let Some(p) = &folded {
+                if prefixes.last() == Some(p) {
+                    last_consumed = Some(name.as_str());
+                    continue;
+                }
+            }
             if entries >= max_results {
-                next_page_token = Some(name.as_str().to_owned());
+                next_page_token = last_consumed.map(str::to_owned);
                 break;
             }
             if let Some(p) = folded {
-                if last_emitted_prefix.as_deref() == Some(p.as_str()) {
-                    continue;
-                }
-                last_emitted_prefix = Some(p.clone());
                 prefixes.push(p);
             } else {
                 items.push(meta.clone());
             }
             entries += 1;
-        }
-        // The token must point at the last entry actually returned.
-        if next_page_token.is_some() {
-            let last_item = items.last().map(|m| m.name.as_str().to_owned());
-            let last_prefix = prefixes.last().cloned();
-            next_page_token = match (last_item, last_prefix) {
-                (Some(i), Some(p)) => Some(if i > p { i } else { p }),
-                (Some(i), None) => Some(i),
-                (None, Some(p)) => Some(p),
-                (None, None) => None,
-            };
+            last_consumed = Some(name.as_str());
         }
         ListPage {
             items,
@@ -596,6 +603,10 @@ impl StorageState {
         if custom_metadata_size(&metadata.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
+        self.sweep_uploads(now);
+        if self.uploads.len() >= MAX_UPLOAD_SESSIONS {
+            return Err(StorageError::TooManyUploads);
+        }
         self.next_upload += 1;
         let sequence = self.next_upload;
         let token = self.token();
@@ -616,44 +627,127 @@ impl StorageState {
         Ok(id)
     }
 
+    fn expired(u: &UploadSession, now: LogicalInstant) -> bool {
+        now.checked_duration_since(u.started_at)
+            .is_none_or(|d| d > LogicalDuration::from_seconds(UPLOAD_SESSION_TTL_SECONDS))
+    }
+
+    /// Drops expired sessions and the buffers of finished ones.
+    fn sweep_uploads(&mut self, now: LogicalInstant) {
+        self.uploads.retain(|_, u| !Self::expired(u, now));
+    }
+
     fn upload_mut(
         &mut self,
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<&mut UploadSession, StorageError> {
-        let expired = self.uploads.get(id).is_some_and(|u| {
-            now.checked_duration_since(u.started_at)
-                .is_none_or(|d| d > LogicalDuration::from_seconds(UPLOAD_SESSION_TTL_SECONDS))
-        });
-        if expired {
+        if self.uploads.get(id).is_some_and(|u| Self::expired(u, now)) {
             self.uploads.remove(id);
         }
         self.uploads.get_mut(id).ok_or(StorageError::UploadNotFound)
     }
 
-    /// Bytes received so far and whether the upload is finished.
+    /// Bytes received so far and the committed object once finalized (the exact generation
+    /// the upload produced, even if the object changed since).
     pub fn upload_status(
-        &self,
+        &mut self,
         id: &UploadId,
+        now: LogicalInstant,
     ) -> Result<(u64, Option<ObjectMetadata>), StorageError> {
-        let u = self.uploads.get(id).ok_or(StorageError::UploadNotFound)?;
-        let committed = match u.state {
-            UploadState::Committed(_) => self.get(&u.bucket, &u.name).cloned(),
-            _ => None,
-        };
-        Ok((u.received.len() as u64, committed))
+        let u = self.upload_mut(id, now)?;
+        Ok(match &u.state {
+            UploadState::Committed(m) => (m.size, Some((**m).clone())),
+            UploadState::Receiving | UploadState::Aborted => (u.received.len() as u64, None),
+        })
+    }
+
+    /// Declares (or confirms) the total size of an upload; a different total than the one
+    /// already declared is a size mismatch.
+    pub fn set_upload_total(
+        &mut self,
+        id: &UploadId,
+        total: u64,
+        now: LogicalInstant,
+    ) -> Result<(), StorageError> {
+        if total > MAX_OBJECT_BYTES {
+            return Err(StorageError::TooLarge);
+        }
+        let u = self.upload_mut(id, now)?;
+        match u.total {
+            Some(t) if t != total => Err(StorageError::UploadSizeMismatch),
+            _ => {
+                u.total = Some(total);
+                Ok(())
+            }
+        }
     }
 
     /// Appends a chunk at `offset` (must equal the bytes received so far; a repeated chunk
-    /// is ignored) and commits the object when `finalize` is set.
-    pub fn upload_chunk(
+    /// is ignored) and returns the bytes received.
+    pub fn append_upload(
         &mut self,
         id: &UploadId,
         offset: u64,
         chunk: &[u8],
-        finalize: bool,
         now: LogicalInstant,
-    ) -> Result<UploadProgress, StorageError> {
+    ) -> Result<u64, StorageError> {
+        let u = self.upload_mut(id, now)?;
+        match u.state {
+            UploadState::Committed(_) | UploadState::Aborted => {
+                return Err(StorageError::UploadFinalized)
+            }
+            UploadState::Receiving => {}
+        }
+        let received = u.received.len() as u64;
+        let end = offset
+            .checked_add(chunk.len() as u64)
+            .ok_or(StorageError::TooLarge)?;
+        if end <= received {
+            // Retried chunk: already received, nothing to append.
+        } else if offset > received {
+            return Err(StorageError::UploadOffset { expected: received });
+        } else {
+            let skip = usize::try_from(received - offset).unwrap_or(0);
+            if end > MAX_OBJECT_BYTES || u.total.is_some_and(|t| end > t) {
+                u.state = UploadState::Aborted;
+                u.received = Vec::new();
+                return Err(if u.total.is_some_and(|t| end > t) {
+                    StorageError::UploadSizeMismatch
+                } else {
+                    StorageError::TooLarge
+                });
+            }
+            u.received.extend_from_slice(&chunk[skip..]);
+        }
+        Ok(u.received.len() as u64)
+    }
+
+    /// What an upload would commit right now (for authorization before finalization).
+    pub fn pending_upload(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<PendingUpload<'_>, StorageError> {
+        let u = self.upload_mut(id, now)?;
+        match u.state {
+            UploadState::Committed(_) | UploadState::Aborted => Err(StorageError::UploadFinalized),
+            UploadState::Receiving => Ok(PendingUpload {
+                bucket: &u.bucket,
+                name: &u.name,
+                metadata: &u.metadata,
+                bytes: &u.received,
+                total: u.total,
+            }),
+        }
+    }
+
+    /// Commits the received bytes as a new generation.
+    pub fn finalize_upload(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
         let (bucket, name, metadata, precondition, bytes) = {
             let u = self.upload_mut(id, now)?;
             match u.state {
@@ -662,27 +756,9 @@ impl StorageState {
                 }
                 UploadState::Receiving => {}
             }
-            let received = u.received.len() as u64;
-            if offset + chunk.len() as u64 <= received {
-                // Retried chunk: already received, nothing to append.
-            } else if offset > received {
-                return Err(StorageError::UploadOffset { expected: received });
-            } else {
-                let skip = usize::try_from(received - offset).unwrap_or(0);
-                u.received.extend_from_slice(&chunk[skip..]);
-                if u.received.len() as u64 > MAX_OBJECT_BYTES {
-                    u.state = UploadState::Aborted;
-                    return Err(StorageError::TooLarge);
-                }
-            }
-            if !finalize {
-                return Ok(UploadProgress {
-                    received: u.received.len() as u64,
-                    committed: None,
-                });
-            }
             if u.total.is_some_and(|t| t != u.received.len() as u64) {
                 u.state = UploadState::Aborted;
+                u.received = Vec::new();
                 return Err(StorageError::UploadSizeMismatch);
             }
             (
@@ -693,7 +769,6 @@ impl StorageState {
                 std::mem::take(&mut u.received),
             )
         };
-        let size = bytes.len() as u64;
         let meta = match self.put(&bucket, &name, bytes, metadata, precondition, now) {
             Ok(m) => m,
             Err(e) => {
@@ -704,22 +779,81 @@ impl StorageState {
             }
         };
         if let Some(u) = self.uploads.get_mut(id) {
-            u.state = UploadState::Committed(meta.generation);
+            u.state = UploadState::Committed(Box::new(meta.clone()));
         }
+        Ok(meta)
+    }
+
+    /// [`Self::append_upload`] followed by [`Self::finalize_upload`] when `finalize` is set.
+    pub fn upload_chunk(
+        &mut self,
+        id: &UploadId,
+        offset: u64,
+        chunk: &[u8],
+        finalize: bool,
+        now: LogicalInstant,
+    ) -> Result<UploadProgress, StorageError> {
+        let received = self.append_upload(id, offset, chunk, now)?;
+        if !finalize {
+            return Ok(UploadProgress {
+                received,
+                committed: None,
+            });
+        }
+        let meta = self.finalize_upload(id, now)?;
         Ok(UploadProgress {
-            received: size,
+            received: meta.size,
             committed: Some(meta),
         })
     }
 
     /// Cancels an upload.
-    pub fn cancel_upload(&mut self, id: &UploadId) -> Result<(), StorageError> {
-        let u = self
-            .uploads
-            .get_mut(id)
-            .ok_or(StorageError::UploadNotFound)?;
+    pub fn cancel_upload(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<(), StorageError> {
+        let u = self.upload_mut(id, now)?;
         u.state = UploadState::Aborted;
-        u.received.clear();
+        u.received = Vec::new();
         Ok(())
+    }
+}
+
+impl MetadataPatch {
+    /// The object after this patch (metageneration and update time untouched).
+    #[must_use]
+    pub fn apply(&self, base: &ObjectMetadata) -> ObjectMetadata {
+        let mut next = base.clone();
+        if let Some(ct) = &self.content_type {
+            next.content_type = ct
+                .clone()
+                .unwrap_or_else(|| "application/octet-stream".to_owned());
+        }
+        if let Some(v) = &self.content_disposition {
+            next.content_disposition.clone_from(v);
+        }
+        if let Some(v) = &self.content_encoding {
+            next.content_encoding.clone_from(v);
+        }
+        if let Some(v) = &self.content_language {
+            next.content_language.clone_from(v);
+        }
+        if let Some(v) = &self.cache_control {
+            next.cache_control.clone_from(v);
+        }
+        if let Some(custom) = &self.custom {
+            for (k, v) in custom {
+                match v {
+                    Some(v) => {
+                        next.custom.insert(k.clone(), v.clone());
+                    }
+                    None => {
+                        next.custom.remove(k);
+                    }
+                }
+            }
+        }
+        next
     }
 }

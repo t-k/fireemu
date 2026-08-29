@@ -20,6 +20,7 @@ use ftd_core_rules::eval::{
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_rules::value::{AuthContext, RulesValue};
 use ftd_core_session::clock::VirtualClock;
+use ftd_core_storage::hash::{crc32c, md5};
 use ftd_core_storage::name::{BucketName, ObjectName};
 use ftd_core_storage::store::{
     MetadataPatch, NewMetadata, ObjectMetadata, Precondition, StorageError,
@@ -41,6 +42,8 @@ pub struct StorageState {
     pub rules: Arc<RwLock<LoadedRules>>,
     /// Project (default buckets `{project}.appspot.com` / `{project}.firebasestorage.app`).
     pub project: String,
+    /// Caller that started each resumable upload (rules run again at finalization).
+    pub upload_principals: Mutex<BTreeMap<String, Principal>>,
 }
 
 /// One HTTP request of the Storage surface.
@@ -111,40 +114,43 @@ enum Dialect {
 }
 
 fn error_response(dialect: Dialect, status: u16, message: &str) -> StorageResponse {
-    let status_name = match status {
-        400 => "INVALID_ARGUMENT",
-        401 => "UNAUTHENTICATED",
-        403 => "PERMISSION_DENIED",
-        404 => "NOT_FOUND",
-        412 => "FAILED_PRECONDITION",
-        413 => "OUT_OF_RANGE",
-        _ => "INTERNAL",
+    let (status_name, reason) = match status {
+        400 => ("INVALID_ARGUMENT", "invalid"),
+        401 => ("UNAUTHENTICATED", "required"),
+        403 => ("PERMISSION_DENIED", "forbidden"),
+        404 => ("NOT_FOUND", "notFound"),
+        405 => ("INVALID_ARGUMENT", "methodNotAllowed"),
+        412 => ("FAILED_PRECONDITION", "conditionNotMet"),
+        413 => ("OUT_OF_RANGE", "uploadTooLarge"),
+        416 => ("OUT_OF_RANGE", "requestedRangeNotSatisfiable"),
+        429 => ("RESOURCE_EXHAUSTED", "rateLimitExceeded"),
+        _ => ("INTERNAL", "internalError"),
     };
     let body = match dialect {
         Dialect::Firebase => {
             json!({"error": {"code": status, "message": message, "status": status_name}})
         }
         Dialect::Gcs => {
-            json!({"error": {"code": status, "message": message, "errors": [{"domain": "global", "reason": status_name.to_ascii_lowercase(), "message": message}]}})
+            json!({"error": {"code": status, "message": message, "errors": [{"domain": "global", "reason": reason, "message": message}]}})
         }
     };
     StorageResponse::json(status, &body)
 }
 
-fn storage_error(dialect: Dialect, e: &StorageError) -> StorageResponse {
+/// HTTP status and plain message of a core error (serialized once, by [`handle`]).
+fn core_err(e: StorageError) -> (u16, String) {
     match e {
-        StorageError::NotFound => error_response(dialect, 404, "Not Found. Could not get object"),
-        StorageError::PreconditionFailed(m) => error_response(dialect, 412, m),
-        StorageError::TooLarge => error_response(dialect, 413, "object too large"),
-        StorageError::MetadataTooLarge => error_response(dialect, 400, "custom metadata too large"),
-        StorageError::UploadNotFound => error_response(dialect, 404, "upload session not found"),
-        StorageError::UploadOffset { expected } => error_response(
-            dialect,
-            400,
-            &format!("upload offset mismatch, expected {expected}"),
-        ),
-        StorageError::UploadFinalized => error_response(dialect, 400, "upload already finalized"),
-        StorageError::UploadSizeMismatch => error_response(dialect, 400, "upload size mismatch"),
+        StorageError::NotFound => (404, "Not Found. Could not get object".to_owned()),
+        StorageError::PreconditionFailed(m) => (412, m),
+        StorageError::TooLarge => (413, "object too large".to_owned()),
+        StorageError::MetadataTooLarge => (400, "custom metadata too large".to_owned()),
+        StorageError::UploadNotFound => (404, "upload session not found".to_owned()),
+        StorageError::UploadOffset { expected } => {
+            (400, format!("upload offset mismatch, expected {expected}"))
+        }
+        StorageError::UploadFinalized => (400, "upload already finalized".to_owned()),
+        StorageError::UploadSizeMismatch => (400, "upload size mismatch".to_owned()),
+        StorageError::TooManyUploads => (429, "too many open upload sessions".to_owned()),
     }
 }
 
@@ -207,7 +213,9 @@ fn rfc3339(t: LogicalInstant) -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
-/// multipart/related: returns (metadata JSON part, data content type, data bytes).
+/// multipart/related: returns (metadata JSON part, data content type, data bytes). A
+/// delimiter is recognized only at the start of a line and exactly the framing line break
+/// before it is removed, so payloads ending in line breaks survive intact.
 fn parse_multipart(
     content_type: &str,
     body: &[u8],
@@ -220,28 +228,34 @@ fn parse_multipart(
         .ok_or_else(|| "multipart/related without boundary".to_owned())?;
     let delimiter = format!("--{boundary}").into_bytes();
     let mut parts: Vec<(BTreeMap<String, String>, Vec<u8>)> = Vec::new();
-    let mut cursor = 0;
-    while let Some(pos) = find(&body[cursor..], &delimiter) {
-        let start = cursor + pos + delimiter.len();
-        if body.get(start..start + 2) == Some(b"--") {
+    let Some(mut cursor) = find_delimiter(body, 0, &delimiter) else {
+        return Err("multipart body has no parts".into());
+    };
+    loop {
+        let after = cursor + delimiter.len();
+        if body.get(after..after + 2) == Some(b"--") {
             break;
         }
-        // Skip the line break after the delimiter.
-        let mut p = start;
-        while body.get(p).is_some_and(|c| *c == b'\r' || *c == b'\n') {
+        // Skip the line break after the delimiter line.
+        let mut p = after;
+        if body.get(p) == Some(&b'\r') {
             p += 1;
         }
-        let Some(next) = find(&body[p..], &delimiter) else {
+        if body.get(p) == Some(&b'\n') {
+            p += 1;
+        }
+        let Some(next) = find_delimiter(body, p, &delimiter) else {
             return Err("unterminated multipart part".into());
         };
-        let mut part = &body[p..p + next];
-        // Strip the line break before the next delimiter.
-        while part.last().is_some_and(|c| *c == b'\r' || *c == b'\n') {
+        let mut part = &body[p..next];
+        if part.ends_with(b"\r\n") {
+            part = &part[..part.len() - 2];
+        } else if part.ends_with(b"\n") {
             part = &part[..part.len() - 1];
         }
         let (headers, content) = split_headers(part);
         parts.push((headers, content.to_vec()));
-        cursor = p + next;
+        cursor = next;
     }
     if parts.is_empty() {
         return Err("multipart body has no parts".into());
@@ -257,6 +271,24 @@ fn parse_multipart(
         .and_then(|(h, _)| h.get("content-type").cloned())
         .filter(|_| parts.len() >= 2);
     Ok((metadata, ct, data))
+}
+
+/// Position of the next delimiter at or after `from` that starts a line.
+fn find_delimiter(body: &[u8], from: usize, delimiter: &[u8]) -> Option<usize> {
+    let mut at = from;
+    while let Some(rel) = find(body.get(at..)?, delimiter) {
+        let pos = at + rel;
+        let line_start = pos == 0 || body[pos - 1] == b'\n';
+        // A delimiter line is the delimiter followed by `--`, a line break or the end.
+        let after = pos + delimiter.len();
+        let line_end = matches!(body.get(after), None | Some(b'\r' | b'\n'))
+            || body.get(after..after + 2) == Some(b"--");
+        if line_start && line_end {
+            return Some(pos);
+        }
+        at = pos + 1;
+    }
+    None
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -416,9 +448,12 @@ fn metadata_json(dialect: Dialect, m: &ObjectMetadata, host: &str) -> Value {
 
 /// Caller of a Storage request.
 #[derive(Debug, Clone, PartialEq)]
-enum Principal {
+pub enum Principal {
+    /// Admin credentials (JSON API without an end-user token, `Bearer owner`): rules bypassed.
     Owner,
+    /// A verified end user.
     User(AuthContext),
+    /// No credentials.
     Anonymous,
 }
 
@@ -466,13 +501,15 @@ fn storage_rules_value(m: &ObjectMetadata) -> RulesValue {
     RulesValue::Map(map)
 }
 
-/// The `request.resource` of an upload (declared metadata, declared size).
+/// The `request.resource` of an upload: the object as it will be stored, without the
+/// server-assigned `generation`, `metageneration`, `etag`, `timeCreated` and `updated`
+/// (production excludes them); hashes are present once the bytes are known.
 fn incoming_rules_value(
     bucket: &BucketName,
     name: &ObjectName,
     meta: &NewMetadata,
     size: u64,
-    now: LogicalInstant,
+    hashes: Option<(&[u8; 16], u32)>,
 ) -> RulesValue {
     let mut map = BTreeMap::new();
     let s = |v: &str| RulesValue::String(v.to_owned());
@@ -482,8 +519,13 @@ fn incoming_rules_value(
         "size".into(),
         RulesValue::Int(i64::try_from(size).unwrap_or(i64::MAX)),
     );
-    map.insert("timeCreated".into(), RulesValue::Timestamp(now.as_nanos()));
-    map.insert("updated".into(), RulesValue::Timestamp(now.as_nanos()));
+    if let Some((digest, crc)) = hashes {
+        map.insert("md5Hash".into(), s(&ftd_core_storage::hash::base64(digest)));
+        map.insert(
+            "crc32c".into(),
+            s(&ftd_core_storage::hash::base64(&crc.to_be_bytes())),
+        );
+    }
     map.insert(
         "contentType".into(),
         s(meta
@@ -504,6 +546,26 @@ fn incoming_rules_value(
         RulesValue::Map(meta.custom.iter().map(|(k, v)| (k.clone(), s(v))).collect()),
     );
     RulesValue::Map(map)
+}
+
+/// The `request.resource` of a metadata update: the object after the patch, without the
+/// server-assigned fields.
+fn prospective_rules_value(m: &ObjectMetadata) -> RulesValue {
+    match storage_rules_value(m) {
+        RulesValue::Map(mut map) => {
+            for k in [
+                "generation",
+                "metageneration",
+                "etag",
+                "timeCreated",
+                "updated",
+            ] {
+                map.remove(k);
+            }
+            RulesValue::Map(map)
+        }
+        other => other,
+    }
 }
 
 impl StorageState {
@@ -556,6 +618,14 @@ impl StorageState {
         let Some(ruleset) = &rules.ruleset else {
             return Ok(());
         };
+        if method == Method::List && ruleset.version.as_deref() != Some("2") {
+            // Storage list requests exist only under rules_version = '2'; a v1 `read` never
+            // grants them.
+            return Err(format!(
+                "list on /b/{}/o/{object_path} denied by Storage Rules: list requires rules_version = '2'",
+                bucket.as_str()
+            ));
+        }
         let path = if object_path.is_empty() {
             format!("/b/{}/o", bucket.as_str())
         } else {
@@ -678,13 +748,78 @@ fn route(path: &str) -> Result<Route, String> {
     }
 }
 
-fn precondition(params: &BTreeMap<String, String>) -> Precondition {
-    Precondition {
-        if_generation_match: params.get("ifGenerationMatch").and_then(|v| v.parse().ok()),
-        if_metageneration_match: params
-            .get("ifMetagenerationMatch")
-            .and_then(|v| v.parse().ok()),
+/// Strictly parsed write preconditions: a malformed value is an error, never ignored.
+fn precondition(params: &BTreeMap<String, String>) -> Result<Precondition, (u16, String)> {
+    Ok(Precondition {
+        if_generation_match: u64_param(params, "ifGenerationMatch")?,
+        if_metageneration_match: u64_param(params, "ifMetagenerationMatch")?,
+        if_generation_not_match: u64_param(params, "ifGenerationNotMatch")?,
+        if_metageneration_not_match: u64_param(params, "ifMetagenerationNotMatch")?,
+    })
+}
+
+fn u64_param(params: &BTreeMap<String, String>, key: &str) -> Result<Option<u64>, (u16, String)> {
+    match params.get(key) {
+        None => Ok(None),
+        Some(v) => v
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| (400, format!("invalid {key}: {v:?}"))),
     }
+}
+
+/// Applies a `generation` / `sourceGeneration` selector: a generation other than the
+/// current one is not available (historical versions are not kept).
+fn select_generation(
+    meta: Option<ObjectMetadata>,
+    params: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<ObjectMetadata>, (u16, String)> {
+    match u64_param(params, key)? {
+        Some(g) => Ok(meta.filter(|m| m.generation == g)),
+        None => Ok(meta),
+    }
+}
+
+/// Expected hashes of an upload (`X-Goog-Hash` and the `md5Hash` / `crc32c` metadata
+/// fields); a mismatch with the received bytes refuses the upload before it is committed.
+fn verify_hashes(
+    req: &StorageRequest,
+    meta_json: Option<&Value>,
+    bytes: &[u8],
+) -> Result<([u8; 16], u32), (u16, String)> {
+    let digest = md5(bytes);
+    let crc = crc32c(bytes);
+    let mut expected: Vec<(String, String)> = Vec::new();
+    if let Some(h) = req.header("x-goog-hash") {
+        for item in h.split(',') {
+            if let Some((k, v)) = item.trim().split_once('=') {
+                expected.push((k.trim().to_ascii_lowercase(), v.trim().to_owned()));
+            }
+        }
+    }
+    if let Some(m) = meta_json {
+        if let Some(v) = m.get("md5Hash").and_then(Value::as_str) {
+            expected.push(("md5".into(), v.to_owned()));
+        }
+        if let Some(v) = m.get("crc32c").and_then(Value::as_str) {
+            expected.push(("crc32c".into(), v.to_owned()));
+        }
+    }
+    for (kind, value) in expected {
+        let actual = match kind.as_str() {
+            "md5" => ftd_core_storage::hash::base64(&digest),
+            "crc32c" => ftd_core_storage::hash::base64(&crc.to_be_bytes()),
+            _ => continue,
+        };
+        if actual != value {
+            return Err((
+                400,
+                format!("{kind} checksum mismatch: expected {value}, received {actual}"),
+            ));
+        }
+    }
+    Ok((digest, crc))
 }
 
 /// Handles one request.
@@ -863,7 +998,7 @@ fn upload(
     let now = state.now();
     // Continuation of a resumable upload.
     if let Some(upload_id) = params.get("upload_id") {
-        return resumable_continue(state, dialect, &b, upload_id, req, params, host);
+        return resumable_continue(state, principal, dialect, upload_id, req, host);
     }
     let upload_type = params.get("uploadType").map(String::as_str);
     let protocol = req.header("x-goog-upload-protocol");
@@ -890,9 +1025,10 @@ fn upload(
             .ok_or_else(|| (400, "object name is required".to_owned()))?;
         let n = object_name(&name)?;
         let meta = new_metadata_from_json(&meta_json, part_ct);
-        let pre = precondition(params);
+        let pre = precondition(params)?;
+        let hashes = verify_hashes(req, Some(&meta_json), &data)?;
         return commit_bytes(
-            state, principal, dialect, &b, &n, data, meta, pre, now, host,
+            state, principal, dialect, &b, &n, data, meta, pre, hashes, now, host,
         );
     }
     if is_resumable {
@@ -915,49 +1051,32 @@ fn upload(
             .header("x-goog-upload-header-content-type")
             .or_else(|| req.header("x-upload-content-type"))
             .map(str::to_owned);
-        let declared_len: Option<u64> = req
+        let declared_len: Option<u64> = match req
             .header("x-goog-upload-header-content-length")
             .or_else(|| req.header("x-upload-content-length"))
-            .and_then(|v| v.parse().ok());
-        let meta = new_metadata_from_json(&meta_json, declared_ct);
-        let pre = precondition(params);
-        // Rules run when the upload starts, with the declared metadata and size.
-        let existing = state
-            .store
-            .lock()
-            .map_err(|_| (500, "store poisoned".to_owned()))?
-            .get(&b, &n)
-            .cloned();
-        let method = if existing.is_some() {
-            Method::Update
-        } else {
-            Method::Create
+        {
+            None => None,
+            Some(v) => Some(
+                v.parse()
+                    .map_err(|_| (400, format!("invalid declared content length {v:?}")))?,
+            ),
         };
-        state
-            .authorize(
-                principal,
-                method,
-                &b,
-                n.as_str(),
-                existing.as_ref().map(storage_rules_value),
-                Some(incoming_rules_value(
-                    &b,
-                    &n,
-                    &meta,
-                    declared_len.unwrap_or(0),
-                    now,
-                )),
-            )
-            .map_err(deny)?;
+        let meta = new_metadata_from_json(&meta_json, declared_ct);
+        let pre = precondition(params)?;
+        // Rules run at finalization against the received bytes (as the official Emulator
+        // does): the declared size and metadata alone cannot decide rules that inspect the
+        // hashes, and the destination may change while the session is open.
         let id = state
             .store
             .lock()
             .map_err(|_| (500, "store poisoned".to_owned()))?
             .begin_upload(&b, &n, meta, pre, declared_len, now)
-            .map_err(|e| {
-                let r = storage_error(dialect, &e);
-                (r.status, String::from_utf8_lossy(&r.body).into_owned())
-            })?;
+            .map_err(core_err)?;
+        state
+            .upload_principals
+            .lock()
+            .map_err(|_| (500, "principals poisoned".to_owned()))?
+            .insert(id.as_str().to_owned(), principal.clone());
         let session_url = match dialect {
             Dialect::Firebase => format!(
                 "http://{host}/v0/b/{}/o?name={}&upload_id={}&upload_protocol=resumable",
@@ -989,7 +1108,8 @@ fn upload(
         content_type: Some(content_type).filter(|c| !c.is_empty()),
         ..NewMetadata::default()
     };
-    let pre = precondition(params);
+    let pre = precondition(params)?;
+    let hashes = verify_hashes(req, None, &req.body)?;
     commit_bytes(
         state,
         principal,
@@ -999,6 +1119,7 @@ fn upload(
         req.body.clone(),
         meta,
         pre,
+        hashes,
         now,
         host,
     )
@@ -1014,6 +1135,7 @@ fn commit_bytes(
     data: Vec<u8>,
     meta: NewMetadata,
     pre: Precondition,
+    hashes: ([u8; 16], u32),
     now: LogicalInstant,
     host: &str,
 ) -> Outcome {
@@ -1034,26 +1156,86 @@ fn commit_bytes(
             b,
             n.as_str(),
             existing.as_ref().map(storage_rules_value),
-            Some(incoming_rules_value(b, n, &meta, data.len() as u64, now)),
+            Some(incoming_rules_value(
+                b,
+                n,
+                &meta,
+                data.len() as u64,
+                Some((&hashes.0, hashes.1)),
+            )),
         )
         .map_err(deny)?;
-    let m = store.put(b, n, data, meta, pre, now).map_err(|e| {
-        let r = storage_error(dialect, &e);
-        (r.status, String::from_utf8_lossy(&r.body).into_owned())
-    })?;
+    let m = store.put(b, n, data, meta, pre, now).map_err(core_err)?;
     Ok(StorageResponse::json(
         200,
         &metadata_json(dialect, &m, host),
     ))
 }
 
+/// Authorizes and commits a resumable upload against the bytes actually received (the
+/// principal that started the session; the then-current destination).
+fn finalize_resumable(
+    state: &StorageState,
+    store: &mut ObjectStore,
+    id: &UploadId,
+    fallback: &Principal,
+    req: &StorageRequest,
+    now: LogicalInstant,
+) -> Result<ObjectMetadata, (u16, String)> {
+    let principal = state
+        .upload_principals
+        .lock()
+        .map_err(|_| (500, "principals poisoned".to_owned()))?
+        .get(id.as_str())
+        .cloned()
+        .unwrap_or_else(|| fallback.clone());
+    let (b, n, meta, size, hashes) = {
+        let pending = store.pending_upload(id, now).map_err(core_err)?;
+        let hashes = verify_hashes(req, None, pending.bytes)?;
+        (
+            pending.bucket.clone(),
+            pending.name.clone(),
+            pending.metadata.clone(),
+            pending.bytes.len() as u64,
+            hashes,
+        )
+    };
+    let existing = store.get(&b, &n).cloned();
+    let method = if existing.is_some() {
+        Method::Update
+    } else {
+        Method::Create
+    };
+    state
+        .authorize(
+            &principal,
+            method,
+            &b,
+            n.as_str(),
+            existing.as_ref().map(storage_rules_value),
+            Some(incoming_rules_value(
+                &b,
+                &n,
+                &meta,
+                size,
+                Some((&hashes.0, hashes.1)),
+            )),
+        )
+        .map_err(deny)?;
+    let m = store.finalize_upload(id, now).map_err(core_err)?;
+    if let Ok(mut principals) = state.upload_principals.lock() {
+        principals.remove(id.as_str());
+    }
+    Ok(m)
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn resumable_continue(
     state: &StorageState,
+    principal: &Principal,
     dialect: Dialect,
-    b: &BucketName,
     upload_id: &str,
     req: &StorageRequest,
-    params: &BTreeMap<String, String>,
     host: &str,
 ) -> Outcome {
     let id = UploadId::from_str_unchecked(upload_id);
@@ -1062,82 +1244,109 @@ fn resumable_continue(
         .store
         .lock()
         .map_err(|_| (500, "store poisoned".to_owned()))?;
-    let map_err = |e: StorageError| {
-        let r = storage_error(dialect, &e);
-        (r.status, String::from_utf8_lossy(&r.body).into_owned())
-    };
-    let _ = b;
-    let _ = params;
     // Firebase X-Goog-Upload protocol.
     if let Some(command) = req.header("x-goog-upload-command") {
         let commands: Vec<&str> = command.split(',').map(str::trim).collect();
         if commands.contains(&"cancel") {
-            store.cancel_upload(&id).map_err(map_err)?;
+            store.cancel_upload(&id, now).map_err(core_err)?;
+            if let Ok(mut principals) = state.upload_principals.lock() {
+                principals.remove(id.as_str());
+            }
             return Ok(StorageResponse::empty(200).with_header("x-goog-upload-status", "cancelled"));
         }
         if commands.contains(&"query") {
-            let (received, committed) = store.upload_status(&id).map_err(map_err)?;
-            let mut r = StorageResponse::empty(200)
-                .with_header("x-goog-upload-size-received", received.to_string());
+            let (received, committed) = store.upload_status(&id, now).map_err(core_err)?;
             return Ok(match committed {
-                Some(m) => {
-                    r = StorageResponse::json(200, &metadata_json(dialect, &m, host))
-                        .with_header("x-goog-upload-size-received", received.to_string());
-                    r.with_header("x-goog-upload-status", "final")
-                }
-                None => r.with_header("x-goog-upload-status", "active"),
+                Some(m) => StorageResponse::json(200, &metadata_json(dialect, &m, host))
+                    .with_header("x-goog-upload-size-received", received.to_string())
+                    .with_header("x-goog-upload-status", "final"),
+                None => StorageResponse::empty(200)
+                    .with_header("x-goog-upload-size-received", received.to_string())
+                    .with_header("x-goog-upload-status", "active"),
             });
         }
-        let offset: u64 = req
-            .header("x-goog-upload-offset")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        let finalize = commands.contains(&"finalize");
-        let progress = store
-            .upload_chunk(&id, offset, &req.body, finalize, now)
-            .map_err(map_err)?;
-        return Ok(match progress.committed {
-            Some(m) => StorageResponse::json(200, &metadata_json(dialect, &m, host))
-                .with_header("x-goog-upload-status", "final")
-                .with_header("x-goog-upload-size-received", progress.received.to_string()),
-            None => StorageResponse::empty(200)
-                .with_header("x-goog-upload-status", "active")
-                .with_header("x-goog-upload-size-received", progress.received.to_string()),
-        });
+        let offset: u64 = match req.header("x-goog-upload-offset") {
+            None => 0,
+            Some(v) => v
+                .parse()
+                .map_err(|_| (400, format!("invalid X-Goog-Upload-Offset {v:?}")))?,
+        };
+        if commands.contains(&"upload") {
+            store
+                .append_upload(&id, offset, &req.body, now)
+                .map_err(core_err)?;
+        } else if !req.body.is_empty() {
+            return Err((400, "a body needs the upload command".to_owned()));
+        }
+        if commands.contains(&"finalize") {
+            let m = finalize_resumable(state, &mut store, &id, principal, req, now)?;
+            return Ok(
+                StorageResponse::json(200, &metadata_json(dialect, &m, host))
+                    .with_header("x-goog-upload-status", "final")
+                    .with_header("x-goog-upload-size-received", m.size.to_string()),
+            );
+        }
+        let (received, _) = store.upload_status(&id, now).map_err(core_err)?;
+        return Ok(StorageResponse::empty(200)
+            .with_header("x-goog-upload-status", "active")
+            .with_header("x-goog-upload-size-received", received.to_string()));
     }
     // JSON API protocol: Content-Range on PUT.
-    let content_range = req.header("content-range");
-    let (offset, end, total) = match content_range {
+    let range = match req.header("content-range") {
         Some(cr) => {
             parse_content_range(cr).ok_or_else(|| (400, format!("invalid Content-Range {cr:?}")))?
         }
-        None => (Some(0), None, Some(req.body.len() as u64)),
+        None => ContentRange::Span {
+            start: 0,
+            end: Some(req.body.len() as u64),
+            total: Some(req.body.len() as u64),
+        },
     };
-    // Status query: `bytes */TOTAL`.
-    if offset.is_none() {
-        let (received, committed) = store.upload_status(&id).map_err(map_err)?;
-        return Ok(if let Some(m) = committed {
-            StorageResponse::json(200, &gcs_json(&m, host))
-        } else {
-            incomplete(received)
-        });
+    let (start, end, total) = match range {
+        ContentRange::Status => {
+            let (received, committed) = store.upload_status(&id, now).map_err(core_err)?;
+            return Ok(if let Some(m) = committed {
+                StorageResponse::json(200, &gcs_json(&m, host))
+            } else {
+                incomplete(received)
+            });
+        }
+        ContentRange::Span { start, end, total } => (start, end, total),
+    };
+    let body_len = req.body.len() as u64;
+    if let Some(end) = end {
+        if end.checked_sub(start) != Some(body_len) {
+            return Err((
+                400,
+                format!(
+                    "Content-Range spans {} bytes but the body has {body_len}",
+                    end.saturating_sub(start)
+                ),
+            ));
+        }
+        if total.is_some_and(|t| end > t) {
+            return Err((400, "Content-Range exceeds the declared total".to_owned()));
+        }
     }
-    let offset = offset.unwrap_or(0);
-    let last = end.unwrap_or(offset + req.body.len() as u64);
-    // A known total finishes when reached; an open-ended range (or no Content-Range at all)
-    // carries the rest of the object in this request.
-    let finalize = match total {
-        Some(t) => last == t,
-        None => end.is_none(),
+    if let Some(t) = total {
+        store.set_upload_total(&id, t, now).map_err(core_err)?;
+    }
+    store
+        .append_upload(&id, start, &req.body, now)
+        .map_err(core_err)?;
+    // A known total finishes when reached; an open-ended range (`START-*/*`, or no
+    // Content-Range at all) carries the rest of the object in this request.
+    let finalize = match (end, total) {
+        (Some(e), Some(t)) => e == t,
+        (Some(_), None) => false,
+        (None, _) => true,
     };
-    let progress = store
-        .upload_chunk(&id, offset, &req.body, finalize, now)
-        .map_err(map_err)?;
-    Ok(if let Some(m) = progress.committed {
-        StorageResponse::json(200, &gcs_json(&m, host))
-    } else {
-        incomplete(progress.received)
-    })
+    if finalize {
+        let m = finalize_resumable(state, &mut store, &id, principal, req, now)?;
+        return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
+    }
+    let (received, _) = store.upload_status(&id, now).map_err(core_err)?;
+    Ok(incomplete(received))
 }
 
 /// `308 Resume Incomplete` with the persisted range.
@@ -1150,26 +1359,89 @@ fn incomplete(received: u64) -> StorageResponse {
     }
 }
 
-/// `bytes START-END/TOTAL`, `bytes */TOTAL`, `bytes START-END/*` → (start, end+1, total).
-fn parse_content_range(cr: &str) -> Option<(Option<u64>, Option<u64>, Option<u64>)> {
+/// A parsed `Content-Range` request header.
+enum ContentRange {
+    /// `bytes */TOTAL` (status query).
+    Status,
+    /// `bytes START-END/TOTAL`, `bytes START-*/*`: `end` is exclusive.
+    Span {
+        start: u64,
+        end: Option<u64>,
+        total: Option<u64>,
+    },
+}
+
+fn parse_content_range(cr: &str) -> Option<ContentRange> {
     let rest = cr.trim().strip_prefix("bytes ")?;
     let (range, total) = rest.split_once('/')?;
     let total = if total == "*" {
         None
     } else {
-        Some(total.parse().ok()?)
+        Some(total.trim().parse::<u64>().ok()?)
     };
     if range == "*" {
-        return Some((None, None, total));
+        return Some(ContentRange::Status);
     }
     let (start, end) = range.split_once('-')?;
-    let start: u64 = start.parse().ok()?;
+    let start: u64 = start.trim().parse().ok()?;
     if end == "*" {
-        // `START-*/*`: the body runs to the end of the object.
-        return Some((Some(start), None, total));
+        return Some(ContentRange::Span {
+            start,
+            end: None,
+            total,
+        });
     }
-    let end: u64 = end.parse().ok()?;
-    Some((Some(start), Some(end + 1), total))
+    let end: u64 = end.trim().parse().ok()?;
+    if end < start {
+        return None;
+    }
+    Some(ContentRange::Span {
+        start,
+        end: Some(end.checked_add(1)?),
+        total,
+    })
+}
+
+/// One satisfiable byte range of a `Range: bytes=...` header (RFC 7233): `Ok(None)` when
+/// the header is absent or syntactically ignorable, `Err(())` when unsatisfiable (416).
+fn parse_range(header: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(spec) = header.and_then(|h| h.trim().strip_prefix("bytes=")) else {
+        return Ok(None);
+    };
+    if spec.contains(',') {
+        return Ok(None);
+    }
+    let Some((first, last)) = spec.split_once('-') else {
+        return Ok(None);
+    };
+    let (first, last) = (first.trim(), last.trim());
+    let (start, end) = if first.is_empty() {
+        // Suffix range: the final N bytes.
+        let Ok(suffix) = last.parse::<u64>() else {
+            return Ok(None);
+        };
+        if suffix == 0 || len == 0 {
+            return Err(());
+        }
+        (len.saturating_sub(suffix), len)
+    } else {
+        let Ok(start) = first.parse::<u64>() else {
+            return Ok(None);
+        };
+        let end = if last.is_empty() {
+            len
+        } else {
+            match last.parse::<u64>() {
+                Ok(e) if e >= start => e.saturating_add(1).min(len),
+                _ => return Ok(None),
+            }
+        };
+        if start >= len {
+            return Err(());
+        }
+        (start, end)
+    };
+    Ok(Some((start, end)))
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1192,7 +1464,7 @@ fn object(
                 .store
                 .lock()
                 .map_err(|_| (500, "store poisoned".to_owned()))?;
-            let meta = store.get(&b, &n).cloned();
+            let meta = select_generation(store.get(&b, &n).cloned(), params, "generation")?;
             let media = params.get("alt").map(String::as_str) == Some("media")
                 || req.path.starts_with("/download/");
             // A valid download token grants the read without rules.
@@ -1247,37 +1519,38 @@ fn object(
             if let Some(cc) = &meta.cache_control {
                 headers.push(("cache-control".to_owned(), cc.clone()));
             }
-            if let Some(range) = req.header("range").and_then(|r| r.strip_prefix("bytes=")) {
-                let (s, e) = range.split_once('-').unwrap_or((range, ""));
-                let start: usize = s.parse().unwrap_or(0);
-                let end: usize = e
-                    .parse::<usize>()
-                    .map_or(bytes.len(), |e| (e + 1).min(bytes.len()));
-                if start > end || start >= bytes.len() && !bytes.is_empty() {
-                    return Ok(StorageResponse {
-                        status: 416,
-                        headers: vec![(
-                            "content-range".to_owned(),
-                            format!("bytes */{}", bytes.len()),
-                        )],
-                        body: Vec::new(),
-                    });
+            let len = bytes.len() as u64;
+            match parse_range(req.header("range"), len) {
+                Err(()) => Ok(StorageResponse {
+                    status: 416,
+                    headers: vec![("content-range".to_owned(), format!("bytes */{len}"))],
+                    body: Vec::new(),
+                }),
+                Ok(Some((start, end))) => {
+                    headers.push((
+                        "content-range".to_owned(),
+                        format!("bytes {start}-{}/{len}", end - 1),
+                    ));
+                    headers.push(("content-length".to_owned(), (end - start).to_string()));
+                    let (s, e) = (
+                        usize::try_from(start).unwrap_or(usize::MAX),
+                        usize::try_from(end).unwrap_or(usize::MAX),
+                    );
+                    Ok(StorageResponse {
+                        status: 206,
+                        headers,
+                        body: bytes.get(s..e).unwrap_or_default().to_vec(),
+                    })
                 }
-                headers.push((
-                    "content-range".to_owned(),
-                    format!("bytes {start}-{}/{}", end.saturating_sub(1), bytes.len()),
-                ));
-                return Ok(StorageResponse {
-                    status: 206,
-                    headers,
-                    body: bytes[start..end].to_vec(),
-                });
+                Ok(None) => {
+                    headers.push(("content-length".to_owned(), len.to_string()));
+                    Ok(StorageResponse {
+                        status: 200,
+                        headers,
+                        body: bytes.to_vec(),
+                    })
+                }
             }
-            Ok(StorageResponse {
-                status: 200,
-                headers,
-                body: bytes.to_vec(),
-            })
         }
         "PATCH" | "PUT" => {
             let body: Value = if req.body.is_empty() {
@@ -1286,32 +1559,16 @@ fn object(
                 serde_json::from_slice(&req.body)
                     .map_err(|e| (400, format!("metadata JSON: {e}")))?
             };
+            let pre = precondition(params)?;
             let mut store = state
                 .store
                 .lock()
                 .map_err(|_| (500, "store poisoned".to_owned()))?;
-            let existing = store
-                .get(&b, &n)
-                .cloned()
+            let existing = select_generation(store.get(&b, &n).cloned(), params, "generation")?
                 .ok_or_else(|| (404, "Not Found. Could not update object".to_owned()))?;
             let patch = patch_from_json(&body);
-            // request.resource = the object as it will be after the patch.
-            let mut preview = existing.clone();
-            if let Some(Some(ct)) = &patch.content_type {
-                preview.content_type.clone_from(ct);
-            }
-            if let Some(custom) = &patch.custom {
-                for (k, v) in custom {
-                    match v {
-                        Some(v) => {
-                            preview.custom.insert(k.clone(), v.clone());
-                        }
-                        None => {
-                            preview.custom.remove(k);
-                        }
-                    }
-                }
-            }
+            // request.resource = the object exactly as the patch will store it.
+            let preview = patch.apply(&existing);
             state
                 .authorize(
                     principal,
@@ -1319,26 +1576,24 @@ fn object(
                     &b,
                     n.as_str(),
                     Some(storage_rules_value(&existing)),
-                    Some(storage_rules_value(&preview)),
+                    Some(prospective_rules_value(&preview)),
                 )
                 .map_err(deny)?;
             let m = store
-                .update_metadata(&b, &n, patch, precondition(params), now)
-                .map_err(|e| {
-                    let r = storage_error(dialect, &e);
-                    (r.status, String::from_utf8_lossy(&r.body).into_owned())
-                })?;
+                .update_metadata(&b, &n, &patch, pre, now)
+                .map_err(core_err)?;
             Ok(StorageResponse::json(
                 200,
                 &metadata_json(dialect, &m, host),
             ))
         }
         "DELETE" => {
+            let pre = precondition(params)?;
             let mut store = state
                 .store
                 .lock()
                 .map_err(|_| (500, "store poisoned".to_owned()))?;
-            let existing = store.get(&b, &n).cloned();
+            let existing = select_generation(store.get(&b, &n).cloned(), params, "generation")?;
             state
                 .authorize(
                     principal,
@@ -1349,16 +1604,16 @@ fn object(
                     None,
                 )
                 .map_err(deny)?;
-            store.delete(&b, &n, precondition(params)).map_err(|e| {
-                let r = storage_error(dialect, &e);
-                (r.status, String::from_utf8_lossy(&r.body).into_owned())
-            })?;
+            if existing.is_none() {
+                return Err((404, "Not Found. Could not delete object".to_owned()));
+            }
+            store.delete(&b, &n, pre).map_err(core_err)?;
             Ok(StorageResponse::empty(204))
         }
         "POST" if dialect == Dialect::Firebase => {
             // Resumable continuation posts to the object URL with upload_id.
             if let Some(upload_id) = params.get("upload_id") {
-                return resumable_continue(state, dialect, &b, upload_id, req, params, host);
+                return resumable_continue(state, principal, dialect, upload_id, req, host);
             }
             Err((405, "method not allowed".to_owned()))
         }
@@ -1395,10 +1650,30 @@ fn rewrite(
         .store
         .lock()
         .map_err(|_| (500, "store poisoned".to_owned()))?;
-    let src = store
-        .get(&b, &n)
-        .cloned()
+    let src = select_generation(store.get(&b, &n).cloned(), params, "sourceGeneration")?
         .ok_or_else(|| (404, format!("No such object: {bucket}/{name}")))?;
+    let source_pre = Precondition {
+        if_generation_match: u64_param(params, "ifSourceGenerationMatch")?,
+        if_metageneration_match: u64_param(params, "ifSourceMetagenerationMatch")?,
+        if_generation_not_match: u64_param(params, "ifSourceGenerationNotMatch")?,
+        if_metageneration_not_match: u64_param(params, "ifSourceMetagenerationNotMatch")?,
+    };
+    if source_pre
+        .if_generation_match
+        .is_some_and(|g| g != src.generation)
+        || source_pre
+            .if_generation_not_match
+            .is_some_and(|g| g == src.generation)
+        || source_pre
+            .if_metageneration_match
+            .is_some_and(|g| g != src.metageneration)
+        || source_pre
+            .if_metageneration_not_match
+            .is_some_and(|g| g == src.metageneration)
+    {
+        return Err((412, "source precondition failed".to_owned()));
+    }
+    let pre = precondition(params)?;
     state
         .authorize(
             principal,
@@ -1435,22 +1710,13 @@ fn rewrite(
                 &dn,
                 &meta_for_rules,
                 src.size,
-                now,
+                Some((&src.md5, src.crc32c)),
             )),
         )
         .map_err(deny)?;
     let m = store
-        .copy(
-            (&b, &n),
-            (&db, &dn),
-            override_meta,
-            precondition(params),
-            now,
-        )
-        .map_err(|e| {
-            let r = storage_error(Dialect::Gcs, &e);
-            (r.status, String::from_utf8_lossy(&r.body).into_owned())
-        })?;
+        .copy((&b, &n), (&db, &dn), override_meta, pre, now)
+        .map_err(core_err)?;
     let resource = gcs_json(&m, host);
     Ok(StorageResponse::json(
         200,

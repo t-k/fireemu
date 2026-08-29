@@ -21,12 +21,9 @@ fn json_strings_escape_control_characters_and_lists_use_commas() {
     ])
     .write_canonical_json(&mut list);
     assert_eq!(list, "[1,true,null]");
-    assert_eq!(
-        CustomClaimsError::ReservedName("sub".into())
-            .to_string()
-            .is_empty(),
-        false
-    );
+    assert!(!CustomClaimsError::ReservedName("sub".into())
+        .to_string()
+        .is_empty());
 }
 
 #[test]

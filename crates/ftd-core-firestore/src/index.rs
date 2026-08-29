@@ -329,10 +329,8 @@ fn automatic_index_for(
     if req.contains.is_some() && req.order.iter().any(|o| !o.field.is_document_name()) {
         return None;
     }
-    if req.equality.len() == 1 && req.order.iter().any(|o| !o.field.is_document_name()) {
-        // Equality on f plus ordering on f is redundant, but ordering on another field is
-        // impossible here because touched.len() <= 1.
-    }
+    // Equality on f plus ordering on f is redundant, and ordering on another field is
+    // impossible here because touched.len() <= 1.
     Some(required_index(req, collection, group))
 }
 

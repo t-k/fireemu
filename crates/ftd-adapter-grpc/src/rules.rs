@@ -191,7 +191,9 @@ impl RulesEnforcer {
     }
 
     /// Authorizes a query from its constraints (see the module documentation). One ruleset
-    /// snapshot and one request time serve every disjunction.
+    /// snapshot and one request time serve every disjunction; collection-group queries are
+    /// proven at more than one depth, so a rule has to cover the group with a recursive
+    /// wildcard as in production.
     pub fn authorize_query(
         &self,
         principal: &Principal,
@@ -209,24 +211,22 @@ impl RulesEnforcer {
             return Ok(());
         };
         let now = self.now()?;
-        let placeholder = placeholder_path(parent, query)?;
-        for disjunction in query.dnf() {
-            let synthetic = Document {
-                path: placeholder.clone(),
-                fields: constrained_fields(&disjunction),
-                create_time: now,
-                update_time: now,
-                version: ftd_core_firestore::store::CommitVersion::default(),
-            };
-            evaluate_with(
-                ruleset,
-                principal,
-                Method::List,
-                &placeholder,
-                Some(&synthetic),
-                None,
-                now,
-            )?;
+        for placeholder in placeholder_paths(parent, query)? {
+            for disjunction in query.dnf() {
+                let ctx = RequestContext {
+                    method: Method::List,
+                    path: rules_path(&placeholder),
+                    auth: match principal {
+                        Principal::User(a) => Some(a.clone()),
+                        _ => None,
+                    },
+                    resource: Some(abstract_resource(&disjunction)),
+                    request_resource: None,
+                    time_unix_nanos: now.as_nanos(),
+                    abstract_path: true,
+                };
+                decide(ruleset, &ctx, Method::List, &placeholder)?;
+            }
         }
         Ok(())
     }
@@ -310,8 +310,18 @@ fn evaluate_with(
         resource: resource.map(resource_value),
         request_resource: request_resource.map(resource_value),
         time_unix_nanos: now.as_nanos(),
+        abstract_path: false,
     };
-    match evaluate_request(ruleset, &ctx).decision {
+    decide(ruleset, &ctx, method, path)
+}
+
+fn decide(
+    ruleset: &Ruleset,
+    ctx: &RequestContext,
+    method: Method,
+    path: &DocumentPath,
+) -> Result<(), Status> {
+    match evaluate_request(ruleset, ctx).decision {
         Decision::Allow => Ok(()),
         Decision::Deny(reason) => Err(Status::permission_denied(format!(
             "{} on {} denied by Security Rules: {}",
@@ -335,20 +345,30 @@ pub fn write_guard<'a>(
     }
 }
 
-/// Fields every document matching `disjunction` must carry (equality and array-membership
-/// constraints only).
-fn constrained_fields(disjunction: &[FilterExpr]) -> BTreeMap<String, Value> {
-    let mut fields = BTreeMap::new();
+/// The `resource` every document matching `disjunction` is known to look like: a partial
+/// map of the constrained fields (equality, `array-contains` as a partial list, `is null`),
+/// an undetermined id and name. Everything else is undetermined, so a rule that depends on
+/// it cannot be proven.
+fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
+    let mut data: BTreeMap<String, RulesValue> = BTreeMap::new();
     for atom in disjunction {
         match atom {
             FilterExpr::Field { field, op, value } if !field.is_document_name() => match op {
-                FieldOp::Equal => set_nested(&mut fields, field, value.clone()),
+                FieldOp::Equal => set_nested(&mut data, field, rules_value(value)),
                 FieldOp::ArrayContains => {
-                    set_nested(&mut fields, field, Value::Array(vec![value.clone()]));
+                    set_nested(
+                        &mut data,
+                        field,
+                        RulesValue::PartialList(vec![rules_value(value)]),
+                    );
                 }
                 FieldOp::ArrayContainsAny => {
                     if let Value::Array(items) = value {
-                        set_nested(&mut fields, field, Value::Array(items.clone()));
+                        set_nested(
+                            &mut data,
+                            field,
+                            RulesValue::PartialList(items.iter().map(rules_value).collect()),
+                        );
                     }
                 }
                 _ => {}
@@ -356,25 +376,31 @@ fn constrained_fields(disjunction: &[FilterExpr]) -> BTreeMap<String, Value> {
             FilterExpr::Unary {
                 field,
                 op: UnaryOp::IsNull,
-            } => set_nested(&mut fields, field, Value::Null),
+            } => set_nested(&mut data, field, RulesValue::Null),
             _ => {}
         }
     }
-    fields
+    let mut m = BTreeMap::new();
+    m.insert("data".to_owned(), RulesValue::PartialMap(data));
+    m.insert("id".to_owned(), RulesValue::Unknown);
+    m.insert("__name__".to_owned(), RulesValue::Unknown);
+    RulesValue::Map(m)
 }
 
-fn set_nested(fields: &mut BTreeMap<String, Value>, path: &FieldPath, value: Value) {
+/// Sets a nested constrained field; intermediate levels are partial maps (other keys may
+/// exist), an exact map value replaces the level entirely.
+fn set_nested(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath, value: RulesValue) {
     let segments = path.segments();
     let mut map = fields;
     for s in &segments[..segments.len() - 1] {
         let entry = map
             .entry(s.clone())
-            .or_insert_with(|| Value::Map(BTreeMap::new()));
-        if !matches!(entry, Value::Map(_)) {
-            *entry = Value::Map(BTreeMap::new());
+            .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
+        if !matches!(entry, RulesValue::PartialMap(_) | RulesValue::Map(_)) {
+            *entry = RulesValue::PartialMap(BTreeMap::new());
         }
         map = match entry {
-            Value::Map(m) => m,
+            RulesValue::PartialMap(m) | RulesValue::Map(m) => m,
             _ => return,
         };
     }
@@ -416,17 +442,26 @@ pub fn rules_path(path: &DocumentPath) -> String {
     )
 }
 
-/// Document path standing in for "any document of this query" (the wildcard binds to
-/// `ftd-placeholder`; collection-group queries bind at the root, where `{path=**}` matches
-/// zero segments).
-pub fn placeholder_path(parent: &Parent, query: &Query) -> Result<DocumentPath, Status> {
+/// Document paths standing in for "any document of this query". A collection query has one
+/// (its collection, id undetermined); a collection-group query is proven at the root and at
+/// a nested depth, so only a rule covering every depth (`{path=**}`) passes.
+pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentPath>, Status> {
     let collection_id = query.scope.collection_id.as_str();
-    let relative = match (&query.scope.parent, query.scope.all_descendants) {
-        (Some(p), false) => format!("{}/{collection_id}/ftd-placeholder", p.relative()),
-        _ => format!("{collection_id}/ftd-placeholder"),
+    let relatives = match (&query.scope.parent, query.scope.all_descendants) {
+        (Some(p), false) => vec![format!("{}/{collection_id}/ftd-placeholder", p.relative())],
+        (_, false) => vec![format!("{collection_id}/ftd-placeholder")],
+        (_, true) => vec![
+            format!("{collection_id}/ftd-placeholder"),
+            format!("ftd-placeholder/ftd-placeholder/{collection_id}/ftd-placeholder"),
+        ],
     };
-    DocumentPath::parse(&parent.project, &parent.database, &relative)
-        .map_err(|e| Status::invalid_argument(e.to_string()))
+    relatives
+        .iter()
+        .map(|r| {
+            DocumentPath::parse(&parent.project, &parent.database, r)
+                .map_err(|e| Status::invalid_argument(e.to_string()))
+        })
+        .collect()
 }
 
 fn reference_path(resource_name: &str) -> RulesValue {

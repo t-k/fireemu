@@ -72,6 +72,7 @@ fn ctx(method: Method, path: &str, auth: Option<AuthContext>) -> RequestContext 
         resource: None,
         request_resource: None,
         time_unix_nanos: 1_788_004_860_i128 * 1_000_000_000,
+        abstract_path: false,
     }
 }
 
@@ -352,4 +353,121 @@ fn auth_context_is_built_from_id_token_claims() {
         ctx.token.get("email_verified"),
         Some(&RulesValue::Bool(true))
     );
+}
+
+// ------------------------------------------------------------------------------------------
+// Abstract values (query proofs) and recursive wildcards
+// ------------------------------------------------------------------------------------------
+
+fn abstract_ctx(path: &str, data: Vec<(&str, RulesValue)>) -> RequestContext {
+    let mut resource = BTreeMap::new();
+    resource.insert(
+        "data".to_owned(),
+        RulesValue::PartialMap(data.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+    );
+    resource.insert("id".to_owned(), RulesValue::Unknown);
+    RequestContext {
+        method: Method::List,
+        path: path.to_owned(),
+        auth: None,
+        resource: Some(RulesValue::Map(resource)),
+        request_resource: None,
+        time_unix_nanos: 1_788_004_860_i128 * 1_000_000_000,
+        abstract_path: true,
+    }
+}
+
+fn allows(rules: &str, ctx: &RequestContext) -> bool {
+    let ruleset = parse_ruleset(rules).unwrap();
+    matches!(evaluate_request(&ruleset, ctx).decision, Decision::Allow)
+}
+
+#[test]
+fn undetermined_values_never_prove_a_condition() {
+    let rules = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
+    };
+    let known = abstract_ctx(
+        "/databases/(default)/documents/notes/x",
+        vec![("owner", RulesValue::String("u1".into()))],
+    );
+    assert!(allows(&rules("resource.data.owner == 'u1'"), &known));
+    assert!(!allows(&rules("resource.data.owner == 'u2'"), &known));
+    // Anything depending on an unconstrained field, the map shape, the id or the path
+    // cannot be proven.
+    for cond in [
+        "resource.data.secret == null",
+        "!('blocked' in resource.data)",
+        "resource.data.keys().hasOnly(['owner'])",
+        "resource.data.size() == 1",
+        "resource.data.get('flag', false) == false",
+        "id != 'secret'",
+        "resource.id != 'secret'",
+        "request.path[3] == 'notes'",
+        "resource.data.other is string",
+        "!(resource.data.other is string)",
+    ] {
+        assert!(!allows(&rules(cond), &known), "{cond} must not be provable");
+    }
+    // Three-valued logic: a deciding operand still decides.
+    assert!(allows(
+        &rules("resource.data.owner == 'u1' || resource.data.secret == 1"),
+        &known
+    ));
+    assert!(allows(&rules("resource.data.secret == 1 || true"), &known));
+    assert!(!allows(
+        &rules("resource.data.owner == 'u1' && resource.data.secret == 1"),
+        &known
+    ));
+    assert!(!allows(
+        &rules("resource.data.secret == 1 ? true : true"),
+        &known
+    ));
+    // Partial lists prove membership, nothing else.
+    let tags = abstract_ctx(
+        "/databases/(default)/documents/notes/x",
+        vec![(
+            "tags",
+            RulesValue::PartialList(vec![RulesValue::String("x".into())]),
+        )],
+    );
+    assert!(allows(&rules("resource.data.tags.hasAny(['x'])"), &tags));
+    assert!(allows(&rules("'x' in resource.data.tags"), &tags));
+    assert!(allows(&rules("resource.data.tags is list"), &tags));
+    for cond in [
+        "resource.data.tags.size() == 1",
+        "resource.data.tags.hasOnly(['x'])",
+        "resource.data.tags == ['x']",
+        "resource.data.tags.hasAny(['y'])",
+        "resource.data.tags[0] == 'x'",
+    ] {
+        assert!(!allows(&rules(cond), &tags), "{cond} must not be provable");
+    }
+}
+
+#[test]
+fn recursive_wildcards_backtrack_and_bind_undetermined_captures_in_proofs() {
+    let group = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{r} { allow list: if true; } } }";
+    for path in [
+        "/databases/(default)/documents/reviews/x",
+        "/databases/(default)/documents/posts/p/reviews/x",
+    ] {
+        assert!(allows(group, &abstract_ctx(path, vec![])), "{path}");
+    }
+    // Version 1: `**` needs at least one segment.
+    let v1 = "service cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{r} { allow list: if true; } } }";
+    assert!(!allows(
+        v1,
+        &abstract_ctx("/databases/(default)/documents/reviews/x", vec![])
+    ));
+    assert!(allows(
+        v1,
+        &abstract_ctx("/databases/(default)/documents/a/reviews/x", vec![])
+    ));
+    // A capture cannot decide a proof, and a rule relying on it is not provable.
+    let by_capture = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if id == 'x'; } } }";
+    assert!(!allows(
+        by_capture,
+        &abstract_ctx("/databases/(default)/documents/notes/x", vec![])
+    ));
 }

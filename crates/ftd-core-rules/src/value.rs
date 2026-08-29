@@ -35,6 +35,13 @@ pub enum RulesValue {
         /// Longitude.
         longitude: f64,
     },
+    /// A value the request does not determine (query proofs: an unconstrained field, the
+    /// document id of a potential result). Every operation on it is undecidable.
+    Unknown,
+    /// A map whose listed keys are known; any other key may exist with any value.
+    PartialMap(BTreeMap<String, RulesValue>),
+    /// A list known to contain the listed members plus an unknown remainder.
+    PartialList(Vec<RulesValue>),
 }
 
 impl RulesValue {
@@ -47,12 +54,13 @@ impl RulesValue {
             Self::Int(_) => "int",
             Self::Float(_) => "float",
             Self::String(_) => "string",
-            Self::List(_) => "list",
-            Self::Map(_) => "map",
+            Self::List(_) | Self::PartialList(_) => "list",
+            Self::Map(_) | Self::PartialMap(_) => "map",
             Self::Path(_) => "path",
             Self::Timestamp(_) => "timestamp",
             Self::Bytes(_) => "bytes",
             Self::LatLng { .. } => "latlng",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -110,6 +118,9 @@ impl fmt::Display for RulesValue {
                 latitude,
                 longitude,
             } => write!(f, "latlng({latitude}, {longitude})"),
+            Self::Unknown => f.write_str("unknown"),
+            Self::PartialMap(m) => write!(f, "map({} known keys, ...)", m.len()),
+            Self::PartialList(l) => write!(f, "list({} known members, ...)", l.len()),
         }
     }
 }

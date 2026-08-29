@@ -469,3 +469,84 @@ async fn list_is_authorized_from_the_query_constraints() {
     );
     h.handle.abort();
 }
+
+#[tokio::test]
+async fn query_proofs_are_sound_for_shapes_arrays_and_collection_groups() {
+    let mut h = start().await;
+    let (alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} { allow read: if !('blocked' in resource.data); }
+    match /tagged/{id} { allow read: if resource.data.tags.hasAny(['x']); }
+    match /sized/{id} { allow read: if resource.data.tags.size() == 1; }
+    match /reviews/{id} { allow read: if true; }
+    match /{path=**}/comments/{id} { allow read: if request.auth != null; }
+  }
+}",
+    )
+    .unwrap();
+    let denied = |code: tonic::Code| assert_eq!(code, tonic::Code::PermissionDenied);
+    // Map-shape conditions cannot be proven for an unfiltered query.
+    denied(
+        h.client
+            .run_query(with_bearer(list("shape"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+    );
+    // array-contains proves membership...
+    let mut contains = list("tagged");
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut contains.query_type {
+        sq.r#where = Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                field: Some(sq::FieldReference {
+                    field_path: "tags".to_owned(),
+                }),
+                op: sq::field_filter::Operator::ArrayContains as i32,
+                value: Some(s("x")),
+            })),
+        });
+    }
+    assert!(h
+        .client
+        .run_query(with_bearer(contains.clone(), &alice_token))
+        .await
+        .is_ok());
+    // ...but not the size of the array.
+    let mut sized = contains.clone();
+    sized.parent = DOCS.to_owned();
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut sized.query_type {
+        sq.from[0].collection_id = "sized".to_owned();
+    }
+    denied(
+        h.client
+            .run_query(with_bearer(sized, &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+    );
+    // A collection-group query needs a rule covering every depth.
+    let group = |collection: &str| {
+        let mut q = list(collection);
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut q.query_type {
+            sq.from[0].all_descendants = true;
+        }
+        q
+    };
+    denied(
+        h.client
+            .run_query(with_bearer(group("reviews"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+    );
+    assert!(h
+        .client
+        .run_query(with_bearer(group("comments"), &alice_token))
+        .await
+        .is_ok());
+    let _ = alice;
+    h.handle.abort();
+}

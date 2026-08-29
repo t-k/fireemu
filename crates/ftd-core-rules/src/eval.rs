@@ -78,6 +78,9 @@ pub struct RequestContext {
     pub request_resource: Option<RulesValue>,
     /// `request.time` in Unix nanoseconds.
     pub time_unix_nanos: i128,
+    /// Query proof mode: path captures and `request.path` are undetermined (the request
+    /// stands for every potential result).
+    pub abstract_path: bool,
 }
 
 /// Why a request was denied.
@@ -130,6 +133,9 @@ enum EvalError {
     /// the `rules explain` output (Milestone H); it does not influence the decision.
     #[allow(dead_code)]
     Soft(String),
+    /// The value is not determined by the request (query proofs); the condition cannot be
+    /// proven and the allow does not apply.
+    Unknown,
     /// Fail closed.
     Unsupported(String),
     /// Budget exceeded.
@@ -194,6 +200,8 @@ struct Scope<'a> {
 struct Evaluator<'a> {
     request: RulesValue,
     resource: RulesValue,
+    /// `rules_version = '2'`: `**` matches zero or more segments.
+    wildcard_zero_or_more: bool,
     resource_absent: bool,
     absent_resource_used: core::cell::Cell<bool>,
     budget: Budget,
@@ -238,6 +246,7 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
         let mut ev = Evaluator {
             request: request_value,
             resource: resource_value,
+            wildcard_zero_or_more: ruleset.version.as_deref() == Some("2"),
             resource_absent: ctx.resource.is_none(),
             absent_resource_used: core::cell::Cell::new(false),
             budget,
@@ -255,7 +264,7 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
                     absent_resource_used,
                 }
             }
-            Ok(false) | Err(EvalError::Soft(_)) => {}
+            Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
             Err(EvalError::Budget {
                 limit_id,
                 current,
@@ -304,14 +313,18 @@ fn build_request(ctx: &RequestContext) -> RulesValue {
     );
     m.insert(
         "path".to_owned(),
-        RulesValue::Path(
-            ctx.path
-                .trim_start_matches('/')
-                .split('/')
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect(),
-        ),
+        if ctx.abstract_path {
+            RulesValue::Unknown
+        } else {
+            RulesValue::Path(
+                ctx.path
+                    .trim_start_matches('/')
+                    .split('/')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        },
     );
     m.insert(
         "time".to_owned(),
@@ -338,7 +351,7 @@ fn walk_items<'a>(
         if let Item::Match(block) = item {
             match walk_match(block, remaining, ctx, ev, matched_any) {
                 Ok(true) => return Ok(true),
-                Ok(false) | Err(EvalError::Soft(_)) => {}
+                Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
                 Err(EvalError::Budget {
                     limit_id,
                     current,
@@ -367,66 +380,100 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    let Some((rest, captures)) = match_path(&block.path, remaining) else {
-        return Ok(false);
-    };
-    let functions_before = ev.scope.functions.len();
-    let bindings_before = ev.scope.bindings.len();
-    for item in &block.items {
-        if let Item::Function(f) = item {
-            ev.scope.functions.push(f);
+    // Every way the pattern can consume the path is tried (`**` backtracks).
+    let mut outcome: Result<bool, EvalError> = Ok(false);
+    for (rest, captures) in match_path(&block.path, remaining, ev.wildcard_zero_or_more) {
+        let captures: Vec<(String, RulesValue)> = if ctx.abstract_path {
+            captures
+                .into_iter()
+                .map(|(n, _)| (n, RulesValue::Unknown))
+                .collect()
+        } else {
+            captures
+        };
+        let functions_before = ev.scope.functions.len();
+        let bindings_before = ev.scope.bindings.len();
+        for item in &block.items {
+            if let Item::Function(f) = item {
+                ev.scope.functions.push(f);
+            }
+        }
+        ev.scope.bindings.extend(captures);
+        let mut result: Result<bool, EvalError> = Ok(false);
+        if rest.is_empty() {
+            *matched_any = true;
+            result = evaluate_allows(&block.allows, ctx, ev);
+        }
+        if !matches!(result, Ok(true)) {
+            let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
+            result = match (result, nested) {
+                (_, Ok(true)) => Ok(true),
+                (Err(e), Ok(false)) | (Ok(false) | Err(_), Err(e)) => Err(e),
+                (Ok(false), Ok(false)) => Ok(false),
+                (Ok(true), r) => r,
+            };
+        }
+        ev.scope.functions.truncate(functions_before);
+        ev.scope.bindings.truncate(bindings_before);
+        match result {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(e @ EvalError::Budget { .. }) => return Err(e),
+            Err(e) => {
+                if matches!(outcome, Ok(false)) {
+                    outcome = Err(e);
+                }
+            }
         }
     }
-    ev.scope.bindings.extend(captures);
-    let mut result: Result<bool, EvalError> = Ok(false);
-    if rest.is_empty() {
-        *matched_any = true;
-        result = evaluate_allows(&block.allows, ctx, ev);
-    }
-    if !matches!(result, Ok(true)) {
-        let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
-        result = match (result, nested) {
-            (_, Ok(true)) => Ok(true),
-            (Err(e), Ok(false)) | (Ok(false) | Err(_), Err(e)) => Err(e),
-            (Ok(false), Ok(false)) => Ok(false),
-            (Ok(true), r) => r,
-        };
-    }
-    ev.scope.functions.truncate(functions_before);
-    ev.scope.bindings.truncate(bindings_before);
-    result
+    outcome
 }
 
 /// Unmatched remainder and captured bindings of a path match.
 type PathMatch = (Vec<String>, Vec<(String, RulesValue)>);
 
-/// Matches `pattern` against the start of `segments`; returns the unmatched remainder and
-/// the captured bindings.
-fn match_path(pattern: &[PathSegment], segments: &[String]) -> Option<PathMatch> {
-    let mut captures = Vec::new();
-    let mut i = 0;
-    for seg in pattern {
+/// Every way `pattern` matches the start of `segments` (a recursive wildcard consumes zero or
+/// more segments under rules version 2, one or more under version 1), each with its
+/// unmatched remainder and captured bindings.
+fn match_path(pattern: &[PathSegment], segments: &[String], zero_or_more: bool) -> Vec<PathMatch> {
+    fn go(
+        pattern: &[PathSegment],
+        segments: &[String],
+        zero_or_more: bool,
+        captures: &mut Vec<(String, RulesValue)>,
+        out: &mut Vec<PathMatch>,
+    ) {
+        let Some((seg, tail)) = pattern.split_first() else {
+            out.push((segments.to_vec(), captures.clone()));
+            return;
+        };
         match seg {
             PathSegment::Literal(l) => {
-                if segments.get(i)? != l {
-                    return None;
+                if segments.first() == Some(l) {
+                    go(tail, &segments[1..], zero_or_more, captures, out);
                 }
-                i += 1;
             }
             PathSegment::Capture { name, .. } => {
-                let v = segments.get(i)?;
-                captures.push((name.clone(), RulesValue::String(v.clone())));
-                i += 1;
+                if let Some(v) = segments.first() {
+                    captures.push((name.clone(), RulesValue::String(v.clone())));
+                    go(tail, &segments[1..], zero_or_more, captures, out);
+                    captures.pop();
+                }
             }
             PathSegment::RecursiveWildcard { name, .. } => {
-                let rest: Vec<String> = segments[i..].to_vec();
-                captures.push((name.clone(), RulesValue::Path(rest)));
-                i = segments.len();
+                let min = usize::from(!zero_or_more);
+                for take in min..=segments.len() {
+                    captures.push((name.clone(), RulesValue::Path(segments[..take].to_vec())));
+                    go(tail, &segments[take..], zero_or_more, captures, out);
+                    captures.pop();
+                }
             }
-            PathSegment::Binding(_) => return None,
+            PathSegment::Binding(_) => {}
         }
     }
-    Some((segments[i..].to_vec(), captures))
+    let mut out = Vec::new();
+    go(pattern, segments, zero_or_more, &mut Vec::new(), &mut out);
+    out
 }
 
 fn evaluate_allows<'a>(
@@ -444,7 +491,7 @@ fn evaluate_allows<'a>(
         };
         match ev.eval(cond) {
             Ok(RulesValue::Bool(true)) => return Ok(true),
-            Ok(_) | Err(EvalError::Soft(_)) => {}
+            Ok(_) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
             Err(e @ EvalError::Budget { .. }) => return Err(e),
             Err(e @ EvalError::Unsupported(_)) => deferred = Some(e),
         }
@@ -462,8 +509,17 @@ fn soft(msg: impl Into<String>) -> EvalError {
 fn truthy(v: &RulesValue) -> Result<bool, EvalError> {
     match v {
         RulesValue::Bool(b) => Ok(*b),
+        RulesValue::Unknown => Err(EvalError::Unknown),
         other => Err(soft(format!("expected bool, got {}", other.type_name()))),
     }
+}
+
+/// Values whose identity is not determined (query proofs) make most operations undecidable.
+fn undetermined(v: &RulesValue) -> bool {
+    matches!(
+        v,
+        RulesValue::Unknown | RulesValue::PartialMap(_) | RulesValue::PartialList(_)
+    )
 }
 
 impl<'a> Evaluator<'a> {
@@ -513,6 +569,11 @@ impl<'a> Evaluator<'a> {
                         .get(name)
                         .cloned()
                         .ok_or_else(|| soft(format!("missing member {name}"))),
+                    // A key the query does not constrain may or may not exist.
+                    RulesValue::PartialMap(m) => {
+                        Ok(m.get(name).cloned().unwrap_or(RulesValue::Unknown))
+                    }
+                    RulesValue::Unknown => Err(EvalError::Unknown),
                     RulesValue::Null => Err(soft(format!("member {name} of null"))),
                     other => Err(soft(format!("member {name} of {}", other.type_name()))),
                 }
@@ -525,6 +586,10 @@ impl<'a> Evaluator<'a> {
                         .get(&k)
                         .cloned()
                         .ok_or_else(|| soft(format!("missing key {k}"))),
+                    (RulesValue::PartialMap(m), RulesValue::String(k)) => {
+                        Ok(m.get(&k).cloned().unwrap_or(RulesValue::Unknown))
+                    }
+                    (o, i) if undetermined(&o) || undetermined(&i) => Err(EvalError::Unknown),
                     (RulesValue::List(items), RulesValue::Int(i)) => usize::try_from(i)
                         .ok()
                         .and_then(|i| items.get(i).cloned())
@@ -550,6 +615,7 @@ impl<'a> Evaluator<'a> {
             Expr::Unary { op, expr } => {
                 let v = self.eval(expr)?;
                 match (op, v) {
+                    (_, v) if undetermined(&v) => Err(EvalError::Unknown),
                     (UnaryOp::Not, RulesValue::Bool(b)) => Ok(RulesValue::Bool(!b)),
                     (UnaryOp::Neg, RulesValue::Int(i)) => i
                         .checked_neg()
@@ -591,6 +657,7 @@ impl<'a> Evaluator<'a> {
                     match s {
                         PathSegment::Literal(l) => out.push(l.clone()),
                         PathSegment::Binding(e) => match self.eval(e)? {
+                            v if undetermined(&v) => return Err(EvalError::Unknown),
                             RulesValue::String(s) => out.push(s),
                             RulesValue::Path(p) => out.extend(p),
                             RulesValue::Int(i) => out.push(i.to_string()),
@@ -607,6 +674,9 @@ impl<'a> Evaluator<'a> {
             }
             Expr::Is { expr, type_name } => {
                 let v = self.eval(expr)?;
+                if matches!(v, RulesValue::Unknown) {
+                    return Err(EvalError::Unknown);
+                }
                 let matches = match type_name.as_str() {
                     "number" => matches!(v, RulesValue::Int(_) | RulesValue::Float(_)),
                     "latlng" | "bytes" | "duration" => {
@@ -621,7 +691,7 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    #[allow(clippy::many_single_char_names)]
+    #[allow(clippy::many_single_char_names, clippy::too_many_lines)]
     fn binary(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> Result<RulesValue, EvalError> {
         use RulesValue as V;
         // Short-circuit operators charge only the operands they evaluate. Long chains parse
@@ -644,18 +714,43 @@ impl<'a> Evaluator<'a> {
                 cursor = l;
             }
             operands.push(cursor);
+            // Three-valued: a deciding operand (`false` for `&&`, `true` for `||`) wins
+            // even when another operand is undetermined; otherwise an undetermined operand
+            // makes the whole expression undetermined.
             let stop_on = matches!(op, BinaryOp::Or);
+            let mut unknown = false;
             for operand in operands.into_iter().rev() {
-                let v = self.eval(operand)?;
-                if truthy(&v)? == stop_on {
-                    return Ok(RulesValue::Bool(stop_on));
+                match self.eval(operand).and_then(|v| truthy(&v)) {
+                    Ok(b) if b == stop_on => return Ok(RulesValue::Bool(stop_on)),
+                    Ok(_) => {}
+                    Err(EvalError::Unknown) => unknown = true,
+                    Err(e) => return Err(e),
                 }
+            }
+            if unknown {
+                return Err(EvalError::Unknown);
             }
             return Ok(RulesValue::Bool(!stop_on));
         }
         let l = self.eval(left)?;
         let r = self.eval(right)?;
         Ok(match (op, &l, &r) {
+            // Membership in a partially known container is provable only positively.
+            (BinaryOp::In, item, V::PartialList(known)) if !undetermined(item) => {
+                if known.iter().any(|x| values_equal(x, item)) {
+                    V::Bool(true)
+                } else {
+                    return Err(EvalError::Unknown);
+                }
+            }
+            (BinaryOp::In, V::String(k), V::PartialMap(m)) => {
+                if m.contains_key(k) {
+                    V::Bool(true)
+                } else {
+                    return Err(EvalError::Unknown);
+                }
+            }
+            (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
             (BinaryOp::Eq, a, b) => V::Bool(values_equal(a, b)),
             (BinaryOp::Ne, a, b) => V::Bool(!values_equal(a, b)),
             (BinaryOp::In, item, V::List(items)) => {
@@ -785,6 +880,10 @@ impl<'a> Evaluator<'a> {
 // and the exact float comparison are intentional.
 #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
 fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
+    debug_assert!(
+        !undetermined(a) && !undetermined(b),
+        "undetermined values never compare"
+    );
     match (a, b) {
         (RulesValue::Int(x), RulesValue::Float(y)) | (RulesValue::Float(y), RulesValue::Int(x)) => {
             (*x as f64) == *y
@@ -868,7 +967,8 @@ fn method_call(
     };
     let list_arg = |a: &RulesValue| -> Result<Vec<RulesValue>, EvalError> {
         match a {
-            V::List(items) => Ok(items.clone()),
+            V::List(items) if !items.iter().any(undetermined) => Ok(items.clone()),
+            V::List(_) | V::PartialList(_) | V::Unknown => Err(EvalError::Unknown),
             other => Err(soft(format!(
                 "{name}() expects a list, got {}",
                 other.type_name()
@@ -876,6 +976,41 @@ fn method_call(
         }
     };
     Ok(match (receiver, name) {
+        (V::PartialList(known), "hasAny") => {
+            arity(1)?;
+            let wanted = list_arg(&args[0])?;
+            if wanted
+                .iter()
+                .any(|w| known.iter().any(|i| values_equal(i, w)))
+            {
+                V::Bool(true)
+            } else {
+                return Err(EvalError::Unknown);
+            }
+        }
+        (V::PartialList(known), "hasAll") => {
+            arity(1)?;
+            let wanted = list_arg(&args[0])?;
+            if wanted
+                .iter()
+                .all(|w| known.iter().any(|i| values_equal(i, w)))
+            {
+                V::Bool(true)
+            } else {
+                return Err(EvalError::Unknown);
+            }
+        }
+        (V::PartialMap(m), "get") => {
+            arity(2)?;
+            match &args[0] {
+                V::String(k) => match m.get(k) {
+                    Some(v) => v.clone(),
+                    None => return Err(EvalError::Unknown),
+                },
+                _ => return Err(soft("get() expects a string key")),
+            }
+        }
+        (V::Unknown | V::PartialList(_) | V::PartialMap(_), _) => return Err(EvalError::Unknown),
         (V::String(s), "size") => {
             arity(0)?;
             V::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))

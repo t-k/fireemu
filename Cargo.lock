@@ -380,6 +380,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-core-storage"
+version = "0.1.0"
+dependencies = [
+ "ftd-core-types",
+ "proptest",
+]
+
+[[package]]
 name = "ftd-core-types"
 version = "0.1.0"
 dependencies = [

@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use ftd_core_firestore::field_path::FieldPath;
 use ftd_core_firestore::path::DocumentPath;
 use ftd_core_firestore::store::{
-    FieldTransform, FirestoreError, FirestoreState, Precondition, TransformKind, Write, WriteOp,
+    CommitVersion, FieldTransform, FirestoreError, FirestoreState, Precondition, TransformKind,
+    Write, WriteOp,
 };
 use ftd_core_firestore::value::Value;
 use ftd_core_types::ids::{DatabaseId, ProjectId};
@@ -664,4 +665,34 @@ fn read_times_never_precede_the_last_commit_and_no_op_commits_still_consume_time
     // A transaction reports the snapshot time it started with.
     let txn = s.begin_transaction(true, t(0)).unwrap();
     assert_eq!(s.transaction_read_time(&txn).unwrap(), noop.commit_time);
+}
+
+#[test]
+fn read_time_snapshots_resolve_to_the_version_committed_at_or_before() {
+    let mut s = FirestoreState::new();
+    assert_eq!(s.version_at(t(0)), CommitVersion::default());
+    let first = s
+        .commit(&[set("snap/a", &[("v", Value::Integer(1))])], None, t(10))
+        .unwrap();
+    let second = s
+        .commit(&[set("snap/a", &[("v", Value::Integer(2))])], None, t(20))
+        .unwrap();
+    assert_eq!(s.version_at(t(5)), CommitVersion::default());
+    assert_eq!(s.version_at(t(10)), first.version);
+    assert_eq!(s.version_at(t(15)), first.version);
+    assert_eq!(s.version_at(t(20)), second.version);
+    assert_eq!(s.version_at(t(99)), second.version);
+    let at_first = s.get_at(&path("snap/a"), s.version_at(t(12))).unwrap();
+    assert_eq!(at_first.fields.get("v"), Some(&Value::Integer(1)));
+    assert!(s.get_at(&path("snap/a"), s.version_at(t(1))).is_none());
+    assert_eq!(
+        s.list_documents_at(None, "snap", Some(s.version_at(t(1))))
+            .len(),
+        0
+    );
+    assert_eq!(
+        s.list_documents_at(None, "snap", Some(s.version_at(t(30))))
+            .len(),
+        1
+    );
 }

@@ -244,6 +244,8 @@ pub struct FirestoreState {
     transactions: BTreeMap<TransactionId, Transaction>,
     /// Last published commit time; commit times are strictly monotonic per database.
     last_commit_time: Option<LogicalInstant>,
+    /// Commit time of every published version (`read_time` snapshots).
+    commit_times: Vec<(CommitVersion, LogicalInstant)>,
 }
 
 fn limit(id: &str) -> &'static ftd_core_limits::model::LimitDefinition {
@@ -382,6 +384,18 @@ impl FirestoreState {
             }
         }
         expired.map_or(Ok(()), |m| Err(FirestoreError::InvalidArgument(m.into())))
+    }
+
+    /// The version visible at `at` (the latest version committed at or before it; the empty
+    /// database before the first commit).
+    #[must_use]
+    pub fn version_at(&self, at: LogicalInstant) -> CommitVersion {
+        let idx = self
+            .commit_times
+            .partition_point(|(_, t)| t.as_nanos() <= at.as_nanos());
+        idx.checked_sub(1)
+            .and_then(|i| self.commit_times.get(i))
+            .map_or(CommitVersion::default(), |(v, _)| *v)
     }
 
     /// Time reported for a live read at `now`: never earlier than the last commit, so a
@@ -549,6 +563,7 @@ impl FirestoreState {
             self.version
         } else {
             self.version = next_version;
+            self.commit_times.push((next_version, commit_time));
             for (path, doc) in changed {
                 self.history
                     .entry(path)
@@ -632,8 +647,20 @@ impl FirestoreState {
         parent: Option<&DocumentPath>,
         collection_id: &str,
     ) -> Vec<Document> {
+        self.list_documents_at(parent, collection_id, None)
+    }
+
+    /// Documents directly under `parent` in `collection_id` as of `version` (latest when
+    /// `None`).
+    #[must_use]
+    pub fn list_documents_at(
+        &self,
+        parent: Option<&DocumentPath>,
+        collection_id: &str,
+        version: Option<CommitVersion>,
+    ) -> Vec<Document> {
         let parent_len = parent.map_or(0, |p| p.pairs().len());
-        self.live_documents(None)
+        self.live_documents(version)
             .filter(|d| {
                 d.path.pairs().len() == parent_len + 1
                     && d.path.collection_id().as_str() == collection_id

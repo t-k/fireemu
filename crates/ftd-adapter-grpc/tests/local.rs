@@ -9,6 +9,7 @@ use ftd_adapter_grpc::local::LocalBackend;
 use ftd_adapter_grpc::service::GatewayService;
 use ftd_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use ftd_core_session::clock::VirtualClock;
+use ftd_core_types::determinism::Clock;
 use ftd_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 use ftd_proto_firestore::google::firestore::v1 as pb;
@@ -826,5 +827,64 @@ async fn verify_writes_check_preconditions_without_changing_anything() {
         .unwrap()
         .into_inner();
     assert_eq!(doc.fields.get("v"), Some(&i(1)), "verify changed nothing");
+    handle.abort();
+}
+
+#[tokio::test]
+async fn read_time_selectors_serve_historical_snapshots() {
+    let (mut client, clock, handle) = start().await;
+    let t0 = clock.lock().unwrap().now();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("hist/a", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let t1 = clock.lock().unwrap().now();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("hist/a", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let at = |t: LogicalInstant| {
+        Some(pb::get_document_request::ConsistencySelector::ReadTime(
+            ftd_adapter_grpc::encode::encode_instant(t),
+        ))
+    };
+    let old = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/hist/a"),
+            consistency_selector: at(t1),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(old.fields.get("v"), Some(&i(1)));
+    let before = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/hist/a"),
+            consistency_selector: at(LogicalInstant::from_nanos(t0.as_nanos() - 1)),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(before.code(), tonic::Code::NotFound);
+    let mut q = query("hist", None);
+    q.consistency_selector = Some(pb::run_query_request::ConsistencySelector::ReadTime(
+        ftd_adapter_grpc::encode::encode_instant(t1),
+    ));
+    let docs = collect_docs(&mut client, q).await;
+    assert_eq!(docs[0].fields.get("v"), Some(&i(1)));
     handle.abort();
 }

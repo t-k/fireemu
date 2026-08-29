@@ -342,27 +342,26 @@ impl LocalBackend {
     ) -> Result<DocumentSnapshot, Status> {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
-        let txn = match &req.consistency_selector {
+        let (txn, read_at) = match &req.consistency_selector {
             Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
-                Self::txn(&parent, t)?
+                (Self::txn(&parent, t)?, None)
             }
-            Some(pb::get_document_request::ConsistencySelector::ReadTime(_)) => {
-                return Err(Status::unimplemented(
-                    "read_time consistency is not implemented",
-                ))
+            Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)) => {
+                (None, Some(crate::encode::decode_instant(ts)))
             }
-            None => None,
+            None => (None, None),
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let now = self.now();
-        let document = self.with_db(&parent, |db| match &txn {
-            Some(t) => {
+        let document = self.with_db(&parent, |db| match (&txn, read_at) {
+            (Some(t), _) => {
                 db.touch_transaction(t, now)
                     .map_err(|e| status_from_error(&e))?;
                 db.get_in_transaction(t, &path)
                     .map_err(|e| status_from_error(&e))
             }
-            None => Ok(db.get(&path).cloned()),
+            (None, Some(at)) => Ok(db.get_at(&path, db.version_at(at)).cloned()),
+            (None, None) => Ok(db.get(&path).cloned()),
         })?;
         Ok(DocumentSnapshot {
             path,
@@ -409,26 +408,32 @@ impl LocalBackend {
                     (Some(id), bytes)
                 }
                 Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(_)) => {
-                    return Err(Status::unimplemented(
-                        "read_time consistency is not implemented",
-                    ))
+                    (None, Vec::new())
                 }
                 None => (None, Vec::new()),
             };
-            let read_time = match &txn {
-                Some(t) => db
+            let read_at = match &req.consistency_selector {
+                Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(ts)) => {
+                    Some(crate::encode::decode_instant(ts))
+                }
+                _ => None,
+            };
+            let read_time = match (&txn, read_at) {
+                (Some(t), _) => db
                     .transaction_read_time(t)
                     .map_err(|e| status_from_error(&e))?,
-                None => db.read_time(now),
+                (None, Some(at)) => at,
+                (None, None) => db.read_time(now),
             };
             let mut items = Vec::with_capacity(req.documents.len());
             for (name, path) in req.documents.iter().zip(&paths) {
                 let path = path.clone();
-                let doc = match &txn {
-                    Some(t) => db
+                let doc = match (&txn, read_at) {
+                    (Some(t), _) => db
                         .get_in_transaction(t, &path)
                         .map_err(|e| status_from_error(&e))?,
-                    None => db.get(&path).cloned(),
+                    (None, Some(at)) => db.get_at(&path, db.version_at(at)).cloned(),
+                    (None, None) => db.get(&path).cloned(),
                 };
                 items.push(match doc {
                     Some(d) => BatchGetItem::Found(d),
@@ -718,26 +723,30 @@ impl LocalBackend {
                     let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
-                Some(pb::run_query_request::ConsistencySelector::ReadTime(_)) => {
-                    return Err(Status::unimplemented(
-                        "read_time consistency is not implemented",
-                    ))
+                Some(pb::run_query_request::ConsistencySelector::ReadTime(_)) | None => {
+                    (None, Vec::new())
                 }
-                None => (None, Vec::new()),
             };
-            let docs = match &txn {
-                Some(t) => db
+            let read_at = match &req.consistency_selector {
+                Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
+                    Some(crate::encode::decode_instant(ts))
+                }
+                _ => None,
+            };
+            let docs = match (&txn, read_at) {
+                (Some(t), _) => db
                     .run_query_in_transaction(t, &accepted.query)
                     .map_err(|e| status_from_error(&e))?,
-                None => db
-                    .run_query(&accepted.query, None)
+                (None, at) => db
+                    .run_query(&accepted.query, at.map(|t| db.version_at(t)))
                     .map_err(|e| status_from_error(&e))?,
             };
-            let read_time = Some(encode_instant(match &txn {
-                Some(t) => db
+            let read_time = Some(encode_instant(match (&txn, read_at) {
+                (Some(t), _) => db
                     .transaction_read_time(t)
                     .map_err(|e| status_from_error(&e))?,
-                None => db.read_time(now),
+                (None, Some(at)) => at,
+                (None, None) => db.read_time(now),
             }));
             let mut responses: Vec<pb::RunQueryResponse> = docs
                 .iter()
@@ -821,16 +830,20 @@ impl LocalBackend {
                     (Some(id), bytes)
                 }
                 Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(_)) => {
-                    return Err(Status::unimplemented(
-                        "read_time consistency is not implemented",
-                    ))
+                    (None, Vec::new())
                 }
                 None => (None, Vec::new()),
             };
+            let read_at = match &req.consistency_selector {
+                Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(ts)) => {
+                    Some(crate::encode::decode_instant(ts))
+                }
+                _ => None,
+            };
             // Inside a transaction the aggregation is computed at the snapshot and the query
             // is recorded so that later changes abort the commit.
-            let version = match &txn {
-                Some(t) => {
+            let version = match (&txn, read_at) {
+                (Some(t), _) => {
                     db.run_query_in_transaction(t, &accepted.query)
                         .map_err(|e| status_from_error(&e))?;
                     Some(
@@ -838,13 +851,15 @@ impl LocalBackend {
                             .map_err(|e| status_from_error(&e))?,
                     )
                 }
-                None => None,
+                (None, Some(at)) => Some(db.version_at(at)),
+                (None, None) => None,
             };
-            let read_time = match &txn {
-                Some(t) => db
+            let read_time = match (&txn, read_at) {
+                (Some(t), _) => db
                     .transaction_read_time(t)
                     .map_err(|e| status_from_error(&e))?,
-                None => db.read_time(now),
+                (None, Some(at)) => at,
+                (None, None) => db.read_time(now),
             };
             let values = db
                 .run_aggregation(&accepted.query, &aggregations, version)
@@ -882,15 +897,25 @@ impl LocalBackend {
                 .map_err(|_| Status::invalid_argument("malformed page_token"))?;
             Some(name)
         };
-        if req.consistency_selector.is_some() {
-            // Never serve live data for a snapshot request.
-            return Err(Status::unimplemented(
-                "ListDocuments transaction / read_time consistency is not implemented",
-            ));
-        }
+        let read_at = match &req.consistency_selector {
+            Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
+                Some(crate::encode::decode_instant(ts))
+            }
+            Some(pb::list_documents_request::ConsistencySelector::Transaction(_)) => {
+                // Never serve live data for a snapshot request.
+                return Err(Status::unimplemented(
+                    "ListDocuments inside a transaction is not implemented",
+                ));
+            }
+            None => None,
+        };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         self.with_db(&parent, |db| {
-            let mut docs = db.list_documents(parent.document.as_ref(), &req.collection_id);
+            let mut docs = db.list_documents_at(
+                parent.document.as_ref(),
+                &req.collection_id,
+                read_at.map(|t| db.version_at(t)),
+            );
             if let Some(after) = &after {
                 docs.retain(|d| d.path.resource_name() > *after);
             }

@@ -397,7 +397,7 @@ fn transactions_validate_their_read_set_on_commit() {
     );
     assert!(
         matches!(
-            s.commit(&[write.clone()], Some(&txn), t(4)),
+            s.commit(std::slice::from_ref(&write), Some(&txn), t(4)),
             Err(FirestoreError::InvalidArgument(_))
         ),
         "a finished transaction cannot be reused"

@@ -1,0 +1,11 @@
+.worktrees/
+/docs.local/
+AGENTS.override.md
+CLAUDE.local.md
+/target/
+**/target/
+.claude/agent-dags/
+junit.xml
+verification/tla/states/
+verification/tla/**/states/
+*.tlaps

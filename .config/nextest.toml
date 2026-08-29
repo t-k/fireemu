@@ -1,0 +1,26 @@
+# Test execution profiles. The `ci` profile never retries: a test that passes
+# only after a retry is a flaky diagnosis, not a success.
+[profile.default]
+retries = 0
+fail-fast = true
+
+[profile.pr]
+retries = 0
+fail-fast = true
+
+[profile.ci]
+retries = 0
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
+
+[profile.stress]
+retries = 0
+fail-fast = false
+test-threads = "num-cpus"
+
+[profile.flaky-diagnose]
+# Retries are allowed here only for diagnosis; this profile is never a gate.
+retries = 3
+fail-fast = false

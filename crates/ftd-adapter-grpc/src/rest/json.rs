@@ -709,3 +709,176 @@ pub fn transaction_options_from_json(v: Option<&Value>) -> pb::TransactionOption
 pub fn optional_timestamp_to_json(t: Option<&prost_types::Timestamp>) -> Value {
     t.map_or(Value::Null, timestamp_to_json)
 }
+
+// ------------------------------------------------------------------------------------------
+// Listen / Write stream messages (WebChannel carries their proto3 JSON form)
+// ------------------------------------------------------------------------------------------
+
+/// JSON → `ListenRequest`.
+pub fn listen_request_from_json(v: &Value) -> Result<pb::ListenRequest, JsonError> {
+    let target_change = if let Some(t) = v.get("addTarget") {
+        let target_type = if let Some(q) = t.get("query") {
+            Some(pb::target::TargetType::Query(pb::target::QueryTarget {
+                parent: q
+                    .get("parent")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                query_type: q
+                    .get("structuredQuery")
+                    .map(structured_query_from_json)
+                    .transpose()?
+                    .map(pb::target::query_target::QueryType::StructuredQuery),
+            }))
+        } else {
+            t.get("documents").map(|d| {
+                pb::target::TargetType::Documents(pb::target::DocumentsTarget {
+                    documents: d
+                        .get("documents")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+            })
+        };
+        let resume_type = if let Some(token) = t.get("resumeToken").and_then(Value::as_str) {
+            Some(pb::target::ResumeType::ResumeToken(base64_decode(token)?))
+        } else if let Some(rt) = t.get("readTime") {
+            Some(pb::target::ResumeType::ReadTime(timestamp_from_json(rt)?))
+        } else {
+            None
+        };
+        Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+            target_id: int32(t.get("targetId"), "targetId")?.unwrap_or(0),
+            once: t.get("once").and_then(Value::as_bool).unwrap_or(false),
+            expected_count: int32(t.get("expectedCount"), "expectedCount")?,
+            target_type,
+            resume_type,
+        }))
+    } else if let Some(id) = v.get("removeTarget") {
+        Some(pb::listen_request::TargetChange::RemoveTarget(
+            int32(Some(id), "removeTarget")?.unwrap_or(0),
+        ))
+    } else {
+        None
+    };
+    Ok(pb::ListenRequest {
+        database: v
+            .get("database")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        labels: HashMap::new(),
+        request_options: None,
+        target_change,
+    })
+}
+
+/// JSON → `WriteRequest`.
+pub fn write_request_from_json(v: &Value) -> Result<pb::WriteRequest, JsonError> {
+    Ok(pb::WriteRequest {
+        database: v
+            .get("database")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        stream_id: v
+            .get("streamId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        writes: v
+            .get("writes")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().map(write_from_json).collect::<Result<_, _>>())
+            .transpose()?
+            .unwrap_or_default(),
+        stream_token: match v.get("streamToken").and_then(Value::as_str) {
+            Some(t) => base64_decode(t)?,
+            None => Vec::new(),
+        },
+        labels: HashMap::new(),
+        request_options: None,
+    })
+}
+
+fn target_change_type_name(t: i32) -> &'static str {
+    match pb::target_change::TargetChangeType::try_from(t) {
+        Ok(pb::target_change::TargetChangeType::Add) => "ADD",
+        Ok(pb::target_change::TargetChangeType::Remove) => "REMOVE",
+        Ok(pb::target_change::TargetChangeType::Current) => "CURRENT",
+        Ok(pb::target_change::TargetChangeType::Reset) => "RESET",
+        _ => "NO_CHANGE",
+    }
+}
+
+/// `ListenResponse` → JSON.
+#[must_use]
+pub fn listen_response_to_json(r: &pb::ListenResponse) -> Value {
+    use pb::listen_response::ResponseType as R;
+    match &r.response_type {
+        Some(R::TargetChange(t)) => {
+            let mut v = json!({
+                "targetChange": {
+                    "targetChangeType": target_change_type_name(t.target_change_type),
+                    "targetIds": t.target_ids,
+                }
+            });
+            if !t.resume_token.is_empty() {
+                v["targetChange"]["resumeToken"] = Value::String(base64_encode(&t.resume_token));
+            }
+            if let Some(rt) = &t.read_time {
+                v["targetChange"]["readTime"] = timestamp_to_json(rt);
+            }
+            if let Some(c) = &t.cause {
+                v["targetChange"]["cause"] = json!({"code": c.code, "message": c.message});
+            }
+            v
+        }
+        Some(R::DocumentChange(d)) => json!({
+            "documentChange": {
+                "document": d.document.as_ref().map(document_to_json),
+                "targetIds": d.target_ids,
+                "removedTargetIds": d.removed_target_ids,
+            }
+        }),
+        Some(R::DocumentDelete(d)) => json!({
+            "documentDelete": {
+                "document": d.document,
+                "removedTargetIds": d.removed_target_ids,
+                "readTime": optional_timestamp_to_json(d.read_time.as_ref()),
+            }
+        }),
+        Some(R::DocumentRemove(d)) => json!({
+            "documentRemove": {
+                "document": d.document,
+                "removedTargetIds": d.removed_target_ids,
+                "readTime": optional_timestamp_to_json(d.read_time.as_ref()),
+            }
+        }),
+        Some(R::Filter(f)) => json!({"filter": {"targetId": f.target_id, "count": f.count}}),
+        None => json!({}),
+    }
+}
+
+/// `WriteResponse` → JSON.
+#[must_use]
+pub fn write_response_to_json(r: &pb::WriteResponse) -> Value {
+    let mut v = json!({
+        "streamToken": base64_encode(&r.stream_token),
+        "writeResults": r.write_results.iter().map(write_result_to_json).collect::<Vec<_>>(),
+    });
+    if !r.stream_id.is_empty() {
+        v["streamId"] = Value::String(r.stream_id.clone());
+    }
+    if let Some(t) = &r.commit_time {
+        v["commitTime"] = timestamp_to_json(t);
+    }
+    v
+}

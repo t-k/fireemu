@@ -23,7 +23,7 @@ use ftd_core_firestore::store::{CommitVersion, Document, Write};
 use ftd_proto_firestore::google::firestore::v1 as pb;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
-use tonic::{Status, Streaming};
+use tonic::Status;
 
 use crate::decode::{parse_parent, Parent};
 use crate::encode::{decode_write, encode_document, encode_instant};
@@ -70,7 +70,7 @@ struct WriteStreamState {
 /// message commits its writes atomically and answers with results and a fresh token.
 pub async fn write_stream(
     ctx: StreamContext,
-    mut inbound: Streaming<pb::WriteRequest>,
+    mut inbound: impl tokio_stream::Stream<Item = Result<pb::WriteRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::WriteResponse, Status>>,
 ) {
     let mut state = WriteStreamState {
@@ -176,7 +176,7 @@ struct TargetState {
 /// Runs the `Listen` stream.
 pub async fn listen_stream(
     ctx: StreamContext,
-    mut inbound: Streaming<pb::ListenRequest>,
+    mut inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
 ) {
     let mut parent: Option<Parent> = None;

@@ -1,0 +1,77 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>firebase-testd web smoke</title></head>
+<body>
+<pre id="out">starting</pre>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import { getAuth, connectAuthEmulator, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+import { getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, getDocs, onSnapshot, collection, query, where, deleteDoc, updateDoc, increment, runTransaction } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+
+const params = new URLSearchParams(location.search);
+const fsPort = Number(params.get("fs"));
+const authPort = Number(params.get("auth"));
+const results = [];
+const out = document.getElementById("out");
+function render() { out.textContent = JSON.stringify(results, null, 1); }
+async function check(name, fn) {
+  try { results.push({ name, ok: true, extra: await fn() }); }
+  catch (e) { results.push({ name, ok: false, extra: (e && (e.code || e.message)) || String(e) }); }
+  render();
+}
+async function expectDenied(fn) {
+  try { await fn(); } catch (e) { if (e.code === "permission-denied") return "permission-denied"; throw e; }
+  throw new Error("expected permission-denied");
+}
+const RULES = `
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /profiles/{uid} { allow read, write: if request.auth != null && request.auth.uid == uid; }
+    match /notes/{id} {
+      allow get: if request.auth != null;
+      allow list: if request.auth != null && resource.data.owner == request.auth.uid;
+      allow create, update: if request.auth != null && request.resource.data.owner == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.owner == request.auth.uid;
+    }
+    match /public/{id} { allow read: if true; }
+  }
+}`;
+(async () => {
+  const put = await fetch(`http://127.0.0.1:${authPort}/v1/rules`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: RULES }) });
+  results.push({ name: "rules loaded", ok: put.ok, extra: put.status }); render();
+  const app = initializeApp({ projectId: "demo-app", apiKey: "fake-api-key" });
+  const auth = getAuth(app);
+  connectAuthEmulator(auth, `http://127.0.0.1:${authPort}`, { disableWarnings: true });
+  const db = getFirestore(app);
+  connectFirestoreEmulator(db, "127.0.0.1", fsPort);
+  await check("anonymous read of a protected doc is denied", () => expectDenied(() => getDoc(doc(db, "profiles/x"))));
+  await check("anonymous read of public collection", async () => (await getDocs(collection(db, "public"))).size);
+  const cred = await createUserWithEmailAndPassword(auth, `web-${Date.now()}@example.com`, "password123");
+  const uid = cred.user.uid;
+  await check("set + get own profile", async () => { await setDoc(doc(db, `profiles/${uid}`), { name: "Web" }); return (await getDoc(doc(db, `profiles/${uid}`))).data(); });
+  await check("write another profile is denied", () => expectDenied(() => setDoc(doc(db, "profiles/other"), { name: "X" })));
+  await check("onSnapshot receives live updates", async () => {
+    const seen = [];
+    const ref = doc(db, `profiles/${uid}`);
+    await new Promise((resolve, reject) => {
+      const unsub = onSnapshot(ref, (snap) => {
+        seen.push(snap.data()?.count ?? null);
+        if (seen.length === 1) updateDoc(ref, { count: increment(1) }).catch(reject);
+        if (seen.length >= 2 && seen[seen.length - 1] === 1) { unsub(); resolve(); }
+      }, reject);
+      setTimeout(() => reject(new Error("timeout waiting for snapshot")), 10000);
+    });
+    return seen;
+  });
+  await check("owner-constrained query", async () => {
+    await setDoc(doc(db, "notes/n1"), { owner: uid, t: "x" });
+    return (await getDocs(query(collection(db, "notes"), where("owner", "==", uid)))).docs.map((d) => d.id);
+  });
+  await check("unconstrained query is denied", () => expectDenied(() => getDocs(collection(db, "notes"))));
+  await check("transaction", async () => runTransaction(db, async (tx) => { const s = await tx.get(doc(db, `profiles/${uid}`)); tx.update(doc(db, `profiles/${uid}`), { count: (s.data().count || 0) + 10 }); return "ok"; }));
+  await check("delete note", async () => { await deleteDoc(doc(db, "notes/n1")); return (await getDoc(doc(db, "notes/n1"))).exists(); });
+  await signOut(auth);
+  results.push({ name: "DONE", ok: true, extra: results.filter((r) => !r.ok).length }); render();
+})().catch((e) => { results.push({ name: "FATAL", ok: false, extra: String(e && (e.stack || e)) }); render(); });
+</script>
+</body></html>

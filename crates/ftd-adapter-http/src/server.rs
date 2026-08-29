@@ -23,6 +23,27 @@ async fn respond(
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().as_str().to_owned();
+    let origin = req
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    if method == "OPTIONS" {
+        // Browser preflight (the Auth SDK sends JSON with an Authorization header).
+        let requested = req
+            .headers()
+            .get("access-control-request-headers")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("authorization, content-type")
+            .to_owned();
+        return Ok(
+            with_cors(Response::builder().status(204), origin.as_deref())
+                .header("access-control-allow-headers", requested)
+                .header("access-control-max-age", "3600")
+                .body(Full::new(Bytes::new()))
+                .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))),
+        );
+    }
     let path = req
         .uri()
         .path_and_query()
@@ -72,11 +93,33 @@ async fn respond(
         }
     };
     let text = serde_json::to_vec(&body).unwrap_or_default();
-    Ok(Response::builder()
-        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
-        .header("content-type", "application/json; charset=utf-8")
-        .body(Full::new(Bytes::from(text)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
+    Ok(with_cors(
+        Response::builder()
+            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)),
+        origin.as_deref(),
+    )
+    .header("content-type", "application/json; charset=utf-8")
+    .body(Full::new(Bytes::from(text)))
+    .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
+}
+
+/// Permissive CORS for a loopback test runtime (browser SDKs call these endpoints directly;
+/// privileged routes still check the `Origin` themselves).
+fn with_cors(
+    builder: hyper::http::response::Builder,
+    origin: Option<&str>,
+) -> hyper::http::response::Builder {
+    let mut b = builder
+        .header("access-control-allow-origin", origin.unwrap_or("*"))
+        .header("access-control-allow-credentials", "true")
+        .header(
+            "access-control-allow-methods",
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        );
+    if origin.is_some() {
+        b = b.header("vary", "origin");
+    }
+    b
 }
 
 /// Serves the Identity Toolkit surface on `listener` until the task is aborted.

@@ -15,3 +15,4 @@ pub mod rules;
 pub mod serve;
 pub mod service;
 pub mod streams;
+pub mod webchannel;

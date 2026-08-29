@@ -54,6 +54,10 @@ service cloud.firestore {
     match /strict/{id} {
       allow create: if resource.data.x == 1;
     }
+    match /owned/{id} {
+      allow create, update: if request.auth != null && request.resource.data.owner == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.owner == request.auth.uid;
+    }
   }
 }
 ";
@@ -316,6 +320,37 @@ async fn owner_bypasses_rules_and_users_are_checked_per_method() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
+    // delete rules see the existing document as `resource`.
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("owned/o1", &[("owner", s(&alice))])]),
+            &alice_token,
+        ))
+        .await
+        .unwrap();
+    let err = h
+        .client
+        .commit(with_bearer(
+            commit(vec![pb::Write {
+                operation: Some(pb::write::Operation::Delete(format!("{DOCS}/owned/o1"))),
+                ..Default::default()
+            }]),
+            &bob_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    h.client
+        .commit(with_bearer(
+            commit(vec![pb::Write {
+                operation: Some(pb::write::Operation::Delete(format!("{DOCS}/owned/o1"))),
+                ..Default::default()
+            }]),
+            &alice_token,
+        ))
+        .await
+        .unwrap();
 
     // A forged / unknown token is UNAUTHENTICATED, not silently anonymous.
     let err = h

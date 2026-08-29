@@ -912,3 +912,67 @@ fn form_encoded_token_refresh_is_accepted_by_the_server_layer() {
     assert_eq!(status, 200, "{body}");
     assert!(body["id_token"].as_str().is_some());
 }
+
+#[test]
+fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
+    let s = state();
+    let now_secs = 1_788_004_860;
+    let token = custom_token("custom-r", &json!({"role": "tester"}), now_secs + 3600);
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let refresh = body["refreshToken"].as_str().unwrap();
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let decoded =
+        ftd_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        decoded.payload.get("role").and_then(|v| v.as_str()),
+        Some("tester")
+    );
+    assert_eq!(
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|f| f.get("sign_in_provider"))
+            .and_then(|v| v.as_str()),
+        Some("custom")
+    );
+    // A password user signing in with a custom token also gets a custom-provider session.
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "pw@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"email": ["pw@example.com"]}),
+    );
+    let uid = looked["users"][0]["localId"].as_str().unwrap().to_owned();
+    let token = custom_token(&uid, &json!({}), now_secs + 3600);
+    let (_, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token}),
+    );
+    let decoded = ftd_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|f| f.get("sign_in_provider"))
+            .and_then(|v| v.as_str()),
+        Some("custom")
+    );
+    assert!(looked["users"][0]["lastLoginAt"].is_string() || body["localId"] == uid);
+}

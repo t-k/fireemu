@@ -48,7 +48,9 @@ pub enum Provider {
 }
 
 impl Provider {
-    fn id(&self) -> &'static str {
+    /// Provider ID as it appears in `firebase.sign_in_provider`.
+    #[must_use]
+    pub const fn id(&self) -> &'static str {
         match self {
             Self::Password => "password",
             Self::Anonymous => "anonymous",
@@ -88,6 +90,22 @@ impl NewUser {
             provider: Provider::Anonymous,
         }
     }
+}
+
+/// What a refresh token restores: the user, when it was issued, and how the session was
+/// obtained (sign-in provider, custom-token claims, second factor).
+#[derive(Debug, Clone)]
+pub struct RefreshSession {
+    /// User.
+    pub uid: LocalId,
+    /// Issue time (revocation compares against it).
+    pub issued_at: LogicalInstant,
+    /// Provider override (`custom` for custom-token sign-ins).
+    pub provider: Option<Provider>,
+    /// Custom-token developer claims.
+    pub claims: CustomClaims,
+    /// Second factor of the session.
+    pub second_factor: Option<SecondFactorAssertion>,
 }
 
 /// User record.
@@ -242,7 +260,7 @@ pub struct AuthStore {
     policy: TotpPolicy,
     users: BTreeMap<LocalId, UserRecord>,
     counter: u64,
-    refresh_tokens: BTreeMap<String, (LocalId, LogicalInstant)>,
+    refresh_tokens: BTreeMap<String, RefreshSession>,
     next_id_override: Option<String>,
     next_sequence: u64,
 }
@@ -330,7 +348,7 @@ impl AuthStore {
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
         let key = LocalId(uid.to_owned());
         self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
-        self.refresh_tokens.retain(|_, (owner, _)| owner != &key);
+        self.refresh_tokens.retain(|_, s| s.uid != key);
         Ok(())
     }
 
@@ -487,7 +505,7 @@ impl AuthStore {
 
     /// Removes every refresh token of `uid` (password change, explicit revocation).
     pub fn revoke_refresh_tokens(&mut self, uid: &LocalId) {
-        self.refresh_tokens.retain(|_, (owner, _)| owner != uid);
+        self.refresh_tokens.retain(|_, s| s.uid != *uid);
     }
 
     /// Sets a password credential.
@@ -540,36 +558,88 @@ impl AuthStore {
             .find(|u| u.email.as_deref() == Some(email))
     }
 
-    /// Issues a refresh token bound to `uid` at `now`.
+    /// Issues a refresh token for `uid` (plain session: the user's own provider and claims).
     pub fn issue_refresh_token(
         &mut self,
         uid: &LocalId,
         now: LogicalInstant,
     ) -> Result<String, AuthError> {
+        self.issue_refresh_session(uid, now, None, CustomClaims::default(), None)
+    }
+
+    /// Issues a refresh token that remembers how the session was obtained: the sign-in
+    /// provider, custom-token claims and the second factor, so refreshed ID tokens carry the
+    /// same `firebase` block and claims as the first one.
+    pub fn issue_refresh_session(
+        &mut self,
+        uid: &LocalId,
+        now: LogicalInstant,
+        provider: Option<Provider>,
+        claims: CustomClaims,
+        second_factor: Option<SecondFactorAssertion>,
+    ) -> Result<String, AuthError> {
         if !self.users.contains_key(uid) {
             return Err(AuthError::UserNotFound);
         }
         let token = self.next_id("rt-");
-        self.refresh_tokens
-            .insert(token.clone(), (uid.clone(), now));
+        self.refresh_tokens.insert(
+            token.clone(),
+            RefreshSession {
+                uid: uid.clone(),
+                issued_at: now,
+                provider,
+                claims,
+                second_factor,
+            },
+        );
         Ok(token)
+    }
+
+    /// The session behind a refresh token (validated like [`Self::redeem_refresh_token`]).
+    pub fn refresh_session(&self, token: &str) -> Result<&RefreshSession, AuthError> {
+        self.redeem_refresh_token(token)?;
+        self.refresh_tokens
+            .get(token)
+            .ok_or(AuthError::InvalidRefreshToken)
+    }
+
+    /// ID token claims for a refreshed session.
+    pub fn id_token_claims_for_session(
+        &self,
+        session: &RefreshSession,
+        now: LogicalInstant,
+    ) -> Result<IdTokenClaims, AuthError> {
+        let mut claims = self.id_token_claims(&session.uid, session.second_factor.as_ref(), now)?;
+        if let Some(p) = &session.provider {
+            p.id().clone_into(&mut claims.firebase.sign_in_provider);
+        }
+        for (k, v) in session.claims.entries() {
+            claims
+                .custom
+                .insert(k, v.clone())
+                .map_err(|_| AuthError::InvalidRefreshToken)?;
+        }
+        Ok(claims)
     }
 
     /// Redeems a refresh token: unknown tokens, tokens issued before a revocation, and disabled
     /// users are rejected.
     pub fn redeem_refresh_token(&self, token: &str) -> Result<LocalId, AuthError> {
-        let (uid, issued_at) = self
+        let session = self
             .refresh_tokens
             .get(token)
             .ok_or(AuthError::InvalidRefreshToken)?;
-        let user = self.users.get(uid).ok_or(AuthError::InvalidRefreshToken)?;
+        let user = self
+            .users
+            .get(&session.uid)
+            .ok_or(AuthError::InvalidRefreshToken)?;
         if user.disabled {
             return Err(AuthError::UserDisabled);
         }
-        if *issued_at < user.tokens_valid_after {
+        if session.issued_at < user.tokens_valid_after {
             return Err(AuthError::InvalidRefreshToken);
         }
-        Ok(uid.clone())
+        Ok(session.uid.clone())
     }
 
     /// Looks up a user.

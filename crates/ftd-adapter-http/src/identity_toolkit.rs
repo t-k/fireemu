@@ -116,21 +116,25 @@ fn issue_tokens(
     second: Option<&SecondFactorAssertion>,
     at: LogicalInstant,
 ) -> Result<Value, JsonResponse> {
-    issue_tokens_with(store, uid, second, at, None)
+    issue_tokens_with(store, uid, second, at, None, None)
 }
 
-/// Issues an ID token + refresh token; `extra` claims (custom-token developer claims) are
-/// merged into the token without being stored on the user.
+/// Issues an ID token + refresh token; `extra` claims (custom-token developer claims) and
+/// `provider` are merged into the token and remembered by the refresh session.
 fn issue_tokens_with(
     store: &mut AuthStore,
     uid: &LocalId,
     second: Option<&SecondFactorAssertion>,
     at: LogicalInstant,
     extra: Option<&CustomClaims>,
+    provider: Option<ftd_core_auth::store::Provider>,
 ) -> Result<Value, JsonResponse> {
     let mut claims = store
         .id_token_claims(uid, second, at)
         .map_err(|e| auth_error(&e))?;
+    if let Some(p) = &provider {
+        p.id().clone_into(&mut claims.firebase.sign_in_provider);
+    }
     if let Some(extra) = extra {
         for (k, v) in extra.entries() {
             claims
@@ -140,7 +144,13 @@ fn issue_tokens_with(
         }
     }
     let refresh = store
-        .issue_refresh_token(uid, at)
+        .issue_refresh_session(
+            uid,
+            at,
+            provider,
+            extra.cloned().unwrap_or_default(),
+            second.cloned(),
+        )
         .map_err(|e| auth_error(&e))?;
     Ok(json!({
         "idToken": encode_unsigned(&claims),
@@ -378,7 +388,14 @@ fn sign_in_with_custom_token(
         return error(400, "USER_DISABLED");
     }
     store.record_sign_in(&uid, at);
-    match issue_tokens_with(store, &uid, None, at, Some(&extra)) {
+    match issue_tokens_with(
+        store,
+        &uid,
+        None,
+        at,
+        Some(&extra),
+        Some(ftd_core_auth::store::Provider::Custom),
+    ) {
         Ok(mut body) => {
             body["kind"] = json!("identitytoolkit#VerifyCustomTokenResponse");
             body["isNewUser"] = json!(is_new);
@@ -1157,11 +1174,11 @@ fn refresh(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
     let Some(token) = str_field(body, "refresh_token") else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
-    let uid = match store.redeem_refresh_token(token) {
-        Ok(uid) => uid,
+    let session = match store.refresh_session(token) {
+        Ok(s) => s.clone(),
         Err(e) => return auth_error(&e),
     };
-    match store.id_token_claims(&uid, None, at) {
+    match store.id_token_claims_for_session(&session, at) {
         Ok(claims) => JsonResponse {
             status: 200,
             body: json!({
@@ -1169,7 +1186,7 @@ fn refresh(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
                 "refresh_token": token,
                 "expires_in": "3600",
                 "token_type": "Bearer",
-                "user_id": uid.as_str(),
+                "user_id": session.uid.as_str(),
                 "project_id": store.project_id(),
             }),
         },

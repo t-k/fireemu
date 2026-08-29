@@ -218,6 +218,19 @@ impl LocalBackend {
         self.with_db(parent, |db| Ok((db.current_version(), db.read_time(now))))
     }
 
+    /// Runs `f` against one consistent database snapshot (version, read time, lookups and
+    /// queries all see the same state). `Listen` refreshes use it.
+    pub fn with_snapshot<T>(
+        &self,
+        parent: &Parent,
+        f: impl FnOnce(&FirestoreState, CommitVersion, ftd_core_types::time::LogicalInstant) -> T,
+    ) -> Result<T, Status> {
+        let now = self.now();
+        self.with_db(parent, |db| {
+            Ok(f(db, db.current_version(), db.read_time(now)))
+        })
+    }
+
     /// Decodes and validates a structured query through the strict gateway.
     pub fn accepted_query(
         &self,

@@ -205,6 +205,7 @@ enum TargetKind {
 
 struct TargetState {
     kind: TargetKind,
+    parent: Parent,
     known: BTreeMap<DocumentPath, CommitVersion>,
     once: bool,
     /// Reached its first consistent snapshot (`CURRENT` was sent).
@@ -313,6 +314,7 @@ fn handle_listen_request(
                 id,
                 TargetState {
                     kind,
+                    parent: parent.clone(),
                     known: BTreeMap::new(),
                     once: target.once,
                     current: false,
@@ -390,7 +392,35 @@ fn refresh_all(
             return;
         }
     };
-    let (version, read_at) = match ctx.local.snapshot(parent) {
+    // One critical section: every target sees the same version, read time and documents.
+    let snapshot = ctx.local.with_snapshot(parent, |db, version, read_at| {
+        let read_time = encode_instant(read_at);
+        let token = version.value().to_be_bytes().to_vec();
+        let mut removed = Vec::new();
+        for (id, state) in targets.iter_mut() {
+            match refresh_target(ctx, &principal, db, *id, state, read_time) {
+                Ok(()) => {
+                    out.append(&mut state.pending);
+                    if !state.current {
+                        state.current = true;
+                        out.push(target_change(
+                            pb::target_change::TargetChangeType::Current,
+                            vec![*id],
+                            Some(token.clone()),
+                            Some(read_time),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    state.pending.clear();
+                    out.push(removed_with_cause(*id, &e));
+                    removed.push(*id);
+                }
+            }
+        }
+        (read_time, token, removed)
+    });
+    let (read_time, token, removed) = match snapshot {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -400,30 +430,6 @@ fn refresh_all(
             return;
         }
     };
-    let read_time = encode_instant(read_at);
-    let token = version.value().to_be_bytes().to_vec();
-    let mut removed = Vec::new();
-    for (id, state) in targets.iter_mut() {
-        match refresh_target(ctx, &principal, parent, *id, state, read_time) {
-            Ok(()) => {
-                out.append(&mut state.pending);
-                if !state.current {
-                    state.current = true;
-                    out.push(target_change(
-                        pb::target_change::TargetChangeType::Current,
-                        vec![*id],
-                        Some(token.clone()),
-                        Some(read_time),
-                    ));
-                }
-            }
-            Err(e) => {
-                state.pending.clear();
-                out.push(removed_with_cause(*id, &e));
-                removed.push(*id);
-            }
-        }
-    }
     for id in removed {
         targets.remove(&id);
     }
@@ -464,7 +470,7 @@ fn refresh_all(
 fn refresh_target(
     ctx: &StreamContext,
     principal: &Principal,
-    parent: &Parent,
+    db: &ftd_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
     read_time: prost_types::Timestamp,
@@ -473,7 +479,7 @@ fn refresh_target(
         TargetKind::Documents(paths) => {
             let mut docs = Vec::new();
             for path in paths {
-                let doc = ctx.local.current_document(parent, path)?;
+                let doc = db.get(path).cloned();
                 if let Some(rules) = &ctx.rules {
                     rules.authorize_get(principal, path, doc.as_ref())?;
                 }
@@ -485,9 +491,10 @@ fn refresh_target(
         }
         TargetKind::Query(query) => {
             if let Some(rules) = &ctx.rules {
-                rules.authorize_query(principal, parent, query)?;
+                rules.authorize_query(principal, &state.parent, query)?;
             }
-            ctx.local.run_query_latest(parent, query)?
+            db.run_query(query, None)
+                .map_err(|e| crate::encode::status_from_error(&e))?
         }
     };
     let mut next_known: BTreeMap<DocumentPath, CommitVersion> = BTreeMap::new();
@@ -502,7 +509,7 @@ fn refresh_target(
             continue;
         }
         let name = path.resource_name();
-        let still_exists = ctx.local.current_document(parent, path)?.is_some();
+        let still_exists = db.get(path).is_some();
         let response_type = if still_exists {
             pb::listen_response::ResponseType::DocumentRemove(pb::DocumentRemove {
                 document: name,

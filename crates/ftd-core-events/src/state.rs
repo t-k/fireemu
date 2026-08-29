@@ -233,6 +233,16 @@ impl EventRecord {
         }
     }
 
+    /// `Running -> Pending` when the delivery infrastructure failed before the handler
+    /// could run to completion (runner death): the attempt is given back, so it is not
+    /// charged against the retry policy.
+    pub fn interrupt(&mut self) -> Result<(), EventTransitionError> {
+        self.guard("interrupt", matches!(self.state, EventState::Running))?;
+        self.attempt = self.attempt.saturating_sub(1);
+        self.state = EventState::Pending;
+        Ok(())
+    }
+
     /// `RetryWaiting -> Pending` once `now >= retry_at`.
     pub fn retry_due(&mut self, now: LogicalInstant) -> Result<(), EventTransitionError> {
         self.guard(

@@ -165,6 +165,8 @@ function makeHttpServer(functions, manifest) {
       res.status(403).send("not the firebase-testd proxy");
       return;
     }
+    // The secret is not part of the request the function sees.
+    delete req.headers["x-ftd-runner-secret"];
     const spec = manifest.functions.find((f) => f.name === req.params.name && f.trigger?.type === "http");
     const fn = spec && functions.get(spec.entryPoint);
     const region = spec?.region || "us-central1";

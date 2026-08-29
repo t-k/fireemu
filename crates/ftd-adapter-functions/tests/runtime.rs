@@ -123,24 +123,6 @@ async fn events_are_dispatched_and_retried_in_virtual_time() {
         after: Some(doc("other/x", 1)),
     }]));
     assert!(runtime.is_idle());
-    // Storage: the slow function times out (1s) and is dead-lettered (no retry).
-    let mut store = StorageState::new(1);
-    let meta = store
-        .put(
-            &BucketName::try_new("demo-app.appspot.com").unwrap(),
-            &ObjectName::try_new("a.txt").unwrap(),
-            b"x".to_vec(),
-            NewMetadata::default(),
-            Precondition::default(),
-            START,
-        )
-        .unwrap();
-    runtime.on_storage_event(&StorageEvent::Finalized(meta));
-    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
-    assert!(runtime
-        .dead_letters()
-        .iter()
-        .any(|r| r.function == "slow" && r.outcome == "timeout"));
     // Schedules: the retries advanced 3 minutes; 12 more make 15, i.e. three "every 5
     // minutes" runs (catch-up enqueues every missed run).
     clock
@@ -159,10 +141,38 @@ async fn events_are_dispatched_and_retried_in_virtual_time() {
     runtime.run_schedule("tick").unwrap();
     assert!(runtime.run_schedule("ok").is_err(), "not a schedule");
     assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    // Storage: the slow function times out (1s) and is dead-lettered (no retry).
+    let mut store = StorageState::new(1);
+    let meta = store
+        .put(
+            &BucketName::try_new("demo-app.appspot.com").unwrap(),
+            &ObjectName::try_new("a.txt").unwrap(),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            START,
+        )
+        .unwrap();
+    runtime.on_storage_event(&StorageEvent::Finalized(meta));
+    // The event is dead-lettered at the deadline, but the handler is still running in the
+    // runner, so the session is not idle until it finishes.
+    let busy = runtime.await_idle(Duration::from_secs(3)).await;
+    assert!(busy.is_err(), "{busy:?}");
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|r| r.function == "slow" && r.outcome == "timeout"));
+    assert_eq!(runtime.status()["running"], 1);
     let status = runtime.status();
-    assert_eq!(status["running"], 0);
+    assert_eq!(
+        status["running"], 1,
+        "the hung handler still holds its slot"
+    );
     assert_eq!(status["deadLettered"], 2);
+    // Killing the runner releases the slot and stops dispatch.
     runtime.runner().shutdown().await;
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(!runtime.runner_alive());
 }
 
 #[tokio::test]
@@ -274,16 +284,24 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
 #[test]
 fn http_responses_are_parsed_with_every_body_framing() {
     let chunked = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n1\r\n!\r\n0\r\n\r\n";
-    let r = parse_response(chunked).unwrap();
+    let r = parse_response(chunked, "GET").unwrap();
     assert_eq!((r.status, r.body.as_slice()), (200, &b"hello!"[..]));
     assert_eq!(
         r.headers,
         vec![("Content-Type".to_owned(), "text/plain".to_owned())]
     );
     let sized = b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nnopIGNORED";
-    assert_eq!(parse_response(sized).unwrap().body, b"nop");
+    assert_eq!(parse_response(sized, "GET").unwrap().body, b"nop");
+    // HEAD and body-less statuses omit the declared body; a truncated GET is an error.
+    let head = b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\n";
+    assert!(parse_response(head, "HEAD").unwrap().body.is_empty());
+    assert!(parse_response(head, "GET").is_err());
+    assert!(parse_response(b"HTTP/1.1 204 No Content\r\n\r\n", "GET")
+        .unwrap()
+        .body
+        .is_empty());
     let closed = b"HTTP/1.1 500 X\r\n\r\nwhole body";
-    assert_eq!(parse_response(closed).unwrap().body, b"whole body");
-    assert!(parse_response(b"garbage").is_err());
-    assert!(parse_response(b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nshort").is_err());
+    assert_eq!(parse_response(closed, "GET").unwrap().body, b"whole body");
+    assert!(parse_response(b"garbage", "GET").is_err());
+    assert!(parse_response(b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nshort", "GET").is_err());
 }

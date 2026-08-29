@@ -28,7 +28,7 @@ use tokio::sync::Notify;
 
 use crate::events::{change_kind, firestore_event, schedule_event, storage_event};
 use crate::http::{forward, ProxiedResponse};
-use crate::runner::{InvokeOutcome, Runner};
+use crate::runner::{Invocation, InvokeOutcome, Runner};
 
 /// Default maximum schedule runs enqueued per clock advance and job (spec 11.6); the rest
 /// stays due and is enqueued as invocations complete, so nothing is discarded.
@@ -95,7 +95,10 @@ pub struct InvocationRecord {
 struct Inner {
     outbox: Outbox,
     payloads: BTreeMap<EventId, (String, Value)>,
-    running: BTreeMap<EventId, String>,
+    /// Invocations occupying a slot, keyed by invocation key (`<event>-<attempt>` or
+    /// `http-<n>`) with the function name; a timed-out handler keeps its slot until it
+    /// really finishes.
+    running: BTreeMap<String, String>,
     next_event: u64,
     epoch: Epoch,
     jobs: Vec<ScheduledJob>,
@@ -340,15 +343,25 @@ impl FunctionsRuntime {
             return;
         };
         let mut enqueued = false;
+        // Runs are enqueued only into vacant capacity: the outstanding scheduled work never
+        // exceeds the cap, whatever the number of completions that refill it.
         let cap = self.config.max_catch_up_runs.max(1);
+        let room = cap.saturating_sub(inner.payloads.len());
+        if room == 0 && inner.catch_up_pending {
+            return;
+        }
+        let cap = room.max(1);
         let mut pending = false;
         let runs: Vec<(String, String, LogicalInstant)> = inner
             .jobs
             .iter_mut()
             .flat_map(|job| {
-                let runs = job
-                    .schedule
-                    .runs_between(job.cursor, now, job.offset_seconds, cap + 1);
+                let runs = job.schedule.runs_between(
+                    job.cursor,
+                    now,
+                    job.offset_seconds,
+                    cap.saturating_add(1),
+                );
                 if runs.len() > cap {
                     // Beyond the cap: enqueue `cap` runs now and leave the cursor at the last
                     // one so the rest stays due (keeping the session busy) instead of vanishing.
@@ -435,8 +448,12 @@ impl FunctionsRuntime {
             inner.epoch = inner.epoch.next().unwrap_or(inner.epoch);
             let epoch = inner.epoch;
             inner.outbox.discard_stale(epoch);
-            let running: Vec<EventId> = inner.running.keys().copied().collect();
-            inner.payloads.retain(|id, _| running.contains(id));
+            let running: Vec<String> = inner.running.keys().cloned().collect();
+            inner.payloads.retain(|id, _| {
+                running
+                    .iter()
+                    .any(|k| k.starts_with(&format!("{}-", id.value())))
+            });
             inner.catch_up_pending = false;
             for job in &mut inner.jobs {
                 job.cursor = now;
@@ -479,7 +496,7 @@ impl FunctionsRuntime {
         let mut retry_waiting = 0;
         let mut dead = 0;
         let mut succeeded = 0;
-        for id in inner.payloads.keys().chain(inner.running.keys()) {
+        for id in inner.payloads.keys() {
             if let Some(r) = inner.outbox.record(*id) {
                 match r.state() {
                     EventState::Pending | EventState::Leased => pending += 1,
@@ -575,7 +592,7 @@ impl FunctionsRuntime {
         let (timeout, concurrency) = self.manifest.get(&target.function).map_or((60, 1), |f| {
             (u64::from(f.timeout_seconds), f.concurrency as usize)
         });
-        let id = {
+        let (id, key) = {
             let Ok(mut inner) = self.inner.lock() else {
                 return Err("runtime poisoned".into());
             };
@@ -593,10 +610,18 @@ impl FunctionsRuntime {
             }
             inner.next_event += 1;
             let id = EventId::new(u128::from(inner.next_event));
-            inner.running.insert(id, target.function.clone());
-            id
+            let key = format!("http-{}", inner.next_event);
+            inner.running.insert(key.clone(), target.function.clone());
+            (id, key)
         };
-        let mut forwarded: Vec<(String, String)> = headers.to_vec();
+        // The slot is released even if the client disconnects and this future is dropped.
+        let _admission = Admission { runtime: self, key };
+        // The runner secret is ours to add; a caller-supplied copy never passes through.
+        let mut forwarded: Vec<(String, String)> = headers
+            .iter()
+            .filter(|(k, _)| !k.eq_ignore_ascii_case("x-ftd-runner-secret"))
+            .cloned()
+            .collect();
         forwarded.push((
             "x-ftd-runner-secret".to_owned(),
             self.config.runner_secret.clone(),
@@ -612,7 +637,6 @@ impl FunctionsRuntime {
             Err(_) => "timeout".to_owned(),
         };
         if let Ok(mut inner) = self.inner.lock() {
-            inner.running.remove(&id);
             inner.history.push(InvocationRecord {
                 event_id: id.value(),
                 function: target.function.clone(),
@@ -620,9 +644,6 @@ impl FunctionsRuntime {
                 outcome,
             });
         }
-        self.idle.notify_waiters();
-        // The freed slot may unblock a pending event.
-        self.wake.notify_one();
         match result {
             Ok(r) => r,
             Err(_) => Err(format!(
@@ -681,13 +702,23 @@ impl FunctionsRuntime {
                 continue;
             };
             let request = self.invoke_request(id, spec, attempt, epoch, payload);
-            inner.running.insert(id, function_name.clone());
+            let key = format!("{}-{attempt}", id.value());
+            inner.running.insert(key.clone(), function_name.clone());
             let runtime = self.clone();
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
             let retry = spec.retry;
             tokio::spawn(async move {
-                let outcome = runtime.runner.invoke(request, timeout).await;
-                runtime.complete(id, &function_name, attempt, epoch, retry, &outcome);
+                let Invocation { outcome, late } = runtime.runner.invoke(request, timeout).await;
+                runtime.complete(id, &key, &function_name, attempt, epoch, retry, &outcome);
+                match late {
+                    // The handler is still running: its slot stays taken until it finishes
+                    // (or the runner dies), so idle and concurrency stay truthful.
+                    Some(late) => {
+                        let _ = late.await;
+                        runtime.release(&key);
+                    }
+                    None => runtime.release(&key),
+                }
             });
         }
     }
@@ -725,9 +756,20 @@ impl FunctionsRuntime {
         })
     }
 
+    /// Frees an invocation slot.
+    fn release(&self, key: &str) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.running.remove(key);
+        }
+        self.idle.notify_waiters();
+        self.wake.notify_one();
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn complete(
         &self,
         id: EventId,
+        key: &str,
         function: &str,
         attempt: u32,
         epoch: Epoch,
@@ -735,8 +777,8 @@ impl FunctionsRuntime {
         outcome: &InvokeOutcome,
     ) {
         let now = self.now();
+        let _ = key;
         if let Ok(mut inner) = self.inner.lock() {
-            inner.running.remove(&id);
             let text = match &outcome {
                 InvokeOutcome::Ok => "ok".to_owned(),
                 InvokeOutcome::Failed(e) => format!("failed: {e}"),
@@ -750,11 +792,17 @@ impl FunctionsRuntime {
                 outcome: text.clone(),
             });
             if inner.epoch != epoch {
-                // Stale epoch: the record was discarded by the reset; nothing to update.
+                // Stale epoch: the record was discarded by the reset; only the payload kept
+                // for the running invocation goes.
+                inner.payloads.remove(&id);
             } else if let Ok(record) = inner.outbox.record_mut(id) {
                 if matches!(outcome, InvokeOutcome::Ok) {
                     let _ = record.succeed();
                     inner.payloads.remove(&id);
+                } else if matches!(outcome, InvokeOutcome::RunnerGone(_)) {
+                    // Infrastructure failure: the attempt is given back and the event waits,
+                    // pending, for a runner (dispatch stops while the runner is dead).
+                    let _ = record.interrupt();
                 } else {
                     let single = RetryPolicy::try_new(
                         1,
@@ -792,5 +840,18 @@ impl FunctionsRuntime {
         }
         self.idle.notify_waiters();
         self.wake.notify_one();
+    }
+}
+
+/// Holds an HTTP invocation's slot; dropping it (normal completion or a cancelled request
+/// future) frees the slot and wakes the dispatcher and idle waiters.
+struct Admission<'a> {
+    runtime: &'a FunctionsRuntime,
+    key: String,
+}
+
+impl Drop for Admission<'_> {
+    fn drop(&mut self) {
+        self.runtime.release(&self.key);
     }
 }

@@ -104,22 +104,8 @@ pub fn handle_with(
     headers: &RequestHeaders,
     body: &Value,
 ) -> JsonResponse {
-    if let Some(origin) = &headers.origin {
-        if !crate::identity_toolkit::origin_is_local(origin) {
-            return error(403, "FORBIDDEN_ORIGIN");
-        }
-        let privileged = method != "GET" && !path.starts_with("/health/");
-        let presented = headers
-            .authorization
-            .as_deref()
-            .and_then(|a| a.strip_prefix("Bearer "))
-            .map(str::trim);
-        if privileged && presented != Some(state.control_token.as_str()) {
-            return error(
-                403,
-                "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token> (printed at start, FTD_CONTROL_TOKEN)",
-            );
-        }
+    if let Some(refusal) = browser_guard(state, method, path, headers) {
+        return refusal;
     }
     let path = path.split('?').next().unwrap_or(path);
     match (method, path) {
@@ -256,6 +242,35 @@ fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonRespon
         },
         _ => error(404, "NOT_FOUND"),
     }
+}
+
+/// The browser policy of every control route (also applied by the asynchronous
+/// `awaitIdle` path): foreign origins are refused, and a page on a loopback origin needs
+/// the control token for anything but reads.
+#[must_use]
+pub fn browser_guard(
+    state: &ControlState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+) -> Option<JsonResponse> {
+    let origin = headers.origin.as_deref()?;
+    if !crate::identity_toolkit::origin_is_local(origin) {
+        return Some(error(403, "FORBIDDEN_ORIGIN"));
+    }
+    let privileged = method != "GET" && !path.starts_with("/health/");
+    let presented = headers
+        .authorization
+        .as_deref()
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .map(str::trim);
+    if privileged && presented != Some(state.control_token.as_str()) {
+        return Some(error(
+            403,
+            "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token> (printed at start, FTD_CONTROL_TOKEN)",
+        ));
+    }
+    None
 }
 
 /// `POST /v1/sessions/{s}:awaitIdle`: waits until the functions runtime has no outstanding

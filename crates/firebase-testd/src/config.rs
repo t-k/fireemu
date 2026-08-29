@@ -241,8 +241,16 @@ impl RuntimeConfig {
                 }
             }
         }
-        if let Some(n) = s.get("maxCatchUpRuns").and_then(Value::as_u64) {
-            cfg.scheduler_max_catch_up_runs = usize::try_from(n).unwrap_or(usize::MAX).max(1);
+        if let Some(v) = s.get("maxCatchUpRuns") {
+            let n = v
+                .as_u64()
+                .filter(|n| (1..=100_000).contains(n))
+                .ok_or_else(|| {
+                    ConfigError(
+                        "scheduler.maxCatchUpRuns must be an integer from 1 to 100000".into(),
+                    )
+                })?;
+            cfg.scheduler_max_catch_up_runs = usize::try_from(n).unwrap_or(1000);
         }
         if let Some(tz) = s.get("defaultTimeZone").and_then(Value::as_str) {
             ftd_core_functions::cron::fixed_offset_seconds(Some(tz))

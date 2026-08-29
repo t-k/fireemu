@@ -275,15 +275,19 @@ async fn terminate_signal() {
     std::future::pending::<()>().await;
 }
 
-/// A 128-bit secret from the seed mixed with the process id and wall-clock time.
-fn random_secret(seed: u64) -> String {
-    use ftd_core_types::determinism::DeterministicRng;
-    let mut mix = seed ^ u64::from(std::process::id());
-    if let Ok(elapsed) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        mix ^= u64::try_from(elapsed.as_nanos() & u128::from(u64::MAX)).unwrap_or(0);
-    }
-    let mut rng = SplitMix64::new(mix);
-    format!("{:016x}{:016x}", rng.next_u64(), rng.next_u64())
+/// A 128-bit secret from the operating system's entropy source; the daemon refuses to start
+/// without one (these values authorize control and runner access).
+fn random_secret() -> Result<String, String> {
+    use std::fmt::Write as _;
+    use std::io::Read as _;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|e| format!("cannot read /dev/urandom for the control token: {e}"))?;
+    Ok(bytes.iter().fold(String::with_capacity(32), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    }))
 }
 
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
@@ -399,8 +403,8 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             .and_then(|l| l.local_addr().ok());
         // Random secrets: the control token browsers must present, and the secret that ties
         // the runner's HTTP server to this daemon's proxy.
-        let control_token = random_secret(cfg.seed ^ 0xC0_11);
-        let runner_secret = random_secret(cfg.seed ^ 0x5E_C2);
+        let control_token = random_secret()?;
+        let runner_secret = random_secret()?;
         let functions_runtime = match functions_listener.as_ref() {
             Some(_) => Some(
                 functions::start(

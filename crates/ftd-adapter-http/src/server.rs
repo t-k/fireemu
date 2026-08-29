@@ -100,14 +100,9 @@ async fn respond(
                 Some(json) => {
                     let r = match &control {
                         Some(c) if method == "POST" && control::is_await_idle_path(&path) => {
-                            if headers
-                                .origin
-                                .as_deref()
-                                .is_some_and(|o| !crate::identity_toolkit::origin_is_local(o))
-                            {
-                                control::handle_with(c, &method, &path, &headers, &json)
-                            } else {
-                                control::await_idle(c, &json).await
+                            match control::browser_guard(c, &method, &path, &headers) {
+                                Some(refusal) => refusal,
+                                None => control::await_idle(c, &json).await,
                             }
                         }
                         Some(c) if control::is_control_path(&path) => {

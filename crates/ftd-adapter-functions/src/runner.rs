@@ -58,14 +58,13 @@ pub const INHERITED_ENV: &[&str] = &[
     "SYSTEMDRIVE",
     "COMSPEC",
     "NODE_PATH",
-    "NODE_OPTIONS",
     "NODE_EXTRA_CA_CERTS",
     "NVM_DIR",
     "NVM_BIN",
 ];
 
-/// Variable prefixes inherited by a runner (tool managers, XDG directories).
-pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_", "XDG_"];
+/// Variable prefixes inherited by a runner (Node version managers only).
+pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"];
 
 /// A running runner.
 pub struct Runner {
@@ -88,8 +87,34 @@ pub fn child_env(extra: &[(String, String)]) -> Vec<(String, String)> {
                 || INHERITED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
         })
         .collect();
+    // `HOME` has to stay (the version-manager shims need it), so Application Default
+    // Credentials are blocked explicitly: the well-known file lookup goes through
+    // `CLOUDSDK_CONFIG` (an empty directory) and `GOOGLE_APPLICATION_CREDENTIALS` names a
+    // file that does not exist.
+    let isolated = std::env::temp_dir().join("firebase-testd-runner");
+    let _ = std::fs::create_dir_all(isolated.join("gcloud-empty"));
+    env.push((
+        "CLOUDSDK_CONFIG".to_owned(),
+        isolated.join("gcloud-empty").to_string_lossy().into_owned(),
+    ));
+    env.push((
+        "GOOGLE_APPLICATION_CREDENTIALS".to_owned(),
+        isolated
+            .join("no-credentials.json")
+            .to_string_lossy()
+            .into_owned(),
+    ));
     env.extend(extra.iter().cloned());
     env
+}
+
+/// Result of an invocation plus, after a timeout, the channel on which the handler's late
+/// result (or the runner's death) will still arrive.
+pub struct Invocation {
+    /// Outcome within the deadline.
+    pub outcome: InvokeOutcome,
+    /// Present only for `TimedOut`: resolves when the handler actually finishes.
+    pub late: Option<oneshot::Receiver<InvokeOutcome>>,
 }
 
 impl Runner {
@@ -291,47 +316,75 @@ impl Runner {
     }
 
     /// Sends an `invoke` and waits for its result. One deadline covers the stdin lock, the
-    /// frame write (a runner that stopped reading its stdin cannot block others forever) and
-    /// the result; a timed-out invocation's late result is discarded (the `invocationId` is
-    /// unique per attempt).
-    pub async fn invoke(&self, request: Value, timeout: Duration) -> InvokeOutcome {
+    /// frame write and the result. A frame that cannot be written in full within the
+    /// deadline means the runner stopped reading its stdin: the stream is closed and the
+    /// runner retired rather than left with a half frame. A timed-out invocation keeps its
+    /// waiter: the late result (or the runner's death) arrives on [`Invocation::late`].
+    pub async fn invoke(&self, request: Value, timeout: Duration) -> Invocation {
+        let done = |outcome| Invocation {
+            outcome,
+            late: None,
+        };
         if !self.is_alive() {
-            return InvokeOutcome::RunnerGone("runner exited".into());
+            return done(InvokeOutcome::RunnerGone("runner exited".into()));
         }
         let id = request
             .get("invocationId")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         if let Ok(mut w) = self.waiters.lock() {
             w.insert(id.clone(), tx);
         }
-        let send_and_wait = async {
-            {
-                let mut stdin = self.stdin.lock().await;
-                let Some(stdin) = stdin.as_mut() else {
-                    return InvokeOutcome::RunnerGone("runner stdin closed".into());
-                };
-                let mut frame = request;
-                frame["type"] = Value::String("invoke".into());
-                if let Err(e) = write_frame(stdin, &frame).await {
-                    return InvokeOutcome::RunnerGone(format!("cannot write to runner: {e}"));
-                }
-            }
-            match rx.await {
-                Ok(outcome) => outcome,
-                Err(_) => InvokeOutcome::RunnerGone("runner exited".into()),
+        let deadline = tokio::time::Instant::now() + timeout;
+        let forget = |waiters: &Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>| {
+            if let Ok(mut w) = waiters.lock() {
+                w.remove(&id);
             }
         };
-        let outcome = match tokio::time::timeout(timeout, send_and_wait).await {
-            Ok(outcome) => outcome,
-            Err(_) => InvokeOutcome::TimedOut,
+        // 1. The stdin lock (waiting here is harmless: nothing was written yet).
+        let Ok(mut stdin) = tokio::time::timeout_at(deadline, self.stdin.lock()).await else {
+            forget(&self.waiters);
+            return done(InvokeOutcome::TimedOut);
         };
-        if let Ok(mut w) = self.waiters.lock() {
-            w.remove(&id);
+        let Some(pipe) = stdin.as_mut() else {
+            forget(&self.waiters);
+            return done(InvokeOutcome::RunnerGone("runner stdin closed".into()));
+        };
+        // 2. The frame: a partial write would desynchronize the protocol, so a stalled or
+        //    failed write retires the runner.
+        let mut frame = request;
+        frame["type"] = Value::String("invoke".into());
+        let written = tokio::time::timeout_at(deadline, write_frame(pipe, &frame)).await;
+        if !matches!(written, Ok(Ok(()))) {
+            *stdin = None;
+            self.alive.store(false, Ordering::SeqCst);
+            eprintln!(
+                "{} runner stopped reading its stdin; functions are unavailable until the daemon restarts",
+                self.label
+            );
+            forget(&self.waiters);
+            return done(InvokeOutcome::RunnerGone(
+                "runner stopped reading its stdin".into(),
+            ));
         }
-        outcome
+        drop(stdin);
+        // 3. The result.
+        match tokio::time::timeout_at(deadline, &mut rx).await {
+            Ok(Ok(outcome)) => {
+                forget(&self.waiters);
+                done(outcome)
+            }
+            Ok(Err(_)) => {
+                forget(&self.waiters);
+                done(InvokeOutcome::RunnerGone("runner exited".into()))
+            }
+            Err(_) => Invocation {
+                outcome: InvokeOutcome::TimedOut,
+                late: Some(rx),
+            },
+        }
     }
 
     /// Asks the runner to exit, then kills it.

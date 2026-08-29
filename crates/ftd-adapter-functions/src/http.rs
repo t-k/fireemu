@@ -93,15 +93,13 @@ pub async fn forward(
             "function response exceeds {MAX_FUNCTION_RESPONSE_BYTES} bytes"
         ));
     }
-    let mut response = parse_response(&raw)?;
-    if method.eq_ignore_ascii_case("HEAD") {
-        response.body.clear();
-    }
-    Ok(response)
+    parse_response(&raw, method)
 }
 
-/// Parses a complete HTTP/1.1 response (`Content-Length`, chunked or close-delimited body).
-pub fn parse_response(raw: &[u8]) -> Result<ProxiedResponse, String> {
+/// Parses a complete HTTP/1.1 response (`Content-Length`, chunked or close-delimited body)
+/// to a `method` request; only HEAD responses and body-less statuses may omit a declared
+/// body.
+pub fn parse_response(raw: &[u8], method: &str) -> Result<ProxiedResponse, String> {
     let header_end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -130,17 +128,17 @@ pub fn parse_response(raw: &[u8]) -> Result<ProxiedResponse, String> {
         }
     }
     let rest = &raw[header_end + 4..];
-    let body = if chunked {
+    let bodyless = method.eq_ignore_ascii_case("HEAD")
+        || matches!(status, 204 | 304)
+        || (100..200).contains(&status);
+    let body = if bodyless {
+        Vec::new()
+    } else if chunked {
         decode_chunked(rest)?
     } else if let Some(n) = content_length {
-        // A HEAD response (or 204 / 304) legitimately carries no body.
-        if rest.is_empty() {
-            Vec::new()
-        } else {
-            rest.get(..n)
-                .ok_or_else(|| "truncated response body".to_owned())?
-                .to_vec()
-        }
+        rest.get(..n)
+            .ok_or_else(|| "truncated response body".to_owned())?
+            .to_vec()
     } else {
         rest.to_vec()
     };
@@ -249,11 +247,12 @@ async fn respond(
 /// Whether a browser `Origin` is a loopback origin.
 #[must_use]
 pub fn origin_is_local(origin: &str) -> bool {
+    // `null` (sandboxed or opaque contexts) is not a loopback origin.
     let Some(rest) = origin
         .strip_prefix("http://")
         .or_else(|| origin.strip_prefix("https://"))
     else {
-        return origin == "null";
+        return false;
     };
     let host = rest.split('/').next().unwrap_or("");
     let host = host

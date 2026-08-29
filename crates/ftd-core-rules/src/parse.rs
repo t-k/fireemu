@@ -620,20 +620,16 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            match matched {
-                Some(op) => {
-                    let right = self.binary(level + 1)?;
-                    left = Expr::Binary {
-                        op,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    };
-                }
-                None => {
-                    self.pos = save;
-                    return Ok(left);
-                }
-            }
+            let Some(op) = matched else {
+                self.pos = save;
+                return Ok(left);
+            };
+            let right = self.binary(level + 1)?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
     }
 

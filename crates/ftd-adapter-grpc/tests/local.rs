@@ -725,3 +725,55 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     assert!(only.result.is_none());
     handle.abort();
 }
+
+#[tokio::test]
+async fn list_documents_pages_by_name_with_opaque_tokens() {
+    let (mut client, _clock, handle) = start().await;
+    let writes: Vec<pb::Write> = (0..5i64)
+        .map(|n| update_write(&format!("pg/d{n}"), &[("v", i(n))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut token = String::new();
+    let mut seen = Vec::new();
+    loop {
+        let page = client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: DOCS.to_owned(),
+                collection_id: "pg".to_owned(),
+                page_size: 2,
+                page_token: token.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        seen.extend(page.documents.iter().map(|d| d.name.clone()));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        token = page.next_page_token;
+    }
+    assert_eq!(seen.len(), 5);
+    assert!(
+        seen.windows(2).all(|w| w[0] < w[1]),
+        "listed by name: {seen:?}"
+    );
+    let err = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "pg".to_owned(),
+            page_token: "not-a-token".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    handle.abort();
+}

@@ -29,6 +29,9 @@ use crate::encode::{
 use crate::gateway::{AcceptedQuery, Gateway, Rejection};
 use crate::rules::{allow_all, WriteGuard};
 
+/// `ListDocuments` page size when the request leaves it unset (the service default).
+pub const DEFAULT_LIST_PAGE_SIZE: usize = 100;
+
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
@@ -842,11 +845,20 @@ impl LocalBackend {
         req: &pb::ListDocumentsRequest,
     ) -> Result<pb::ListDocumentsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
-        if !req.page_token.is_empty() {
-            return Err(Status::unimplemented(
-                "ListDocuments pagination tokens are not implemented",
-            ));
-        }
+        // Page tokens are the resource name of the last document of the previous page
+        // (documents are listed by name).
+        let after: Option<String> = if req.page_token.is_empty() {
+            None
+        } else {
+            let name = String::from_utf8(
+                crate::rest::json::base64_decode(&req.page_token)
+                    .map_err(|_| Status::invalid_argument("malformed page_token"))?,
+            )
+            .map_err(|_| Status::invalid_argument("malformed page_token"))?;
+            decode_document_name(&name)
+                .map_err(|_| Status::invalid_argument("malformed page_token"))?;
+            Some(name)
+        };
         if req.consistency_selector.is_some() {
             // Never serve live data for a snapshot request.
             return Err(Status::unimplemented(
@@ -856,9 +868,23 @@ impl LocalBackend {
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         self.with_db(&parent, |db| {
             let mut docs = db.list_documents(parent.document.as_ref(), &req.collection_id);
-            if req.page_size > 0 {
-                docs.truncate(usize::try_from(req.page_size).unwrap_or(usize::MAX));
+            if let Some(after) = &after {
+                docs.retain(|d| d.path.resource_name() > *after);
             }
+            let page_size = if req.page_size > 0 {
+                usize::try_from(req.page_size).unwrap_or(usize::MAX)
+            } else {
+                DEFAULT_LIST_PAGE_SIZE
+            };
+            let has_more = docs.len() > page_size;
+            docs.truncate(page_size);
+            let next_page_token = if has_more {
+                docs.last().map_or(String::new(), |d| {
+                    crate::rest::json::base64_encode(d.path.resource_name().as_bytes())
+                })
+            } else {
+                String::new()
+            };
             let documents = docs
                 .iter()
                 .map(|d| {
@@ -871,7 +897,7 @@ impl LocalBackend {
                 .collect();
             Ok(pb::ListDocumentsResponse {
                 documents,
-                next_page_token: String::new(),
+                next_page_token,
             })
         })
     }

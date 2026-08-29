@@ -86,7 +86,11 @@ mod tests {
     use super::*;
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
+        use core::fmt::Write as _;
+        bytes.iter().fold(String::new(), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
     }
 
     #[test]
@@ -103,7 +107,7 @@ mod tests {
             "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
         );
         assert_eq!(
-            hex(&sha1(&[b'a'; 1_000_000])),
+            hex(&sha1(&vec![b'a'; 1_000_000])),
             "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
         );
     }

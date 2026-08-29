@@ -28,6 +28,15 @@ async fn respond(
         .get("origin")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
+    if origin
+        .as_deref()
+        .is_some_and(|o| !crate::identity_toolkit::origin_is_local(o))
+    {
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Full::new(Bytes::from_static(b"forbidden origin")))
+            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+    }
     if method == "OPTIONS" {
         // Browser preflight (the Auth SDK sends JSON with an Authorization header).
         let requested = req

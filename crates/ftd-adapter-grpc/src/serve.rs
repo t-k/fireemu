@@ -139,6 +139,7 @@ async fn channel_call(
         method,
         params,
         authorization,
+        origin: origin.clone(),
         body,
     });
     match response {
@@ -227,6 +228,16 @@ where
                         return Ok::<_, Infallible>(
                             response.map(|b| b.map_err(|e| Box::new(e) as BoxError).boxed_unsync()),
                         );
+                    }
+                    if let Some(origin) = header(&req, "origin") {
+                        if !crate::webchannel::origin_is_local(origin) {
+                            // A page on another site must not drive this credentialed
+                            // loopback runtime (simple requests need no preflight).
+                            return Ok(Response::builder()
+                                .status(403)
+                                .body(full(Bytes::from_static(b"forbidden origin")))
+                                .unwrap_or_else(|_| Response::new(full(Bytes::new()))));
+                        }
                     }
                     if req.method() == hyper::Method::OPTIONS {
                         return Ok(preflight(&req));

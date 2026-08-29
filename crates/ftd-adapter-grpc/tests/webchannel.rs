@@ -134,6 +134,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("database", DB), ("VER", "8"), ("RID", "1"), ("CVER", "22")]),
         authorization: None,
+        origin: None,
         body: form(&[
             ("headers", "X-Goog-Api-Client:test\r\n"),
             ("count", "1"),
@@ -165,6 +166,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
             ("TYPE", "xmlhttp"),
         ]),
         authorization: None,
+        origin: None,
         body: String::new(),
     }) else {
         panic!("expected a streamed back channel");
@@ -185,6 +187,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("SID", &sid), ("RID", "2"), ("AID", "1")]),
         authorization: None,
+        origin: None,
         body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &second)]),
     }));
     assert_eq!(status, 200);
@@ -211,6 +214,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("SID", &sid), ("RID", "3"), ("AID", "4")]),
         authorization: None,
+        origin: None,
         body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &second)]),
     }));
     assert_eq!(status, 200);
@@ -219,6 +223,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("SID", "nope"), ("RID", "4"), ("AID", "0")]),
         authorization: None,
+        origin: None,
         body: String::new(),
     }));
     assert_eq!(status, 400);
@@ -235,6 +240,7 @@ async fn rules_denials_reach_the_browser_as_target_removals() {
         method: "POST".to_owned(),
         params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
         authorization: None,
+        origin: None,
         body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
     }));
     assert_eq!(status, 200);
@@ -255,6 +261,7 @@ async fn rules_denials_reach_the_browser_as_target_removals() {
             ("TYPE", "xmlhttp"),
         ]),
         authorization: None,
+        origin: None,
         body: String::new(),
     }) else {
         panic!("expected a streamed back channel");
@@ -281,4 +288,104 @@ async fn rules_denials_reach_the_browser_as_target_removals() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
+    let hub = hub(None);
+    // Handshake with map 0; then maps 2 and 1 arrive out of order (2 first).
+    let first = listen_target(2, "open");
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        origin: Some("http://localhost:5173".to_owned()),
+        body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
+    }));
+    assert_eq!(status, 200);
+    let sid = headers
+        .iter()
+        .find(|(k, _)| *k == "x-http-session-id")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    assert_eq!(sid.len(), 32, "128-bit session id");
+    // Another origin cannot use the session; a non-loopback origin is refused outright.
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("SID", &sid), ("RID", "2"), ("AID", "0")]),
+        authorization: None,
+        origin: Some("http://localhost:9999".to_owned()),
+        body: form(&[("count", "0"), ("ofs", "1")]),
+    }));
+    assert_eq!((status, body.as_str()), (400, "Error: Unknown SID"));
+    let (status, _, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        origin: Some("https://evil.example".to_owned()),
+        body: String::new(),
+    }));
+    assert_eq!(status, 403);
+
+    // Map 2 (target 6) before map 1 (target 4): the stream must see 4 before 6.
+    let second = listen_target(4, "open");
+    let third = listen_target(6, "open");
+    let send = |ofs: &str, data: &str| ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("SID", &sid), ("RID", "3"), ("AID", "0")]),
+        authorization: None,
+        origin: Some("http://localhost:5173".to_owned()),
+        body: form(&[("count", "1"), ("ofs", ofs), ("req0___data__", data)]),
+    };
+    assert_eq!(full(hub.handle(&send("2", &third))).0, 200);
+    assert_eq!(full(hub.handle(&send("1", &second))).0, 200);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "rpc"),
+            ("AID", "0"),
+            ("CI", "1"),
+            ("TYPE", "xmlhttp"),
+        ]),
+        authorization: None,
+        origin: Some("http://localhost:5173".to_owned()),
+        body: String::new(),
+    }) else {
+        panic!("expected a streamed back channel");
+    };
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let text = std::str::from_utf8(&chunk).unwrap();
+    let arrays = chunks(text);
+    let adds: Vec<i64> = arrays[0]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| {
+            let tc = &a[1][0]["targetChange"];
+            (tc["targetChangeType"] == "ADD").then(|| tc["targetIds"][0].as_i64().unwrap())
+        })
+        .collect();
+    assert_eq!(adds, vec![2, 4, 6], "maps delivered in id order");
+
+    // Non-ASCII payloads: the length prefix counts UTF-16 code units.
+    let (len, rest) = chunk_parts("13\n[[1,[\"日本語\"]]]");
+    assert_eq!(len, 13);
+    assert_eq!(rest.encode_utf16().count(), 13);
+    assert_ne!(rest.len(), 13, "byte length differs from the UTF-16 length");
+}
+
+fn chunk_parts(text: &str) -> (usize, &str) {
+    let (len, rest) = text.split_once('\n').unwrap();
+    (len.parse().unwrap(), rest)
 }

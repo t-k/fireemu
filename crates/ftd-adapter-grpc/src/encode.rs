@@ -219,6 +219,9 @@ pub fn decode_write(w: &pb::Write) -> Result<Write, DecodeError> {
         Some(pb::write::Operation::Delete(name)) => WriteOp::Delete {
             path: decode_document_name(name)?,
         },
+        Some(pb::write::Operation::Verify(name)) => WriteOp::Verify {
+            path: decode_document_name(name)?,
+        },
         Some(pb::write::Operation::Transform(dt)) => {
             if dt.field_transforms.is_empty() {
                 return Err(DecodeError::InvalidQuery(

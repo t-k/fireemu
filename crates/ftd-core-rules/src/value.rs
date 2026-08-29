@@ -24,8 +24,8 @@ pub enum RulesValue {
     Map(BTreeMap<String, RulesValue>),
     /// Path (segments without the leading slash).
     Path(Vec<String>),
-    /// Timestamp as Unix nanoseconds (full Firestore precision).
-    Timestamp(i64),
+    /// Timestamp as Unix nanoseconds (full Firestore precision, no saturation).
+    Timestamp(i128),
     /// Bytes.
     Bytes(Vec<u8>),
     /// Geo point.

@@ -190,16 +190,24 @@ impl RulesEnforcer {
         self.evaluate(principal, Method::Get, path, snapshot, None)
     }
 
-    /// Authorizes a query from its constraints (see the module documentation).
+    /// Authorizes a query from its constraints (see the module documentation). One ruleset
+    /// snapshot and one request time serve every disjunction.
     pub fn authorize_query(
         &self,
         principal: &Principal,
         parent: &Parent,
         query: &Query,
     ) -> Result<(), Status> {
-        if matches!(principal, Principal::Owner) || !self.loaded()? {
+        if matches!(principal, Principal::Owner) {
             return Ok(());
         }
+        let rules = self
+            .rules
+            .read()
+            .map_err(|_| Status::internal("rules lock poisoned"))?;
+        let Some(ruleset) = &rules.ruleset else {
+            return Ok(());
+        };
         let now = self.now()?;
         let placeholder = placeholder_path(parent, query)?;
         for disjunction in query.dnf() {
@@ -210,19 +218,22 @@ impl RulesEnforcer {
                 update_time: now,
                 version: ftd_core_firestore::store::CommitVersion::default(),
             };
-            self.evaluate(
+            evaluate_with(
+                ruleset,
                 principal,
                 Method::List,
                 &placeholder,
                 Some(&synthetic),
                 None,
+                now,
             )?;
         }
         Ok(())
     }
 
     /// Authorizes the writes of one commit against the sequentially staged state `db` will
-    /// see. Meant to run inside the database critical section (see [`WriteGuard`]).
+    /// see, at the commit time the commit will receive. Meant to run inside the database
+    /// critical section (see [`WriteGuard`]); one ruleset snapshot serves every write.
     pub fn authorize_writes_in(
         &self,
         principal: &Principal,
@@ -230,9 +241,17 @@ impl RulesEnforcer {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), Status> {
-        if matches!(principal, Principal::Owner) || !self.loaded()? {
+        if matches!(principal, Principal::Owner) {
             return Ok(());
         }
+        let rules = self
+            .rules
+            .read()
+            .map_err(|_| Status::internal("rules lock poisoned"))?;
+        let Some(ruleset) = &rules.ruleset else {
+            return Ok(());
+        };
+        let at = db.next_commit_time(now);
         let mut staged: BTreeMap<DocumentPath, Option<Document>> = BTreeMap::new();
         for write in writes {
             let path = write.op.path();
@@ -242,18 +261,30 @@ impl RulesEnforcer {
             };
             let (method, preview) = match &write.op {
                 WriteOp::Delete { .. } => (Method::Delete, None),
+                // A verify is a transactional read of the document.
+                WriteOp::Verify { .. } => (Method::Get, None),
                 WriteOp::Set { .. } => (
                     if current.is_some() {
                         Method::Update
                     } else {
                         Method::Create
                     },
-                    FirestoreState::preview_from(current.clone(), write, now)
+                    FirestoreState::preview_from(current.clone(), write, at)
                         .map_err(|e| crate::encode::status_from_error(&e))?,
                 ),
             };
-            self.evaluate(principal, method, path, current.as_ref(), preview.as_ref())?;
-            staged.insert(path.clone(), preview);
+            evaluate_with(
+                ruleset,
+                principal,
+                method,
+                path,
+                current.as_ref(),
+                preview.as_ref(),
+                at,
+            )?;
+            if !matches!(write.op, WriteOp::Verify { .. }) {
+                staged.insert(path.clone(), preview);
+            }
         }
         Ok(())
     }
@@ -278,8 +309,7 @@ fn evaluate_with(
         },
         resource: resource.map(resource_value),
         request_resource: request_resource.map(resource_value),
-        time_unix_seconds: i64::try_from(now.as_nanos().div_euclid(1_000_000_000))
-            .unwrap_or(i64::MAX),
+        time_unix_nanos: now.as_nanos(),
     };
     match evaluate_request(ruleset, &ctx).decision {
         Decision::Allow => Ok(()),
@@ -418,11 +448,9 @@ pub fn rules_value(v: &Value) -> RulesValue {
         Value::Boolean(b) => RulesValue::Bool(*b),
         Value::Integer(i) => RulesValue::Int(*i),
         Value::Double(d) => RulesValue::Float(*d),
-        Value::Timestamp(t) => RulesValue::Timestamp(
-            t.seconds()
-                .saturating_mul(1_000_000_000)
-                .saturating_add(i64::from(t.nanos())),
-        ),
+        Value::Timestamp(t) => {
+            RulesValue::Timestamp(i128::from(t.seconds()) * 1_000_000_000 + i128::from(t.nanos()))
+        }
         Value::String(s) => RulesValue::String(s.clone()),
         Value::Bytes(b) => RulesValue::Bytes(b.clone()),
         Value::Reference(r) => reference_path(r),

@@ -890,3 +890,25 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
         400
     );
 }
+
+#[test]
+fn form_encoded_token_refresh_is_accepted_by_the_server_layer() {
+    // The JS SDK posts the refresh as application/x-www-form-urlencoded; the server layer
+    // turns it into the JSON object the handler expects. Covered here at the handler level
+    // with the decoded shape, and end to end by tools/sdk-smoke/web.
+    let s = state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "f@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    let refresh = signed["refreshToken"].as_str().unwrap();
+    let (status, body) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body["id_token"].as_str().is_some());
+}

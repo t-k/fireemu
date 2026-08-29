@@ -70,8 +70,15 @@ async fn respond(
         ),
         Ok(collected) => {
             let bytes = collected.to_bytes();
+            let is_form = headers
+                .content_type
+                .as_deref()
+                .is_some_and(|ct| ct.starts_with("application/x-www-form-urlencoded"));
             let json: Option<serde_json::Value> = if bytes.is_empty() {
                 Some(serde_json::Value::Object(serde_json::Map::new()))
+            } else if is_form {
+                // The Firebase SDKs post the token refresh as a form (RFC 6749 style).
+                Some(form_to_json(&String::from_utf8_lossy(&bytes)))
             } else {
                 serde_json::from_slice(&bytes).ok()
             };
@@ -101,6 +108,36 @@ async fn respond(
     .header("content-type", "application/json; charset=utf-8")
     .body(Full::new(Bytes::from(text)))
     .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
+}
+
+/// `k=v&k=v` (percent-encoded) → JSON object of strings.
+fn form_to_json(text: &str) -> serde_json::Value {
+    fn decode(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                if let Some(b) = s
+                    .get(i + 1..i + 3)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
+                    out.push(b);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+    let mut map = serde_json::Map::new();
+    for kv in text.split('&').filter(|s| !s.is_empty()) {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        map.insert(decode(k), serde_json::Value::String(decode(v)));
+    }
+    serde_json::Value::Object(map)
 }
 
 /// Permissive CORS for a loopback test runtime (browser SDKs call these endpoints directly;

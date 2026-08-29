@@ -121,6 +121,11 @@ pub enum WriteOp {
         /// Path.
         path: DocumentPath,
     },
+    /// Check the precondition on a document without changing it (transaction reads).
+    Verify {
+        /// Path.
+        path: DocumentPath,
+    },
 }
 
 impl WriteOp {
@@ -128,7 +133,7 @@ impl WriteOp {
     #[must_use]
     pub const fn path(&self) -> &DocumentPath {
         match self {
-            Self::Set { path, .. } | Self::Delete { path } => path,
+            Self::Set { path, .. } | Self::Delete { path } | Self::Verify { path } => path,
         }
     }
 }
@@ -494,14 +499,7 @@ impl FirestoreState {
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
         // by one microsecond when the clock did not move between commits.
-        let aligned_now =
-            LogicalInstant::from_nanos(now.as_nanos() - now.as_nanos().rem_euclid(1_000));
-        let commit_time = match self.last_commit_time {
-            Some(last) if last.as_nanos() >= aligned_now.as_nanos() => {
-                LogicalInstant::from_nanos(last.as_nanos() + 1_000)
-            }
-            _ => aligned_now,
-        };
+        let commit_time = self.next_commit_time(now);
 
         // Stage every write against a working copy; fail before touching state. A write
         // whose result equals the current document is a no-op: it keeps the existing version
@@ -527,7 +525,8 @@ impl FirestoreState {
                 _ => false,
             };
             if unchanged {
-                if let Some(c) = &current {
+                // A no-op Set keeps the existing update time; a verify reports none.
+                if let (Some(c), false) = (&current, matches!(write.op, WriteOp::Verify { .. })) {
                     result.update_time = Some(c.update_time);
                 }
                 let previously_changed = staged.get(&path).is_some_and(|(_, c)| *c);
@@ -586,6 +585,20 @@ impl FirestoreState {
             }
         }
         None
+    }
+
+    /// The commit time a commit at `now` would receive: microsecond-aligned and strictly
+    /// after the last commit. Rules previews use it so that server timestamps match.
+    #[must_use]
+    pub fn next_commit_time(&self, now: LogicalInstant) -> LogicalInstant {
+        let aligned_now =
+            LogicalInstant::from_nanos(now.as_nanos() - now.as_nanos().rem_euclid(1_000));
+        match self.last_commit_time {
+            Some(last) if last.as_nanos() >= aligned_now.as_nanos() => {
+                LogicalInstant::from_nanos(last.as_nanos() + 1_000)
+            }
+            _ => aligned_now,
+        }
     }
 
     /// Result of applying `write` to `current` (the `request.resource` seen by Security
@@ -772,6 +785,21 @@ fn apply_write(
     version: CommitVersion,
 ) -> Result<(Option<Document>, WriteResult), FirestoreError> {
     match &write.op {
+        WriteOp::Verify { .. } => {
+            if !write.transforms.is_empty() {
+                return Err(FirestoreError::InvalidArgument(
+                    "transforms on a verify".into(),
+                ));
+            }
+            // Precondition already checked by the caller; nothing changes.
+            Ok((
+                current,
+                WriteResult {
+                    update_time: None,
+                    transform_results: vec![],
+                },
+            ))
+        }
         WriteOp::Delete { .. } => {
             if !write.transforms.is_empty() {
                 return Err(FirestoreError::InvalidArgument(

@@ -232,7 +232,8 @@ impl RestState {
     }
 
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
-        let Some(path) = req.path.strip_prefix("/v1/") else {
+        let decoded = decode_path(&req.path)?;
+        let Some(path) = decoded.strip_prefix("/v1/") else {
             return Err(Status::not_found(format!("unknown path {}", req.path)));
         };
         let params = query_params(&req.query);
@@ -420,7 +421,9 @@ impl RestState {
                 let database = database_of(resource)?;
                 let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
                     database,
-                    options: Some(transaction_options_from_json(body.get("options"))),
+                    options: Some(
+                        transaction_options_from_json(body.get("options")).map_err(|e| bad(&e))?,
+                    ),
                     request_options: None,
                 })?;
                 Ok(ok(json!({"transaction": base64_encode(&token)})))
@@ -437,16 +440,29 @@ impl RestState {
             "runQuery" => self.run_query(principal, resource, body),
             "runAggregationQuery" => self.run_aggregation_query(principal, resource, body),
             "listCollectionIds" => {
+                if let Some(rules) = &self.rules {
+                    rules.require_owner(principal, "listCollectionIds")?;
+                }
                 let response = self
                     .local
                     .list_collection_ids(&pb::ListCollectionIdsRequest {
                         parent: resource.to_owned(),
-                        page_size: 0,
-                        page_token: String::new(),
+                        page_size: json::int32(body.get("pageSize"), "pageSize")
+                            .map_err(|e| bad(&e))?
+                            .unwrap_or(0),
+                        page_token: body
+                            .get("pageToken")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
                         request_options: None,
                         consistency_selector: None,
                     })?;
-                Ok(ok(json!({"collectionIds": response.collection_ids})))
+                let mut out = json!({"collectionIds": response.collection_ids});
+                if !response.next_page_token.is_empty() {
+                    out["nextPageToken"] = Value::String(response.next_page_token);
+                }
+                Ok(ok(out))
             }
             other => Err(Status::not_found(format!("unknown method {other}"))),
         }
@@ -512,12 +528,17 @@ impl RestState {
                     transaction_bytes(Some(t))?,
                 ),
             )
+        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+            Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(rt))
         } else {
-            body.get("newTransaction").map(|o| {
-                pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
-                    transaction_options_from_json(Some(o)),
-                )
-            })
+            match body.get("newTransaction") {
+                Some(o) => Some(
+                    pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                    ),
+                ),
+                None => None,
+            }
         };
         let req = pb::BatchGetDocumentsRequest {
             database: database_of(resource)?,
@@ -572,12 +593,15 @@ impl RestState {
             Some(pb::run_query_request::ConsistencySelector::Transaction(
                 transaction_bytes(Some(t))?,
             ))
+        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+            Some(pb::run_query_request::ConsistencySelector::ReadTime(rt))
         } else {
-            body.get("newTransaction").map(|o| {
-                pb::run_query_request::ConsistencySelector::NewTransaction(
-                    transaction_options_from_json(Some(o)),
-                )
-            })
+            match body.get("newTransaction") {
+                Some(o) => Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+                    transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                )),
+                None => None,
+            }
         };
         let req = pb::RunQueryRequest {
             parent: resource.to_owned(),
@@ -639,12 +663,17 @@ impl RestState {
                     transaction_bytes(Some(t))?,
                 ),
             )
+        } else if let Some(rt) = json::read_time_from_json(body).map_err(|e| bad(&e))? {
+            Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(rt))
         } else {
-            body.get("newTransaction").map(|o| {
-                pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
-                    transaction_options_from_json(Some(o)),
-                )
-            })
+            match body.get("newTransaction") {
+                Some(o) => Some(
+                    pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                        transaction_options_from_json(Some(o)).map_err(|e| bad(&e))?,
+                    ),
+                ),
+                None => None,
+            }
         };
         let req = pb::RunAggregationQueryRequest {
             parent: resource.to_owned(),
@@ -674,6 +703,44 @@ impl RestState {
         }
         Ok(ok(Value::Array(vec![v])))
     }
+}
+
+/// Percent-decodes every path segment (document IDs may carry spaces, Unicode, `%`);
+/// an escape that would introduce a `/` changes the structure and is refused.
+fn decode_path(path: &str) -> Result<String, Status> {
+    let mut out = String::with_capacity(path.len());
+    for (i, segment) in path.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        if !segment.contains('%') {
+            out.push_str(segment);
+            continue;
+        }
+        let bytes = segment.as_bytes();
+        let mut raw = Vec::with_capacity(bytes.len());
+        let mut k = 0;
+        while k < bytes.len() {
+            if bytes[k] == b'%' {
+                let hex = segment
+                    .get(k + 1..k + 3)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                    .ok_or_else(|| Status::invalid_argument("malformed percent escape in path"))?;
+                raw.push(hex);
+                k += 3;
+            } else {
+                raw.push(bytes[k]);
+                k += 1;
+            }
+        }
+        let text = String::from_utf8(raw)
+            .map_err(|_| Status::invalid_argument("path segment is not UTF-8"))?;
+        if text.contains('/') {
+            return Err(Status::invalid_argument("encoded '/' in a path segment"));
+        }
+        out.push_str(&text);
+    }
+    Ok(out)
 }
 
 fn database_of(resource: &str) -> Result<String, Status> {

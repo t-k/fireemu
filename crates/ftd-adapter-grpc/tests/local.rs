@@ -777,3 +777,54 @@ async fn list_documents_pages_by_name_with_opaque_tokens() {
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     handle.abort();
 }
+
+#[tokio::test]
+async fn verify_writes_check_preconditions_without_changing_anything() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("vf/a", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let verify = |exists: bool| pb::Write {
+        operation: Some(pb::write::Operation::Verify(format!("{DOCS}/vf/a"))),
+        current_document: Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(exists)),
+        }),
+        ..Default::default()
+    };
+    // A transaction that read vf/a and writes vf/b sends a verify for vf/a.
+    let response = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![verify(true), update_write("vf/b", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.write_results.len(), 2);
+    assert!(response.write_results[0].update_time.is_none());
+    let err = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![verify(false)],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::AlreadyExists);
+    let doc = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/vf/a"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(doc.fields.get("v"), Some(&i(1)), "verify changed nothing");
+    handle.abort();
+}

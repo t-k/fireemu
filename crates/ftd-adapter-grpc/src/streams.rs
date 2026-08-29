@@ -40,8 +40,28 @@ pub struct StreamContext {
     pub gateway: Arc<Gateway>,
     /// Rules enforcement, if configured.
     pub rules: Option<Arc<RulesEnforcer>>,
-    /// Caller.
+    /// Caller as resolved when the stream opened.
     pub principal: Principal,
+    /// Raw `Authorization` value: re-verified on every write / refresh so revocation,
+    /// disablement and expiry end the stream instead of living on in it.
+    pub authorization: Option<String>,
+    /// Backend reset epoch when the stream opened; a reset ends the stream.
+    pub epoch: u64,
+}
+
+impl StreamContext {
+    /// Re-resolves the caller and checks the session epoch before serving anything.
+    fn refresh_principal(&self) -> Result<Principal, Status> {
+        if self.local.epoch() != self.epoch {
+            return Err(Status::aborted(
+                "the session was reset; streams opened before the reset are closed",
+            ));
+        }
+        match &self.rules {
+            Some(r) => r.principal_from_authorization(self.authorization.as_deref()),
+            None => Ok(self.principal.clone()),
+        }
+    }
 }
 
 fn status(e: crate::decode::DecodeError) -> Status {
@@ -61,9 +81,11 @@ static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 struct WriteStreamState {
     parent: Option<Parent>,
     stream_id: String,
-    /// Tokens are issued 1, 2, 3, ...; a request may acknowledge any issued token (clients
-    /// pipeline several batches against the last token they saw).
+    /// Tokens are issued 1, 2, 3, ...; a request may acknowledge any issued token not
+    /// older than the highest acknowledgement seen (clients pipeline several batches
+    /// against the last token they saw).
     issued: u64,
+    acknowledged: u64,
 }
 
 /// Runs the `Write` stream: the first message (no writes) is the handshake; every later
@@ -77,9 +99,16 @@ pub async fn write_stream(
         parent: None,
         stream_id: format!("ftd-{}", NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)),
         issued: 0,
+        acknowledged: 0,
     };
     while let Some(next) = inbound.next().await {
-        let Ok(req) = next else { break };
+        let req = match next {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(Err(e)).await;
+                break;
+            }
+        };
         let outcome = handle_write_request(&ctx, &mut state, &req);
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
@@ -109,7 +138,16 @@ fn handle_write_request(
                 "write stream resumption is not supported; start a new stream",
             ));
         }
+        if !req.writes.is_empty() {
+            return Err(Status::invalid_argument(
+                "the first Write request is the handshake and must carry no writes",
+            ));
+        }
         state.parent = Some(database_parent(&req.database)?);
+    } else if !req.stream_id.is_empty() || !req.database.is_empty() {
+        return Err(Status::invalid_argument(
+            "stream_id / database are only valid on the first Write request",
+        ));
     }
     let Some(parent) = state.parent.as_ref() else {
         return Err(Status::internal("write stream without database"));
@@ -117,9 +155,10 @@ fn handle_write_request(
     if !req.stream_token.is_empty() {
         let acknowledged: Option<[u8; 8]> = req.stream_token.as_slice().try_into().ok();
         let acknowledged = acknowledged.map_or(0, u64::from_be_bytes);
-        if acknowledged == 0 || acknowledged > state.issued {
+        if acknowledged == 0 || acknowledged > state.issued || acknowledged < state.acknowledged {
             return Err(Status::failed_precondition("unknown write stream token"));
         }
+        state.acknowledged = acknowledged;
     }
     state.issued += 1;
     let stream_id = if first {
@@ -144,7 +183,8 @@ fn handle_write_request(
     for w in &writes {
         LocalBackend::check_database(parent, &w.op.path().resource_name())?;
     }
-    let guard = write_guard(ctx.rules.as_ref(), &ctx.principal);
+    let principal = ctx.refresh_principal()?;
+    let guard = write_guard(ctx.rules.as_ref(), &principal);
     let result = ctx.local.commit_writes(parent, &writes, &*guard)?;
     Ok(pb::WriteResponse {
         stream_id,
@@ -185,8 +225,10 @@ pub async fn listen_stream(
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
         let outcome: Result<bool, Status> = tokio::select! {
+            () = tx.closed() => Ok(false),
             msg = inbound.next() => match msg {
-                None | Some(Err(_)) => Ok(false),
+                None => Ok(false),
+                Some(Err(e)) => Err(e),
                 Some(Ok(req)) => handle_listen_request(&ctx, &mut parent, &mut targets, &req, &mut out).map(|()| true),
             },
             ev = events.recv() => match ev {
@@ -338,6 +380,16 @@ fn refresh_all(
     out: &mut Vec<pb::ListenResponse>,
 ) {
     let Some(parent) = parent else { return };
+    let principal = match ctx.refresh_principal() {
+        Ok(p) => p,
+        Err(e) => {
+            for id in targets.keys() {
+                out.push(removed_with_cause(*id, &e));
+            }
+            targets.clear();
+            return;
+        }
+    };
     let (version, read_at) = match ctx.local.snapshot(parent) {
         Ok(s) => s,
         Err(e) => {
@@ -352,7 +404,7 @@ fn refresh_all(
     let token = version.value().to_be_bytes().to_vec();
     let mut removed = Vec::new();
     for (id, state) in targets.iter_mut() {
-        match refresh_target(ctx, parent, *id, state, read_time) {
+        match refresh_target(ctx, &principal, parent, *id, state, read_time) {
             Ok(()) => {
                 out.append(&mut state.pending);
                 if !state.current {
@@ -411,6 +463,7 @@ fn refresh_all(
 /// Recomputes one target and appends the diff against its last known state.
 fn refresh_target(
     ctx: &StreamContext,
+    principal: &Principal,
     parent: &Parent,
     id: i32,
     state: &mut TargetState,
@@ -422,7 +475,7 @@ fn refresh_target(
             for path in paths {
                 let doc = ctx.local.current_document(parent, path)?;
                 if let Some(rules) = &ctx.rules {
-                    rules.authorize_get(&ctx.principal, path, doc.as_ref())?;
+                    rules.authorize_get(principal, path, doc.as_ref())?;
                 }
                 if let Some(d) = doc {
                     docs.push(d);
@@ -432,7 +485,7 @@ fn refresh_target(
         }
         TargetKind::Query(query) => {
             if let Some(rules) = &ctx.rules {
-                rules.authorize_query(&ctx.principal, parent, query)?;
+                rules.authorize_query(principal, parent, query)?;
             }
             ctx.local.run_query_latest(parent, query)?
         }

@@ -304,6 +304,8 @@ impl Hub {
             gateway: self.state.gateway.clone(),
             rules: self.state.rules.clone(),
             principal,
+            authorization,
+            epoch: self.state.local.epoch(),
         };
         spawn_stream(&session, ctx, inbound_rx);
         // The first message rides along with the handshake.

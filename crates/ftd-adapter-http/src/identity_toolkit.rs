@@ -377,6 +377,7 @@ fn sign_in_with_custom_token(
     if store.user(&uid).is_some_and(|u| u.disabled) {
         return error(400, "USER_DISABLED");
     }
+    store.record_sign_in(&uid, at);
     match issue_tokens_with(store, &uid, None, at, Some(&extra)) {
         Ok(mut body) => {
             body["kind"] = json!("identitytoolkit#VerifyCustomTokenResponse");

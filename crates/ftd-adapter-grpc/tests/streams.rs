@@ -36,6 +36,11 @@ service cloud.firestore {
 }
 ";
 
+thread_local! {
+    static BACKEND: std::cell::RefCell<Option<Arc<LocalBackend>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 async fn start(
     with_rules: bool,
 ) -> (
@@ -56,6 +61,7 @@ async fn start(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
     let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    BACKEND.with(|b| *b.borrow_mut() = Some(backend.clone()));
     let mut service = GatewayService::local(gateway, backend);
     if with_rules {
         let auth = Arc::new(Mutex::new(AuthStore::new(
@@ -443,6 +449,57 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
             "NO_CHANGE[]",
             "REMOVE[3]"
         ]
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn streams_end_when_the_session_is_reset() {
+    let (mut client, handle) = start(false).await;
+    // The write stream is opened before the reset...
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .write(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: DB.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let handshake = responses.next().await.unwrap().unwrap();
+    // ...and a listener too.
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    ltx.send(add_query_target(1, "open")).await.unwrap();
+    let _ = next_until(&mut listen, "NO_CHANGE[]").await;
+
+    // Reset through the shared backend (what the control API does).
+    BACKEND.with(|b| {
+        if let Some(backend) = b.borrow().as_ref() {
+            backend.reset();
+        }
+    });
+
+    tx.send(pb::WriteRequest {
+        writes: vec![set_write("open/after", &[("v", s("1"))])],
+        stream_token: handshake.stream_token,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let err = responses.next().await.unwrap().unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Aborted, "{err}");
+    let trace = next_until(&mut listen, "REMOVE[1] cause=10").await;
+    assert!(
+        trace.ends_with(&["REMOVE[1] cause=10".to_owned()]),
+        "{trace:?}"
     );
     handle.abort();
 }

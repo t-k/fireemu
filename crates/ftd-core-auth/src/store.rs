@@ -341,6 +341,13 @@ impl AuthStore {
         self.refresh_tokens.clear();
     }
 
+    /// Records a successful sign-in (Admin `lastLoginAt`).
+    pub fn record_sign_in(&mut self, uid: &LocalId, now: LogicalInstant) {
+        if let Some(u) = self.users.get_mut(uid) {
+            u.last_sign_in_at = Some(now);
+        }
+    }
+
     /// Users in creation order (stable `listUsers` paging).
     #[must_use]
     pub fn users_by_creation(&self) -> Vec<&UserRecord> {

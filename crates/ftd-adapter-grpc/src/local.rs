@@ -39,6 +39,8 @@ pub struct LocalBackend {
     databases: Mutex<BTreeMap<(String, String), FirestoreState>>,
     ids: Mutex<SplitMix64>,
     commits: tokio::sync::broadcast::Sender<CommitEvent>,
+    /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
+    epoch: std::sync::atomic::AtomicU64,
 }
 
 /// Published after every successful commit (drives `Listen` streams).
@@ -146,11 +148,19 @@ impl LocalBackend {
             databases: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             commits: tokio::sync::broadcast::channel(1024).0,
+            epoch: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Current reset epoch.
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Drops every database (session reset). Listen streams observe the wipe as deletes.
     pub fn reset(&self) {
+        // Streams opened before the reset see the epoch change before any data is dropped.
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let cleared: Vec<(String, String)> = match self.databases.lock() {
             Ok(mut dbs) => {
                 let keys = dbs.keys().cloned().collect();

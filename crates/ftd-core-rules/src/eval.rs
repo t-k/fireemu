@@ -76,8 +76,8 @@ pub struct RequestContext {
     pub resource: Option<RulesValue>,
     /// Incoming document (`request.resource`), as a map with `data`.
     pub request_resource: Option<RulesValue>,
-    /// `request.time` in Unix seconds.
-    pub time_unix_seconds: i64,
+    /// `request.time` in Unix nanoseconds.
+    pub time_unix_nanos: i128,
 }
 
 /// Why a request was denied.
@@ -315,7 +315,7 @@ fn build_request(ctx: &RequestContext) -> RulesValue {
     );
     m.insert(
         "time".to_owned(),
-        RulesValue::Timestamp(ctx.time_unix_seconds.saturating_mul(1_000_000_000)),
+        RulesValue::Timestamp(ctx.time_unix_nanos),
     );
     m.insert(
         "resource".to_owned(),
@@ -805,7 +805,8 @@ fn as_float(v: &RulesValue) -> Result<f64, EvalError> {
 fn compare(a: &RulesValue, b: &RulesValue) -> Result<core::cmp::Ordering, EvalError> {
     use RulesValue as V;
     match (a, b) {
-        (V::Int(x), V::Int(y)) | (V::Timestamp(x), V::Timestamp(y)) => Ok(x.cmp(y)),
+        (V::Int(x), V::Int(y)) => Ok(x.cmp(y)),
+        (V::Timestamp(x), V::Timestamp(y)) => Ok(x.cmp(y)),
         (V::String(x), V::String(y)) => Ok(x.cmp(y)),
         (V::Bytes(x), V::Bytes(y)) => Ok(x.cmp(y)),
         (V::Int(_) | V::Float(_), V::Int(_) | V::Float(_)) => as_float(a)?
@@ -991,15 +992,15 @@ fn method_call(
         }
         (V::Timestamp(t), "toMillis") => {
             arity(0)?;
-            V::Int(t.div_euclid(1_000_000))
+            V::Int(i64::try_from(t.div_euclid(1_000_000)).unwrap_or(i64::MAX))
         }
         (V::Timestamp(t), "seconds") => {
             arity(0)?;
-            V::Int(t.div_euclid(1_000_000_000))
+            V::Int(i64::try_from(t.div_euclid(1_000_000_000)).unwrap_or(i64::MAX))
         }
         (V::Timestamp(t), "nanos") => {
             arity(0)?;
-            V::Int(t.rem_euclid(1_000_000_000))
+            V::Int(i64::try_from(t.rem_euclid(1_000_000_000)).unwrap_or(0))
         }
         (V::Bytes(b), "size") => {
             arity(0)?;

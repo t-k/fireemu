@@ -142,6 +142,11 @@ impl GatewayService {
             gateway: self.gateway.clone(),
             rules: self.rules.clone(),
             principal: self.principal(metadata)?,
+            authorization: metadata
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned),
+            epoch: local.epoch(),
         })
     }
 

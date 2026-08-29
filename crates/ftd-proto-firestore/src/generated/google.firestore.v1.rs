@@ -1365,7 +1365,7 @@ pub struct Write {
     #[prost(message, optional, tag = "4")]
     pub current_document: ::core::option::Option<Precondition>,
     /// The operation to execute.
-    #[prost(oneof = "write::Operation", tags = "1, 2, 6")]
+    #[prost(oneof = "write::Operation", tags = "1, 2, 6, 5")]
     pub operation: ::core::option::Option<write::Operation>,
 }
 /// Nested message and enum types in `Write`.
@@ -1383,6 +1383,11 @@ pub mod write {
         /// Applies a transformation to a document.
         #[prost(message, tag = "6")]
         Transform(super::DocumentTransform),
+        /// firebase-testd patch (not in the public proto): the name of a document on which to
+        /// verify `current_document` without changing anything. The Firebase SDKs send this for
+        /// transaction reads that are not written back.
+        #[prost(string, tag = "5")]
+        Verify(::prost::alloc::string::String),
     }
 }
 /// A transformation of a document.

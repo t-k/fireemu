@@ -214,13 +214,22 @@ pub fn value_from_json(v: &Value) -> Result<pb::Value, JsonError> {
                 .ok_or_else(|| JsonError("referenceValue must be a string".into()))?
                 .to_owned(),
         ),
-        "geoPointValue" => V::GeoPointValue(ftd_proto_firestore::google::r#type::LatLng {
-            latitude: inner.get("latitude").and_then(Value::as_f64).unwrap_or(0.0),
-            longitude: inner
-                .get("longitude")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-        }),
+        "geoPointValue" => {
+            let coordinate = |key: &str, range: f64| -> Result<f64, JsonError> {
+                let v = inner
+                    .get(key)
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| JsonError(format!("geoPointValue.{key} must be a number")))?;
+                if !v.is_finite() || v.abs() > range {
+                    return err(format!("geoPointValue.{key} out of range"));
+                }
+                Ok(v)
+            };
+            V::GeoPointValue(ftd_proto_firestore::google::r#type::LatLng {
+                latitude: coordinate("latitude", 90.0)?,
+                longitude: coordinate("longitude", 180.0)?,
+            })
+        }
         "arrayValue" => V::ArrayValue(pb::ArrayValue {
             values: inner
                 .get("values")
@@ -359,7 +368,7 @@ fn transform_from_json(v: &Value) -> Result<pb::document_transform::FieldTransfo
             Some("REQUEST_TIME") => T::SetToServerValue(
                 pb::document_transform::field_transform::ServerValue::RequestTime as i32,
             ),
-            _ => T::SetToServerValue(0),
+            other => return err(format!("unknown setToServerValue {other:?}")),
         }
     } else if let Some(x) = v.get("increment") {
         T::Increment(value_from_json(x)?)
@@ -388,6 +397,12 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
         Some(pb::write::Operation::Delete(
             n.as_str()
                 .ok_or_else(|| JsonError("delete must be a document name".into()))?
+                .to_owned(),
+        ))
+    } else if let Some(n) = v.get("verify") {
+        Some(pb::write::Operation::Verify(
+            n.as_str()
+                .ok_or_else(|| JsonError("verify must be a document name".into()))?
                 .to_owned(),
         ))
     } else if let Some(t) = v.get("transform") {
@@ -546,7 +561,8 @@ fn cursor_from_json(v: Option<&Value>) -> Result<Option<pb::Cursor>, JsonError> 
     }))
 }
 
-fn int32(v: Option<&Value>, what: &str) -> Result<Option<i32>, JsonError> {
+/// Int32 from a JSON number, numeric string or `{"value": n}` wrapper.
+pub fn int32(v: Option<&Value>, what: &str) -> Result<Option<i32>, JsonError> {
     match v {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(n)) => n
@@ -627,6 +643,9 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
                 .unwrap_or_default(),
         }),
     };
+    if v.get("findNearest").is_some() {
+        return err("findNearest (vector search) is not implemented");
+    }
     Ok(pb::StructuredQuery {
         select,
         from,
@@ -689,19 +708,49 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
     })
 }
 
-/// Transaction options JSON (`{"readOnly": {}}` / `{"readWrite": {}}`).
-#[must_use]
-pub fn transaction_options_from_json(v: Option<&Value>) -> pb::TransactionOptions {
+/// Transaction options JSON (`{"readOnly": {}}` / `{"readWrite": {}}`). A
+/// `readOnly.readTime` is carried through so the backend can refuse it explicitly;
+/// `readWrite.retryTransaction` is accepted (retries start a fresh transaction here).
+pub fn transaction_options_from_json(
+    v: Option<&Value>,
+) -> Result<pb::TransactionOptions, JsonError> {
     let mode = match v {
-        Some(o) if o.get("readOnly").is_some() => Some(pb::transaction_options::Mode::ReadOnly(
-            pb::transaction_options::ReadOnly::default(),
-        )),
-        Some(o) if o.get("readWrite").is_some() => Some(pb::transaction_options::Mode::ReadWrite(
-            pb::transaction_options::ReadWrite::default(),
-        )),
+        Some(o) if o.get("readOnly").is_some() => {
+            let read_time = o
+                .get("readOnly")
+                .and_then(|r| r.get("readTime"))
+                .map(timestamp_from_json)
+                .transpose()?;
+            Some(pb::transaction_options::Mode::ReadOnly(
+                pb::transaction_options::ReadOnly {
+                    consistency_selector: read_time
+                        .map(pb::transaction_options::read_only::ConsistencySelector::ReadTime),
+                },
+            ))
+        }
+        Some(o) if o.get("readWrite").is_some() => {
+            let retry = o
+                .get("readWrite")
+                .and_then(|r| r.get("retryTransaction"))
+                .and_then(Value::as_str)
+                .map(base64_decode)
+                .transpose()?
+                .unwrap_or_default();
+            Some(pb::transaction_options::Mode::ReadWrite(
+                pb::transaction_options::ReadWrite {
+                    retry_transaction: retry,
+                    ..Default::default()
+                },
+            ))
+        }
         _ => None,
     };
-    pb::TransactionOptions { mode }
+    Ok(pb::TransactionOptions { mode })
+}
+
+/// `readTime` consistency selector value, if the request carries one.
+pub fn read_time_from_json(v: &Value) -> Result<Option<prost_types::Timestamp>, JsonError> {
+    v.get("readTime").map(timestamp_from_json).transpose()
 }
 
 /// Optional RFC 3339 timestamp field → JSON (used for `readTime` / `commitTime`).

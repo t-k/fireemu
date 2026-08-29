@@ -11,8 +11,8 @@ use ftd_core_firestore::field_path::FieldPath;
 use ftd_core_firestore::path::DocumentPath;
 use ftd_core_firestore::query::Query;
 use ftd_core_firestore::store::{
-    Aggregation, CommitResult, CommitVersion, Document, FirestoreState, Precondition,
-    TransactionId, Write, WriteOp,
+    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
+    Precondition, TransactionId, Write, WriteOp,
 };
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
@@ -46,7 +46,7 @@ pub struct LocalBackend {
 }
 
 /// Published after every successful commit (drives `Listen` streams).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CommitEvent {
     /// Project.
     pub project: String,
@@ -54,6 +54,10 @@ pub struct CommitEvent {
     pub database: String,
     /// Version after the commit.
     pub version: u64,
+    /// Commit time (`None` for a reset).
+    pub commit_time: Option<ftd_core_types::time::LogicalInstant>,
+    /// Documents the commit changed (before / after), shared with every subscriber.
+    pub changes: Arc<Vec<DocumentChange>>,
 }
 
 fn status(e: DecodeError) -> Status {
@@ -176,6 +180,8 @@ impl LocalBackend {
                 project,
                 database,
                 version: 0,
+                commit_time: None,
+                changes: Arc::new(Vec::new()),
             });
         }
     }
@@ -186,11 +192,13 @@ impl LocalBackend {
         self.commits.subscribe()
     }
 
-    fn publish(&self, parent: &Parent, version: CommitVersion) {
+    fn publish(&self, parent: &Parent, result: &CommitResult) {
         let _ = self.commits.send(CommitEvent {
             project: parent.project.as_str().to_owned(),
             database: parent.database.as_str().to_owned(),
-            version: version.value(),
+            version: result.version.value(),
+            commit_time: Some(result.commit_time),
+            changes: Arc::new(result.changes.clone()),
         });
     }
 
@@ -207,7 +215,7 @@ impl LocalBackend {
             db.commit(writes, None, now)
                 .map_err(|e| status_from_error(&e))
         })?;
-        self.publish(parent, result.version);
+        self.publish(parent, &result);
         Ok(crate::streams::WireCommit::from_result(&result))
     }
 
@@ -641,7 +649,7 @@ impl LocalBackend {
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.now();
-        let (doc, version) = self.with_db(parent, |db| {
+        let (doc, result) = self.with_db(parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
             let result = db
                 .commit(&[write], None, now)
@@ -650,9 +658,9 @@ impl LocalBackend {
                 .get(&path)
                 .map(|d| encode_masked(d, mask.as_deref()))
                 .ok_or_else(|| Status::internal("document vanished after commit"))?;
-            Ok((doc, result.version))
+            Ok((doc, result))
         })?;
-        self.publish(parent, version);
+        self.publish(parent, &result);
         Ok(doc)
     }
 
@@ -707,13 +715,12 @@ impl LocalBackend {
     ) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
         let now = self.now();
-        let version = self.with_db(&parent, |db| {
+        let result = self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
             db.commit(&[write], None, now)
-                .map(|r| r.version)
                 .map_err(|e| status_from_error(&e))
         })?;
-        self.publish(&parent, version);
+        self.publish(&parent, &result);
         Ok(())
     }
 
@@ -789,7 +796,7 @@ impl LocalBackend {
             db.commit(&writes, txn.as_ref(), now)
                 .map_err(|e| status_from_error(&e))
         })?;
-        self.publish(&parent, result.version);
+        self.publish(&parent, &result);
         Ok(encode_commit(&result))
     }
 
@@ -1186,6 +1193,7 @@ impl LocalBackend {
         self.with_db(&parent, |db| {
             let mut write_results = Vec::with_capacity(req.writes.len());
             let mut statuses = Vec::with_capacity(req.writes.len());
+            let mut combined: Option<CommitResult> = None;
             for decoded in decoded {
                 let outcome = decoded.and_then(|write| {
                     guard(db, std::slice::from_ref(&write), now)?;
@@ -1195,6 +1203,14 @@ impl LocalBackend {
                 match outcome {
                     Ok(result) => {
                         let encoded = encode_commit(&result);
+                        match &mut combined {
+                            Some(c) => {
+                                c.version = result.version;
+                                c.commit_time = result.commit_time;
+                                c.changes.extend(result.changes.iter().cloned());
+                            }
+                            None => combined = Some(result.clone()),
+                        }
                         write_results
                             .push(encoded.write_results.into_iter().next().unwrap_or_default());
                         statuses.push(ftd_proto_firestore::google::rpc::Status {
@@ -1218,11 +1234,13 @@ impl LocalBackend {
                     write_results,
                     status: statuses,
                 },
-                db.current_version(),
+                combined,
             ))
         })
-        .map(|(response, version)| {
-            self.publish(&parent, version);
+        .map(|(response, combined)| {
+            if let Some(result) = combined {
+                self.publish(&parent, &result);
+            }
             response
         })
     }

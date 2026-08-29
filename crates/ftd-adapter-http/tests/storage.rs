@@ -30,6 +30,7 @@ fn state(rules: Option<&str>) -> StorageState {
             LoadedRules::from_source(r).unwrap()
         }))),
         project: "demo-app".to_owned(),
+        events: None,
     }
 }
 

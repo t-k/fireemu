@@ -23,7 +23,7 @@ use ftd_core_session::clock::VirtualClock;
 use ftd_core_storage::hash::{crc32c, md5};
 use ftd_core_storage::name::{BucketName, ObjectName};
 use ftd_core_storage::store::{
-    MetadataPatch, NewMetadata, ObjectMetadata, Precondition, StorageError,
+    MetadataPatch, NewMetadata, ObjectMetadata, Precondition, StorageError, StorageEvent,
     StorageState as ObjectStore, UploadId, UploadOptions,
 };
 use ftd_core_types::determinism::Clock;
@@ -42,6 +42,8 @@ pub struct StorageState {
     pub rules: Arc<RwLock<LoadedRules>>,
     /// Project (default buckets `{project}.appspot.com` / `{project}.firebasestorage.app`).
     pub project: String,
+    /// Where object events go (Storage triggers); `None` drops them.
+    pub events: Option<tokio::sync::mpsc::UnboundedSender<StorageEvent>>,
 }
 
 /// One HTTP request of the Storage surface.
@@ -991,6 +993,14 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
             &host,
         ),
     };
+    // Events of the request go out after its critical section, in commit order.
+    if let Some(sink) = &state.events {
+        if let Ok(mut store) = state.store.lock() {
+            for event in store.drain_events() {
+                let _ = sink.send(event);
+            }
+        }
+    }
     match outcome {
         Ok(r) => r,
         Err((status, message)) => error_response(dialect, status, &message),

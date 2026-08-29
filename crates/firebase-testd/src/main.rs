@@ -171,6 +171,7 @@ fn storage_state(
         auth: auth_store.clone(),
         rules: storage_rules.clone(),
         project: cfg.auth_project.clone(),
+        events: None,
     })
 }
 

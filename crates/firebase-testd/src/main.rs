@@ -145,6 +145,35 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     }
 }
 
+fn control_state(
+    cfg: &RuntimeConfig,
+    clock: &Arc<Mutex<VirtualClock>>,
+    rules: &Arc<RwLock<LoadedRules>>,
+    backend: &Arc<LocalBackend>,
+    auth_store: &Arc<Mutex<AuthStore>>,
+) -> ftd_adapter_http::control::ControlState {
+    let firestore_reset = {
+        let backend = backend.clone();
+        Arc::new(move || backend.reset()) as Arc<dyn Fn() + Send + Sync>
+    };
+    let auth_reset = {
+        let auth_store = auth_store.clone();
+        Arc::new(move || {
+            if let Ok(mut s) = auth_store.lock() {
+                s.clear();
+            }
+        }) as Arc<dyn Fn() + Send + Sync>
+    };
+    ftd_adapter_http::control::ControlState {
+        clock: clock.clone(),
+        require_demo_prefix: cfg.require_demo_prefix,
+        edition: cfg.edition,
+        capabilities: control::capabilities_manifest(),
+        rules: rules.clone(),
+        reset_hooks: vec![firestore_reset, auth_reset],
+    }
+}
+
 fn run_up(cfg: RuntimeConfig) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -180,13 +209,7 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             clock: clock.clone(),
         });
         let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
-        let control = Arc::new(ftd_adapter_http::control::ControlState {
-            clock: clock.clone(),
-            require_demo_prefix: cfg.require_demo_prefix,
-            edition: cfg.edition,
-            capabilities: control::capabilities_manifest(),
-            rules: rules.clone(),
-        });
+        let control = Arc::new(control_state(&cfg, &clock, &rules, &backend, &auth_store));
 
         let grpc_listener = tokio::net::TcpListener::bind(&cfg.firestore_addr)
             .await

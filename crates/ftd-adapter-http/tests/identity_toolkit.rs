@@ -647,3 +647,101 @@ fn admin_password_change_revokes_sessions_and_update_is_atomic() {
     );
     assert_eq!(status, 200);
 }
+
+// ------------------------------------------------------------------------------------------
+// Custom token sign-in
+// ------------------------------------------------------------------------------------------
+
+fn custom_token(uid: &str, claims: &Value, exp: i64) -> String {
+    use ftd_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    use ftd_core_auth::jwt::base64url_encode;
+    let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = json!({
+        "aud": CUSTOM_TOKEN_AUDIENCE,
+        "iss": "firebase-auth-emulator@example.com",
+        "sub": "firebase-auth-emulator@example.com",
+        "uid": uid,
+        "claims": claims,
+        "iat": exp - 3600,
+        "exp": exp,
+    });
+    let payload = base64url_encode(payload.to_string().as_bytes());
+    format!("{header}.{payload}.")
+}
+
+#[test]
+fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
+    let s = state();
+    let now_secs = 1_788_004_860;
+    let token = custom_token("custom-1", &json!({"role": "tester"}), now_secs + 3600);
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["isNewUser"], true);
+    assert_eq!(body["localId"], "custom-1");
+    let id_token = body["idToken"].as_str().unwrap();
+    let decoded = ftd_core_auth::jwt::decode_unsigned(id_token).unwrap();
+    assert_eq!(
+        decoded.payload.get("role").and_then(|v| v.as_str()),
+        Some("tester")
+    );
+    assert_eq!(
+        decoded.payload.get("sub").and_then(|v| v.as_str()),
+        Some("custom-1")
+    );
+    // Second sign-in: same user, not new; claims are per token, not stored.
+    let again = custom_token("custom-1", &json!({}), now_secs + 3600);
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": again}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(body["isNewUser"], false);
+    let decoded = ftd_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
+    assert!(decoded.payload.get("role").is_none());
+    // Reserved claims, wrong audience and expired tokens are rejected.
+    let reserved = custom_token("custom-2", &json!({"sub": "x"}), now_secs + 3600);
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": reserved})
+        )
+        .0,
+        400
+    );
+    let expired = custom_token("custom-3", &json!({}), now_secs - 1);
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": expired})
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": "nope"})
+        )
+        .0,
+        400
+    );
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["custom-2", "custom-3"]}),
+    );
+    assert_eq!(
+        looked["users"].as_array().map(Vec::len),
+        Some(0),
+        "rejected tokens create nobody"
+    );
+}

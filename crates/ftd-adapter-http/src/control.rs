@@ -36,6 +36,8 @@ pub struct ControlState {
     pub capabilities: Value,
     /// Loaded Security Rules (shared with the gRPC adapter).
     pub rules: Arc<RwLock<LoadedRules>>,
+    /// Hooks run by `POST /v1/sessions/{s}/reset` (Firestore wipe, Auth wipe, ...).
+    pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -143,6 +145,12 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     let (session, action) = rest.split_once('/').map_or((rest, ""), |(s, a)| (s, a));
     if session.is_empty() {
         return error(404, "NOT_FOUND");
+    }
+    if (method, action) == ("POST", "reset") {
+        for hook in &state.reset_hooks {
+            hook();
+        }
+        return ok(json!({"session": session, "reset": true, "hooks": state.reset_hooks.len()}));
     }
     let Ok(mut clock) = state.clock.lock() else {
         return error(500, "INTERNAL");

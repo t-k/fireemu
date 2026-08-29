@@ -78,6 +78,25 @@ impl LocalBackend {
         }
     }
 
+    /// Drops every database (session reset). Listen streams observe the wipe as deletes.
+    pub fn reset(&self) {
+        let cleared: Vec<(String, String)> = match self.databases.lock() {
+            Ok(mut dbs) => {
+                let keys = dbs.keys().cloned().collect();
+                dbs.clear();
+                keys
+            }
+            Err(_) => Vec::new(),
+        };
+        for (project, database) in cleared {
+            let _ = self.commits.send(CommitEvent {
+                project,
+                database,
+                version: 0,
+            });
+        }
+    }
+
     /// Subscribes to commit events.
     #[must_use]
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<CommitEvent> {

@@ -320,6 +320,13 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Removes every user, credential and token (session reset). The project ID and the
+    /// deterministic generator are kept so IDs stay reproducible per session.
+    pub fn clear(&mut self) {
+        self.users.clear();
+        self.refresh_tokens.clear();
+    }
+
     /// All user IDs in canonical order.
     #[must_use]
     pub fn all_user_ids(&self) -> Vec<LocalId> {

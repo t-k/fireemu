@@ -114,9 +114,29 @@ fn issue_tokens(
     second: Option<&SecondFactorAssertion>,
     at: LogicalInstant,
 ) -> Result<Value, JsonResponse> {
-    let claims = store
+    issue_tokens_with(store, uid, second, at, None)
+}
+
+/// Issues an ID token + refresh token; `extra` claims (custom-token developer claims) are
+/// merged into the token without being stored on the user.
+fn issue_tokens_with(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    second: Option<&SecondFactorAssertion>,
+    at: LogicalInstant,
+    extra: Option<&CustomClaims>,
+) -> Result<Value, JsonResponse> {
+    let mut claims = store
         .id_token_claims(uid, second, at)
         .map_err(|e| auth_error(&e))?;
+    if let Some(extra) = extra {
+        for (k, v) in extra.entries() {
+            claims
+                .custom
+                .insert(k, v.clone())
+                .map_err(|e| error(400, &format!("INVALID_CUSTOM_TOKEN : {e}")))?;
+        }
+    }
     let refresh = store
         .issue_refresh_token(uid, at)
         .map_err(|e| auth_error(&e))?;
@@ -256,6 +276,9 @@ pub fn handle_with(
         "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword" => {
             sign_in_with_password(&mut store, body, at)
         }
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken" => {
+            sign_in_with_custom_token(&mut store, body, at)
+        }
         "/identitytoolkit.googleapis.com/v1/accounts:lookup" => lookup(&store, body, at),
         "/identitytoolkit.googleapis.com/v1/accounts:update" => update(&mut store, body, at),
         "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:start" => {
@@ -293,6 +316,71 @@ fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
     }
     match issue_tokens(store, &uid, None, at) {
         Ok(body) => JsonResponse { status: 200, body },
+        Err(r) => r,
+    }
+}
+
+/// Audience every Firebase custom token carries.
+pub const CUSTOM_TOKEN_AUDIENCE: &str =
+    "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit";
+
+/// `accounts:signInWithCustomToken`: the Admin SDK mints unsigned (`alg: none`) custom
+/// tokens against an emulator; the user is created on first sign-in.
+fn sign_in_with_custom_token(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let Some(token) = str_field(body, "token") else {
+        return error(400, "MISSING_CUSTOM_TOKEN");
+    };
+    let decoded = match ftd_core_auth::jwt::decode_unsigned(token) {
+        Ok(d) => d,
+        Err(e) => return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}")),
+    };
+    if decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE) {
+        return error(400, "INVALID_CUSTOM_TOKEN : wrong audience");
+    }
+    let Some(uid) = decoded.payload.get("uid").and_then(JsonValue::as_str) else {
+        return error(400, "INVALID_CUSTOM_TOKEN : missing uid");
+    };
+    let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    if decoded.exp().is_some_and(|exp| now_secs >= exp) {
+        return error(400, "TOKEN_EXPIRED");
+    }
+    let mut extra = CustomClaims::default();
+    if let Some(JsonValue::Object(claims)) = decoded.payload.get("claims") {
+        for (k, v) in claims {
+            let Some(cv) = claims_from_json(v) else {
+                return error(400, "INVALID_CUSTOM_TOKEN : unsupported claim value");
+            };
+            if let Err(e) = extra.insert(k, cv) {
+                return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+            }
+        }
+    }
+    let (uid, is_new) = if let Some(u) = store.user_by_id(uid) {
+        (u.local_id.clone(), false)
+    } else {
+        let new_user = NewUser {
+            email: None,
+            email_verified: false,
+            provider: ftd_core_auth::store::Provider::Custom,
+        };
+        match store.create_user_with_id(new_user, Some(uid), at) {
+            Ok(id) => (id, true),
+            Err(e) => return auth_error(&e),
+        }
+    };
+    if store.user(&uid).is_some_and(|u| u.disabled) {
+        return error(400, "USER_DISABLED");
+    }
+    match issue_tokens_with(store, &uid, None, at, Some(&extra)) {
+        Ok(mut body) => {
+            body["kind"] = json!("identitytoolkit#VerifyCustomTokenResponse");
+            body["isNewUser"] = json!(is_new);
+            JsonResponse { status: 200, body }
+        }
         Err(r) => r,
     }
 }

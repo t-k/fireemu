@@ -481,7 +481,11 @@ fn refresh_target(
             for path in paths {
                 let doc = db.get(path).cloned();
                 if let Some(rules) = &ctx.rules {
-                    rules.authorize_get(principal, path, doc.as_ref())?;
+                    let reader = crate::rules::StateReader {
+                        db,
+                        parent: &state.parent,
+                    };
+                    rules.authorize_get(principal, path, doc.as_ref(), &reader)?;
                 }
                 if let Some(d) = doc {
                     docs.push(d);
@@ -491,7 +495,11 @@ fn refresh_target(
         }
         TargetKind::Query(query) => {
             if let Some(rules) = &ctx.rules {
-                rules.authorize_query(principal, &state.parent, query)?;
+                let reader = crate::rules::StateReader {
+                    db,
+                    parent: &state.parent,
+                };
+                rules.authorize_query(principal, &state.parent, query, &reader)?;
             }
             db.run_query(query, None)
                 .map_err(|e| crate::encode::status_from_error(&e))?

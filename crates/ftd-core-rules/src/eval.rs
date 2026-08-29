@@ -63,6 +63,10 @@ impl Method {
     }
 }
 
+/// Path segment that stands for "any document" in a query proof (see
+/// `RequestContext::abstract_path`); captures binding it are undetermined.
+pub const ABSTRACT_SEGMENT: &str = "ftd-placeholder";
+
 /// Request being authorized.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestContext {
@@ -197,9 +201,31 @@ struct Scope<'a> {
     bindings: Vec<(String, RulesValue)>,
 }
 
+/// Reads other documents for `get()` / `exists()`. `segments` is the rules path after the
+/// leading slash (`["databases", db, "documents", ...]`); `None` means the document does not
+/// exist. Implementations decide the consistency (a commit's staged state, a snapshot).
+pub trait DocumentAccess {
+    /// The document as a `resource`-shaped value (`data`, `id`, `__name__`), if it exists.
+    fn get(&self, segments: &[String]) -> Option<RulesValue>;
+}
+
+/// No document access: `get()` / `exists()` are unsupported.
+pub struct NoDocumentAccess;
+
+impl DocumentAccess for NoDocumentAccess {
+    fn get(&self, _: &[String]) -> Option<RulesValue> {
+        None
+    }
+}
+
 struct Evaluator<'a> {
     request: RulesValue,
     resource: RulesValue,
+    /// `get()` / `exists()` provider (`None` = unsupported).
+    access: Option<&'a dyn DocumentAccess>,
+    /// Documents read so far (a path is charged once per request, as in production).
+    doc_cache: BTreeMap<Vec<String>, Option<RulesValue>>,
+    doc_reads_max: u64,
     /// `rules_version = '2'`: `**` matches zero or more segments.
     wildcard_zero_or_more: bool,
     resource_absent: bool,
@@ -208,9 +234,21 @@ struct Evaluator<'a> {
     scope: Scope<'a>,
 }
 
-/// Evaluates a request against a ruleset.
+/// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
+/// unsupported and fail closed).
 #[must_use]
 pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationReport {
+    evaluate_request_with(ruleset, ctx, None)
+}
+
+/// Evaluates a request against a ruleset; `access` serves `get()` / `exists()` within the
+/// `RULES-DOC-ACCESS-SINGLE` budget.
+#[must_use]
+pub fn evaluate_request_with(
+    ruleset: &Ruleset,
+    ctx: &RequestContext,
+    access: Option<&dyn DocumentAccess>,
+) -> EvaluationReport {
     let mut budget = Budget {
         expressions: 0,
         expression_max: limit_max("RULES-EXPRESSIONS-PER-REQUEST"),
@@ -246,6 +284,9 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
         let mut ev = Evaluator {
             request: request_value,
             resource: resource_value,
+            access,
+            doc_cache: BTreeMap::new(),
+            doc_reads_max: limit_max("RULES-DOC-ACCESS-SINGLE"),
             wildcard_zero_or_more: ruleset.version.as_deref() == Some("2"),
             resource_absent: ctx.resource.is_none(),
             absent_resource_used: core::cell::Cell::new(false),
@@ -383,10 +424,19 @@ fn walk_match<'a>(
     // Every way the pattern can consume the path is tried (`**` backtracks).
     let mut outcome: Result<bool, EvalError> = Ok(false);
     for (rest, captures) in match_path(&block.path, remaining, ev.wildcard_zero_or_more) {
+        // In a query proof only the segments standing for potential results are
+        // undetermined; the database and any concrete ancestor segments stay known.
         let captures: Vec<(String, RulesValue)> = if ctx.abstract_path {
             captures
                 .into_iter()
-                .map(|(n, _)| (n, RulesValue::Unknown))
+                .map(|(n, v)| {
+                    let placeholder = match &v {
+                        RulesValue::String(s) => s == ABSTRACT_SEGMENT,
+                        RulesValue::Path(p) => p.iter().any(|s| s == ABSTRACT_SEGMENT),
+                        _ => false,
+                    };
+                    (n, if placeholder { RulesValue::Unknown } else { v })
+                })
                 .collect()
         } else {
             captures
@@ -537,6 +587,29 @@ impl<'a> Evaluator<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Reads a document through the access provider, charging the budget once per path.
+    fn read_document(&mut self, path: Vec<String>) -> Result<Option<RulesValue>, EvalError> {
+        if let Some(cached) = self.doc_cache.get(&path) {
+            return Ok(cached.clone());
+        }
+        let Some(access) = self.access else {
+            return Err(EvalError::Unsupported(
+                "get()/exists() document access is not available for this request".into(),
+            ));
+        };
+        let reads = self.doc_cache.len() as u64 + 1;
+        if reads > self.doc_reads_max {
+            return Err(EvalError::Budget {
+                limit_id: "RULES-DOC-ACCESS-SINGLE",
+                current: reads,
+                maximum: self.doc_reads_max,
+            });
+        }
+        let doc = access.get(&path);
+        self.doc_cache.insert(path, doc.clone());
+        Ok(doc)
     }
 
     fn function(&self, name: &str) -> Option<&'a FunctionDecl> {
@@ -814,9 +887,30 @@ impl<'a> Evaluator<'a> {
                     return self.call_user(f, values);
                 }
                 match name.as_str() {
-                    "get" | "exists" | "getAfter" => Err(EvalError::Unsupported(format!(
-                        "{name}() document access is not implemented in this evaluator"
-                    ))),
+                    "get" | "exists" => {
+                        let [a] = args else {
+                            return Err(soft(format!("{name}() takes one path")));
+                        };
+                        let path = match self.eval(a)? {
+                            RulesValue::Path(p) => p,
+                            v if undetermined(&v) => return Err(EvalError::Unknown),
+                            other => {
+                                return Err(soft(format!(
+                                    "{name}() expects a path, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        let doc = self.read_document(path)?;
+                        Ok(match (name.as_str(), doc) {
+                            ("exists", d) => RulesValue::Bool(d.is_some()),
+                            (_, Some(d)) => d,
+                            (_, None) => return Err(soft("get() of a missing document")),
+                        })
+                    }
+                    "getAfter" => Err(EvalError::Unsupported(
+                        "getAfter() is not implemented in this evaluator".into(),
+                    )),
                     "debug" => match args {
                         [a] => self.eval(a),
                         _ => Err(soft("debug() takes one argument")),

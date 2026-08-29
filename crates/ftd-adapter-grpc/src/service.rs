@@ -81,11 +81,23 @@ impl GatewayService {
     fn authorize_get(
         &self,
         principal: &Principal,
+        local: &LocalBackend,
         path: &ftd_core_firestore::path::DocumentPath,
         snapshot: Option<&ftd_core_firestore::store::Document>,
     ) -> Result<(), Status> {
         match &self.rules {
-            Some(r) => r.authorize_get(principal, path, snapshot),
+            Some(r) => {
+                let parent = crate::decode::Parent {
+                    project: path.project().clone(),
+                    database: path.database().clone(),
+                    document: None,
+                };
+                let reader = crate::rules::BackendReader {
+                    local,
+                    parent: &parent,
+                };
+                r.authorize_get(principal, path, snapshot, &reader)
+            }
             None => Ok(()),
         }
     }
@@ -94,11 +106,15 @@ impl GatewayService {
     fn authorize_query(
         &self,
         principal: &Principal,
+        local: &LocalBackend,
         parent: &crate::decode::Parent,
         query: &ftd_core_firestore::query::Query,
     ) -> Result<(), Status> {
         match &self.rules {
-            Some(r) => r.authorize_query(principal, parent, query),
+            Some(r) => {
+                let reader = crate::rules::BackendReader { local, parent };
+                r.authorize_query(principal, parent, query, &reader)
+            }
             None => Ok(()),
         }
     }
@@ -192,7 +208,12 @@ impl Firestore for GatewayService {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
             let snapshot = local.get_document_snapshot(request.get_ref())?;
-            self.authorize_get(&principal, &snapshot.path, snapshot.document.as_ref())?;
+            self.authorize_get(
+                &principal,
+                local,
+                &snapshot.path,
+                snapshot.document.as_ref(),
+            )?;
             return snapshot.into_response().map(Response::new);
         }
         self.client()?.get_document(request.into_inner()).await
@@ -207,7 +228,7 @@ impl Firestore for GatewayService {
             let req = request.get_ref();
             let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
             let accepted = local.accepted_query(&parent, &Self::list_query(req))?;
-            self.authorize_query(&principal, &parent, &accepted.query)?;
+            self.authorize_query(&principal, local, &parent, &accepted.query)?;
             return local.list_documents(req).map(Response::new);
         }
         self.client()?.list_documents(request.into_inner()).await
@@ -251,7 +272,7 @@ impl Firestore for GatewayService {
             let principal = self.principal(request.metadata())?;
             let outcome = local.batch_get_documents(request.get_ref())?;
             for item in &outcome.items {
-                self.authorize_get(&principal, &item.path()?, item.document())?;
+                self.authorize_get(&principal, local, &item.path()?, item.document())?;
             }
             let read_time = Some(crate::encode::encode_instant(outcome.read_time));
             if outcome.items.is_empty() && !outcome.transaction.is_empty() {
@@ -342,7 +363,7 @@ impl Firestore for GatewayService {
             };
             let accepted = local.accepted_query(&parent, sq)?;
             // Authorized from the query constraints before any data is touched.
-            self.authorize_query(&principal, &parent, &accepted.query)?;
+            self.authorize_query(&principal, local, &parent, &accepted.query)?;
             let (responses, warnings) = local.run_query(&req)?;
             let stream: Vec<Result<pb::RunQueryResponse, Status>> =
                 responses.into_iter().map(Ok).collect();
@@ -394,7 +415,7 @@ impl Firestore for GatewayService {
             };
             let accepted = local.accepted_query(&parent, sq)?;
             // The underlying query is authorized from its constraints, like a list.
-            self.authorize_query(&principal, &parent, &accepted.query)?;
+            self.authorize_query(&principal, local, &parent, &accepted.query)?;
             let response = local.run_aggregation_query(req)?;
             let stream: Vec<Result<pb::RunAggregationQueryResponse, Status>> = vec![Ok(response)];
             return Ok(Response::new(Box::pin(tokio_stream::iter(stream))));

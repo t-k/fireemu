@@ -34,7 +34,9 @@ use ftd_core_firestore::query::{FieldOp, FilterExpr, Query, UnaryOp};
 use ftd_core_firestore::store::{Document, FirestoreState, Write, WriteOp};
 use ftd_core_firestore::value::Value;
 use ftd_core_rules::ast::Ruleset;
-use ftd_core_rules::eval::{evaluate_request, Decision, DenyReason, Method, RequestContext};
+use ftd_core_rules::eval::{
+    evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
+};
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_rules::value::{AuthContext, RulesValue};
 use ftd_core_session::clock::VirtualClock;
@@ -44,6 +46,60 @@ use tonic::metadata::MetadataMap;
 use tonic::Status;
 
 use crate::decode::Parent;
+
+/// `get()` / `exists()` over a database snapshot (inside a commit's critical section or a
+/// `Listen` refresh).
+pub struct StateReader<'a> {
+    /// Database.
+    pub db: &'a FirestoreState,
+    /// Project / database of the request.
+    pub parent: &'a Parent,
+}
+
+/// `get()` / `exists()` through the backend (unary reads, no lock held).
+pub struct BackendReader<'a> {
+    /// Backend.
+    pub local: &'a crate::local::LocalBackend,
+    /// Project / database of the request.
+    pub parent: &'a Parent,
+}
+
+/// Rules path segments (`databases/{db}/documents/...`) → document path in the request's
+/// project. Other databases are unreachable (`None`).
+fn rules_segments_to_path(parent: &Parent, segments: &[String]) -> Option<DocumentPath> {
+    let [db_literal, db, docs_literal, rest @ ..] = segments else {
+        return None;
+    };
+    if db_literal != "databases"
+        || docs_literal != "documents"
+        || rest.is_empty()
+        || rest.len() % 2 != 0
+    {
+        return None;
+    }
+    if db != parent.database.as_str() {
+        return None;
+    }
+    DocumentPath::parse(&parent.project, &parent.database, &rest.join("/")).ok()
+}
+
+impl DocumentAccess for StateReader<'_> {
+    fn get(&self, segments: &[String]) -> Option<RulesValue> {
+        let path = rules_segments_to_path(self.parent, segments)?;
+        self.db.get(&path).map(resource_value)
+    }
+}
+
+impl DocumentAccess for BackendReader<'_> {
+    fn get(&self, segments: &[String]) -> Option<RulesValue> {
+        let path = rules_segments_to_path(self.parent, segments)?;
+        self.local
+            .current_document(self.parent, &path)
+            .ok()
+            .flatten()
+            .map(|d| resource_value(&d))
+    }
+}
 
 /// Who is making the request.
 #[derive(Debug, Clone, PartialEq)]
@@ -157,6 +213,7 @@ impl RulesEnforcer {
         path: &DocumentPath,
         resource: Option<&Document>,
         request_resource: Option<&Document>,
+        access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
         if matches!(principal, Principal::Owner) {
             return Ok(());
@@ -177,17 +234,20 @@ impl RulesEnforcer {
             resource,
             request_resource,
             now,
+            access,
         )
     }
 
-    /// Authorizes a single-document read against the snapshot that will be returned.
+    /// Authorizes a single-document read against the snapshot that will be returned;
+    /// `access` serves `get()` / `exists()` in the rules.
     pub fn authorize_get(
         &self,
         principal: &Principal,
         path: &DocumentPath,
         snapshot: Option<&Document>,
+        access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
-        self.evaluate(principal, Method::Get, path, snapshot, None)
+        self.evaluate(principal, Method::Get, path, snapshot, None, access)
     }
 
     /// Authorizes a query from its constraints (see the module documentation). One ruleset
@@ -199,6 +259,7 @@ impl RulesEnforcer {
         principal: &Principal,
         parent: &Parent,
         query: &Query,
+        access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
         if matches!(principal, Principal::Owner) {
             return Ok(());
@@ -225,7 +286,7 @@ impl RulesEnforcer {
                     time_unix_nanos: now.as_nanos(),
                     abstract_path: true,
                 };
-                decide(ruleset, &ctx, Method::List, &placeholder)?;
+                decide(ruleset, &ctx, Method::List, &placeholder, access)?;
             }
         }
         Ok(())
@@ -237,6 +298,7 @@ impl RulesEnforcer {
     pub fn authorize_writes_in(
         &self,
         principal: &Principal,
+        parent: &Parent,
         db: &FirestoreState,
         writes: &[Write],
         now: LogicalInstant,
@@ -252,6 +314,7 @@ impl RulesEnforcer {
             return Ok(());
         };
         let at = db.next_commit_time(now);
+        let reader = StateReader { db, parent };
         let mut staged: BTreeMap<DocumentPath, Option<Document>> = BTreeMap::new();
         for write in writes {
             let path = write.op.path();
@@ -281,6 +344,7 @@ impl RulesEnforcer {
                 current.as_ref(),
                 preview.as_ref(),
                 at,
+                &reader,
             )?;
             if !matches!(write.op, WriteOp::Verify { .. }) {
                 staged.insert(path.clone(), preview);
@@ -299,6 +363,7 @@ fn evaluate_with(
     resource: Option<&Document>,
     request_resource: Option<&Document>,
     now: LogicalInstant,
+    access: &dyn DocumentAccess,
 ) -> Result<(), Status> {
     let ctx = RequestContext {
         method,
@@ -312,7 +377,7 @@ fn evaluate_with(
         time_unix_nanos: now.as_nanos(),
         abstract_path: false,
     };
-    decide(ruleset, &ctx, method, path)
+    decide(ruleset, &ctx, method, path, access)
 }
 
 fn decide(
@@ -320,8 +385,9 @@ fn decide(
     ctx: &RequestContext,
     method: Method,
     path: &DocumentPath,
+    access: &dyn DocumentAccess,
 ) -> Result<(), Status> {
-    match evaluate_request(ruleset, ctx).decision {
+    match evaluate_request_with(ruleset, ctx, Some(access)).decision {
         Decision::Allow => Ok(()),
         Decision::Deny(reason) => Err(Status::permission_denied(format!(
             "{} on {} denied by Security Rules: {}",
@@ -338,9 +404,17 @@ pub fn write_guard<'a>(
     principal: &'a Principal,
 ) -> BoxedWriteGuard<'a> {
     match rules {
-        Some(r) => {
-            Box::new(move |db, writes, now| r.authorize_writes_in(principal, db, writes, now))
-        }
+        Some(r) => Box::new(move |db, writes, now| {
+            let Some(first) = writes.first() else {
+                return Ok(());
+            };
+            let parent = Parent {
+                project: first.op.path().project().clone(),
+                database: first.op.path().database().clone(),
+                document: None,
+            };
+            r.authorize_writes_in(principal, &parent, db, writes, now)
+        }),
         None => Box::new(allow_all),
     }
 }

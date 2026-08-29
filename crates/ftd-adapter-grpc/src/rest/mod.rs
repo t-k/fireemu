@@ -218,7 +218,36 @@ impl RestState {
         query: &Query,
     ) -> Result<(), Status> {
         match &self.rules {
-            Some(r) => r.authorize_query(principal, parent, query),
+            Some(r) => {
+                let reader = rules::BackendReader {
+                    local: &self.local,
+                    parent,
+                };
+                r.authorize_query(principal, parent, query, &reader)
+            }
+            None => Ok(()),
+        }
+    }
+
+    fn authorize_get(
+        &self,
+        principal: &Principal,
+        path: &ftd_core_firestore::path::DocumentPath,
+        snapshot: Option<&ftd_core_firestore::store::Document>,
+    ) -> Result<(), Status> {
+        match &self.rules {
+            Some(r) => {
+                let parent = Parent {
+                    project: path.project().clone(),
+                    database: path.database().clone(),
+                    document: None,
+                };
+                let reader = rules::BackendReader {
+                    local: &self.local,
+                    parent: &parent,
+                };
+                r.authorize_get(principal, path, snapshot, &reader)
+            }
             None => Ok(()),
         }
     }
@@ -287,9 +316,7 @@ impl RestState {
             request_options: None,
         };
         let snapshot = self.local.get_document_snapshot(&req)?;
-        if let Some(rules) = &self.rules {
-            rules.authorize_get(principal, &snapshot.path, snapshot.document.as_ref())?;
-        }
+        self.authorize_get(principal, &snapshot.path, snapshot.document.as_ref())?;
         let doc = snapshot.into_response()?;
         Ok(ok(document_to_json(&doc)))
     }
@@ -548,10 +575,8 @@ impl RestState {
             consistency_selector,
         };
         let outcome = self.local.batch_get_documents(&req)?;
-        if let Some(rules) = &self.rules {
-            for item in &outcome.items {
-                rules.authorize_get(principal, &item.path()?, item.document())?;
-            }
+        for item in &outcome.items {
+            self.authorize_get(principal, &item.path()?, item.document())?;
         }
         let read_time = optional_timestamp_to_json(Some(&encode_instant(outcome.read_time)));
         let mut out: Vec<Value> = outcome

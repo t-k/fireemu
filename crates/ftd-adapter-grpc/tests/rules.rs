@@ -550,3 +550,74 @@ service cloud.firestore {
     let _ = alice;
     h.handle.abort();
 }
+
+#[tokio::test]
+async fn rules_can_read_other_documents_with_get_and_exists() {
+    let mut h = start().await;
+    let (alice, alice_token) = h.user("alice@example.com");
+    let (_bob, bob_token) = h.user("bob@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /admin/{id} {
+      allow read, write: if get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role == 'admin';
+    }
+    match /gated/{id} {
+      allow list: if exists(/databases/$(database)/documents/flags/open);
+    }
+  }
+}",
+    )
+    .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![
+                set_write(&format!("roles/{alice}"), &[("role", s("admin"))]),
+                set_write("admin/settings", &[("v", s("1"))]),
+            ]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    assert!(h
+        .client
+        .get_document(with_bearer(get("admin/settings"), &alice_token))
+        .await
+        .is_ok());
+    let err = h
+        .client
+        .get_document(with_bearer(get("admin/settings"), &bob_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // Writes evaluate get() against the same commit snapshot.
+    assert!(h
+        .client
+        .commit(with_bearer(
+            commit(vec![set_write("admin/settings", &[("v", s("2"))])]),
+            &alice_token,
+        ))
+        .await
+        .is_ok());
+    // exists() in a list rule reads real documents (not part of the query proof).
+    let err = h
+        .client
+        .run_query(with_bearer(list("gated"), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("flags/open", &[("on", s("yes"))])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    assert!(h
+        .client
+        .run_query(with_bearer(list("gated"), &alice_token))
+        .await
+        .is_ok());
+    h.handle.abort();
+}

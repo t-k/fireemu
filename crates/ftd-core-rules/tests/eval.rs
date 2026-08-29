@@ -388,7 +388,7 @@ fn undetermined_values_never_prove_a_condition() {
         format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /notes/{{id}} {{ allow list: if {cond}; }} }} }}")
     };
     let known = abstract_ctx(
-        "/databases/(default)/documents/notes/x",
+        "/databases/(default)/documents/notes/ftd-placeholder",
         vec![("owner", RulesValue::String("u1".into()))],
     );
     assert!(allows(&rules("resource.data.owner == 'u1'"), &known));
@@ -425,7 +425,7 @@ fn undetermined_values_never_prove_a_condition() {
     ));
     // Partial lists prove membership, nothing else.
     let tags = abstract_ctx(
-        "/databases/(default)/documents/notes/x",
+        "/databases/(default)/documents/notes/ftd-placeholder",
         vec![(
             "tags",
             RulesValue::PartialList(vec![RulesValue::String("x".into())]),
@@ -449,8 +449,8 @@ fn undetermined_values_never_prove_a_condition() {
 fn recursive_wildcards_backtrack_and_bind_undetermined_captures_in_proofs() {
     let group = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{r} { allow list: if true; } } }";
     for path in [
-        "/databases/(default)/documents/reviews/x",
-        "/databases/(default)/documents/posts/p/reviews/x",
+        "/databases/(default)/documents/reviews/ftd-placeholder",
+        "/databases/(default)/documents/posts/ftd-placeholder/reviews/ftd-placeholder",
     ] {
         assert!(allows(group, &abstract_ctx(path, vec![])), "{path}");
     }
@@ -458,16 +458,127 @@ fn recursive_wildcards_backtrack_and_bind_undetermined_captures_in_proofs() {
     let v1 = "service cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{r} { allow list: if true; } } }";
     assert!(!allows(
         v1,
-        &abstract_ctx("/databases/(default)/documents/reviews/x", vec![])
+        &abstract_ctx("/databases/(default)/documents/reviews/ftd-placeholder", vec![])
     ));
     assert!(allows(
         v1,
-        &abstract_ctx("/databases/(default)/documents/a/reviews/x", vec![])
+        &abstract_ctx("/databases/(default)/documents/a/reviews/ftd-placeholder", vec![])
     ));
     // A capture cannot decide a proof, and a rule relying on it is not provable.
     let by_capture = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if id == 'x'; } } }";
     assert!(!allows(
         by_capture,
-        &abstract_ctx("/databases/(default)/documents/notes/x", vec![])
+        &abstract_ctx("/databases/(default)/documents/notes/ftd-placeholder", vec![])
+    ));
+}
+
+// ------------------------------------------------------------------------------------------
+// get() / exists() document access
+// ------------------------------------------------------------------------------------------
+
+struct MapAccess(BTreeMap<String, RulesValue>);
+
+impl ftd_core_rules::eval::DocumentAccess for MapAccess {
+    fn get(&self, segments: &[String]) -> Option<RulesValue> {
+        self.0.get(&segments.join("/")).cloned()
+    }
+}
+
+fn resource(fields: Vec<(&str, RulesValue)>) -> RulesValue {
+    let mut m = BTreeMap::new();
+    m.insert(
+        "data".to_owned(),
+        RulesValue::Map(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()),
+    );
+    RulesValue::Map(m)
+}
+
+#[test]
+fn get_and_exists_read_other_documents_within_the_access_budget() {
+    use ftd_core_rules::eval::evaluate_request_with;
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /admin/{id} {
+      allow read: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    match /guarded/{id} {
+      allow read: if exists(/databases/$(database)/documents/flags/open);
+    }
+    match /costly/{id} {
+      allow read: if get(/databases/$(database)/documents/a/1).data.v == 1
+                  && get(/databases/$(database)/documents/a/1).data.v == 1
+                  && exists(/databases/$(database)/documents/a/2)
+                  && exists(/databases/$(database)/documents/a/3)
+                  && exists(/databases/$(database)/documents/a/4)
+                  && exists(/databases/$(database)/documents/a/5)
+                  && exists(/databases/$(database)/documents/a/6)
+                  && exists(/databases/$(database)/documents/a/7)
+                  && exists(/databases/$(database)/documents/a/8)
+                  && exists(/databases/$(database)/documents/a/9)
+                  && exists(/databases/$(database)/documents/a/10)
+                  && exists(/databases/$(database)/documents/a/11);
+    }
+  }
+}";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let mut docs = BTreeMap::new();
+    docs.insert(
+        "databases/(default)/documents/users/u1".to_owned(),
+        resource(vec![("role", RulesValue::String("admin".into()))]),
+    );
+    docs.insert(
+        "databases/(default)/documents/a/1".to_owned(),
+        resource(vec![("v", RulesValue::Int(1))]),
+    );
+    for n in 2..=11 {
+        docs.insert(
+            format!("databases/(default)/documents/a/{n}"),
+            resource(vec![]),
+        );
+    }
+    let access = MapAccess(docs);
+    let ctx = |path: &str, uid: &str| RequestContext {
+        method: Method::Get,
+        path: path.to_owned(),
+        auth: Some(AuthContext {
+            uid: uid.to_owned(),
+            token: BTreeMap::new(),
+        }),
+        resource: Some(resource(vec![])),
+        request_resource: None,
+        time_unix_nanos: 0,
+        abstract_path: false,
+    };
+    let admin = ctx("/databases/(default)/documents/admin/x", "u1");
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &admin, Some(&access)).decision,
+        Decision::Allow
+    ));
+    let stranger = ctx("/databases/(default)/documents/admin/x", "u2");
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &stranger, Some(&access)).decision,
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+    // Without an access provider, document reads fail closed as unsupported.
+    assert!(matches!(
+        evaluate_request(&ruleset, &admin).decision,
+        Decision::Deny(DenyReason::Unsupported(_))
+    ));
+    let guarded = ctx("/databases/(default)/documents/guarded/x", "u1");
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &guarded, Some(&access)).decision,
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+    // Eleven distinct documents exceed RULES-DOC-ACCESS-SINGLE (10); the repeated path counts
+    // once.
+    let costly = ctx("/databases/(default)/documents/costly/x", "u1");
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &costly, Some(&access)).decision,
+        Decision::Deny(DenyReason::BudgetExceeded {
+            limit_id: "RULES-DOC-ACCESS-SINGLE",
+            current: 11,
+            maximum: 10
+        })
     ));
 }

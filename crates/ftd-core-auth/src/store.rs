@@ -99,6 +99,8 @@ pub struct UserRecord {
     pub email: Option<String>,
     /// Email verified.
     pub email_verified: bool,
+    /// Display name.
+    pub display_name: Option<String>,
     /// Disabled flag.
     pub disabled: bool,
     /// Provider.
@@ -164,6 +166,10 @@ pub enum AuthError {
     UserDisabled,
     /// Unknown or revoked refresh token.
     InvalidRefreshToken,
+    /// Caller-chosen user ID is malformed.
+    InvalidLocalId,
+    /// Caller-chosen user ID already exists.
+    LocalIdExists,
     /// Limit violation.
     LimitExceeded(LimitViolation),
 }
@@ -178,6 +184,8 @@ impl fmt::Display for AuthError {
             Self::InvalidCredentials => f.write_str("invalid email or password"),
             Self::UserDisabled => f.write_str("user is disabled"),
             Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
+            Self::InvalidLocalId => f.write_str("invalid local id"),
+            Self::LocalIdExists => f.write_str("local id already exists"),
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
         }
     }
@@ -223,6 +231,7 @@ pub struct AuthStore {
     users: BTreeMap<LocalId, UserRecord>,
     counter: u64,
     refresh_tokens: BTreeMap<String, (LocalId, LogicalInstant)>,
+    next_id_override: Option<String>,
 }
 
 impl AuthStore {
@@ -236,6 +245,7 @@ impl AuthStore {
             users: BTreeMap::new(),
             counter: 0,
             refresh_tokens: BTreeMap::new(),
+            next_id_override: None,
         }
     }
 
@@ -278,6 +288,44 @@ impl AuthStore {
         TotpSecret::new(bytes)
     }
 
+    /// Creates a user with a caller-chosen ID (Admin SDK `uid`), or a generated one.
+    pub fn create_user_with_id(
+        &mut self,
+        new: NewUser,
+        id: Option<&str>,
+        now: LogicalInstant,
+    ) -> Result<LocalId, AuthError> {
+        match id {
+            None => self.create_user(new, now),
+            Some(id) => {
+                if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+                    return Err(AuthError::InvalidLocalId);
+                }
+                if self.users.contains_key(&LocalId(id.to_owned())) {
+                    return Err(AuthError::LocalIdExists);
+                }
+                self.next_id_override = Some(id.to_owned());
+                let result = self.create_user(new, now);
+                self.next_id_override = None;
+                result
+            }
+        }
+    }
+
+    /// Deletes a user and its refresh tokens.
+    pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
+        let key = LocalId(uid.to_owned());
+        self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
+        self.refresh_tokens.retain(|_, (owner, _)| owner != &key);
+        Ok(())
+    }
+
+    /// All user IDs in canonical order.
+    #[must_use]
+    pub fn all_user_ids(&self) -> Vec<LocalId> {
+        self.users.keys().cloned().collect()
+    }
+
     /// Creates a user.
     pub fn create_user(&mut self, new: NewUser, now: LogicalInstant) -> Result<LocalId, AuthError> {
         if let Some(email) = &new.email {
@@ -292,13 +340,17 @@ impl AuthStore {
                 return Err(AuthError::EmailExists);
             }
         }
-        let local_id = LocalId(self.next_id("u"));
+        let local_id = match self.next_id_override.take() {
+            Some(id) => LocalId(id),
+            None => LocalId(self.next_id("u")),
+        };
         self.users.insert(
             local_id.clone(),
             UserRecord {
                 local_id: local_id.clone(),
                 email: new.email,
                 email_verified: new.email_verified,
+                display_name: None,
                 disabled: false,
                 provider: new.provider,
                 custom_claims: CustomClaims::default(),

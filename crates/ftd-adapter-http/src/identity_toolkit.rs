@@ -66,6 +66,8 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::UserDisabled => error(400, "USER_DISABLED"),
         AuthError::InvalidRefreshToken => error(400, "INVALID_REFRESH_TOKEN"),
         AuthError::UserNotFound => error(400, "USER_NOT_FOUND"),
+        AuthError::InvalidLocalId => error(400, "INVALID_LOCAL_ID"),
+        AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),
         AuthError::LimitExceeded(v) => error(400, &format!("INVALID_CLAIMS : {}", v.limit_id)),
     }
 }
@@ -146,6 +148,20 @@ pub fn handle(state: &AuthState, method: &str, path: &str, body: &Value) -> Json
     let Ok(mut store) = state.store.lock() else {
         return error(500, "INTERNAL");
     };
+    // Admin SDK paths are project-scoped: /identitytoolkit.googleapis.com/v1/projects/{p}/accounts...
+    let admin = path
+        .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
+        .and_then(|rest| rest.split_once('/'));
+    if let Some((_project, action)) = admin {
+        return match action {
+            "accounts" => admin_create(&mut store, body, at),
+            "accounts:lookup" => lookup(&store, body, at),
+            "accounts:update" => update(&mut store, body, at),
+            "accounts:delete" => admin_delete(&mut store, body),
+            "accounts:batchGet" => admin_batch_get(&store, body),
+            _ => error(404, "NOT_FOUND"),
+        };
+    }
     match path {
         "/identitytoolkit.googleapis.com/v1/accounts:signUp" => sign_up(&mut store, body, at),
         "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword" => {
@@ -240,6 +256,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     json!({
         "localId": u.local_id.as_str(),
         "email": u.email,
+        "displayName": u.display_name,
         "emailVerified": u.email_verified,
         "disabled": u.disabled,
         "customAttributes": u.custom_claims.canonical_json(),
@@ -249,8 +266,18 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     })
 }
 
+fn first_of(body: &Value, key: &str) -> Option<String> {
+    match body.get(key) {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Array(items)) => items.first().and_then(Value::as_str).map(str::to_owned),
+        _ => None,
+    }
+}
+
 fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
-    let uid = if let Some(local_id) = str_field(body, "localId") {
+    let local_id = first_of(body, "localId");
+    let email = first_of(body, "email");
+    let uid = if let Some(local_id) = local_id.as_deref() {
         match store.user_by_id(local_id) {
             Some(u) => u.local_id.clone(),
             None => {
@@ -260,7 +287,7 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
                 }
             }
         }
-    } else if let Some(email) = str_field(body, "email") {
+    } else if let Some(email) = email.as_deref() {
         match store.user_by_email(email) {
             Some(u) => u.local_id.clone(),
             None => {
@@ -336,6 +363,21 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
             return auth_error(&e);
         }
     }
+    if let Some(password) = str_field(body, "password") {
+        if let Err(e) = store.set_password(&uid, password) {
+            return auth_error(&e);
+        }
+    }
+    if let Some(name) = str_field(body, "displayName") {
+        if let Some(u) = store.user_mut(&uid) {
+            u.display_name = Some(name.to_owned());
+        }
+    }
+    if let Some(verified) = body.get("emailVerified").and_then(Value::as_bool) {
+        if let Some(u) = store.user_mut(&uid) {
+            u.email_verified = verified;
+        }
+    }
     if let Some(disable) = body.get("disableUser").and_then(Value::as_bool) {
         if let Some(u) = store.user_mut(&uid) {
             u.disabled = disable;
@@ -350,6 +392,74 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
     JsonResponse {
         status: 200,
         body: json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"}),
+    }
+}
+
+/// Admin `POST /v1/projects/{p}/accounts` (createUser).
+fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    let new_user = match str_field(body, "email") {
+        Some(email) => NewUser {
+            email: Some(email.to_owned()),
+            email_verified: body
+                .get("emailVerified")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            provider: ftd_core_auth::store::Provider::Password,
+        },
+        None => NewUser::anonymous(),
+    };
+    let requested_id = str_field(body, "localId").map(str::to_owned);
+    let uid = match store.create_user_with_id(new_user, requested_id.as_deref(), at) {
+        Ok(uid) => uid,
+        Err(e) => return auth_error(&e),
+    };
+    if let Some(password) = str_field(body, "password") {
+        if let Err(e) = store.set_password(&uid, password) {
+            return auth_error(&e);
+        }
+    }
+    if let Some(u) = store.user_mut(&uid) {
+        u.display_name = str_field(body, "displayName").map(str::to_owned);
+        u.disabled = body
+            .get("disabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
+    JsonResponse {
+        status: 200,
+        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": str_field(body, "email")}),
+    }
+}
+
+/// Admin `accounts:delete`.
+fn admin_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
+    let Some(local_id) = str_field(body, "localId") else {
+        return error(400, "MISSING_LOCAL_ID");
+    };
+    match store.delete_user_by_id(local_id) {
+        Ok(()) => JsonResponse {
+            status: 200,
+            body: json!({"kind": "identitytoolkit#DeleteAccountResponse"}),
+        },
+        Err(e) => auth_error(&e),
+    }
+}
+
+/// Admin `accounts:batchGet` (listUsers) without pagination.
+fn admin_batch_get(store: &AuthStore, body: &Value) -> JsonResponse {
+    let max = body
+        .get("maxResults")
+        .and_then(Value::as_u64)
+        .unwrap_or(1_000);
+    let users: Vec<Value> = store
+        .all_user_ids()
+        .into_iter()
+        .take(usize::try_from(max).unwrap_or(usize::MAX))
+        .map(|uid| user_json(store, &uid))
+        .collect();
+    JsonResponse {
+        status: 200,
+        body: json!({"kind": "identitytoolkit#DownloadAccountResponse", "users": users}),
     }
 }
 

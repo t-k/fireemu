@@ -106,7 +106,7 @@ impl Gateway {
             IndexDecision::MissingRequired { requirement } => {
                 return Err(Rejection::MissingIndex {
                     fragment: requirement.indexes_json_fragment(),
-                    description: format!("missing index {decision}"),
+                    description: decision.to_string(),
                 });
             }
             IndexDecision::Unsupported { feature } => {

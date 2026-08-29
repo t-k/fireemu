@@ -32,8 +32,8 @@ use serde_json::{json, Value};
 
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
-    /// User store.
-    pub store: Mutex<AuthStore>,
+    /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
+    pub store: Arc<Mutex<AuthStore>>,
     /// Virtual clock shared with the other adapters.
     pub clock: Arc<Mutex<VirtualClock>>,
 }

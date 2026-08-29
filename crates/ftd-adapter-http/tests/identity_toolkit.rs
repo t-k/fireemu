@@ -17,11 +17,11 @@ const V2: &str = "/identitytoolkit.googleapis.com/v2";
 
 fn state() -> AuthState {
     AuthState {
-        store: Mutex::new(AuthStore::new(
+        store: Arc::new(Mutex::new(AuthStore::new(
             "demo-app",
             SplitMix64::new(5),
             TotpPolicy::default(),
-        )),
+        ))),
         clock: Arc::new(Mutex::new(VirtualClock::new(
             LogicalInstant::from_unix_seconds(1_788_004_860),
         ))),

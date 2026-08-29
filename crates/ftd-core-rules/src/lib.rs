@@ -5,4 +5,5 @@ pub mod ast;
 pub mod eval;
 pub mod lint;
 pub mod parse;
+pub mod runtime;
 pub mod value;

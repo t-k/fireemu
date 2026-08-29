@@ -34,6 +34,10 @@ pub struct RuntimeConfig {
     pub auth_project: String,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
+    /// Path of the Security Rules source, if configured.
+    pub rules_file: Option<String>,
+    /// Whether Security Rules are enforced on the Firestore surface.
+    pub rules_enforced: bool,
 }
 
 impl Default for RuntimeConfig {
@@ -49,6 +53,8 @@ impl Default for RuntimeConfig {
             seed: 42,
             auth_project: "demo-app".to_owned(),
             index_file: None,
+            rules_file: None,
+            rules_enforced: true,
         }
     }
 }
@@ -90,6 +96,25 @@ impl RuntimeConfig {
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
         Self::from_json(&json)
+    }
+
+    fn parse_rules(
+        rules: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        if let Some(source) = rules.get("source").and_then(Value::as_str) {
+            cfg.rules_file = Some(source.to_owned());
+        }
+        match rules.get("executionMode").and_then(Value::as_str) {
+            None | Some("native" | "admin-bypass") => Ok(()),
+            Some("disabled") => {
+                cfg.rules_enforced = false;
+                Ok(())
+            }
+            Some(other) => Err(ConfigError(format!(
+                "rules.executionMode {other:?} is declared but not implemented; use \"native\" or \"disabled\""
+            ))),
+        }
     }
 
     /// Builds the runtime config from parsed JSON.
@@ -179,6 +204,9 @@ impl RuntimeConfig {
             if let Some(p) = d.get("authProject").and_then(Value::as_str) {
                 p.clone_into(&mut cfg.auth_project);
             }
+        }
+        if let Some(rules) = obj.get("rules").and_then(Value::as_object) {
+            Self::parse_rules(rules, &mut cfg)?;
         }
         if let Some(auth) = obj.get("auth").and_then(Value::as_object) {
             if let Some(mode) = auth.get("idTokenSigning").and_then(Value::as_str) {

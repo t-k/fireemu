@@ -561,6 +561,18 @@ impl FirestoreState {
         None
     }
 
+    /// Result of applying `write` to the current document without publishing anything (the
+    /// `request.resource` seen by Security Rules). Preconditions are not checked here.
+    pub fn preview_write(
+        &self,
+        write: &Write,
+        now: LogicalInstant,
+    ) -> Result<Option<Document>, FirestoreError> {
+        let current = self.get(write.op.path()).cloned();
+        let (next, _) = apply_write(write, current, now, CommitVersion(self.version.0 + 1))?;
+        Ok(next)
+    }
+
     /// Documents directly under `parent` (root when `None`) in `collection_id`, by name.
     #[must_use]
     pub fn list_documents(

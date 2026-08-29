@@ -244,8 +244,31 @@ impl LocalBackend {
         })
     }
 
-    /// `CreateDocument`.
-    pub fn create_document(&self, req: &pb::CreateDocumentRequest) -> Result<pb::Document, Status> {
+    /// Current document (latest version) without any transaction bookkeeping.
+    pub fn current_document(
+        &self,
+        parent: &Parent,
+        path: &DocumentPath,
+    ) -> Result<Option<Document>, Status> {
+        self.with_db(parent, |db| Ok(db.get(path).cloned()))
+    }
+
+    /// Result of `write` against the current state without publishing it.
+    pub fn preview_write(
+        &self,
+        parent: &Parent,
+        write: &Write,
+    ) -> Result<Option<Document>, Status> {
+        let now = self.now();
+        self.with_db(parent, |db| {
+            db.preview_write(write, now)
+                .map_err(|e| status_from_error(&e))
+        })
+    }
+
+    /// Decodes a `CreateDocument` request into its write (the document ID is fixed here, so
+    /// that authorization and execution see the same path).
+    pub fn plan_create(&self, req: &pb::CreateDocumentRequest) -> Result<(Parent, Write), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         let collection = CollectionId::try_new(req.collection_id.as_str())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -271,16 +294,33 @@ impl LocalBackend {
         .map_err(status)?;
         let write = Write {
             op: WriteOp::Set {
-                path: path.clone(),
+                path,
                 fields,
                 update_mask: None,
             },
             precondition: Some(Precondition::Exists(false)),
             transforms: vec![],
         };
-        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        Ok((parent, write))
+    }
+
+    /// `CreateDocument`.
+    pub fn create_document(&self, req: &pb::CreateDocumentRequest) -> Result<pb::Document, Status> {
+        let (parent, write) = self.plan_create(req)?;
+        self.execute_planned(&parent, write, req.mask.as_ref())
+    }
+
+    /// Executes a single planned write and returns the resulting document.
+    pub fn execute_planned(
+        &self,
+        parent: &Parent,
+        write: Write,
+        mask: Option<&pb::DocumentMask>,
+    ) -> Result<pb::Document, Status> {
+        let mask = decode_mask(mask).map_err(status)?;
+        let path = write.op.path().clone();
         let now = self.now();
-        self.with_db(&parent, |db| {
+        self.with_db(parent, |db| {
             db.commit(&[write], None, now)
                 .map_err(|e| status_from_error(&e))?;
             db.get(&path)
@@ -289,8 +329,8 @@ impl LocalBackend {
         })
     }
 
-    /// `UpdateDocument`.
-    pub fn update_document(&self, req: &pb::UpdateDocumentRequest) -> Result<pb::Document, Status> {
+    /// Decodes an `UpdateDocument` request into its write.
+    pub fn plan_update(req: &pb::UpdateDocumentRequest) -> Result<(Parent, Write), Status> {
         let doc = req
             .document
             .as_ref()
@@ -299,26 +339,24 @@ impl LocalBackend {
         let parent = parse_parent(&doc.name).map_err(status)?;
         let write = Write {
             op: WriteOp::Set {
-                path: path.clone(),
+                path,
                 fields: decode_fields(&doc.fields).map_err(status)?,
                 update_mask: decode_mask(req.update_mask.as_ref()).map_err(status)?,
             },
             precondition: decode_precondition(req.current_document.as_ref()).map_err(status)?,
             transforms: vec![],
         };
-        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
-        let now = self.now();
-        self.with_db(&parent, |db| {
-            db.commit(&[write], None, now)
-                .map_err(|e| status_from_error(&e))?;
-            db.get(&path)
-                .map(|d| encode_masked(d, mask.as_deref()))
-                .ok_or_else(|| Status::internal("document vanished after commit"))
-        })
+        Ok((parent, write))
     }
 
-    /// `DeleteDocument`.
-    pub fn delete_document(&self, req: &pb::DeleteDocumentRequest) -> Result<(), Status> {
+    /// `UpdateDocument`.
+    pub fn update_document(&self, req: &pb::UpdateDocumentRequest) -> Result<pb::Document, Status> {
+        let (parent, write) = Self::plan_update(req)?;
+        self.execute_planned(&parent, write, req.mask.as_ref())
+    }
+
+    /// Decodes a `DeleteDocument` request into its write.
+    pub fn plan_delete(req: &pb::DeleteDocumentRequest) -> Result<(Parent, Write), Status> {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
         let write = Write {
@@ -326,12 +364,46 @@ impl LocalBackend {
             precondition: decode_precondition(req.current_document.as_ref()).map_err(status)?,
             transforms: vec![],
         };
+        Ok((parent, write))
+    }
+
+    /// `DeleteDocument`.
+    pub fn delete_document(&self, req: &pb::DeleteDocumentRequest) -> Result<(), Status> {
+        let (parent, write) = Self::plan_delete(req)?;
         let now = self.now();
         self.with_db(&parent, |db| {
             db.commit(&[write], None, now)
                 .map(|_| ())
                 .map_err(|e| status_from_error(&e))
         })
+    }
+
+    /// Decodes the writes of a `Commit` request (also used for authorization).
+    pub fn plan_commit(req: &pb::CommitRequest) -> Result<(Parent, Vec<Write>), Status> {
+        let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        let writes = req
+            .writes
+            .iter()
+            .map(decode_write)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(status)?;
+        for w in &writes {
+            Self::check_database(&parent, &w.op.path().resource_name())?;
+        }
+        Ok((parent, writes))
+    }
+
+    /// Decodes the writes of a `BatchWrite` request that are well-formed (malformed writes
+    /// are reported per write by [`Self::batch_write`]).
+    pub fn plan_batch_write(req: &pb::BatchWriteRequest) -> Result<(Parent, Vec<Write>), Status> {
+        let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        let writes = req
+            .writes
+            .iter()
+            .filter_map(|w| decode_write(w).ok())
+            .filter(|w| Self::check_database(&parent, &w.op.path().resource_name()).is_ok())
+            .collect();
+        Ok((parent, writes))
     }
 
     /// `BeginTransaction`.
@@ -352,16 +424,7 @@ impl LocalBackend {
 
     /// `Commit`.
     pub fn commit(&self, req: &pb::CommitRequest) -> Result<pb::CommitResponse, Status> {
-        let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
-        let writes = req
-            .writes
-            .iter()
-            .map(decode_write)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(status)?;
-        for w in &writes {
-            Self::check_database(&parent, &w.op.path().resource_name())?;
-        }
+        let (parent, writes) = Self::plan_commit(req)?;
         let txn = Self::txn(&parent, &req.transaction)?;
         let now = self.now();
         self.with_db(&parent, |db| {

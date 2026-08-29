@@ -10,4 +10,5 @@ pub mod decode;
 pub mod encode;
 pub mod gateway;
 pub mod local;
+pub mod rules;
 pub mod service;

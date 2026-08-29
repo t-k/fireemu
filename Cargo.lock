@@ -246,6 +246,7 @@ dependencies = [
  "ftd-core-auth",
  "ftd-core-firestore",
  "ftd-core-limits",
+ "ftd-core-rules",
  "ftd-core-session",
  "ftd-core-types",
  "ftd-proto-firestore",
@@ -291,8 +292,10 @@ dependencies = [
 name = "ftd-adapter-grpc"
 version = "0.1.0"
 dependencies = [
+ "ftd-core-auth",
  "ftd-core-firestore",
  "ftd-core-limits",
+ "ftd-core-rules",
  "ftd-core-session",
  "ftd-core-types",
  "ftd-proto-firestore",
@@ -309,6 +312,7 @@ dependencies = [
  "bytes",
  "ftd-core-auth",
  "ftd-core-limits",
+ "ftd-core-rules",
  "ftd-core-session",
  "ftd-core-types",
  "http-body-util",

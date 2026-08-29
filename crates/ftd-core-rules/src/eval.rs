@@ -118,6 +118,10 @@ pub struct EvaluationReport {
     pub expressions_evaluated: u64,
     /// Deepest function call chain observed.
     pub max_call_depth: u16,
+    /// `resource` was read while the request carried no existing document. A `list`
+    /// evaluation over an empty result set uses this to tell "denied by the rule" from
+    /// "undecidable without a document" (spec RULES-LIST-APPROX).
+    pub absent_resource_used: bool,
 }
 
 #[derive(Debug)]
@@ -190,6 +194,8 @@ struct Scope<'a> {
 struct Evaluator<'a> {
     request: RulesValue,
     resource: RulesValue,
+    resource_absent: bool,
+    absent_resource_used: core::cell::Cell<bool>,
     budget: Budget,
     scope: Scope<'a>,
 }
@@ -213,6 +219,7 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
         .collect();
     let mut matched_any = false;
     let mut unsupported: Option<String> = None;
+    let mut absent_resource_used = false;
     for service in &ruleset.services {
         if service.name != "cloud.firestore" {
             continue;
@@ -231,10 +238,13 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
         let mut ev = Evaluator {
             request: request_value,
             resource: resource_value,
+            resource_absent: ctx.resource.is_none(),
+            absent_resource_used: core::cell::Cell::new(false),
             budget,
             scope,
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
+        absent_resource_used |= ev.absent_resource_used.get();
         budget = ev.budget;
         match outcome {
             Ok(true) => {
@@ -242,6 +252,7 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
                     decision: Decision::Allow,
                     expressions_evaluated: budget.expressions,
                     max_call_depth: budget.max_depth_seen,
+                    absent_resource_used,
                 }
             }
             Ok(false) | Err(EvalError::Soft(_)) => {}
@@ -258,6 +269,7 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
                     }),
                     expressions_evaluated: budget.expressions,
                     max_call_depth: budget.max_depth_seen,
+                    absent_resource_used,
                 }
             }
             Err(EvalError::Unsupported(m)) => unsupported = Some(m),
@@ -274,6 +286,7 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
         decision,
         expressions_evaluated: budget.expressions,
         max_call_depth: budget.max_depth_seen,
+        absent_resource_used,
     }
 }
 
@@ -460,7 +473,12 @@ impl<'a> Evaluator<'a> {
         }
         match name {
             "request" => Some(self.request.clone()),
-            "resource" => Some(self.resource.clone()),
+            "resource" => {
+                if self.resource_absent {
+                    self.absent_resource_used.set(true);
+                }
+                Some(self.resource.clone())
+            }
             _ => None,
         }
     }

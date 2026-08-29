@@ -14,15 +14,17 @@ mod control;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_adapter_grpc::gateway::Gateway;
 use ftd_adapter_grpc::local::LocalBackend;
+use ftd_adapter_grpc::rules::RulesEnforcer;
 use ftd_adapter_grpc::service::GatewayService;
 use ftd_adapter_http::identity_toolkit::AuthState;
 use ftd_core_auth::mfa::TotpPolicy;
 use ftd_core_auth::store::AuthStore;
 use ftd_core_firestore::index::{IndexSet, PlanningContext};
+use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::SplitMix64;
 use ftd_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
@@ -118,6 +120,31 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
     Ok(cfg)
 }
 
+fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
+    match &cfg.rules_file {
+        Some(path) => {
+            let source =
+                std::fs::read_to_string(path).map_err(|e| format!("rules source {path}: {e}"))?;
+            LoadedRules::from_source(&source)
+                .map_err(|e| format!("rules source {path} does not parse: {e}"))
+        }
+        None => Ok(LoadedRules::default()),
+    }
+}
+
+fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
+    match (cfg.rules_enforced, loaded) {
+        (false, _) => println!("  rules: disabled by config (every request is allowed)"),
+        (true, false) => println!(
+            "  rules: none loaded; every request is allowed (PUT /v1/rules or rules.source)"
+        ),
+        (true, true) => println!(
+            "  rules: enforced from {}",
+            cfg.rules_file.as_deref().unwrap_or("config")
+        ),
+    }
+}
+
 fn run_up(cfg: RuntimeConfig) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -143,19 +170,22 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             },
         };
         let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed));
+        let auth_store = Arc::new(Mutex::new(AuthStore::new(
+            &cfg.auth_project,
+            SplitMix64::new(cfg.seed ^ 0xA0),
+            TotpPolicy::default(),
+        )));
         let auth = Arc::new(AuthState {
-            store: Mutex::new(AuthStore::new(
-                &cfg.auth_project,
-                SplitMix64::new(cfg.seed ^ 0xA0),
-                TotpPolicy::default(),
-            )),
+            store: auth_store.clone(),
             clock: clock.clone(),
         });
+        let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
         let control = Arc::new(ftd_adapter_http::control::ControlState {
             clock: clock.clone(),
             require_demo_prefix: cfg.require_demo_prefix,
             edition: cfg.edition,
             capabilities: control::capabilities_manifest(),
+            rules: rules.clone(),
         });
 
         let grpc_listener = tokio::net::TcpListener::bind(&cfg.firestore_addr)
@@ -171,8 +201,17 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
         println!("  auth (REST):      {http_addr}   FIREBASE_AUTH_EMULATOR_HOST={http_addr}");
         println!("  control API:      http://{http_addr}/v1/  (health: /health/live)");
         println!("  edition: {}   clock: {}", cfg.edition, cfg.clock_start);
+        print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
 
-        let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+        let mut service = GatewayService::local(gateway, backend);
+        if cfg.rules_enforced {
+            service = service.with_rules(Arc::new(RulesEnforcer::new(
+                rules,
+                auth_store,
+                clock.clone(),
+            )));
+        }
+        let svc = FirestoreServer::new(service);
         let grpc = tokio::spawn(async move {
             tonic::transport::Server::builder()
                 .add_service(svc)

@@ -13,8 +13,9 @@
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
 //! snapshots and `await-idle` arrive with the session runtime.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
+use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::Clock;
 use ftd_core_types::edition::FirestoreEdition;
@@ -33,6 +34,8 @@ pub struct ControlState {
     pub edition: FirestoreEdition,
     /// Capability manifest served at `/v1/capabilities`.
     pub capabilities: Value,
+    /// Loaded Security Rules (shared with the gRPC adapter).
+    pub rules: Arc<RwLock<LoadedRules>>,
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -84,6 +87,35 @@ pub fn handle(state: &ControlState, method: &str, path: &str, body: &Value) -> J
             })).collect::<Vec<_>>()
         })),
         (m, p) if p.starts_with("/v1/sessions/") => session_route(state, m, p, body),
+        ("GET", "/v1/rules") => match state.rules.read() {
+            Ok(r) => ok(json!({"loaded": r.is_loaded(), "source": r.source})),
+            Err(_) => error(500, "INTERNAL"),
+        },
+        ("PUT", "/v1/rules") => {
+            let Some(source) = body.get("source").and_then(Value::as_str) else {
+                return error(
+                    400,
+                    "INVALID_ARGUMENT : body.source (rules text) is required",
+                );
+            };
+            match LoadedRules::from_source(source) {
+                Ok(loaded) => match state.rules.write() {
+                    Ok(mut slot) => {
+                        *slot = loaded;
+                        ok(json!({"loaded": true}))
+                    }
+                    Err(_) => error(500, "INTERNAL"),
+                },
+                Err(e) => error(400, &format!("INVALID_ARGUMENT : rules do not parse: {e}")),
+            }
+        }
+        ("DELETE", "/v1/rules") => match state.rules.write() {
+            Ok(mut slot) => {
+                *slot = LoadedRules::default();
+                ok(json!({"loaded": false}))
+            }
+            Err(_) => error(500, "INTERNAL"),
+        },
         _ => error(404, "NOT_FOUND"),
     }
 }

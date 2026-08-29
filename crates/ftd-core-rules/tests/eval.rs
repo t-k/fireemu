@@ -409,12 +409,14 @@ fn undetermined_values_never_prove_a_condition() {
     ] {
         assert!(!allows(&rules(cond), &known), "{cond} must not be provable");
     }
-    // Three-valued logic: a deciding operand still decides.
+    // Left to right: a deciding operand ends the evaluation, an undetermined one (which may
+    // be a runtime error for some document) makes the expression undetermined.
     assert!(allows(
         &rules("resource.data.owner == 'u1' || resource.data.secret == 1"),
         &known
     ));
-    assert!(allows(&rules("resource.data.secret == 1 || true"), &known));
+    assert!(!allows(&rules("resource.data.secret == 1 || true"), &known));
+    assert!(allows(&rules("true || resource.data.secret == 1"), &known));
     assert!(!allows(
         &rules("resource.data.owner == 'u1' && resource.data.secret == 1"),
         &known
@@ -423,6 +425,13 @@ fn undetermined_values_never_prove_a_condition() {
         &rules("resource.data.secret == 1 ? true : true"),
         &known
     ));
+    // Containers holding an undetermined member are undetermined too.
+    assert!(!allows(&rules("[resource.data.secret] != [null]"), &known));
+    assert!(!allows(
+        &rules("{'k': resource.data.secret} == {'k': 1}"),
+        &known
+    ));
+    assert!(!allows(&rules("1 in [resource.data.secret]"), &known));
     // Partial lists prove membership, nothing else.
     let tags = abstract_ctx(
         "/databases/(default)/documents/notes/ftd-placeholder",
@@ -458,18 +467,42 @@ fn recursive_wildcards_backtrack_and_bind_undetermined_captures_in_proofs() {
     let v1 = "service cloud.firestore { match /databases/{d}/documents { match /{path=**}/reviews/{r} { allow list: if true; } } }";
     assert!(!allows(
         v1,
-        &abstract_ctx("/databases/(default)/documents/reviews/ftd-placeholder", vec![])
+        &abstract_ctx(
+            "/databases/(default)/documents/reviews/ftd-placeholder",
+            vec![]
+        )
     ));
     assert!(allows(
         v1,
-        &abstract_ctx("/databases/(default)/documents/a/reviews/ftd-placeholder", vec![])
+        &abstract_ctx(
+            "/databases/(default)/documents/a/reviews/ftd-placeholder",
+            vec![]
+        )
     ));
     // A capture cannot decide a proof, and a rule relying on it is not provable.
     let by_capture = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow list: if id == 'x'; } } }";
     assert!(!allows(
         by_capture,
-        &abstract_ctx("/databases/(default)/documents/notes/ftd-placeholder", vec![])
+        &abstract_ctx(
+            "/databases/(default)/documents/notes/ftd-placeholder",
+            vec![]
+        )
     ));
+    // A literal segment never equals the abstract id, and the "any prefix" marker is only
+    // covered by a recursive wildcard.
+    let literal = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/ftd-placeholder { allow list: if true; } } }";
+    assert!(!allows(
+        literal,
+        &abstract_ctx(
+            "/databases/(default)/documents/notes/ftd-placeholder",
+            vec![]
+        )
+    ));
+    let fixed_depths = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /reviews/{r} { allow list: if true; } match /{a}/{b}/reviews/{r} { allow list: if true; } } }";
+    let group_path =
+        "/databases/(default)/documents/ftd-any-prefix/ftd-any-prefix/reviews/ftd-placeholder";
+    assert!(!allows(fixed_depths, &abstract_ctx(group_path, vec![])));
+    assert!(allows(group, &abstract_ctx(group_path, vec![])));
 }
 
 // ------------------------------------------------------------------------------------------

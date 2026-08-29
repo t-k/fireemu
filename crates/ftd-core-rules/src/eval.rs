@@ -64,8 +64,17 @@ impl Method {
 }
 
 /// Path segment that stands for "any document" in a query proof (see
-/// `RequestContext::abstract_path`); captures binding it are undetermined.
+/// `RequestContext::abstract_path`); captures binding it are undetermined and no literal
+/// segment equals it.
 pub const ABSTRACT_SEGMENT: &str = "ftd-placeholder";
+
+/// Path segment that stands for "any ancestor prefix, of any depth" (collection-group
+/// proofs); only a recursive wildcard can consume it.
+pub const ABSTRACT_PREFIX: &str = "ftd-any-prefix";
+
+fn is_abstract_segment(s: &str) -> bool {
+    s == ABSTRACT_SEGMENT || s == ABSTRACT_PREFIX
+}
 
 /// Request being authorized.
 #[derive(Debug, Clone, PartialEq)]
@@ -499,12 +508,14 @@ fn match_path(pattern: &[PathSegment], segments: &[String], zero_or_more: bool) 
         };
         match seg {
             PathSegment::Literal(l) => {
-                if segments.first() == Some(l) {
+                // An undetermined segment is never equal to a literal.
+                if segments.first() == Some(l) && !is_abstract_segment(l) {
                     go(tail, &segments[1..], zero_or_more, captures, out);
                 }
             }
             PathSegment::Capture { name, .. } => {
-                if let Some(v) = segments.first() {
+                // The "any prefix" marker stands for zero or more segments: only `**` fits.
+                if let Some(v) = segments.first().filter(|v| v.as_str() != ABSTRACT_PREFIX) {
                     captures.push((name.clone(), RulesValue::String(v.clone())));
                     go(tail, &segments[1..], zero_or_more, captures, out);
                     captures.pop();
@@ -513,6 +524,13 @@ fn match_path(pattern: &[PathSegment], segments: &[String], zero_or_more: bool) 
             PathSegment::RecursiveWildcard { name, .. } => {
                 let min = usize::from(!zero_or_more);
                 for take in min..=segments.len() {
+                    // A prefix marker must be consumed whole by the wildcard.
+                    if segments[take..]
+                        .first()
+                        .is_some_and(|s| s == ABSTRACT_PREFIX)
+                    {
+                        continue;
+                    }
                     captures.push((name.clone(), RulesValue::Path(segments[..take].to_vec())));
                     go(tail, &segments[take..], zero_or_more, captures, out);
                     captures.pop();
@@ -565,11 +583,15 @@ fn truthy(v: &RulesValue) -> Result<bool, EvalError> {
 }
 
 /// Values whose identity is not determined (query proofs) make most operations undecidable.
+/// Undetermined at any depth: a container holding an undetermined member cannot be compared,
+/// searched or iterated with a definite result.
 fn undetermined(v: &RulesValue) -> bool {
-    matches!(
-        v,
-        RulesValue::Unknown | RulesValue::PartialMap(_) | RulesValue::PartialList(_)
-    )
+    match v {
+        RulesValue::Unknown | RulesValue::PartialMap(_) | RulesValue::PartialList(_) => true,
+        RulesValue::List(items) => items.iter().any(undetermined),
+        RulesValue::Map(m) => m.values().any(undetermined),
+        _ => false,
+    }
 }
 
 impl<'a> Evaluator<'a> {
@@ -790,18 +812,15 @@ impl<'a> Evaluator<'a> {
             // Three-valued: a deciding operand (`false` for `&&`, `true` for `||`) wins
             // even when another operand is undetermined; otherwise an undetermined operand
             // makes the whole expression undetermined.
+            // Left to right, as in production: an operand that decides the result ends the
+            // evaluation; an undetermined operand (which may be a runtime error for some
+            // potential document) makes the whole expression undetermined.
             let stop_on = matches!(op, BinaryOp::Or);
-            let mut unknown = false;
             for operand in operands.into_iter().rev() {
-                match self.eval(operand).and_then(|v| truthy(&v)) {
-                    Ok(b) if b == stop_on => return Ok(RulesValue::Bool(stop_on)),
-                    Ok(_) => {}
-                    Err(EvalError::Unknown) => unknown = true,
-                    Err(e) => return Err(e),
+                let b = truthy(&self.eval(operand)?)?;
+                if b == stop_on {
+                    return Ok(RulesValue::Bool(stop_on));
                 }
-            }
-            if unknown {
-                return Err(EvalError::Unknown);
             }
             return Ok(RulesValue::Bool(!stop_on));
         }

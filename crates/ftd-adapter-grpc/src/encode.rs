@@ -242,6 +242,11 @@ pub fn decode_write(w: &pb::Write) -> Result<Write, DecodeError> {
         }
         None => return Err(DecodeError::InvalidQuery("write without operation".into())),
     };
+    if w.update_mask.is_some() && !matches!(op, WriteOp::Set { .. }) {
+        return Err(DecodeError::InvalidQuery(
+            "update_mask is only valid with an update operation".into(),
+        ));
+    }
     Ok(Write {
         op,
         precondition,

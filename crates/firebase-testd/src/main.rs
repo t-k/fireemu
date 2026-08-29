@@ -246,10 +246,10 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
         });
         let grpc = tokio::spawn(serve_multiplexed(
             grpc_listener,
-            // Firestore accepts 10 MiB requests; leave room for framing overhead.
+            // Firestore's request size limit applies to the message (framing is separate).
             FirestoreServer::new(service)
-                .max_decoding_message_size(11 * 1024 * 1024)
-                .max_encoding_message_size(11 * 1024 * 1024),
+                .max_decoding_message_size(10 * 1024 * 1024)
+                .max_encoding_message_size(10 * 1024 * 1024),
             rest,
         ));
         let http = tokio::spawn(ftd_adapter_http::server::serve_with_control(

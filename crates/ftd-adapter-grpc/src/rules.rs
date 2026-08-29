@@ -36,6 +36,7 @@ use ftd_core_firestore::value::Value;
 use ftd_core_rules::ast::Ruleset;
 use ftd_core_rules::eval::{
     evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
+    ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_rules::value::{AuthContext, RulesValue};
@@ -517,25 +518,20 @@ pub fn rules_path(path: &DocumentPath) -> String {
 }
 
 /// Document paths standing in for "any document of this query". A collection query has one
-/// (its collection, id undetermined); a collection-group query is proven at the root and at
-/// a nested depth, so only a rule covering every depth (`{path=**}`) passes.
+/// (its collection, id undetermined); a collection-group query prepends the "any prefix"
+/// marker that only a recursive wildcard rule can cover, as production requires.
 pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentPath>, Status> {
     let collection_id = query.scope.collection_id.as_str();
-    let relatives = match (&query.scope.parent, query.scope.all_descendants) {
-        (Some(p), false) => vec![format!("{}/{collection_id}/ftd-placeholder", p.relative())],
-        (_, false) => vec![format!("{collection_id}/ftd-placeholder")],
-        (_, true) => vec![
-            format!("{collection_id}/ftd-placeholder"),
-            format!("ftd-placeholder/ftd-placeholder/{collection_id}/ftd-placeholder"),
-        ],
+    let relative = match (&query.scope.parent, query.scope.all_descendants) {
+        (Some(p), false) => format!("{}/{collection_id}/{ABSTRACT_SEGMENT}", p.relative()),
+        (_, false) => format!("{collection_id}/{ABSTRACT_SEGMENT}"),
+        (_, true) => {
+            format!("{ABSTRACT_PREFIX}/{ABSTRACT_PREFIX}/{collection_id}/{ABSTRACT_SEGMENT}")
+        }
     };
-    relatives
-        .iter()
-        .map(|r| {
-            DocumentPath::parse(&parent.project, &parent.database, r)
-                .map_err(|e| Status::invalid_argument(e.to_string()))
-        })
-        .collect()
+    let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+    Ok(vec![path])
 }
 
 fn reference_path(resource_name: &str) -> RulesValue {

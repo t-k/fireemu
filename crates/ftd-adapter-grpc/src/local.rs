@@ -931,10 +931,39 @@ impl LocalBackend {
         req: &pb::ListCollectionIdsRequest,
     ) -> Result<pb::ListCollectionIdsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
+        let after: Option<String> = if req.page_token.is_empty() {
+            None
+        } else {
+            Some(
+                String::from_utf8(
+                    crate::rest::json::base64_decode(&req.page_token)
+                        .map_err(|_| Status::invalid_argument("malformed page_token"))?,
+                )
+                .map_err(|_| Status::invalid_argument("malformed page_token"))?,
+            )
+        };
+        let page_size = if req.page_size > 0 {
+            usize::try_from(req.page_size).unwrap_or(usize::MAX)
+        } else {
+            DEFAULT_LIST_PAGE_SIZE
+        };
         self.with_db(&parent, |db| {
+            let mut ids = db.list_collection_ids(parent.document.as_ref());
+            if let Some(after) = &after {
+                ids.retain(|id| id > after);
+            }
+            let has_more = ids.len() > page_size;
+            ids.truncate(page_size);
+            let next_page_token = if has_more {
+                ids.last().map_or(String::new(), |id| {
+                    crate::rest::json::base64_encode(id.as_bytes())
+                })
+            } else {
+                String::new()
+            };
             Ok(pb::ListCollectionIdsResponse {
-                collection_ids: db.list_collection_ids(parent.document.as_ref()),
-                next_page_token: String::new(),
+                collection_ids: ids,
+                next_page_token,
             })
         })
     }

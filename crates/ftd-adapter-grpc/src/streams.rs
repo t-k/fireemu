@@ -185,7 +185,20 @@ fn handle_write_request(
     }
     let principal = ctx.refresh_principal()?;
     let guard = write_guard(ctx.rules.as_ref(), &principal);
-    let result = ctx.local.commit_writes(parent, &writes, &*guard)?;
+    // The epoch is re-checked inside the commit critical section: a reset that starts
+    // after the check above cannot be raced by this write.
+    let epoch = ctx.epoch;
+    let local = ctx.local.clone();
+    let guarded = move |db: &ftd_core_firestore::store::FirestoreState,
+                        writes: &[Write],
+                        now: ftd_core_types::time::LogicalInstant|
+          -> Result<(), Status> {
+        if local.epoch() != epoch {
+            return Err(Status::aborted("the session was reset"));
+        }
+        guard(db, writes, now)
+    };
+    let result = ctx.local.commit_writes(parent, &writes, &guarded)?;
     Ok(pb::WriteResponse {
         stream_id,
         stream_token: token_bytes(state.issued),
@@ -238,13 +251,13 @@ pub async fn listen_stream(
                         p.project.as_str() == project && p.database.as_str() == database
                     });
                     if relevant {
-                        refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out);
+                        refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out).map(|()| true)
+                    } else {
+                        Ok(true)
                     }
-                    Ok(true)
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out);
-                    Ok(true)
+                    refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out).map(|()| true)
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(false),
             },
@@ -322,7 +335,7 @@ fn handle_listen_request(
                 },
             );
             // Every target is brought to the same snapshot before one global boundary.
-            refresh_all(ctx, Some(parent), targets, out);
+            refresh_all(ctx, Some(parent), targets, out)?;
         }
         Some(pb::listen_request::TargetChange::RemoveTarget(id)) => {
             if targets.remove(id).is_some() {
@@ -380,8 +393,10 @@ fn refresh_all(
     parent: Option<&Parent>,
     targets: &mut BTreeMap<i32, TargetState>,
     out: &mut Vec<pb::ListenResponse>,
-) {
-    let Some(parent) = parent else { return };
+) -> Result<(), Status> {
+    let Some(parent) = parent else { return Ok(()) };
+    // Authentication / reset failures end the stream (every target is removed with the
+    // cause first, so the client learns why).
     let principal = match ctx.refresh_principal() {
         Ok(p) => p,
         Err(e) => {
@@ -389,11 +404,16 @@ fn refresh_all(
                 out.push(removed_with_cause(*id, &e));
             }
             targets.clear();
-            return;
+            return Err(e);
         }
     };
     // One critical section: every target sees the same version, read time and documents.
+    let expected_epoch = ctx.epoch;
+    let local = ctx.local.clone();
     let snapshot = ctx.local.with_snapshot(parent, |db, version, read_at| {
+        if local.epoch() != expected_epoch {
+            return Err(Status::aborted("the session was reset"));
+        }
         let read_time = encode_instant(read_at);
         let token = version.value().to_be_bytes().to_vec();
         let mut removed = Vec::new();
@@ -418,23 +438,23 @@ fn refresh_all(
                 }
             }
         }
-        (read_time, token, removed)
+        Ok((read_time, token, removed))
     });
-    let (read_time, token, removed) = match snapshot {
+    let (read_time, token, removed) = match snapshot.and_then(|r| r) {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
                 out.push(removed_with_cause(*id, &e));
             }
             targets.clear();
-            return;
+            return Err(e);
         }
     };
     for id in removed {
         targets.remove(&id);
     }
     if targets.is_empty() {
-        return;
+        return Ok(());
     }
     for id in targets.keys() {
         out.push(target_change(
@@ -464,6 +484,7 @@ fn refresh_all(
             None,
         ));
     }
+    Ok(())
 }
 
 /// Recomputes one target and appends the diff against its last known state.

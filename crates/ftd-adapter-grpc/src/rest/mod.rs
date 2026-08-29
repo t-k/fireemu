@@ -261,18 +261,23 @@ impl RestState {
     }
 
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
-        let decoded = decode_path(&req.path)?;
+        // The custom-method suffix is recognised on the raw path (an encoded colon inside a
+        // document ID is data, not routing syntax); segments are decoded afterwards.
+        let (raw_resource, action) = match req.path.rsplit_once(':') {
+            Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
+            _ => (req.path.as_str(), None),
+        };
+        let decoded = decode_path(raw_resource)?;
         let Some(path) = decoded.strip_prefix("/v1/") else {
             return Err(Status::not_found(format!("unknown path {}", req.path)));
         };
         let params = query_params(&req.query);
         let principal = self.principal(req.authorization.as_deref())?;
-        // "resource:action" (the action never contains '/')
-        if let Some((resource, action)) = path.rsplit_once(':').filter(|(_, a)| !a.contains('/')) {
+        if let Some(action) = action {
             if req.method != "POST" {
                 return Err(Status::invalid_argument(format!("{action} requires POST")));
             }
-            return self.custom_method(&principal, resource, action, &req.body);
+            return self.custom_method(&principal, path, action, &req.body);
         }
         match (req.method.as_str(), classify(path)?) {
             ("GET", Target::Resource(name)) => self.get(&principal, &name, &params),
@@ -307,11 +312,23 @@ impl RestState {
         let req = pb::GetDocumentRequest {
             name: name.to_owned(),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
-            consistency_selector: match first(params, "transaction") {
-                Some(t) => Some(pb::get_document_request::ConsistencySelector::Transaction(
-                    base64_decode(t).map_err(|e| bad(&e))?,
+            consistency_selector: match (first(params, "transaction"), first(params, "readTime")) {
+                (Some(_), Some(_)) => {
+                    return Err(Status::invalid_argument(
+                        "transaction and readTime are mutually exclusive",
+                    ))
+                }
+                (Some(t), None) => {
+                    Some(pb::get_document_request::ConsistencySelector::Transaction(
+                        base64_decode(t).map_err(|e| bad(&e))?,
+                    ))
+                }
+                (None, Some(rt)) => Some(pb::get_document_request::ConsistencySelector::ReadTime(
+                    json::read_time_from_json(&json!({"readTime": rt}))
+                        .map_err(|e| bad(&e))?
+                        .unwrap_or_default(),
                 )),
-                None => None,
+                (None, None) => None,
             },
             request_options: None,
         };
@@ -338,7 +355,26 @@ impl RestState {
             order_by: first(params, "orderBy").unwrap_or("").to_owned(),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
             show_missing: first(params, "showMissing") == Some("true"),
-            consistency_selector: None,
+            consistency_selector: match (first(params, "transaction"), first(params, "readTime")) {
+                (Some(_), Some(_)) => {
+                    return Err(Status::invalid_argument(
+                        "transaction and readTime are mutually exclusive",
+                    ))
+                }
+                (Some(t), None) => Some(
+                    pb::list_documents_request::ConsistencySelector::Transaction(
+                        base64_decode(t).map_err(|e| bad(&e))?,
+                    ),
+                ),
+                (None, Some(rt)) => {
+                    Some(pb::list_documents_request::ConsistencySelector::ReadTime(
+                        json::read_time_from_json(&json!({"readTime": rt}))
+                            .map_err(|e| bad(&e))?
+                            .unwrap_or_default(),
+                    ))
+                }
+                (None, None) => None,
+            },
             request_options: None,
         };
         let parsed = parse_parent(parent).map_err(decode_err)?;
@@ -767,6 +803,19 @@ fn decode_path(path: &str) -> Result<String, Status> {
     }
     Ok(out)
 }
+
+/// Custom methods of the REST surface (`resource:method`).
+const CUSTOM_METHODS: &[&str] = &[
+    "commit",
+    "batchWrite",
+    "batchGet",
+    "beginTransaction",
+    "rollback",
+    "runQuery",
+    "runAggregationQuery",
+    "listCollectionIds",
+    "partitionQuery",
+];
 
 fn database_of(resource: &str) -> Result<String, Status> {
     resource

@@ -1,0 +1,73 @@
+//! hyper glue: reads the body (bounded), dispatches to the JSON handlers, writes the response.
+
+use std::sync::Arc;
+
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full, Limited};
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpListener;
+
+use crate::identity_toolkit::{handle, AuthState};
+
+/// Maximum accepted request body (spec 33.3 input budget).
+pub const MAX_BODY_BYTES: usize = 256 * 1024;
+
+async fn respond(
+    state: Arc<AuthState>,
+    req: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let method = req.method().as_str().to_owned();
+    let path = req.uri().path().to_owned();
+    // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
+    let collected = Limited::new(req.into_body(), MAX_BODY_BYTES)
+        .collect()
+        .await;
+    let (status, body) = match collected {
+        Err(_) => (
+            413,
+            serde_json::json!({"error": {"code": 413, "message": "PAYLOAD_TOO_LARGE"}}),
+        ),
+        Ok(collected) => {
+            let bytes = collected.to_bytes();
+            let json: Option<serde_json::Value> = if bytes.is_empty() {
+                Some(serde_json::Value::Object(serde_json::Map::new()))
+            } else {
+                serde_json::from_slice(&bytes).ok()
+            };
+            match json {
+                None => (
+                    400,
+                    serde_json::json!({"error": {"code": 400, "message": "INVALID_JSON_PAYLOAD"}}),
+                ),
+                Some(json) => {
+                    let r = handle(&state, &method, &path, &json);
+                    (r.status, r.body)
+                }
+            }
+        }
+    };
+    let text = serde_json::to_vec(&body).unwrap_or_default();
+    Ok(Response::builder()
+        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
+        .header("content-type", "application/json; charset=utf-8")
+        .body(Full::new(Bytes::from(text)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
+}
+
+/// Serves the Identity Toolkit surface on `listener` until the task is aborted.
+pub async fn serve(listener: TcpListener, state: Arc<AuthState>) -> std::io::Result<()> {
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let io = TokioIo::new(stream);
+            let svc = service_fn(move |req| respond(state.clone(), req));
+            // Connection errors are per-client; the accept loop keeps running.
+            let _ = http1::Builder::new().serve_connection(io, svc).await;
+        });
+    }
+}

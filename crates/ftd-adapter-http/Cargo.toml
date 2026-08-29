@@ -1,0 +1,23 @@
+[package]
+name = "ftd-adapter-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "HTTP shell: Identity Toolkit (Firebase Auth) REST subset over hyper"
+
+[dependencies]
+ftd-core-types = { path = "../ftd-core-types" }
+ftd-core-auth = { path = "../ftd-core-auth" }
+ftd-core-session = { path = "../ftd-core-session" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
+[lints]
+workspace = true

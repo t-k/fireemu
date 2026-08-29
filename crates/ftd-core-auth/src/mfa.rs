@@ -287,6 +287,10 @@ impl MfaState {
         &mut self.pending_sign_ins
     }
 
+    pub(crate) fn has_pending_sign_in(&self, id: &str) -> bool {
+        self.pending_sign_ins.contains_key(id)
+    }
+
     /// Clears replay state. Test helper for stepping through window fixtures.
     pub fn reset_replay_state_for_test(&mut self) {
         for f in &mut self.totp {

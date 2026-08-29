@@ -113,6 +113,38 @@ pub struct UserRecord {
     pub last_sign_in_at: Option<LogicalInstant>,
     /// Tokens issued before this instant are revoked.
     pub tokens_valid_after: LogicalInstant,
+    /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
+    /// without a password credential.
+    password: Option<PasswordDigest>,
+}
+
+/// Salted SHA-1 digest of a password. Test-only hashing: never claims scrypt compatibility.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PasswordDigest {
+    salt: [u8; 16],
+    digest: [u8; 20],
+}
+
+impl fmt::Debug for PasswordDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PasswordDigest([redacted])")
+    }
+}
+
+impl PasswordDigest {
+    fn new(salt: [u8; 16], password: &str) -> Self {
+        let mut input = Vec::with_capacity(16 + password.len());
+        input.extend_from_slice(&salt);
+        input.extend_from_slice(password.as_bytes());
+        Self {
+            salt,
+            digest: crate::sha1::sha1(&input),
+        }
+    }
+
+    fn verify(&self, password: &str) -> bool {
+        Self::new(self.salt, password).digest == self.digest
+    }
 }
 
 /// Auth errors.
@@ -124,6 +156,14 @@ pub enum AuthError {
     EmailExists,
     /// Invalid email syntax.
     InvalidEmail,
+    /// Password shorter than six characters (Firebase minimum).
+    WeakPassword,
+    /// Unknown email or wrong password.
+    InvalidCredentials,
+    /// The user is disabled.
+    UserDisabled,
+    /// Unknown or revoked refresh token.
+    InvalidRefreshToken,
     /// Limit violation.
     LimitExceeded(LimitViolation),
 }
@@ -134,6 +174,10 @@ impl fmt::Display for AuthError {
             Self::UserNotFound => f.write_str("user not found"),
             Self::EmailExists => f.write_str("email already exists"),
             Self::InvalidEmail => f.write_str("invalid email"),
+            Self::WeakPassword => f.write_str("password must be at least 6 characters"),
+            Self::InvalidCredentials => f.write_str("invalid email or password"),
+            Self::UserDisabled => f.write_str("user is disabled"),
+            Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
         }
     }
@@ -152,9 +196,23 @@ pub struct SecondFactorAssertion {
     pub verified_at: LogicalInstant,
 }
 
-/// Pending sign-in handle.
+/// Pending sign-in handle (`mfaPendingCredential` on the wire).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingSignInId(String);
+
+impl PendingSignInId {
+    /// Text form.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Parses an opaque credential string.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        (!s.is_empty() && !s.chars().any(char::is_control)).then(|| Self(s.to_owned()))
+    }
+}
 
 /// Deterministic in-memory auth store for one project.
 #[derive(Debug)]
@@ -164,6 +222,7 @@ pub struct AuthStore {
     policy: TotpPolicy,
     users: BTreeMap<LocalId, UserRecord>,
     counter: u64,
+    refresh_tokens: BTreeMap<String, (LocalId, LogicalInstant)>,
 }
 
 impl AuthStore {
@@ -176,6 +235,7 @@ impl AuthStore {
             policy,
             users: BTreeMap::new(),
             counter: 0,
+            refresh_tokens: BTreeMap::new(),
         }
     }
 
@@ -246,9 +306,97 @@ impl AuthStore {
                 created_at: now,
                 last_sign_in_at: None,
                 tokens_valid_after: now,
+                password: None,
             },
         );
         Ok(local_id)
+    }
+
+    /// Minimum password length enforced by Firebase.
+    pub const MIN_PASSWORD_CHARS: usize = 6;
+
+    /// Sets a password credential.
+    pub fn set_password(&mut self, uid: &LocalId, password: &str) -> Result<(), AuthError> {
+        if password.chars().count() < Self::MIN_PASSWORD_CHARS {
+            return Err(AuthError::WeakPassword);
+        }
+        let mut salt = [0u8; 16];
+        salt[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        salt[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        user.password = Some(PasswordDigest::new(salt, password));
+        Ok(())
+    }
+
+    /// Verifies an email + password sign-in; returns the user ID.
+    pub fn verify_password(
+        &mut self,
+        email: &str,
+        password: &str,
+        now: LogicalInstant,
+    ) -> Result<LocalId, AuthError> {
+        let (uid, disabled, ok) = self
+            .users
+            .values()
+            .find(|u| u.email.as_deref() == Some(email))
+            .map(|u| {
+                (
+                    u.local_id.clone(),
+                    u.disabled,
+                    u.password.as_ref().is_some_and(|p| p.verify(password)),
+                )
+            })
+            .ok_or(AuthError::InvalidCredentials)?;
+        if !ok {
+            return Err(AuthError::InvalidCredentials);
+        }
+        if disabled {
+            return Err(AuthError::UserDisabled);
+        }
+        if let Some(u) = self.users.get_mut(&uid) {
+            u.last_sign_in_at = Some(now);
+        }
+        Ok(uid)
+    }
+
+    /// Looks up a user by email.
+    #[must_use]
+    pub fn user_by_email(&self, email: &str) -> Option<&UserRecord> {
+        self.users
+            .values()
+            .find(|u| u.email.as_deref() == Some(email))
+    }
+
+    /// Issues a refresh token bound to `uid` at `now`.
+    pub fn issue_refresh_token(
+        &mut self,
+        uid: &LocalId,
+        now: LogicalInstant,
+    ) -> Result<String, AuthError> {
+        if !self.users.contains_key(uid) {
+            return Err(AuthError::UserNotFound);
+        }
+        let token = self.next_id("rt-");
+        self.refresh_tokens
+            .insert(token.clone(), (uid.clone(), now));
+        Ok(token)
+    }
+
+    /// Redeems a refresh token: unknown tokens, tokens issued before a revocation, and disabled
+    /// users are rejected.
+    pub fn redeem_refresh_token(&self, token: &str) -> Result<LocalId, AuthError> {
+        let (uid, issued_at) = self
+            .refresh_tokens
+            .get(token)
+            .ok_or(AuthError::InvalidRefreshToken)?;
+        let user = self.users.get(uid).ok_or(AuthError::InvalidRefreshToken)?;
+        if user.disabled {
+            return Err(AuthError::UserDisabled);
+        }
+        if *issued_at < user.tokens_valid_after {
+            return Err(AuthError::InvalidRefreshToken);
+        }
+        Ok(uid.clone())
     }
 
     /// Looks up a user.
@@ -399,6 +547,15 @@ impl AuthStore {
             .pending_sign_ins_mut()
             .insert(pending_id.clone(), PendingSignIn { started_at: now });
         Ok(PendingSignInId(pending_id))
+    }
+
+    /// User that owns a pending sign-in, if any.
+    #[must_use]
+    pub fn pending_sign_in_user(&self, pending: &PendingSignInId) -> Option<LocalId> {
+        self.users
+            .values()
+            .find(|u| u.mfa.has_pending_sign_in(&pending.0))
+            .map(|u| u.local_id.clone())
     }
 
     /// Completes the second-factor step.

@@ -285,6 +285,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-adapter-http"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "ftd-core-auth",
+ "ftd-core-session",
+ "ftd-core-types",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ftd-core-auth"
 version = "0.1.0"
 dependencies = [

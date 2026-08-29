@@ -93,6 +93,12 @@ impl VirtualClock {
         self.now = instant;
     }
 
+    /// Current instant (same as [`Clock::now`]; convenient where the trait is not imported).
+    #[must_use]
+    pub const fn now_for_test(&self) -> LogicalInstant {
+        self.now
+    }
+
     /// Number of times the clock was explicitly moved backwards.
     #[must_use]
     pub const fn backwards_sets(&self) -> u32 {

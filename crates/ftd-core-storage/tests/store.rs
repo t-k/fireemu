@@ -403,3 +403,371 @@ fn upload_sessions_keep_the_committed_object_and_enforce_the_declared_total() {
     assert_eq!(received, 3);
     assert_eq!(status, Some(committed));
 }
+
+#[test]
+fn limits_names_and_displays_sit_on_their_documented_boundaries() {
+    use ftd_core_storage::store::{
+        MAX_CUSTOM_METADATA_BYTES, MAX_OBJECT_BYTES, MAX_UPLOAD_SESSIONS,
+        UPLOAD_SESSION_TTL_SECONDS,
+    };
+    assert_eq!(MAX_OBJECT_BYTES, 268_435_456);
+    assert_eq!(MAX_CUSTOM_METADATA_BYTES, 8192);
+    assert_eq!(UPLOAD_SESSION_TTL_SECONDS, 604_800);
+    assert_eq!(MAX_UPLOAD_SESSIONS, 256);
+    assert!(ObjectName::try_new("x".repeat(1024)).is_ok());
+    assert!(BucketName::try_new("b".repeat(222)).is_ok());
+    assert_eq!(
+        BucketName::try_new("b".repeat(223)).unwrap_err(),
+        NameError::TooLong
+    );
+    assert_eq!(BucketName::try_new("").unwrap_err(), NameError::Empty);
+    assert_eq!(bucket().as_str(), "demo-app.appspot.com");
+    assert_eq!(bucket().to_string(), "demo-app.appspot.com");
+    assert_eq!(name("a/b").to_string(), "a/b");
+    assert_eq!(NameError::TooLong.to_string(), "name is too long");
+    assert_eq!(
+        NameError::InvalidBucketCharacter.to_string(),
+        "bucket name contains an invalid character"
+    );
+    assert_eq!(
+        StorageError::UploadOffset { expected: 3 }.to_string(),
+        "upload offset mismatch, expected 3"
+    );
+    assert_eq!(
+        StorageError::TooManyUploads.to_string(),
+        "too many open upload sessions"
+    );
+}
+
+#[test]
+fn custom_metadata_budget_is_exact_on_put_update_and_upload_start() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let n = name("m");
+    let custom = |value_len: usize| BTreeMap::from([("k".to_owned(), "v".repeat(value_len))]);
+    // 1 byte of key + 8191 bytes of value = exactly the budget.
+    let ok = NewMetadata {
+        custom: custom(8191),
+        ..NewMetadata::default()
+    };
+    let over = NewMetadata {
+        custom: custom(8192),
+        ..NewMetadata::default()
+    };
+    assert!(s
+        .put(
+            &b,
+            &n,
+            b"x".to_vec(),
+            ok.clone(),
+            Precondition::default(),
+            t(1)
+        )
+        .is_ok());
+    assert_eq!(
+        s.put(
+            &b,
+            &n,
+            b"x".to_vec(),
+            over.clone(),
+            Precondition::default(),
+            t(1)
+        ),
+        Err(StorageError::MetadataTooLarge)
+    );
+    assert_eq!(
+        s.begin_upload(&b, &n, over, Precondition::default(), None, t(1)),
+        Err(StorageError::MetadataTooLarge)
+    );
+    assert!(s
+        .begin_upload(&b, &n, ok, Precondition::default(), None, t(1))
+        .is_ok());
+    let patch = MetadataPatch {
+        custom: Some(BTreeMap::from([("k2".to_owned(), Some("v".to_owned()))])),
+        ..MetadataPatch::default()
+    };
+    assert_eq!(
+        s.update_metadata(&b, &n, &patch, Precondition::default(), t(2)),
+        Err(StorageError::MetadataTooLarge)
+    );
+    let shrink = MetadataPatch {
+        custom: Some(BTreeMap::from([("k".to_owned(), None)])),
+        ..MetadataPatch::default()
+    };
+    let m = s
+        .update_metadata(&b, &n, &shrink, Precondition::default(), t(2))
+        .unwrap();
+    assert!(m.custom.is_empty());
+}
+
+#[test]
+fn hashes_etag_tokens_and_bucket_scans() {
+    let mut s = StorageState::new(5);
+    let b = bucket();
+    let other = BucketName::try_new("other-bucket").unwrap();
+    let m = s
+        .put(
+            &b,
+            &name("h"),
+            b"abc".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    assert_eq!(m.md5_base64(), "kAFQmDzST7DWlj99KOF/cg==");
+    assert_eq!(m.crc32c_base64(), "Nks/tw==");
+    assert_eq!(m.etag(), format!("\"{}-1\"", m.generation));
+    assert_eq!(m.download_tokens.len(), 1);
+    assert_eq!(m.download_tokens[0].len(), 32, "128-bit hex token");
+    let token = s.add_download_token(&b, &name("h")).unwrap();
+    assert_eq!(token.len(), 32);
+    assert_ne!(token, m.download_tokens[0], "tokens are distinct");
+    assert_eq!(s.get(&b, &name("h")).unwrap().download_tokens.len(), 2);
+    s.remove_download_token(&b, &name("h"), &token).unwrap();
+    assert_eq!(
+        s.get(&b, &name("h")).unwrap().download_tokens,
+        m.download_tokens
+    );
+    assert_eq!(
+        s.add_download_token(&b, &name("missing")),
+        Err(StorageError::NotFound)
+    );
+    assert_eq!(
+        s.remove_download_token(&b, &name("missing"), "x"),
+        Err(StorageError::NotFound)
+    );
+    s.put(
+        &other,
+        &name("o"),
+        b"1".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+    assert_eq!(s.objects(&b).len(), 1);
+    assert_eq!(s.objects(&other)[0].name.as_str(), "o");
+    assert!(
+        s.get(&other, &name("h")).is_none(),
+        "buckets are separate namespaces"
+    );
+    s.clear();
+    assert!(s.objects(&b).is_empty() && s.objects(&other).is_empty());
+    assert!(s.drain_events().is_empty());
+}
+
+#[test]
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
+fn preconditions_check_both_directions_of_each_field() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let n = name("p");
+    let m = s
+        .put(
+            &b,
+            &n,
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    let cases = [
+        (
+            Precondition {
+                if_generation_match: Some(m.generation + 1),
+                ..Precondition::default()
+            },
+            false,
+        ),
+        (
+            Precondition {
+                if_generation_match: Some(m.generation),
+                ..Precondition::default()
+            },
+            true,
+        ),
+        (
+            Precondition {
+                if_metageneration_match: Some(2),
+                ..Precondition::default()
+            },
+            false,
+        ),
+        (
+            Precondition {
+                if_metageneration_match: Some(1),
+                ..Precondition::default()
+            },
+            true,
+        ),
+        (
+            Precondition {
+                if_metageneration_not_match: Some(1),
+                ..Precondition::default()
+            },
+            false,
+        ),
+        (
+            Precondition {
+                if_metageneration_not_match: Some(2),
+                ..Precondition::default()
+            },
+            true,
+        ),
+    ];
+    for (pre, ok) in cases {
+        let patch = MetadataPatch::default();
+        let r = s.update_metadata(&b, &n, &patch, pre, t(2));
+        assert_eq!(r.is_ok(), ok, "{pre:?}");
+        if ok {
+            // Restore the metageneration expectation for the next case.
+            s.delete(&b, &n, Precondition::default()).unwrap();
+            let again = s
+                .put(
+                    &b,
+                    &n,
+                    b"x".to_vec(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    t(1),
+                )
+                .unwrap();
+            assert!(again.generation > m.generation);
+            // Cases after this one compare against metageneration 1 again; the generation
+            // cases were first, so nothing else depends on the generation value.
+        }
+    }
+    // A missing object counts as generation 0 for match preconditions.
+    let absent = Precondition {
+        if_generation_match: Some(0),
+        ..Precondition::default()
+    };
+    assert!(s
+        .put(
+            &b,
+            &name("new"),
+            b"y".to_vec(),
+            NewMetadata::default(),
+            absent,
+            t(3)
+        )
+        .is_ok());
+    let current = s.get(&b, &name("new")).unwrap().generation;
+    assert_eq!(
+        s.put(
+            &b,
+            &name("new"),
+            b"y".to_vec(),
+            NewMetadata::default(),
+            absent,
+            t(3)
+        ),
+        Err(StorageError::PreconditionFailed(format!(
+            "ifGenerationMatch 0 but the current generation is {current}"
+        )))
+    );
+}
+
+#[test]
+fn upload_sessions_expire_are_capped_and_reject_oversized_totals() {
+    use ftd_core_storage::store::{
+        MAX_OBJECT_BYTES, MAX_UPLOAD_SESSIONS, UPLOAD_SESSION_TTL_SECONDS,
+    };
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    assert_eq!(
+        s.begin_upload(
+            &b,
+            &name("x"),
+            NewMetadata::default(),
+            Precondition::default(),
+            Some(MAX_OBJECT_BYTES + 1),
+            t(0)
+        ),
+        Err(StorageError::TooLarge)
+    );
+    let id = s
+        .begin_upload(
+            &b,
+            &name("x"),
+            NewMetadata::default(),
+            Precondition::default(),
+            Some(MAX_OBJECT_BYTES),
+            t(0),
+        )
+        .unwrap();
+    assert_eq!(id.as_str().len(), "upload-00000001-".len() + 32);
+    assert_eq!(
+        s.set_upload_total(&id, MAX_OBJECT_BYTES + 1, t(0)),
+        Err(StorageError::TooLarge)
+    );
+    // Exactly the TTL is still alive; one second more is gone.
+    assert_eq!(
+        s.upload_status(&id, t(UPLOAD_SESSION_TTL_SECONDS))
+            .unwrap()
+            .0,
+        0
+    );
+    assert_eq!(
+        s.upload_status(&id, t(UPLOAD_SESSION_TTL_SECONDS + 1)),
+        Err(StorageError::UploadNotFound)
+    );
+    // Cancel frees the buffer and blocks further chunks.
+    let id = s
+        .begin_upload(
+            &b,
+            &name("c"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    s.append_upload(&id, 0, b"abc", t(0)).unwrap();
+    s.cancel_upload(&id, t(0)).unwrap();
+    assert_eq!(s.upload_status(&id, t(0)).unwrap().0, 0);
+    assert_eq!(
+        s.append_upload(&id, 3, b"d", t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert_eq!(
+        s.cancel_upload(&id, t(UPLOAD_SESSION_TTL_SECONDS + 1)),
+        Err(StorageError::UploadNotFound)
+    );
+    // The cap counts open sessions; expired ones are swept first.
+    let mut s = StorageState::new(2);
+    for i in 0..MAX_UPLOAD_SESSIONS {
+        s.begin_upload(
+            &b,
+            &name(&format!("n{i}")),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        s.begin_upload(
+            &b,
+            &name("one-more"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0)
+        ),
+        Err(StorageError::TooManyUploads)
+    );
+    assert!(s
+        .begin_upload(
+            &b,
+            &name("later"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(UPLOAD_SESSION_TTL_SECONDS + 1)
+        )
+        .is_ok());
+}

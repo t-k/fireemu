@@ -1,0 +1,18 @@
+[package]
+name = "ftd-core-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only value types shared by every firebase-testd core crate"
+
+[dependencies]
+# Intentionally empty: ftd-core-* crates are std-only (ADR-001).
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

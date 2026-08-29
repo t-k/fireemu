@@ -1,0 +1,19 @@
+[package]
+name = "ftd-verification-loom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Loom concurrency scenarios; run with RUSTFLAGS=\"--cfg loom\""
+
+[dependencies]
+ftd-core-types = { path = "../../crates/ftd-core-types" }
+ftd-core-session = { path = "../../crates/ftd-core-session" }
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints]
+workspace = true

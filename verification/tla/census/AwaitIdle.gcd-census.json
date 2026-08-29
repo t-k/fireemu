@@ -1,0 +1,127 @@
+{
+    "schemaVersion": 1,
+    "module": "AwaitIdle.tla",
+    "config": "AwaitIdle.cfg",
+    "sites": [
+        {
+            "candidateId": "gcd-d96537bbd9ddbd85922c",
+            "module": "AwaitIdle",
+            "definition": "BeginExternal",
+            "guard": "fenceState = \"none\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 2,
+            "actionSuccessorConjuncts": 4,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-236f798a6a2379cc7bee",
+            "module": "AwaitIdle",
+            "definition": "BeginExternal",
+            "guard": "i \\notin used",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 2,
+            "actionSuccessorConjuncts": 4,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-a7309eb2dc565e65682f",
+            "module": "AwaitIdle",
+            "definition": "BeginExternal",
+            "guard": "FreshAvailable",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 2,
+            "actionSuccessorConjuncts": 4,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-4a5ad107958faec6dab7",
+            "module": "AwaitIdle",
+            "definition": "CompleteLeaf",
+            "guard": "i \\in active",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-a764e7a34c059e615c17",
+            "module": "AwaitIdle",
+            "definition": "CompleteWithReservation",
+            "guard": "i \\in active",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 2,
+            "actionSuccessorConjuncts": 3,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-081343615bd2858ec426",
+            "module": "AwaitIdle",
+            "definition": "CompleteWithReservation",
+            "guard": "depth[i] < MaxDepth",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 2,
+            "actionSuccessorConjuncts": 3,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-94f34436f1c6787711d4",
+            "module": "AwaitIdle",
+            "definition": "CompleteWithReservation",
+            "guard": "FreshAvailable",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 2,
+            "actionSuccessorConjuncts": 3,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-0ccfe508a378d30d8c44",
+            "module": "AwaitIdle",
+            "definition": "EnqueueChild",
+            "guard": "p \\in reserved",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 6,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-0914670f86c4d9e50719",
+            "module": "AwaitIdle",
+            "definition": "EnqueueChild",
+            "guard": "c \\notin used",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 6,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-afa26877c43d68cb3d54",
+            "module": "AwaitIdle",
+            "definition": "RequestFence",
+            "guard": "fenceState = \"none\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 3,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-34a1070a2a96aa2f6422",
+            "module": "AwaitIdle",
+            "definition": "ReturnIdle",
+            "guard": "fenceState = \"waiting\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-4a8c4fa0d5030e2eda5e",
+            "module": "AwaitIdle",
+            "definition": "ReturnIdle",
+            "guard": "Blocking = {}",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 2,
+            "conforms": false
+        }
+    ]
+}

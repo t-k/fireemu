@@ -1,0 +1,107 @@
+{
+    "schemaVersion": 1,
+    "module": "EventDelivery.tla",
+    "config": "EventDelivery.cfg",
+    "sites": [
+        {
+            "candidateId": "gcd-a663e6da232131aa9eaf",
+            "module": "EventDelivery",
+            "definition": "Lease",
+            "guard": "state[e] = \"Pending\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-bcd5f28ed61306913278",
+            "module": "EventDelivery",
+            "definition": "Start",
+            "guard": "state[e] = \"Leased\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 3,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-840477c6dd51ba480958",
+            "module": "EventDelivery",
+            "definition": "Start",
+            "guard": "attempts[e] < MaxAttempts",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 3,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-b9ab16c9b2fa47e9180e",
+            "module": "EventDelivery",
+            "definition": "Succeed",
+            "guard": "state[e] = \"Running\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-aadb8d08cf2f79572787",
+            "module": "EventDelivery",
+            "definition": "Fail",
+            "guard": "state[e] = \"Running\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-cba1c84cc049a353c07e",
+            "module": "EventDelivery",
+            "definition": "RetryDue",
+            "guard": "state[e] = \"RetryWaiting\"",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-16eb8d17a77db4b01820",
+            "module": "EventDelivery",
+            "definition": "Cancel",
+            "guard": "state[e] \\in NonTerminal",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-97bd9ade9f46ecf1b930",
+            "module": "EventDelivery",
+            "definition": "Reset",
+            "guard": "epoch < MaxEpoch",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 0,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-0e67dc984d63c82f62d9",
+            "module": "EventDelivery",
+            "definition": "DiscardStale",
+            "guard": "state[e] \\in NonTerminal",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        },
+        {
+            "candidateId": "gcd-6b908eb450e7278354b0",
+            "module": "EventDelivery",
+            "definition": "DiscardStale",
+            "guard": "eventEpoch[e] < epoch",
+            "guardLevel": 1,
+            "remainingStateConjuncts": 1,
+            "actionSuccessorConjuncts": 2,
+            "conforms": true
+        }
+    ]
+}

@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Spec 31.1 pull-request gate. Retries are never used (ADR-006).
+  pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: docs
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: cargo deny
+        run: cargo deny check
+      - name: core crates have zero external normal dependencies
+        run: scripts/check-core-deps.sh
+      - name: tests (profile pr, retries 0)
+        run: cargo nextest run --workspace --profile pr
+      - name: limit catalog matches generated constants
+        run: cargo run -p limit-catalog-gen -- check
+      - name: requirement / mutant / loom traceability
+        run: cargo run -p traceability-check
+      - name: loom scenarios
+        run: cargo test -p ftd-verification-loom --release
+        env:
+          RUSTFLAGS: --cfg loom -D warnings
+
+  tla:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: fetch pinned TLA+ Tools
+        run: |
+          mkdir -p .tools
+          curl -sSL -o .tools/tla2tools-1.8.0.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+          echo "eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a  .tools/tla2tools-1.8.0.jar" | sha256sum -c -
+      - name: TLC safety and liveness (small configurations)
+        run: verification/tla/run-tlc.sh

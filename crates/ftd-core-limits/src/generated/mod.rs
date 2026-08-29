@@ -3,11 +3,14 @@
 
 use crate::model::LimitCatalog;
 
+mod firebase_auth_2026_08_30;
 mod firebase_rules_2026_08_25;
 mod firestore_enterprise_native_2026_08_27;
 mod firestore_standard_2026_08_25;
 mod firestore_standard_query_2026_08_25;
 
+/// Catalog `firebase-auth-2026-08-30`.
+pub const FIREBASE_AUTH_2026_08_30: LimitCatalog = firebase_auth_2026_08_30::CATALOG;
 /// Catalog `firebase-rules-2026-08-25`.
 pub const FIREBASE_RULES_2026_08_25: LimitCatalog = firebase_rules_2026_08_25::CATALOG;
 /// Catalog `firestore-enterprise-native-2026-08-27`.
@@ -21,6 +24,7 @@ pub const FIRESTORE_STANDARD_QUERY_2026_08_25: LimitCatalog =
 
 /// Every checked-in catalog, oldest first by file order.
 pub const ALL_CATALOGS: &[&LimitCatalog] = &[
+    &FIREBASE_AUTH_2026_08_30,
     &FIREBASE_RULES_2026_08_25,
     &FIRESTORE_ENTERPRISE_NATIVE_2026_08_27,
     &FIRESTORE_STANDARD_2026_08_25,

@@ -10,11 +10,19 @@
       "status": "implemented",
       "artifacts": {
         "tla": "SessionEpoch.tla::EpochIsolation",
-        "loom": ["stale_epoch_never_mutates_new_state", "reset_races_with_commit"],
+        "loom": [
+          "stale_epoch_never_mutates_new_state",
+          "reset_races_with_commit"
+        ],
         "kani": "epoch_guard_rejects_every_other_epoch",
         "property": "prop_epoch_guard_rejects_non_current",
-        "mutation": ["M-EPOCH-001"],
-        "integration": ["crates/ftd-core-session/tests/session.rs", "crates/ftd-core-events/tests/outbox.rs"]
+        "mutation": [
+          "M-EPOCH-001"
+        ],
+        "integration": [
+          "crates/ftd-core-session/tests/session.rs",
+          "crates/ftd-core-events/tests/outbox.rs"
+        ]
       }
     },
     {
@@ -27,8 +35,12 @@
         "tla": "SessionEpoch.tla::EpochNeverDecreases",
         "kani": "virtual_clock_never_moves_backwards",
         "property": "prop_clock_advance_is_monotonic",
-        "mutation": ["M-SCHED-001"],
-        "integration": ["crates/ftd-core-session/tests/clock.rs"]
+        "mutation": [
+          "M-SCHED-001"
+        ],
+        "integration": [
+          "crates/ftd-core-session/tests/clock.rs"
+        ]
       }
     },
     {
@@ -39,11 +51,18 @@
       "status": "implemented",
       "artifacts": {
         "tla": "EventDelivery.tla::NoTerminalRegression",
-        "loom": ["event_success_races_with_retry_timer"],
+        "loom": [
+          "event_success_races_with_retry_timer"
+        ],
         "kani": "terminal_event_rejects_every_transition",
         "property": "prop_terminal_states_are_absorbing",
-        "mutation": ["M-RETRY-001", "M-RETRY-002"],
-        "integration": ["crates/ftd-core-events/tests/state_machine.rs"]
+        "mutation": [
+          "M-RETRY-001",
+          "M-RETRY-002"
+        ],
+        "integration": [
+          "crates/ftd-core-events/tests/state_machine.rs"
+        ]
       }
     },
     {
@@ -54,11 +73,21 @@
       "status": "implemented",
       "artifacts": {
         "tla": "AwaitIdle.tla::NoFalseIdle",
-        "loom": ["await_idle_races_with_child_enqueue", "active_work_counter_never_underflows", "await_idle_races_with_text_index_backfill_completion"],
+        "loom": [
+          "await_idle_races_with_child_enqueue",
+          "active_work_counter_never_underflows",
+          "await_idle_races_with_text_index_backfill_completion"
+        ],
         "kani": "idle_predicate_never_ignores_active_work",
         "property": "prop_idle_implies_all_terminal",
-        "mutation": ["M-IDLE-001", "M-IDLE-002", "M-IDLE-003"],
-        "integration": ["crates/ftd-core-session/tests/idle.rs"]
+        "mutation": [
+          "M-IDLE-001",
+          "M-IDLE-002",
+          "M-IDLE-003"
+        ],
+        "integration": [
+          "crates/ftd-core-session/tests/idle.rs"
+        ]
       }
     },
     {
@@ -69,8 +98,12 @@
       "status": "implemented",
       "artifacts": {
         "tla": "SessionEpoch.tla::ResetEventuallyActivatesNewEpoch",
-        "mutation": ["M-EPOCH-001"],
-        "integration": ["crates/ftd-core-session/tests/session.rs"]
+        "mutation": [
+          "M-EPOCH-001"
+        ],
+        "integration": [
+          "crates/ftd-core-session/tests/session.rs"
+        ]
       }
     },
     {
@@ -81,8 +114,13 @@
       "status": "implemented",
       "artifacts": {
         "tla": "EventDelivery.tla::EventEventuallyTerminates",
-        "mutation": ["M-RETRY-001", "M-RETRY-002"],
-        "integration": ["crates/ftd-core-events/tests/state_machine.rs"]
+        "mutation": [
+          "M-RETRY-001",
+          "M-RETRY-002"
+        ],
+        "integration": [
+          "crates/ftd-core-events/tests/state_machine.rs"
+        ]
       }
     },
     {
@@ -93,8 +131,12 @@
       "status": "implemented",
       "artifacts": {
         "tla": "AwaitIdle.tla::AwaitIdleEventuallyReturns",
-        "mutation": ["M-IDLE-002"],
-        "integration": ["crates/ftd-core-session/tests/idle.rs"]
+        "mutation": [
+          "M-IDLE-002"
+        ],
+        "integration": [
+          "crates/ftd-core-session/tests/idle.rs"
+        ]
       }
     },
     {
@@ -108,8 +150,16 @@
         "tla": "LimitRejection.tla::LimitRejectionAtomicity",
         "kani": "limit_boundary_classification",
         "property": "prop_boundary_reject_precedes_warning",
-        "mutation": ["M-LIMIT-001", "M-LIMIT-002", "M-LIMIT-004", "M-LIMIT-006"],
-        "integration": ["crates/ftd-core-limits/tests/evaluate.rs", "crates/ftd-core-limits/tests/properties.rs"]
+        "mutation": [
+          "M-LIMIT-001",
+          "M-LIMIT-002",
+          "M-LIMIT-004",
+          "M-LIMIT-006"
+        ],
+        "integration": [
+          "crates/ftd-core-limits/tests/evaluate.rs",
+          "crates/ftd-core-limits/tests/properties.rs"
+        ]
       }
     },
     {
@@ -120,7 +170,9 @@
       "status": "planned",
       "artifacts": {
         "tla": "AtomicCommitOutbox.tla::AtomicCommit",
-        "mutation": ["M-COMMIT-001"]
+        "mutation": [
+          "M-COMMIT-001"
+        ]
       }
     },
     {
@@ -131,7 +183,10 @@
       "status": "planned",
       "artifacts": {
         "tla": "AtomicCommitOutbox.tla::OutboxCompleteness",
-        "mutation": ["M-OUTBOX-001", "M-OUTBOX-002"]
+        "mutation": [
+          "M-OUTBOX-001",
+          "M-OUTBOX-002"
+        ]
       }
     },
     {
@@ -140,7 +195,12 @@
       "criticality": "critical",
       "owner": "core-firestore",
       "status": "planned",
-      "artifacts": {"tla": "FirestoreMvcc.tla::NoPartialTransaction", "mutation": ["M-TXN-001"]}
+      "artifacts": {
+        "tla": "FirestoreMvcc.tla::NoPartialTransaction",
+        "mutation": [
+          "M-TXN-001"
+        ]
+      }
     },
     {
       "id": "INV-STORAGE-001",
@@ -148,15 +208,32 @@
       "criticality": "critical",
       "owner": "core-storage",
       "status": "planned",
-      "artifacts": {"tla": "StorageGeneration.tla::GenerationMonotonicity", "mutation": ["M-STORAGE-003", "M-STORAGE-004"]}
+      "artifacts": {
+        "tla": "StorageGeneration.tla::GenerationMonotonicity",
+        "mutation": [
+          "M-STORAGE-003",
+          "M-STORAGE-004"
+        ]
+      }
     },
     {
       "id": "INV-INDEX-001",
       "statement": "A query accepted as UseIndex by the conservative validator has a supporting index.",
       "criticality": "critical",
       "owner": "core-firestore",
-      "status": "planned",
-      "artifacts": {"kani": "conservative_index_never_false_accepts", "mutation": ["M-INDEX-001", "M-INDEX-002", "M-INDEX-003"]}
+      "status": "partial",
+      "artifacts": {
+        "kani": "conservative_index_never_false_accepts",
+        "mutation": [
+          "M-INDEX-001",
+          "M-INDEX-002",
+          "M-INDEX-003"
+        ],
+        "integration": [
+          "crates/ftd-core-firestore/tests/index.rs"
+        ]
+      },
+      "note": "Conservative validator implemented in ftd-core-firestore; the Kani harness and reference-rule conformance fixtures are pending."
     },
     {
       "id": "INV-RULES-001",
@@ -164,7 +241,16 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "planned",
-      "artifacts": {"tla": "RulesBudget.tla::NoAllowAfterBudgetExceeded", "mutation": ["M-RULES-002", "M-RULES-003", "M-RULES-004", "M-RULES-005", "M-RULES-014"]}
+      "artifacts": {
+        "tla": "RulesBudget.tla::NoAllowAfterBudgetExceeded",
+        "mutation": [
+          "M-RULES-002",
+          "M-RULES-003",
+          "M-RULES-004",
+          "M-RULES-005",
+          "M-RULES-014"
+        ]
+      }
     },
     {
       "id": "INV-RULES-002",
@@ -172,7 +258,15 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "planned",
-      "artifacts": {"tla": "RulesBudget.tla::BudgetIsolation", "loom": ["rules_budget_is_never_shared_between_requests"], "mutation": ["M-RULES-006"]}
+      "artifacts": {
+        "tla": "RulesBudget.tla::BudgetIsolation",
+        "loom": [
+          "rules_budget_is_never_shared_between_requests"
+        ],
+        "mutation": [
+          "M-RULES-006"
+        ]
+      }
     },
     {
       "id": "INV-RULES-003",
@@ -180,7 +274,16 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "planned",
-      "artifacts": {"tla": "RulesetActivation.tla::AtomicRulesetActivation", "loom": ["ruleset_reload_never_exposes_partial_compile", "inflight_request_keeps_single_ruleset_version"], "mutation": ["M-RULES-010"]}
+      "artifacts": {
+        "tla": "RulesetActivation.tla::AtomicRulesetActivation",
+        "loom": [
+          "ruleset_reload_never_exposes_partial_compile",
+          "inflight_request_keeps_single_ruleset_version"
+        ],
+        "mutation": [
+          "M-RULES-010"
+        ]
+      }
     },
     {
       "id": "INV-TEXT-001",
@@ -188,7 +291,12 @@
       "criticality": "critical",
       "owner": "core-text-search",
       "status": "planned",
-      "artifacts": {"tla": "TextIndexLifecycle.tla::ReadyCompleteness", "mutation": ["M-TEXT-017"]}
+      "artifacts": {
+        "tla": "TextIndexLifecycle.tla::ReadyCompleteness",
+        "mutation": [
+          "M-TEXT-017"
+        ]
+      }
     },
     {
       "id": "INV-TEXT-002",
@@ -196,7 +304,16 @@
       "criticality": "critical",
       "owner": "core-text-search",
       "status": "planned",
-      "artifacts": {"tla": "TextIndexLifecycle.tla::NoPartialVisibility", "loom": ["search_never_observes_partial_posting_update"], "mutation": ["M-TEXT-008", "M-TEXT-009"]}
+      "artifacts": {
+        "tla": "TextIndexLifecycle.tla::NoPartialVisibility",
+        "loom": [
+          "search_never_observes_partial_posting_update"
+        ],
+        "mutation": [
+          "M-TEXT-008",
+          "M-TEXT-009"
+        ]
+      }
     },
     {
       "id": "INV-TEXT-003",
@@ -204,7 +321,17 @@
       "criticality": "critical",
       "owner": "core-text-search",
       "status": "planned",
-      "artifacts": {"tla": "TextIndexLifecycle.tla::NoInvalidIndexUse", "loom": ["text_index_ready_publish_races_with_delta_append"], "mutation": ["M-TEXT-005", "M-TEXT-006", "M-TEXT-007"]}
+      "artifacts": {
+        "tla": "TextIndexLifecycle.tla::NoInvalidIndexUse",
+        "loom": [
+          "text_index_ready_publish_races_with_delta_append"
+        ],
+        "mutation": [
+          "M-TEXT-005",
+          "M-TEXT-006",
+          "M-TEXT-007"
+        ]
+      }
     },
     {
       "id": "INV-TEXT-004",
@@ -212,7 +339,15 @@
       "criticality": "critical",
       "owner": "core-text-search",
       "status": "planned",
-      "artifacts": {"tla": "TextIndexLifecycle.tla::TextIndexEpochSafety", "loom": ["reset_discards_old_text_index_worker"], "mutation": ["M-EPOCH-001"]}
+      "artifacts": {
+        "tla": "TextIndexLifecycle.tla::TextIndexEpochSafety",
+        "loom": [
+          "reset_discards_old_text_index_worker"
+        ],
+        "mutation": [
+          "M-EPOCH-001"
+        ]
+      }
     },
     {
       "id": "INV-PIPE-001",
@@ -220,7 +355,11 @@
       "criticality": "critical",
       "owner": "core-pipeline",
       "status": "planned",
-      "artifacts": {"mutation": ["M-PIPE-001"]}
+      "artifacts": {
+        "mutation": [
+          "M-PIPE-001"
+        ]
+      }
     },
     {
       "id": "INV-TEXT-RULES-001",
@@ -228,7 +367,11 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "planned",
-      "artifacts": {"mutation": ["M-TEXT-019"]}
+      "artifacts": {
+        "mutation": [
+          "M-TEXT-019"
+        ]
+      }
     },
     {
       "id": "REQ-TEXT-SEMANTICS-001",
@@ -236,7 +379,12 @@
       "criticality": "critical",
       "owner": "core-text-search",
       "status": "planned",
-      "artifacts": {"mutation": ["M-TEXT-001", "M-TEXT-002"]}
+      "artifacts": {
+        "mutation": [
+          "M-TEXT-001",
+          "M-TEXT-002"
+        ]
+      }
     },
     {
       "id": "REQ-ENT-INDEX-001",
@@ -244,7 +392,12 @@
       "criticality": "critical",
       "owner": "core-firestore",
       "status": "planned",
-      "artifacts": {"mutation": ["M-ENT-INDEX-001", "M-ENT-INDEX-003"]}
+      "artifacts": {
+        "mutation": [
+          "M-ENT-INDEX-001",
+          "M-ENT-INDEX-003"
+        ]
+      }
     },
     {
       "id": "REQ-SCHED-001",
@@ -252,15 +405,32 @@
       "criticality": "critical",
       "owner": "core-scheduler",
       "status": "planned",
-      "artifacts": {"tla": "Scheduler.tla::DueScheduleEventuallyRuns", "mutation": ["M-SCHED-002"]}
+      "artifacts": {
+        "tla": "Scheduler.tla::DueScheduleEventuallyRuns",
+        "mutation": [
+          "M-SCHED-002"
+        ]
+      }
     },
     {
       "id": "REQ-RULES-STATIC-001",
       "statement": "Static Rules limits (arguments 7, recursion 0, source size < 256 KiB) are enforced at the documented boundaries.",
       "criticality": "critical",
       "owner": "core-rules",
-      "status": "planned",
-      "artifacts": {"mutation": ["M-RULES-001", "M-RULES-007", "M-RULES-009", "M-RULES-011", "M-RULES-013"]}
+      "status": "partial",
+      "artifacts": {
+        "mutation": [
+          "M-RULES-001",
+          "M-RULES-007",
+          "M-RULES-009",
+          "M-RULES-011",
+          "M-RULES-013"
+        ],
+        "integration": [
+          "crates/ftd-core-rules/tests/lint.rs"
+        ]
+      },
+      "note": "Static linter implemented in ftd-core-rules; projects.test conformance pending."
     },
     {
       "id": "REQ-STORAGE-NAME-001",
@@ -268,7 +438,87 @@
       "criticality": "critical",
       "owner": "core-storage",
       "status": "planned",
-      "artifacts": {"mutation": ["M-STORAGE-001", "M-STORAGE-002"]}
+      "artifacts": {
+        "mutation": [
+          "M-STORAGE-001",
+          "M-STORAGE-002"
+        ]
+      }
+    },
+    {
+      "id": "INV-AUTH-001",
+      "statement": "A TOTP code for a time step at or below the last accepted step is never accepted again.",
+      "criticality": "critical",
+      "owner": "core-auth",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AuthTotp.tla::NoTotpCodeReuse",
+        "loom": [
+          "totp_verify_races_with_clock_advance"
+        ],
+        "kani": "totp_window_boundary",
+        "property": "prop_same_step_same_code",
+        "mutation": [
+          "M-AUTH-001",
+          "M-AUTH-002"
+        ],
+        "integration": [
+          "crates/ftd-core-auth/tests/mfa.rs",
+          "crates/ftd-core-auth/tests/totp.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-AUTH-002",
+      "statement": "An ID token carries sign_in_second_factor only when the user has an enrolled factor that was verified.",
+      "criticality": "critical",
+      "owner": "core-auth",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AuthTotp.tla::NoSecondFactorWithoutEnrollment",
+        "loom": [
+          "enrollment_finalize_races_with_expiry",
+          "token_revocation_races_with_sign_in"
+        ],
+        "mutation": [
+          "M-AUTH-003"
+        ],
+        "integration": [
+          "crates/ftd-core-auth/tests/mfa.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-AUTH-003",
+      "statement": "TOTP shared secrets never appear in Debug output, canonical traces or default snapshots.",
+      "criticality": "critical",
+      "owner": "core-auth",
+      "status": "implemented",
+      "artifacts": {
+        "property": "prop_debug_never_contains_secret",
+        "mutation": [
+          "M-AUTH-004"
+        ],
+        "integration": [
+          "crates/ftd-core-auth/tests/mfa.rs"
+        ]
+      }
+    },
+    {
+      "id": "LIVE-AUTH-001",
+      "statement": "A started TOTP enrollment eventually finalizes or expires under finite clock advance.",
+      "criticality": "critical",
+      "owner": "core-auth",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AuthTotp.tla::EnrollmentEventuallyFinalizesOrExpires",
+        "mutation": [
+          "M-AUTH-001"
+        ],
+        "integration": [
+          "crates/ftd-core-auth/tests/mfa.rs"
+        ]
+      }
     }
   ]
 }

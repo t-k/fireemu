@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "firebase-auth-2026-08-30",
+  "product": "firebase-auth",
+  "edition": "all",
+  "officialRevision": "Firebase Authentication: Control access with custom claims; Identity Platform multi-factor authentication (TOTP)",
+  "officialLastUpdatedUtc": "2026-08-30",
+  "reviewedAtUtc": "2026-08-30",
+  "conformanceRevision": "unverified",
+  "limits": [
+    {
+      "id": "AUTH-LIMIT-CUSTOM-CLAIMS-BYTES",
+      "class": "hard-resource",
+      "boundary": "inclusive-maximum",
+      "unit": "utf8-bytes",
+      "maximum": 1000,
+      "precision": "boundary-conformance",
+      "enforcementStage": "request",
+      "implemented": "implemented",
+      "officialText": "The custom claims payload must not exceed 1000 bytes",
+      "notes": "Measured on canonical JSON (sorted keys, no whitespace) UTF-8 bytes."
+    },
+    {
+      "id": "AUTH-LIMIT-TOTP-FACTORS-PER-USER",
+      "class": "hard-resource",
+      "boundary": "inclusive-maximum",
+      "unit": "count",
+      "maximum": 1,
+      "precision": "boundary-conformance",
+      "enforcementStage": "request",
+      "implemented": "implemented",
+      "officialText": "A user can enroll one TOTP second factor",
+      "notes": "Official wording to be confirmed against Identity Platform; enforced locally at 1."
+    },
+    {
+      "id": "AUTH-LIMIT-ID-TOKEN-TTL-SECONDS",
+      "class": "time-budget",
+      "boundary": "exact",
+      "unit": "seconds",
+      "maximum": 3600,
+      "precision": "exact",
+      "enforcementStage": "request",
+      "implemented": "implemented",
+      "officialText": "Firebase ID tokens expire one hour after they are issued",
+      "notes": "exp = iat + 3600 on the virtual clock."
+    },
+    {
+      "id": "AUTH-LIMIT-TOTP-ENROLLMENT-SESSION-SECONDS",
+      "class": "backend-opaque",
+      "boundary": "inclusive-maximum",
+      "unit": "seconds",
+      "maximum": 300,
+      "precision": "oracle-only",
+      "enforcementStage": "request",
+      "implemented": "implemented",
+      "officialText": "TOTP enrollment sessions expire; the exact backend lifetime is not published",
+      "notes": "Local versioned policy default 300 s; never used as a production-compatible hard error."
+    }
+  ]
+}

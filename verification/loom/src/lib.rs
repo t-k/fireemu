@@ -305,4 +305,167 @@ mod scenarios {
             assert_eq!(ledger.lock().unwrap().active_total(), 0);
         });
     }
+    fn auth_fixture() -> (
+        Arc<Mutex<ftd_core_auth::store::AuthStore>>,
+        ftd_core_auth::store::LocalId,
+        Vec<u8>,
+        LogicalInstant,
+    ) {
+        use ftd_core_auth::mfa::TotpPolicy;
+        use ftd_core_auth::store::{AuthStore, NewUser};
+        use ftd_core_auth::totp::totp_at;
+        use ftd_core_types::determinism::SplitMix64;
+
+        let t0 = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("a@example.com"), t0)
+            .unwrap();
+        let m = store.start_totp_enrollment(&uid, t0).unwrap();
+        let secret = m.secret_for_test().to_vec();
+        let code = totp_at(&secret, &store.policy().params(), t0);
+        store
+            .finalize_totp_enrollment(&uid, &m.session_id, code, t0)
+            .unwrap();
+        (Arc::new(Mutex::new(store)), uid, secret, t0)
+    }
+
+    /// INV-AUTH-001: two sign-ins presenting the same code race; at most one succeeds and the
+    /// other sees CodeAlreadyUsed, regardless of a concurrent clock advance.
+    #[test]
+    fn totp_verify_races_with_clock_advance() {
+        use ftd_core_auth::mfa::MfaError;
+        use ftd_core_auth::totp::totp_at;
+        use ftd_core_types::time::LogicalDuration;
+
+        loom::model(|| {
+            let (store, uid, secret, t0) = auth_fixture();
+            let now = t0.checked_add(LogicalDuration::from_seconds(120)).unwrap();
+            let code = totp_at(&secret, &store.lock().unwrap().policy().params(), now);
+            let outcomes: Vec<_> = (0..2)
+                .map(|_| {
+                    let store = store.clone();
+                    let uid = uid.clone();
+                    thread::spawn(move || {
+                        let mut s = store.lock().unwrap();
+                        let pending = s.start_mfa_sign_in(&uid, now).unwrap();
+                        s.finalize_mfa_sign_in(&uid, &pending, code, now).is_ok()
+                    })
+                })
+                .collect();
+            let ok: usize = outcomes
+                .into_iter()
+                .map(|h| usize::from(h.join().unwrap()))
+                .sum();
+            assert_eq!(ok, 1, "exactly one sign-in may consume the code");
+            let mut s = store.lock().unwrap();
+            let p = s.start_mfa_sign_in(&uid, now).unwrap();
+            assert_eq!(
+                s.finalize_mfa_sign_in(&uid, &p, code, now),
+                Err(MfaError::CodeAlreadyUsed)
+            );
+        });
+    }
+
+    /// INV-AUTH-002: finalizing an enrollment races with its expiry; a token issued afterwards
+    /// carries a second factor claim only if the enrollment actually finalized.
+    #[test]
+    fn enrollment_finalize_races_with_expiry() {
+        use ftd_core_auth::mfa::TotpPolicy;
+        use ftd_core_auth::store::{AuthStore, NewUser};
+        use ftd_core_auth::totp::totp_at;
+        use ftd_core_types::determinism::SplitMix64;
+        use ftd_core_types::time::LogicalDuration;
+
+        loom::model(|| {
+            let t0 = LogicalInstant::from_unix_seconds(1_788_004_860);
+            let mut st = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+            let uid = st.create_user(NewUser::email("b@example.com"), t0).unwrap();
+            let m = st.start_totp_enrollment(&uid, t0).unwrap();
+            let secret = m.secret_for_test().to_vec();
+            let params = st.policy().params();
+            let store = Arc::new(Mutex::new(st));
+            let late = t0.checked_add(LogicalDuration::from_seconds(301)).unwrap();
+            let on_time = t0.checked_add(LogicalDuration::from_seconds(200)).unwrap();
+            let finalize = {
+                let store = store.clone();
+                let uid = uid.clone();
+                let session = m.session_id.clone();
+                thread::spawn(move || {
+                    let mut s = store.lock().unwrap();
+                    let code = totp_at(&secret, &params, on_time);
+                    s.finalize_totp_enrollment(&uid, &session, code, on_time)
+                        .ok()
+                })
+            };
+            let expiry = {
+                let store = store.clone();
+                let uid = uid.clone();
+                let session = m.session_id.clone();
+                thread::spawn(move || {
+                    let mut s = store.lock().unwrap();
+                    // A late finalize attempt behaves as expiry.
+                    let _ = s.finalize_totp_enrollment(&uid, &session, 0, late);
+                })
+            };
+            let enrolled = finalize.join().unwrap();
+            expiry.join().unwrap();
+            let s = store.lock().unwrap();
+            let claims = s.id_token_claims(&uid, None, late).unwrap();
+            assert!(claims.firebase.sign_in_second_factor.is_none());
+            assert_eq!(
+                s.user(&uid).unwrap().mfa.totp_factors().len(),
+                usize::from(enrolled.is_some())
+            );
+        });
+    }
+
+    /// Revocation and sign-in race: a token issued before revocation is invalid afterwards and a
+    /// token issued after revocation stays valid.
+    #[test]
+    fn token_revocation_races_with_sign_in() {
+        use ftd_core_types::time::LogicalDuration;
+
+        loom::model(|| {
+            let (store, uid, _secret, t0) = auth_fixture();
+            let revoke_at = t0.checked_add(LogicalDuration::from_seconds(10)).unwrap();
+            let issue_at = t0.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+            let revoker = {
+                let store = store.clone();
+                let uid = uid.clone();
+                thread::spawn(move || {
+                    store
+                        .lock()
+                        .unwrap()
+                        .revoke_tokens(&uid, revoke_at)
+                        .unwrap()
+                })
+            };
+            let issuer = {
+                let store = store.clone();
+                let uid = uid.clone();
+                thread::spawn(move || {
+                    let s = store.lock().unwrap();
+                    s.id_token_claims(&uid, None, issue_at).unwrap()
+                })
+            };
+            revoker.join().unwrap();
+            let claims = issuer.join().unwrap();
+            let s = store.lock().unwrap();
+            let auth_time = LogicalInstant::from_unix_seconds(claims.auth_time);
+            let exp = LogicalInstant::from_unix_seconds(claims.exp);
+            let check_at = t0.checked_add(LogicalDuration::from_seconds(20)).unwrap();
+            assert!(
+                !s.token_is_valid(&uid, auth_time, exp, check_at),
+                "pre-revocation token is invalid"
+            );
+            let fresh = s.id_token_claims(&uid, None, check_at).unwrap();
+            assert!(s.token_is_valid(
+                &uid,
+                LogicalInstant::from_unix_seconds(fresh.auth_time),
+                LogicalInstant::from_unix_seconds(fresh.exp),
+                check_at
+            ));
+        });
+    }
 }

@@ -181,6 +181,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-core-auth"
+version = "0.1.0"
+dependencies = [
+ "ftd-core-limits",
+ "ftd-core-types",
+ "proptest",
+]
+
+[[package]]
 name = "ftd-core-events"
 version = "0.1.0"
 dependencies = [
@@ -243,6 +252,7 @@ dependencies = [
 name = "ftd-verification-loom"
 version = "0.1.0"
 dependencies = [
+ "ftd-core-auth",
  "ftd-core-events",
  "ftd-core-session",
  "ftd-core-types",

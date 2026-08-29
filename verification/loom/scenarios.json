@@ -20,6 +20,9 @@
     "search_never_observes_partial_posting_update",
     "index_repair_races_with_write",
     "reset_discards_old_text_index_worker",
-    "await_idle_races_with_text_index_backfill_completion"
+    "await_idle_races_with_text_index_backfill_completion",
+    "totp_verify_races_with_clock_advance",
+    "enrollment_finalize_races_with_expiry",
+    "token_revocation_races_with_sign_in"
   ]
 }

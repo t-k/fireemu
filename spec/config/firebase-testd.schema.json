@@ -134,6 +134,26 @@
         }
       }
     },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$" },
+        "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
+        "totp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "periodSeconds": { "type": "integer", "minimum": 1 },
+            "digits": { "type": "integer", "minimum": 6, "maximum": 8 },
+            "windowSteps": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "enrollmentSessionTtlSeconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "secretMaterialization": { "enum": ["redact", "allow"] }
+      }
+    },
     "storage": {
       "type": "object",
       "additionalProperties": false,

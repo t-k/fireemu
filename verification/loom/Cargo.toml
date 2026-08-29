@@ -12,6 +12,7 @@ description = "Loom concurrency scenarios; run with RUSTFLAGS=\"--cfg loom\""
 ftd-core-types = { path = "../../crates/ftd-core-types" }
 ftd-core-session = { path = "../../crates/ftd-core-session" }
 ftd-core-events = { path = "../../crates/ftd-core-events" }
+ftd-core-auth = { path = "../../crates/ftd-core-auth" }
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"

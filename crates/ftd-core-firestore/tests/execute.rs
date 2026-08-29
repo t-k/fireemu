@@ -385,3 +385,22 @@ fn snapshot_reads_by_version() {
         "reads at an older version see the deleted document"
     );
 }
+
+#[test]
+fn not_in_with_a_null_candidate_matches_nothing() {
+    let s = seeded();
+    let q = tasks().with_filter(field(
+        "priority",
+        FieldOp::NotIn,
+        Value::Array(vec![Value::Integer(1)]),
+    ));
+    // Missing fields and nulls never match not-in; every other typed value does. The result
+    // is ordered by the implied inequality field (numbers before strings).
+    assert_eq!(ids(&s, &q), vec!["t3", "t2", "t4"]);
+    let with_null = tasks().with_filter(field(
+        "priority",
+        FieldOp::NotIn,
+        Value::Array(vec![Value::Integer(1), Value::Null]),
+    ));
+    assert!(ids(&s, &with_null).is_empty());
+}

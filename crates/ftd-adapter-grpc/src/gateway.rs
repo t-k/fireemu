@@ -91,6 +91,13 @@ impl Gateway {
         let canonical = query
             .canonicalize()
             .map_err(|e| Rejection::InvalidQuery(e.to_string()))?;
+        let disjunctions = canonical.dnf_disjunction_count();
+        if disjunctions > ftd_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS {
+            return Err(Rejection::InvalidQuery(format!(
+                "query expands to {disjunctions} disjunctions (bound {})",
+                ftd_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS
+            )));
+        }
         if self.ctx.edition == FirestoreEdition::Standard {
             canonical
                 .check_standard_limits()

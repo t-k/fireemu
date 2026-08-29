@@ -220,6 +220,10 @@ struct Transaction {
     started_at: LogicalInstant,
     /// Observed version per read path (`None` = absent at read time).
     read_set: BTreeMap<DocumentPath, Option<CommitVersion>>,
+    /// Queries executed inside the transaction with their result fingerprints; re-evaluated
+    /// at commit so that phantom rows abort the transaction.
+    queries: Vec<(Query, Vec<(DocumentPath, CommitVersion)>)>,
+    last_activity: LogicalInstant,
     finished: bool,
 }
 
@@ -231,6 +235,8 @@ pub struct FirestoreState {
     version: CommitVersion,
     next_transaction: u64,
     transactions: BTreeMap<TransactionId, Transaction>,
+    /// Last published commit time; commit times are strictly monotonic per database.
+    last_commit_time: Option<LogicalInstant>,
 }
 
 fn limit(id: &str) -> &'static ftd_core_limits::model::LimitDefinition {
@@ -251,13 +257,26 @@ fn check_limit(id: &str, current: u64) -> Result<(), FirestoreError> {
     }
 }
 
-fn transaction_ttl() -> LogicalDuration {
-    match limit("FS-LIMIT-TRANSACTION-TOTAL-TIME").maximum {
+fn seconds_limit(id: &str, fallback: i64) -> LogicalDuration {
+    match limit(id).maximum {
         LimitMaximum::Fixed(secs) => {
             LogicalDuration::from_seconds(i64::try_from(secs).unwrap_or(i64::MAX))
         }
-        _ => LogicalDuration::from_seconds(270),
+        _ => LogicalDuration::from_seconds(fallback),
     }
+}
+
+fn transaction_ttl() -> LogicalDuration {
+    seconds_limit("FS-LIMIT-TRANSACTION-TOTAL-TIME", 270)
+}
+
+fn transaction_idle_ttl() -> LogicalDuration {
+    seconds_limit("FS-LIMIT-TRANSACTION-IDLE-TIME", 60)
+}
+
+fn elapsed(now: LogicalInstant, earlier: LogicalInstant) -> LogicalDuration {
+    now.checked_duration_since(earlier)
+        .unwrap_or(LogicalDuration::from_nanos(i128::MAX))
 }
 
 impl FirestoreState {
@@ -323,10 +342,45 @@ impl FirestoreState {
                 read_version: self.version,
                 started_at: now,
                 read_set: BTreeMap::new(),
+                queries: Vec::new(),
+                last_activity: now,
                 finished: false,
             },
         );
         Ok(id)
+    }
+
+    /// Checks that a transaction is still usable at `now` (total and idle budgets,
+    /// `FS-LIMIT-TRANSACTION-TOTAL-TIME` / `FS-LIMIT-TRANSACTION-IDLE-TIME`) and records the
+    /// activity. An expired transaction is finished and reported as `InvalidArgument`.
+    pub fn touch_transaction(
+        &mut self,
+        id: &TransactionId,
+        now: LogicalInstant,
+    ) -> Result<(), FirestoreError> {
+        let t = self.transaction(id)?;
+        let expired = if elapsed(now, t.started_at) > transaction_ttl() {
+            Some("transaction expired (FS-LIMIT-TRANSACTION-TOTAL-TIME)")
+        } else if elapsed(now, t.last_activity) > transaction_idle_ttl() {
+            Some("transaction expired (FS-LIMIT-TRANSACTION-IDLE-TIME)")
+        } else {
+            None
+        };
+        if let Some(t) = self.transactions.get_mut(id) {
+            match expired {
+                Some(_) => t.finished = true,
+                None => t.last_activity = now,
+            }
+        }
+        expired.map_or(Ok(()), |m| Err(FirestoreError::InvalidArgument(m.into())))
+    }
+
+    /// Snapshot version a transaction reads at.
+    pub fn transaction_read_version(
+        &self,
+        id: &TransactionId,
+    ) -> Result<CommitVersion, FirestoreError> {
+        Ok(self.transaction(id)?.read_version)
     }
 
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
@@ -369,6 +423,7 @@ impl FirestoreState {
             for d in &docs {
                 t.read_set.insert(d.path.clone(), Some(d.version));
             }
+            t.queries.push((query.clone(), fingerprint(&docs)));
         }
         Ok(docs)
     }
@@ -382,8 +437,10 @@ impl FirestoreState {
         Ok(())
     }
 
-    /// Applies `writes` atomically. With a transaction, the read set is validated first
-    /// (`ABORTED` on conflict). Nothing is modified when an error is returned.
+    /// Applies `writes` atomically. With a transaction, the read set and every recorded query
+    /// are validated first (`ABORTED` on conflict). Nothing is modified when an error is
+    /// returned. Commit times are strictly monotonic per database even when the clock did not
+    /// advance, so `update_time` preconditions cannot be satisfied by a stale timestamp.
     pub fn commit(
         &mut self,
         writes: &[Write],
@@ -391,71 +448,117 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<CommitResult, FirestoreError> {
         if let Some(id) = transaction {
+            self.touch_transaction(id, now)?;
             let t = self.transaction(id)?;
             if t.read_only && !writes.is_empty() {
                 return Err(FirestoreError::InvalidArgument(
                     "read-only transaction cannot write".into(),
                 ));
             }
-            let elapsed = now
-                .checked_duration_since(t.started_at)
-                .unwrap_or(LogicalDuration::from_nanos(i128::MAX));
-            if elapsed > transaction_ttl() {
+            if let Some(conflict) = self.transaction_conflict(t) {
                 if let Some(t) = self.transactions.get_mut(id) {
                     t.finished = true;
                 }
-                return Err(FirestoreError::InvalidArgument(
-                    "transaction expired (FS-LIMIT-TRANSACTION-TOTAL-TIME)".into(),
-                ));
-            }
-            for (path, observed) in &t.read_set {
-                if self.latest_version_of(path) != *observed {
-                    let conflict = format!("document {path} changed since the transaction read it");
-                    if let Some(t) = self.transactions.get_mut(id) {
-                        t.finished = true;
-                    }
-                    return Err(FirestoreError::Aborted(conflict));
-                }
+                return Err(FirestoreError::Aborted(conflict));
             }
         }
 
-        // Stage every write against a working copy; fail before touching state.
-        let mut staged: BTreeMap<DocumentPath, Option<Document>> = BTreeMap::new();
+        let mut transforms_per_document: BTreeMap<&DocumentPath, u64> = BTreeMap::new();
+        for write in writes {
+            let n = transforms_per_document.entry(write.op.path()).or_default();
+            *n += write.transforms.len() as u64;
+            check_limit("FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT", *n)?;
+        }
+
+        let commit_time = match self.last_commit_time {
+            Some(last) if last.as_nanos() >= now.as_nanos() => {
+                LogicalInstant::from_nanos(last.as_nanos() + 1)
+            }
+            _ => now,
+        };
+
+        // Stage every write against a working copy; fail before touching state. A write
+        // whose result equals the current document is a no-op: it keeps the existing version
+        // and update time (Firestore semantics) and never creates a spurious conflict.
+        let mut staged: BTreeMap<DocumentPath, (Option<Document>, bool)> = BTreeMap::new();
         let mut results = Vec::with_capacity(writes.len());
         let next_version = CommitVersion(self.version.0 + 1);
         for write in writes {
             let path = write.op.path().clone();
             let current: Option<Document> = match staged.get(&path) {
-                Some(s) => s.clone(),
+                Some((s, _)) => s.clone(),
                 None => self.get(&path).cloned(),
             };
             check_precondition(write.precondition.as_ref(), current.as_ref(), &path)?;
-            let (next, result) = apply_write(write, current, now, next_version)?;
+            let (next, mut result) =
+                apply_write(write, current.clone(), commit_time, next_version)?;
             if let Some(doc) = &next {
                 validate_document(doc)?;
             }
-            staged.insert(path, next);
+            let unchanged = match (&current, &next) {
+                (Some(c), Some(n)) => c.fields == n.fields,
+                (None, None) => true,
+                _ => false,
+            };
+            if unchanged {
+                if let Some(c) = &current {
+                    result.update_time = Some(c.update_time);
+                }
+                let previously_changed = staged.get(&path).is_some_and(|(_, c)| *c);
+                staged.insert(path, (current, previously_changed));
+            } else {
+                staged.insert(path, (next, true));
+            }
             results.push(result);
         }
 
         // Publish.
-        self.version = next_version;
-        for (path, doc) in staged {
-            self.history
-                .entry(path)
-                .or_default()
-                .push((next_version, doc));
-        }
+        let changed: Vec<(DocumentPath, Option<Document>)> = staged
+            .into_iter()
+            .filter(|(_, (_, changed))| *changed)
+            .map(|(p, (d, _))| (p, d))
+            .collect();
+        let version = if changed.is_empty() {
+            self.version
+        } else {
+            self.version = next_version;
+            self.last_commit_time = Some(commit_time);
+            for (path, doc) in changed {
+                self.history
+                    .entry(path)
+                    .or_default()
+                    .push((next_version, doc));
+            }
+            next_version
+        };
         if let Some(id) = transaction {
             if let Some(t) = self.transactions.get_mut(id) {
                 t.finished = true;
             }
         }
         Ok(CommitResult {
-            commit_time: now,
+            commit_time,
             write_results: results,
-            version: next_version,
+            version,
         })
+    }
+
+    /// First conflict between a transaction's reads and the current state, if any.
+    fn transaction_conflict(&self, t: &Transaction) -> Option<String> {
+        for (path, observed) in &t.read_set {
+            if self.latest_version_of(path) != *observed {
+                return Some(format!(
+                    "document {path} changed since the transaction read it"
+                ));
+            }
+        }
+        for (query, seen) in &t.queries {
+            let current = self.run_query(query, None).map(|d| fingerprint(&d));
+            if current.as_ref().ok() != Some(seen) {
+                return Some("query results changed since the transaction ran it".into());
+            }
+        }
+        None
     }
 
     /// Documents directly under `parent` (root when `None`) in `collection_id`, by name.
@@ -589,6 +692,10 @@ impl FirestoreState {
     }
 }
 
+fn fingerprint(docs: &[Document]) -> Vec<(DocumentPath, CommitVersion)> {
+    docs.iter().map(|d| (d.path.clone(), d.version)).collect()
+}
+
 fn check_precondition(
     precondition: Option<&Precondition>,
     current: Option<&Document>,
@@ -620,11 +727,11 @@ fn apply_write(
                     "transforms on a delete".into(),
                 ));
             }
-            let existed = current.is_some();
+            // Firestore never reports an update time for a delete.
             Ok((
                 None,
                 WriteResult {
-                    update_time: existed.then_some(now),
+                    update_time: None,
                     transform_results: vec![],
                 },
             ))
@@ -822,8 +929,15 @@ fn apply_transform(
             )
         }
     };
-    set_field(fields, &t.field, produced.clone());
-    Ok(produced)
+    let reported = match t.kind {
+        // Array transforms report a null transform result (the stored array is not echoed).
+        TransformKind::AppendMissingElements(_) | TransformKind::RemoveAllFromArray(_) => {
+            Value::Null
+        }
+        _ => produced.clone(),
+    };
+    set_field(fields, &t.field, produced);
+    Ok(reported)
 }
 
 fn field_value(doc: &Document, path: &FieldPath) -> Option<Value> {
@@ -906,7 +1020,9 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                     matches!(value, Value::Array(candidates) if candidates.iter().any(|c| equal(&v, c)))
                 }
                 FieldOp::NotIn => {
-                    matches!(value, Value::Array(candidates) if !candidates.iter().any(|c| equal(&v, c)))
+                    // `not-in` never matches null fields, and a null candidate matches nothing.
+                    matches!(value, Value::Array(candidates)
+                        if !candidates.iter().any(|c| equal(&v, c) || matches!(c, Value::Null)))
                         && !matches!(v, Value::Null)
                 }
                 FieldOp::ArrayContainsAny => match (&v, value) {
@@ -971,7 +1087,12 @@ fn cursor_admits(
     true
 }
 
-fn project(fields: &BTreeMap<String, Value>, projection: &[FieldPath]) -> BTreeMap<String, Value> {
+/// Exact projection of `fields` onto `projection` (nested paths keep only the named leaf).
+#[must_use]
+pub fn project(
+    fields: &BTreeMap<String, Value>,
+    projection: &[FieldPath],
+) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
     for p in projection {
         if p.is_document_name() {

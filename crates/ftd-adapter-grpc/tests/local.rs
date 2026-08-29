@@ -472,3 +472,256 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     handle.abort();
 }
+
+fn agg_count(collection: &str, alias: &str) -> pb::StructuredAggregationQuery {
+    pb::StructuredAggregationQuery {
+        query_type: Some(
+            pb::structured_aggregation_query::QueryType::StructuredQuery(pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.to_owned(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            }),
+        ),
+        aggregations: vec![pb::structured_aggregation_query::Aggregation {
+            alias: alias.to_owned(),
+            operator: Some(
+                pb::structured_aggregation_query::aggregation::Operator::Count(
+                    pb::structured_aggregation_query::aggregation::Count { up_to: None },
+                ),
+            ),
+        }],
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn malformed_wire_shapes_are_rejected_before_any_mutation() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("w/1", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    // A present but empty precondition must not become an unconditional delete.
+    let err = client
+        .delete_document(pb::DeleteDocumentRequest {
+            name: format!("{DOCS}/w/1"),
+            current_document: Some(pb::Precondition {
+                condition_type: None,
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/w/1"),
+            ..Default::default()
+        })
+        .await
+        .is_ok());
+
+    // Document names must belong to the request database.
+    let foreign = "projects/demo-app/databases/other/documents/w/2";
+    let err = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: foreign.to_owned(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    let err = client
+        .batch_get_documents(pb::BatchGetDocumentsRequest {
+            database: DB.to_owned(),
+            documents: vec![foreign.to_owned()],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+    // A transaction token is bound to the database that issued it.
+    let other_txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: "projects/demo-app/databases/other".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let err = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![],
+            transaction: other_txn,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+    // BatchWrite rejects duplicate targets as a whole.
+    let err = client
+        .batch_write(pb::BatchWriteRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("w/3", &[("v", i(1))]),
+                update_write("w/3", &[("v", i(2))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    let err = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/w/3"),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
+
+    // Empty document transforms and unspecified server values are malformed.
+    let err = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Transform(pb::DocumentTransform {
+                    document: format!("{DOCS}/w/4"),
+                    field_transforms: vec![],
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+    // Aggregation aliases must be unique.
+    let mut dup = agg_count("w", "n");
+    dup.aggregations.push(dup.aggregations[0].clone());
+    let err = client
+        .run_aggregation_query(pb::RunAggregationQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(dup),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("snap/1", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut req = query("snap", None);
+    req.consistency_selector = Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+        pb::TransactionOptions {
+            mode: Some(pb::transaction_options::Mode::ReadWrite(
+                pb::transaction_options::ReadWrite {
+                    retry_transaction: vec![],
+                    ..Default::default()
+                },
+            )),
+        },
+    ));
+    let mut stream = client.run_query(req).await.unwrap().into_inner();
+    let first = stream.next().await.unwrap().unwrap();
+    assert!(
+        first.document.is_none(),
+        "the first response only carries the transaction"
+    );
+    assert!(!first.transaction.is_empty());
+    let txn = first.transaction.clone();
+    let second = stream.next().await.unwrap().unwrap();
+    assert!(second.document.is_some());
+    assert!(second.transaction.is_empty());
+    assert!(stream.next().await.is_none());
+
+    // A concurrent insert is invisible to the transaction's aggregation and aborts its commit.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("snap/2", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut stream = client
+        .run_aggregation_query(pb::RunAggregationQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    agg_count("snap", "n"),
+                ),
+            ),
+            consistency_selector: Some(
+                pb::run_aggregation_query_request::ConsistencySelector::Transaction(txn.clone()),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let result = stream.next().await.unwrap().unwrap().result.unwrap();
+    assert_eq!(result.aggregate_fields.get("n"), Some(&i(1)));
+    let err = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("snap/3", &[("v", i(3))])],
+            transaction: txn,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Aborted);
+
+    // An empty BatchGet with new_transaction still returns the token.
+    let mut stream = client
+        .batch_get_documents(pb::BatchGetDocumentsRequest {
+            database: DB.to_owned(),
+            documents: vec![],
+            consistency_selector: Some(
+                pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                    pb::TransactionOptions::default(),
+                ),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let only = stream.next().await.unwrap().unwrap();
+    assert!(!only.transaction.is_empty());
+    assert!(only.result.is_none());
+    handle.abort();
+}

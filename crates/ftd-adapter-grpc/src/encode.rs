@@ -133,15 +133,25 @@ pub fn decode_mask(mask: Option<&pb::DocumentMask>) -> Result<Option<Vec<FieldPa
         .map(Some)
 }
 
-/// Decodes a precondition.
-#[must_use]
-pub fn decode_precondition(p: Option<&pb::Precondition>) -> Option<Precondition> {
-    match p.and_then(|p| p.condition_type.as_ref()) {
-        Some(pb::precondition::ConditionType::Exists(e)) => Some(Precondition::Exists(*e)),
+/// Decodes a precondition. A present but empty precondition is malformed (it must never
+/// silently turn a conditional write into an unconditional one).
+pub fn decode_precondition(
+    p: Option<&pb::Precondition>,
+) -> Result<Option<Precondition>, DecodeError> {
+    let Some(p) = p else { return Ok(None) };
+    match &p.condition_type {
+        Some(pb::precondition::ConditionType::Exists(e)) => Ok(Some(Precondition::Exists(*e))),
         Some(pb::precondition::ConditionType::UpdateTime(t)) => {
-            Some(Precondition::UpdateTime(decode_instant(t)))
+            if t.nanos < 0 || t.nanos >= 1_000_000_000 {
+                return Err(DecodeError::InvalidQuery(
+                    "precondition update_time has invalid nanos".into(),
+                ));
+            }
+            Ok(Some(Precondition::UpdateTime(decode_instant(t))))
         }
-        None => None,
+        None => Err(DecodeError::InvalidQuery(
+            "precondition without condition_type".into(),
+        )),
     }
 }
 
@@ -152,7 +162,16 @@ fn decode_transform(
     let field = FieldPath::parse(&t.field_path)
         .map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))?;
     let kind = match &t.transform_type {
-        Some(T::SetToServerValue(_)) => TransformKind::ServerTimestamp,
+        Some(T::SetToServerValue(v))
+            if *v == pb::document_transform::field_transform::ServerValue::RequestTime as i32 =>
+        {
+            TransformKind::ServerTimestamp
+        }
+        Some(T::SetToServerValue(_)) => {
+            return Err(DecodeError::InvalidQuery(
+                "set_to_server_value must be REQUEST_TIME".into(),
+            ))
+        }
         Some(T::Increment(v)) => TransformKind::Increment(decode_value(v)?),
         Some(T::Maximum(v)) => TransformKind::Maximum(decode_value(v)?),
         Some(T::Minimum(v)) => TransformKind::Minimum(decode_value(v)?),
@@ -179,7 +198,7 @@ fn decode_transform(
 
 /// Decodes a write.
 pub fn decode_write(w: &pb::Write) -> Result<Write, DecodeError> {
-    let precondition = decode_precondition(w.current_document.as_ref());
+    let precondition = decode_precondition(w.current_document.as_ref())?;
     let mut transforms = w
         .update_transforms
         .iter()
@@ -195,6 +214,11 @@ pub fn decode_write(w: &pb::Write) -> Result<Write, DecodeError> {
             path: decode_document_name(name)?,
         },
         Some(pb::write::Operation::Transform(dt)) => {
+            if dt.field_transforms.is_empty() {
+                return Err(DecodeError::InvalidQuery(
+                    "document transform without field transforms".into(),
+                ));
+            }
             transforms.extend(
                 dt.field_transforms
                     .iter()

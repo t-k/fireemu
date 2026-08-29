@@ -101,12 +101,48 @@ impl LocalBackend {
             .collect()
     }
 
-    fn txn(bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
+    /// Wire token for a transaction: the handle plus a tag binding it to its database, so a
+    /// token issued by one database is rejected by another.
+    fn token(parent: &Parent, id: &TransactionId) -> Vec<u8> {
+        let mut bytes = encode_transaction(id);
+        bytes.extend_from_slice(&database_tag(parent).to_be_bytes());
+        bytes
+    }
+
+    fn txn(parent: &Parent, bytes: &[u8]) -> Result<Option<TransactionId>, Status> {
         if bytes.is_empty() {
-            Ok(None)
-        } else {
-            decode_transaction(bytes).map(Some).map_err(status)
+            return Ok(None);
         }
+        let (handle, tag) = bytes.split_at(bytes.len().saturating_sub(8));
+        let tag: Option<[u8; 8]> = tag.try_into().ok();
+        if tag.map(u64::from_be_bytes) != Some(database_tag(parent)) {
+            return Err(Status::invalid_argument(
+                "transaction token does not belong to this database",
+            ));
+        }
+        decode_transaction(handle).map(Some).map_err(status)
+    }
+
+    fn required_txn(parent: &Parent, bytes: &[u8]) -> Result<TransactionId, Status> {
+        Self::txn(parent, bytes)?.ok_or_else(|| Status::invalid_argument("missing transaction"))
+    }
+
+    /// Rejects document names outside the request's database.
+    fn check_database(parent: &Parent, name: &str) -> Result<DocumentPath, Status> {
+        let path = decode_document_name(name).map_err(status)?;
+        if path.project() != &parent.project || path.database() != &parent.database {
+            return Err(Status::invalid_argument(format!(
+                "document {name} does not belong to database projects/{}/databases/{}",
+                parent.project.as_str(),
+                parent.database.as_str()
+            )));
+        }
+        Ok(path)
+    }
+
+    fn new_transaction_is_read_only(opts: &pb::TransactionOptions) -> bool {
+        // Firestore defaults `new_transaction` without a mode to read-only.
+        !matches!(opts.mode, Some(pb::transaction_options::Mode::ReadWrite(_)))
     }
 
     /// `GetDocument`.
@@ -114,7 +150,9 @@ impl LocalBackend {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
         let txn = match &req.consistency_selector {
-            Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => Self::txn(t)?,
+            Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
+                Self::txn(&parent, t)?
+            }
             Some(pb::get_document_request::ConsistencySelector::ReadTime(_)) => {
                 return Err(Status::unimplemented(
                     "read_time consistency is not implemented",
@@ -123,11 +161,15 @@ impl LocalBackend {
             None => None,
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        let now = self.now();
         self.with_db(&parent, |db| {
             let doc = match &txn {
-                Some(t) => db
-                    .get_in_transaction(t, &path)
-                    .map_err(|e| status_from_error(&e))?,
+                Some(t) => {
+                    db.touch_transaction(t, now)
+                        .map_err(|e| status_from_error(&e))?;
+                    db.get_in_transaction(t, &path)
+                        .map_err(|e| status_from_error(&e))?
+                }
                 None => db.get(&path).cloned(),
             };
             let mut doc = doc.ok_or_else(|| {
@@ -148,20 +190,28 @@ impl LocalBackend {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        let paths = req
+            .documents
+            .iter()
+            .map(|name| Self::check_database(&parent, name))
+            .collect::<Result<Vec<_>, _>>()?;
         self.with_db(&parent, |db| {
             let (txn, report) = match &req.consistency_selector {
                 Some(pb::batch_get_documents_request::ConsistencySelector::Transaction(t)) => {
-                    (Self::txn(t)?, Vec::new())
+                    let t = Self::txn(&parent, t)?;
+                    if let Some(t) = &t {
+                        db.touch_transaction(t, now)
+                            .map_err(|e| status_from_error(&e))?;
+                    }
+                    (t, Vec::new())
                 }
                 Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
                     opts,
                 )) => {
-                    let read_only =
-                        matches!(opts.mode, Some(pb::transaction_options::Mode::ReadOnly(_)));
                     let id = db
-                        .begin_transaction(read_only, now)
+                        .begin_transaction(Self::new_transaction_is_read_only(opts), now)
                         .map_err(|e| status_from_error(&e))?;
-                    let bytes = encode_transaction(&id);
+                    let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
                 Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(_)) => {
@@ -172,8 +222,8 @@ impl LocalBackend {
                 None => (None, Vec::new()),
             };
             let mut items = Vec::with_capacity(req.documents.len());
-            for name in &req.documents {
-                let path = decode_document_name(name).map_err(status)?;
+            for (name, path) in req.documents.iter().zip(&paths) {
+                let path = path.clone();
                 let doc = match &txn {
                     Some(t) => db
                         .get_in_transaction(t, &path)
@@ -228,12 +278,13 @@ impl LocalBackend {
             precondition: Some(Precondition::Exists(false)),
             transforms: vec![],
         };
+        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let now = self.now();
         self.with_db(&parent, |db| {
             db.commit(&[write], None, now)
                 .map_err(|e| status_from_error(&e))?;
             db.get(&path)
-                .map(encode_document)
+                .map(|d| encode_masked(d, mask.as_deref()))
                 .ok_or_else(|| Status::internal("document vanished after commit"))
         })
     }
@@ -252,15 +303,16 @@ impl LocalBackend {
                 fields: decode_fields(&doc.fields).map_err(status)?,
                 update_mask: decode_mask(req.update_mask.as_ref()).map_err(status)?,
             },
-            precondition: decode_precondition(req.current_document.as_ref()),
+            precondition: decode_precondition(req.current_document.as_ref()).map_err(status)?,
             transforms: vec![],
         };
+        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let now = self.now();
         self.with_db(&parent, |db| {
             db.commit(&[write], None, now)
                 .map_err(|e| status_from_error(&e))?;
             db.get(&path)
-                .map(encode_document)
+                .map(|d| encode_masked(d, mask.as_deref()))
                 .ok_or_else(|| Status::internal("document vanished after commit"))
         })
     }
@@ -271,7 +323,7 @@ impl LocalBackend {
         let parent = parse_parent(&req.name).map_err(status)?;
         let write = Write {
             op: WriteOp::Delete { path },
-            precondition: decode_precondition(req.current_document.as_ref()),
+            precondition: decode_precondition(req.current_document.as_ref()).map_err(status)?,
             transforms: vec![],
         };
         let now = self.now();
@@ -285,6 +337,7 @@ impl LocalBackend {
     /// `BeginTransaction`.
     pub fn begin_transaction(&self, req: &pb::BeginTransactionRequest) -> Result<Vec<u8>, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        // BeginTransaction without options is read-write (unlike `new_transaction`).
         let read_only = matches!(
             req.options.as_ref().and_then(|o| o.mode.as_ref()),
             Some(pb::transaction_options::Mode::ReadOnly(_))
@@ -292,7 +345,7 @@ impl LocalBackend {
         let now = self.now();
         self.with_db(&parent, |db| {
             db.begin_transaction(read_only, now)
-                .map(|id| encode_transaction(&id))
+                .map(|id| Self::token(&parent, &id))
                 .map_err(|e| status_from_error(&e))
         })
     }
@@ -306,7 +359,10 @@ impl LocalBackend {
             .map(decode_write)
             .collect::<Result<Vec<_>, _>>()
             .map_err(status)?;
-        let txn = Self::txn(&req.transaction)?;
+        for w in &writes {
+            Self::check_database(&parent, &w.op.path().resource_name())?;
+        }
+        let txn = Self::txn(&parent, &req.transaction)?;
         let now = self.now();
         self.with_db(&parent, |db| {
             let result = db
@@ -319,7 +375,7 @@ impl LocalBackend {
     /// `Rollback`.
     pub fn rollback(&self, req: &pb::RollbackRequest) -> Result<(), Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
-        let txn = decode_transaction(&req.transaction).map_err(status)?;
+        let txn = Self::required_txn(&parent, &req.transaction)?;
         self.with_db(&parent, |db| {
             db.rollback(&txn).map_err(|e| status_from_error(&e))
         })
@@ -345,15 +401,18 @@ impl LocalBackend {
         self.with_db(&parent, |db| {
             let (txn, report) = match &req.consistency_selector {
                 Some(pb::run_query_request::ConsistencySelector::Transaction(t)) => {
-                    (Self::txn(t)?, Vec::new())
+                    let t = Self::txn(&parent, t)?;
+                    if let Some(t) = &t {
+                        db.touch_transaction(t, now)
+                            .map_err(|e| status_from_error(&e))?;
+                    }
+                    (t, Vec::new())
                 }
                 Some(pb::run_query_request::ConsistencySelector::NewTransaction(opts)) => {
-                    let read_only =
-                        matches!(opts.mode, Some(pb::transaction_options::Mode::ReadOnly(_)));
                     let id = db
-                        .begin_transaction(read_only, now)
+                        .begin_transaction(Self::new_transaction_is_read_only(opts), now)
                         .map_err(|e| status_from_error(&e))?;
-                    let bytes = encode_transaction(&id);
+                    let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
                 Some(pb::run_query_request::ConsistencySelector::ReadTime(_)) => {
@@ -383,15 +442,27 @@ impl LocalBackend {
                 })
                 .collect();
             if responses.is_empty() {
+                // A result-less query still answers with one response carrying read_time.
                 responses.push(pb::RunQueryResponse {
-                    transaction: report.clone(),
+                    transaction: Vec::new(),
                     document: None,
                     read_time,
                     skipped_results: 0,
                     ..Default::default()
                 });
-            } else if let Some(first) = responses.first_mut() {
-                first.transaction = report;
+            }
+            if !report.is_empty() {
+                // A new transaction is announced in a dedicated first response.
+                responses.insert(
+                    0,
+                    pb::RunQueryResponse {
+                        transaction: report,
+                        document: None,
+                        read_time,
+                        skipped_results: 0,
+                        ..Default::default()
+                    },
+                );
             }
             Ok((responses, accepted.warnings))
         })
@@ -422,57 +493,49 @@ impl LocalBackend {
             .gateway
             .validate_query(&query)
             .map_err(|r| r.to_status())?;
-        let mut aliases = Vec::with_capacity(saq.aggregations.len());
-        let mut aggregations = Vec::with_capacity(saq.aggregations.len());
-        for (i, a) in saq.aggregations.iter().enumerate() {
-            use pb::structured_aggregation_query::aggregation::Operator as O;
-            let field =
-                |f: &Option<pb::structured_query::FieldReference>| -> Result<FieldPath, Status> {
-                    let r = f
-                        .as_ref()
-                        .ok_or_else(|| Status::invalid_argument("aggregation without field"))?;
-                    FieldPath::parse(&r.field_path)
-                        .map_err(|e| Status::invalid_argument(e.to_string()))
-                };
-            let agg = match &a.operator {
-                Some(O::Count(c)) => Aggregation::Count {
-                    up_to: c.up_to.and_then(|n| u64::try_from(n).ok()),
-                },
-                Some(O::Sum(s)) => Aggregation::Sum(field(&s.field)?),
-                Some(O::Avg(v)) => Aggregation::Avg(field(&v.field)?),
-                None => return Err(Status::invalid_argument("aggregation without operator")),
-            };
-            aliases.push(if a.alias.is_empty() {
-                format!("field_{}", i + 1)
-            } else {
-                a.alias.clone()
-            });
-            aggregations.push(agg);
-        }
+        let (aliases, aggregations) = decode_aggregations(saq)?;
         let now = self.now();
         self.with_db(&parent, |db| {
-            let txn = match &req.consistency_selector {
+            let (txn, report) = match &req.consistency_selector {
                 Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(t)) => {
-                    Self::txn(t)?
+                    let t = Self::txn(&parent, t)?;
+                    if let Some(t) = &t {
+                        db.touch_transaction(t, now)
+                            .map_err(|e| status_from_error(&e))?;
+                    }
+                    (t, Vec::new())
+                }
+                Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                    opts,
+                )) => {
+                    let id = db
+                        .begin_transaction(Self::new_transaction_is_read_only(opts), now)
+                        .map_err(|e| status_from_error(&e))?;
+                    let bytes = Self::token(&parent, &id);
+                    (Some(id), bytes)
                 }
                 Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(_)) => {
                     return Err(Status::unimplemented(
                         "read_time consistency is not implemented",
                     ))
                 }
-                _ => None,
+                None => (None, Vec::new()),
             };
+            // Inside a transaction the aggregation is computed at the snapshot and the query
+            // is recorded so that later changes abort the commit.
             let version = match &txn {
-                Some(t) => Some(
+                Some(t) => {
                     db.run_query_in_transaction(t, &accepted.query)
-                        .map(|_| db.current_version())
-                        .map_err(|e| status_from_error(&e))?,
-                ),
+                        .map_err(|e| status_from_error(&e))?;
+                    Some(
+                        db.transaction_read_version(t)
+                            .map_err(|e| status_from_error(&e))?,
+                    )
+                }
                 None => None,
             };
-            let _ = version;
             let values = db
-                .run_aggregation(&accepted.query, &aggregations, None)
+                .run_aggregation(&accepted.query, &aggregations, version)
                 .map_err(|e| status_from_error(&e))?;
             let aggregate_fields: HashMap<String, pb::Value> = aliases
                 .into_iter()
@@ -480,7 +543,7 @@ impl LocalBackend {
                 .collect();
             Ok(pb::RunAggregationQueryResponse {
                 result: Some(pb::AggregationResult { aggregate_fields }),
-                transaction: Vec::new(),
+                transaction: report,
                 read_time: Some(encode_instant(now)),
                 explain_metrics: None,
             })
@@ -496,6 +559,12 @@ impl LocalBackend {
         if !req.page_token.is_empty() {
             return Err(Status::unimplemented(
                 "ListDocuments pagination tokens are not implemented",
+            ));
+        }
+        if req.consistency_selector.is_some() {
+            // Never serve live data for a snapshot request.
+            return Err(Status::unimplemented(
+                "ListDocuments transaction / read_time consistency is not implemented",
             ));
         }
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
@@ -542,11 +611,32 @@ impl LocalBackend {
     ) -> Result<pb::BatchWriteResponse, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
+        let decoded: Vec<Result<Write, Status>> = req
+            .writes
+            .iter()
+            .map(|w| {
+                let write = decode_write(w).map_err(status)?;
+                Self::check_database(&parent, &write.op.path().resource_name())?;
+                Ok(write)
+            })
+            .collect();
+        let mut targets = std::collections::BTreeSet::new();
+        for path in decoded
+            .iter()
+            .filter_map(|w| w.as_ref().ok().map(|w| w.op.path()))
+        {
+            if !targets.insert(path.clone()) {
+                return Err(Status::invalid_argument(format!(
+                    "BatchWrite contains multiple writes to {}",
+                    path.resource_name()
+                )));
+            }
+        }
         self.with_db(&parent, |db| {
             let mut write_results = Vec::with_capacity(req.writes.len());
             let mut statuses = Vec::with_capacity(req.writes.len());
-            for w in &req.writes {
-                let outcome = decode_write(w).map_err(status).and_then(|write| {
+            for decoded in decoded {
+                let outcome = decoded.and_then(|write| {
                     db.commit(std::slice::from_ref(&write), None, now)
                         .map_err(|e| status_from_error(&e))
                 });
@@ -593,24 +683,92 @@ fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
     }
 }
 
+/// Firestore accepts at most this many aggregations in one query.
+const MAX_AGGREGATIONS_PER_QUERY: usize = 5;
+
+/// Decodes and validates the aggregation list: 1..=5 entries, positive `count.up_to`,
+/// unique aliases.
+fn decode_aggregations(
+    saq: &pb::StructuredAggregationQuery,
+) -> Result<(Vec<String>, Vec<Aggregation>), Status> {
+    if saq.aggregations.is_empty() || saq.aggregations.len() > MAX_AGGREGATIONS_PER_QUERY {
+        return Err(Status::invalid_argument(format!(
+            "an aggregation query needs 1..={MAX_AGGREGATIONS_PER_QUERY} aggregations"
+        )));
+    }
+    let mut aliases: Vec<String> = Vec::with_capacity(saq.aggregations.len());
+    let mut aggregations = Vec::with_capacity(saq.aggregations.len());
+    for (i, a) in saq.aggregations.iter().enumerate() {
+        use pb::structured_aggregation_query::aggregation::Operator as O;
+        let field =
+            |f: &Option<pb::structured_query::FieldReference>| -> Result<FieldPath, Status> {
+                let r = f
+                    .as_ref()
+                    .ok_or_else(|| Status::invalid_argument("aggregation without field"))?;
+                FieldPath::parse(&r.field_path).map_err(|e| Status::invalid_argument(e.to_string()))
+            };
+        let agg = match &a.operator {
+            Some(O::Count(c)) => Aggregation::Count {
+                up_to: match c.up_to {
+                    None => None,
+                    Some(n) if n > 0 => Some(u64::try_from(n).unwrap_or(u64::MAX)),
+                    Some(_) => {
+                        return Err(Status::invalid_argument("count.up_to must be positive"))
+                    }
+                },
+            },
+            Some(O::Sum(s)) => Aggregation::Sum(field(&s.field)?),
+            Some(O::Avg(v)) => Aggregation::Avg(field(&v.field)?),
+            None => return Err(Status::invalid_argument("aggregation without operator")),
+        };
+        let alias = if a.alias.is_empty() {
+            format!("field_{}", i + 1)
+        } else {
+            a.alias.clone()
+        };
+        if aliases.contains(&alias) {
+            return Err(Status::invalid_argument(format!(
+                "duplicate aggregation alias {alias:?}"
+            )));
+        }
+        aliases.push(alias);
+        aggregations.push(agg);
+    }
+    Ok((aliases, aggregations))
+}
+
+fn database_tag(parent: &Parent) -> u64 {
+    // FNV-1a over "project\0database": stable, dependency-free.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in parent
+        .project
+        .as_str()
+        .bytes()
+        .chain(core::iter::once(0))
+        .chain(parent.database.as_str().bytes())
+    {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
+fn encode_masked(doc: &Document, mask: Option<&[FieldPath]>) -> pb::Document {
+    match mask {
+        Some(mask) => {
+            let mut d = doc.clone();
+            d.fields = project_fields(&d.fields, mask);
+            encode_document(&d)
+        }
+        None => encode_document(doc),
+    }
+}
+
 fn project_fields(
     fields: &BTreeMap<String, ftd_core_firestore::value::Value>,
     mask: &[FieldPath],
 ) -> BTreeMap<String, ftd_core_firestore::value::Value> {
-    let mut out = BTreeMap::new();
-    for p in mask {
-        if let Some(v) = ftd_core_firestore::store::get_field(fields, p) {
-            let first = p.segments()[0].clone();
-            if p.segments().len() == 1 {
-                out.insert(first, v.clone());
-            } else if let Some(root) = fields.get(&first) {
-                // Nested masks copy the containing top-level field; finer projection is a
-                // later refinement.
-                out.insert(first, root.clone());
-            }
-        }
-    }
-    out
+    ftd_core_firestore::store::project(fields, mask)
 }
 
 /// Convenience for tests: documents as (relative path, fields).

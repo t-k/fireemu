@@ -217,6 +217,10 @@ pub enum QueryError {
     },
     /// An empty `and` / `or`.
     EmptyComposite,
+    /// More than one `not-in` filter.
+    MultipleNotIn,
+    /// `not-in` combined with `in`, `array-contains-any` or `or`.
+    NotInWithDisjunction,
     /// Cursor arity does not match the effective order-by.
     CursorArityMismatch {
         /// Cursor values.
@@ -237,6 +241,10 @@ impl fmt::Display for QueryError {
                 )
             }
             Self::EmptyComposite => f.write_str("composite filter has no children"),
+            Self::MultipleNotIn => f.write_str("a query can have at most one not-in filter"),
+            Self::NotInWithDisjunction => {
+                f.write_str("not-in cannot be combined with in, array-contains-any or or")
+            }
             Self::CursorArityMismatch { cursor, order_by } => {
                 write!(
                     f,
@@ -310,7 +318,11 @@ impl Query {
     pub fn canonicalize(&self) -> Result<Self, QueryError> {
         let filter = match &self.filter {
             None => None,
-            Some(f) => Some(canonicalize_filter(f)?),
+            Some(f) => {
+                let c = canonicalize_filter(f)?;
+                check_not_in_rules(&c)?;
+                Some(c)
+            }
         };
         let q = Self {
             filter,
@@ -380,10 +392,16 @@ impl Query {
         out
     }
 
-    /// Component count on the DNF basis.
+    /// Component count on the DNF basis: the sum of every filter occurrence across all
+    /// disjunctions, plus explicit orders and the parent path. Queries whose expansion exceeds
+    /// [`MAX_MATERIALIZED_DISJUNCTIONS`] are reported as saturated without materializing.
     #[must_use]
     pub fn component_count(&self) -> ComponentCount {
-        let filters = self.dnf().iter().map(|d| d.len() as u64).max().unwrap_or(0);
+        let filters = if self.dnf_disjunction_count() > MAX_MATERIALIZED_DISJUNCTIONS {
+            u64::MAX / 4
+        } else {
+            self.dnf().iter().map(|d| d.len() as u64).sum()
+        };
         let orders = self.order_by.len() as u64;
         let parent_path = u64::from(self.scope.parent.is_some());
         ComponentCount {
@@ -420,6 +438,10 @@ impl Query {
             disjunctions,
             format!("{disjunctions} disjunctions after DNF expansion"),
         );
+        if disjunctions > max("FS-QUERY-LIMIT-DNF-DISJUNCTIONS") {
+            // Never materialize an unbounded expansion; the count alone rejects the query.
+            return Err(violations);
+        }
 
         let mut has_not_in = false;
         let mut has_neq = false;
@@ -492,6 +514,44 @@ impl Query {
             Err(violations)
         }
     }
+}
+
+/// Upper bound on the DNF size this crate will materialize (the Standard limit is 30).
+pub const MAX_MATERIALIZED_DISJUNCTIONS: u64 = 4096;
+
+/// Structural operator-combination rules that hold in every edition.
+fn check_not_in_rules(f: &FilterExpr) -> Result<(), QueryError> {
+    fn walk(f: &FilterExpr, not_in: &mut u64, disjunctive: &mut bool) {
+        match f {
+            FilterExpr::Field { op, .. } => match op {
+                FieldOp::NotIn => *not_in += 1,
+                FieldOp::In | FieldOp::ArrayContainsAny => *disjunctive = true,
+                _ => {}
+            },
+            FilterExpr::Unary { .. } => {}
+            FilterExpr::Or(children) => {
+                *disjunctive = true;
+                for c in children {
+                    walk(c, not_in, disjunctive);
+                }
+            }
+            FilterExpr::And(children) => {
+                for c in children {
+                    walk(c, not_in, disjunctive);
+                }
+            }
+        }
+    }
+    let mut not_in = 0;
+    let mut disjunctive = false;
+    walk(f, &mut not_in, &mut disjunctive);
+    if not_in > 1 {
+        return Err(QueryError::MultipleNotIn);
+    }
+    if not_in == 1 && disjunctive {
+        return Err(QueryError::NotInWithDisjunction);
+    }
+    Ok(())
 }
 
 fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {
@@ -581,7 +641,8 @@ fn dnf_of(f: &FilterExpr) -> Vec<Vec<FilterExpr>> {
             let mut acc: Vec<Vec<FilterExpr>> = vec![Vec::new()];
             for child in children {
                 let child_dnf = dnf_of(child);
-                let mut next = Vec::with_capacity(acc.len() * child_dnf.len());
+                let mut next =
+                    Vec::with_capacity(acc.len().saturating_mul(child_dnf.len()).min(1 << 16));
                 for a in &acc {
                     for c in &child_dnf {
                         let mut merged = a.clone();

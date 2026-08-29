@@ -271,3 +271,77 @@ fn in_and_array_contains_any_require_array_values() {
     let empty = base().with_filter(field("a", FieldOp::In, Value::Array(vec![])));
     assert!(empty.canonicalize().is_err());
 }
+
+#[test]
+fn not_in_combination_rules() {
+    use ftd_core_firestore::query::QueryError;
+    let arr = |n: i64| Value::Array((0..n).map(Value::Integer).collect());
+    let two = FilterExpr::And(vec![
+        field("a", FieldOp::NotIn, arr(2)),
+        field("b", FieldOp::NotIn, arr(2)),
+    ]);
+    assert_eq!(
+        base().with_filter(two).canonicalize().unwrap_err(),
+        QueryError::MultipleNotIn
+    );
+    let with_in = FilterExpr::And(vec![
+        field("a", FieldOp::NotIn, arr(2)),
+        field("b", FieldOp::In, arr(2)),
+    ]);
+    assert_eq!(
+        base().with_filter(with_in).canonicalize().unwrap_err(),
+        QueryError::NotInWithDisjunction
+    );
+    let with_or = FilterExpr::Or(vec![
+        field("a", FieldOp::NotIn, arr(2)),
+        field("b", FieldOp::Equal, Value::Integer(1)),
+    ]);
+    assert_eq!(
+        base().with_filter(with_or).canonicalize().unwrap_err(),
+        QueryError::NotInWithDisjunction
+    );
+    let alone = field("a", FieldOp::NotIn, arr(2));
+    assert!(base().with_filter(alone).canonicalize().is_ok());
+}
+
+#[test]
+fn component_count_sums_every_filter_across_disjunctions() {
+    let branch = |prefix: &str| {
+        FilterExpr::And(
+            (0..51)
+                .map(|i| field(&format!("{prefix}{i}"), FieldOp::Equal, Value::Integer(i)))
+                .collect(),
+        )
+    };
+    let q = base().with_filter(FilterExpr::Or(vec![branch("a"), branch("b")]));
+    let c = q.canonicalize().unwrap();
+    assert_eq!(c.dnf_disjunction_count(), 2);
+    assert_eq!(c.component_count().filters, 102);
+    let err = c.check_standard_limits().unwrap_err();
+    assert!(err
+        .iter()
+        .any(|v| v.limit_id == "FS-QUERY-LIMIT-COMPONENTS" && v.current == 102));
+}
+
+#[test]
+fn oversized_dnf_is_rejected_without_materializing() {
+    // 30^10 disjunctions: counted symbolically, never expanded.
+    let filters: Vec<FilterExpr> = (0..10)
+        .map(|i| {
+            field(
+                &format!("f{i}"),
+                FieldOp::In,
+                Value::Array((0..30).map(Value::Integer).collect()),
+            )
+        })
+        .collect();
+    let c = base()
+        .with_filter(FilterExpr::And(filters))
+        .canonicalize()
+        .unwrap();
+    assert_eq!(c.dnf_disjunction_count(), 30u64.pow(10));
+    assert!(c.component_count().filters > 100);
+    let err = c.check_standard_limits().unwrap_err();
+    assert_eq!(err.len(), 1);
+    assert_eq!(err[0].limit_id, "FS-QUERY-LIMIT-DNF-DISJUNCTIONS");
+}

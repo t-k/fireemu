@@ -496,3 +496,146 @@ fn list_documents_and_collection_ids() {
         .collect();
     assert_eq!(posts, vec!["users/a/posts/p1"]);
 }
+
+#[test]
+fn commit_times_are_strictly_monotonic_and_no_op_writes_keep_update_time() {
+    let mut s = FirestoreState::new();
+    let first = s
+        .commit(&[set("m/1", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    // Second commit without a clock advance: the commit time still moves forward, so an
+    // update-time precondition on the first version can never match the second.
+    let second = s
+        .commit(&[set("m/2", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    assert!(second.commit_time.as_nanos() > first.commit_time.as_nanos());
+    assert_eq!(s.get(&path("m/2")).unwrap().update_time, second.commit_time);
+    let stale = Write {
+        precondition: Some(Precondition::UpdateTime(t(0))),
+        ..set("m/2", &[("v", Value::Integer(9))])
+    };
+    assert!(matches!(
+        s.commit(&[stale], None, t(0)),
+        Err(FirestoreError::FailedPrecondition(_))
+    ));
+
+    // Writing the same fields again is a no-op: version and update time are preserved.
+    let before = s.get(&path("m/1")).unwrap().clone();
+    let noop = s
+        .commit(&[set("m/1", &[("v", Value::Integer(1))])], None, t(5))
+        .unwrap();
+    assert_eq!(noop.write_results[0].update_time, Some(before.update_time));
+    let after = s.get(&path("m/1")).unwrap();
+    assert_eq!(after.version, before.version);
+    assert_eq!(after.update_time, before.update_time);
+
+    // Deletes never report an update time.
+    let del = s
+        .commit(
+            &[Write {
+                op: WriteOp::Delete { path: path("m/1") },
+                precondition: None,
+                transforms: vec![],
+            }],
+            None,
+            t(6),
+        )
+        .unwrap();
+    assert_eq!(del.write_results[0].update_time, None);
+    assert!(s.get(&path("m/1")).is_none());
+}
+
+#[test]
+fn array_transforms_report_null_results_and_transform_limit_is_per_document() {
+    let mut s = FirestoreState::new();
+    let write = Write {
+        transforms: vec![FieldTransform {
+            field: FieldPath::parse("tags").unwrap(),
+            kind: TransformKind::AppendMissingElements(vec![Value::String("a".into())]),
+        }],
+        ..set("arr/1", &[])
+    };
+    let result = s.commit(&[write], None, t(0)).unwrap();
+    assert_eq!(result.write_results[0].transform_results, vec![Value::Null]);
+    assert_eq!(
+        s.get(&path("arr/1")).unwrap().fields.get("tags"),
+        Some(&Value::Array(vec![Value::String("a".into())]))
+    );
+
+    let increments = |n: usize| -> Vec<FieldTransform> {
+        (0..n)
+            .map(|i| FieldTransform {
+                field: FieldPath::parse(&format!("f{i}")).unwrap(),
+                kind: TransformKind::Increment(Value::Integer(1)),
+            })
+            .collect()
+    };
+    let a = Write {
+        transforms: increments(300),
+        ..set("arr/2", &[])
+    };
+    let b = Write {
+        transforms: increments(300),
+        ..set("arr/2", &[])
+    };
+    let err = s.commit(&[a, b], None, t(1)).unwrap_err();
+    assert!(
+        matches!(&err, FirestoreError::ResourceExhausted(v) if v.limit_id == "FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT"),
+        "{err}"
+    );
+    assert!(s.get(&path("arr/2")).is_none(), "nothing was written");
+}
+
+#[test]
+fn transactions_detect_phantom_query_results() {
+    use ftd_core_firestore::query::{Query, QueryScope};
+    use ftd_core_types::ids::CollectionId;
+    let mut s = FirestoreState::new();
+    let q = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("ph").unwrap(),
+    ))
+    .canonicalize()
+    .unwrap();
+    let txn = s.begin_transaction(false, t(0)).unwrap();
+    assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
+    // A row matching the query appears after the transaction ran it.
+    s.commit(&[set("ph/new", &[("v", Value::Integer(1))])], None, t(1))
+        .unwrap();
+    assert!(matches!(
+        s.commit(&[set("other/x", &[])], Some(&txn), t(2)),
+        Err(FirestoreError::Aborted(_))
+    ));
+
+    let txn2 = s.begin_transaction(false, t(3)).unwrap();
+    assert_eq!(s.run_query_in_transaction(&txn2, &q).unwrap().len(), 1);
+    assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(4)).is_ok());
+}
+
+#[test]
+fn transactions_expire_on_idle_and_total_time() {
+    let mut s = FirestoreState::new();
+    let txn = s.begin_transaction(false, t(0)).unwrap();
+    assert!(s.touch_transaction(&txn, t(59)).is_ok());
+    assert!(
+        s.touch_transaction(&txn, t(118)).is_ok(),
+        "idle window restarts"
+    );
+    assert!(matches!(
+        s.touch_transaction(&txn, t(179)),
+        Err(FirestoreError::InvalidArgument(m)) if m.contains("IDLE")
+    ));
+    assert!(
+        s.touch_transaction(&txn, t(180)).is_err(),
+        "expired stays expired"
+    );
+
+    let txn = s.begin_transaction(false, t(200)).unwrap();
+    for step in 1..=4 {
+        assert!(s.touch_transaction(&txn, t(200 + step * 60)).is_ok());
+    }
+    assert!(matches!(
+        s.touch_transaction(&txn, t(200 + 271)),
+        Err(FirestoreError::InvalidArgument(m)) if m.contains("TOTAL")
+    ));
+}

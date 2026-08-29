@@ -42,6 +42,16 @@ pub struct RuntimeConfig {
     pub storage_rules_file: Option<String>,
     /// Whether Security Rules are enforced on the Firestore surface.
     pub rules_enforced: bool,
+    /// Functions HTTP bind address.
+    pub functions_addr: String,
+    /// Functions codebase directory (`functions.source`); `None` = no functions runtime.
+    pub functions_source: Option<String>,
+    /// Runner command (`functions.runner`); default: the bundled Node runner.
+    pub functions_runner: Option<Vec<String>>,
+    /// Explicit manifest path (`functions.manifest`); default: runner discovery.
+    pub functions_manifest: Option<String>,
+    /// Maximum invocations running at once (`functions.maxGlobalConcurrency`).
+    pub functions_max_running: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -61,6 +71,11 @@ impl Default for RuntimeConfig {
             rules_file: None,
             storage_rules_file: None,
             rules_enforced: true,
+            functions_addr: "127.0.0.1:5001".to_owned(),
+            functions_source: None,
+            functions_runner: None,
+            functions_manifest: None,
+            functions_max_running: 8,
         }
     }
 }
@@ -110,6 +125,7 @@ impl RuntimeConfig {
                 "firestorePort",
                 "storagePort",
                 "httpPort",
+                "functionsPort",
                 "clockStart",
                 "seed",
                 "authProject",
@@ -127,6 +143,9 @@ impl RuntimeConfig {
         }
         if let Some(port) = d.get("httpPort").and_then(Value::as_u64) {
             cfg.http_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("functionsPort").and_then(Value::as_u64) {
+            cfg.functions_addr = format!("127.0.0.1:{port}");
         }
         if let Some(start) = d.get("clockStart").and_then(Value::as_str) {
             cfg.clock_start = LogicalInstant::parse_rfc3339(start)
@@ -159,6 +178,42 @@ impl RuntimeConfig {
                 "rules.executionMode {other:?} is declared but not implemented; use \"native\" or \"disabled\""
             ))),
         }
+    }
+
+    fn parse_functions(
+        f: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        for key in f.keys() {
+            if !["manifest", "source", "runner", "maxGlobalConcurrency"].contains(&key.as_str()) {
+                return Err(ConfigError(format!("unknown config key functions.{key}")));
+            }
+        }
+        if let Some(m) = f.get("manifest").and_then(Value::as_str) {
+            cfg.functions_manifest = Some(m.to_owned());
+        }
+        if let Some(src) = f.get("source").and_then(Value::as_str) {
+            cfg.functions_source = Some(src.to_owned());
+        }
+        if let Some(runner) = f.get("runner") {
+            let parts: Option<Vec<String>> = runner.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            });
+            match parts {
+                Some(p) if !p.is_empty() => cfg.functions_runner = Some(p),
+                _ => {
+                    return Err(ConfigError(
+                        "functions.runner must be a non-empty array of strings".into(),
+                    ))
+                }
+            }
+        }
+        if let Some(n) = f.get("maxGlobalConcurrency").and_then(Value::as_u64) {
+            cfg.functions_max_running = usize::try_from(n).unwrap_or(8).max(1);
+        }
+        Ok(())
     }
 
     /// Builds the runtime config from parsed JSON.
@@ -228,6 +283,9 @@ impl RuntimeConfig {
             if let Some(source) = storage.get("rules").and_then(Value::as_str) {
                 cfg.storage_rules_file = Some(source.to_owned());
             }
+        }
+        if let Some(functions) = obj.get("functions").and_then(Value::as_object) {
+            Self::parse_functions(functions, &mut cfg)?;
         }
         if let Some(auth) = obj.get("auth").and_then(Value::as_object) {
             if let Some(mode) = auth.get("idTokenSigning").and_then(Value::as_str) {

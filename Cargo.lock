@@ -241,10 +241,12 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 name = "firebase-testd"
 version = "0.1.0"
 dependencies = [
+ "ftd-adapter-functions",
  "ftd-adapter-grpc",
  "ftd-adapter-http",
  "ftd-core-auth",
  "ftd-core-firestore",
+ "ftd-core-functions",
  "ftd-core-limits",
  "ftd-core-rules",
  "ftd-core-session",
@@ -287,6 +289,25 @@ checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
 dependencies = [
  "lazy_static",
  "num",
+]
+
+[[package]]
+name = "ftd-adapter-functions"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "ftd-adapter-grpc",
+ "ftd-core-events",
+ "ftd-core-firestore",
+ "ftd-core-functions",
+ "ftd-core-session",
+ "ftd-core-storage",
+ "ftd-core-types",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

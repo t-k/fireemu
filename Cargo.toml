@@ -13,6 +13,7 @@ members = [
     "crates/ftd-proto-firestore",
     "crates/ftd-adapter-grpc",
     "crates/ftd-adapter-http",
+    "crates/ftd-adapter-functions",
     "crates/firebase-testd",
     "tools/limit-catalog-gen",
     "tools/traceability-check",

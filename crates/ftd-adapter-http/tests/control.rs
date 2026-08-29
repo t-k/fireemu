@@ -24,6 +24,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         reset_hooks: vec![Arc::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
         })],
+        functions: None,
     }
 }
 

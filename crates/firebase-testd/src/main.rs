@@ -1,7 +1,7 @@
 //! `firebase-testd` command-line entry point.
 //!
 //! ```text
-//! firebase-testd up [--config firebase-testd.json] [--firestore-port 8080] [--http-port 9099] [--storage-port 9199]
+//! firebase-testd up [--config firebase-testd.json] [--firestore-port 8080] [--http-port 9099] [--storage-port 9199] [--functions-port 5001] [--functions <dir>]
 //! firebase-testd doctor
 //! firebase-testd capabilities
 //! ```
@@ -11,6 +11,7 @@
 
 mod config;
 mod control;
+mod functions;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -34,7 +35,7 @@ use ftd_proto_firestore::google::firestore::v1::firestore_server::FirestoreServe
 use crate::config::RuntimeConfig;
 
 fn usage() -> ExitCode {
-    eprintln!("usage: firebase-testd up [--config <file>] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>]\n       firebase-testd doctor\n       firebase-testd capabilities");
+    eprintln!("usage: firebase-testd up [--config <file>] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>]\n       firebase-testd doctor\n       firebase-testd capabilities");
     ExitCode::from(2)
 }
 
@@ -80,6 +81,8 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
     let mut firestore_port: Option<u16> = None;
     let mut http_port: Option<u16> = None;
     let mut storage_port: Option<u16> = None;
+    let mut functions_port: Option<u16> = None;
+    let mut functions_source: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -116,6 +119,23 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
                 );
                 i += 2;
             }
+            "--functions-port" => {
+                functions_port = Some(
+                    args.get(i + 1)
+                        .ok_or("--functions-port needs a value")?
+                        .parse()
+                        .map_err(|e| format!("--functions-port: {e}"))?,
+                );
+                i += 2;
+            }
+            "--functions" => {
+                functions_source = Some(
+                    args.get(i + 1)
+                        .ok_or("--functions needs a directory")?
+                        .clone(),
+                );
+                i += 2;
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -131,6 +151,12 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
     }
     if let Some(p) = storage_port {
         cfg.storage_addr = format!("127.0.0.1:{p}");
+    }
+    if let Some(p) = functions_port {
+        cfg.functions_addr = format!("127.0.0.1:{p}");
+    }
+    if let Some(dir) = functions_source {
+        cfg.functions_source = Some(dir);
     }
     Ok(cfg)
 }
@@ -164,6 +190,7 @@ fn storage_state(
     clock: &Arc<Mutex<VirtualClock>>,
     auth_store: &Arc<Mutex<AuthStore>>,
     storage_rules: &Arc<RwLock<LoadedRules>>,
+    events: Option<tokio::sync::mpsc::UnboundedSender<ftd_core_storage::store::StorageEvent>>,
 ) -> Arc<ftd_adapter_http::storage::StorageState> {
     Arc::new(ftd_adapter_http::storage::StorageState {
         store: Mutex::new(ftd_core_storage::store::StorageState::new(cfg.seed ^ 0x57)),
@@ -171,7 +198,7 @@ fn storage_state(
         auth: auth_store.clone(),
         rules: storage_rules.clone(),
         project: cfg.auth_project.clone(),
-        events: None,
+        events,
     })
 }
 
@@ -182,6 +209,7 @@ async fn bind_listeners(
         tokio::net::TcpListener,
         tokio::net::TcpListener,
         tokio::net::TcpListener,
+        Option<tokio::net::TcpListener>,
     ),
     String,
 > {
@@ -193,10 +221,16 @@ async fn bind_listeners(
                 .map_err(|e| format!("bind {addr}: {e}"))
         }
     };
+    let functions = if cfg.functions_source.is_some() {
+        Some(bind(&cfg.functions_addr).await?)
+    } else {
+        None
+    };
     Ok((
         bind(&cfg.firestore_addr).await?,
         bind(&cfg.http_addr).await?,
         bind(&cfg.storage_addr).await?,
+        functions,
     ))
 }
 
@@ -205,11 +239,22 @@ fn print_banner(
     grpc_addr: std::net::SocketAddr,
     http_addr: std::net::SocketAddr,
     storage_addr: std::net::SocketAddr,
+    functions_addr: Option<std::net::SocketAddr>,
 ) {
     println!("firebase-testd up");
     println!("  firestore (gRPC + REST): {grpc_addr}   FIRESTORE_EMULATOR_HOST={grpc_addr}");
     println!("  auth (REST):      {http_addr}   FIREBASE_AUTH_EMULATOR_HOST={http_addr}");
     println!("  storage (HTTP):   {storage_addr}   FIREBASE_STORAGE_EMULATOR_HOST={storage_addr}   STORAGE_EMULATOR_HOST=http://{storage_addr}");
+    match functions_addr {
+        Some(addr) => println!(
+            "  functions (HTTP): {addr}   http://{addr}/{}/us-central1/{{function}}   (source: {})",
+            cfg.auth_project,
+            cfg.functions_source.as_deref().unwrap_or("")
+        ),
+        None => {
+            println!("  functions:        not configured (functions.source or --functions <dir>)");
+        }
+    }
     println!("  control API:      http://{http_addr}/v1/  (health: /health/live)");
     println!("  edition: {}   clock: {}", cfg.edition, cfg.clock_start);
 }
@@ -227,6 +272,7 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn control_state(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -235,6 +281,7 @@ fn control_state(
     backend: &Arc<LocalBackend>,
     auth_store: &Arc<Mutex<AuthStore>>,
     storage: &Arc<ftd_adapter_http::storage::StorageState>,
+    functions: Option<&Arc<ftd_adapter_functions::runtime::FunctionsRuntime>>,
 ) -> ftd_adapter_http::control::ControlState {
     let storage_reset = {
         let storage = storage.clone();
@@ -256,6 +303,11 @@ fn control_state(
             }
         }) as Arc<dyn Fn() + Send + Sync>
     };
+    let mut reset_hooks = vec![firestore_reset, auth_reset, storage_reset];
+    if let Some(runtime) = functions {
+        let runtime = runtime.clone();
+        reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
+    }
     ftd_adapter_http::control::ControlState {
         clock: clock.clone(),
         require_demo_prefix: cfg.require_demo_prefix,
@@ -263,10 +315,15 @@ fn control_state(
         capabilities: control::capabilities_manifest(),
         rules: rules.clone(),
         storage_rules: storage_rules.clone(),
-        reset_hooks: vec![firestore_reset, auth_reset, storage_reset],
+        reset_hooks,
+        functions: functions.map(|r| {
+            Arc::new(functions::Hook(r.clone()))
+                as Arc<dyn ftd_adapter_http::control::FunctionsHook>
+        }),
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_up(cfg: RuntimeConfig) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -303,7 +360,39 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
         });
         let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
         let storage_rules = Arc::new(RwLock::new(load_storage_rules(&cfg)?));
-        let storage = storage_state(&cfg, &clock, &auth_store, &storage_rules);
+        let (grpc_listener, http_listener, storage_listener, functions_listener) =
+            bind_listeners(&cfg).await?;
+        let grpc_addr = grpc_listener.local_addr().map_err(|e| e.to_string())?;
+        let http_addr = http_listener.local_addr().map_err(|e| e.to_string())?;
+        let storage_addr = storage_listener.local_addr().map_err(|e| e.to_string())?;
+        let functions_addr = functions_listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok());
+        let (storage_events_tx, storage_events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let storage = storage_state(
+            &cfg,
+            &clock,
+            &auth_store,
+            &storage_rules,
+            functions_listener.as_ref().map(|_| storage_events_tx),
+        );
+        let functions_runtime = match functions_listener.as_ref() {
+            Some(_) => Some(
+                functions::start(
+                    &cfg,
+                    &clock,
+                    &backend,
+                    &functions::EmulatorHosts {
+                        firestore: grpc_addr.to_string(),
+                        auth: http_addr.to_string(),
+                        storage: storage_addr.to_string(),
+                    },
+                    storage_events_rx,
+                )
+                .await?,
+            ),
+            None => None,
+        };
         let control = Arc::new(control_state(
             &cfg,
             &clock,
@@ -312,14 +401,19 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             &backend,
             &auth_store,
             &storage,
+            functions_runtime.as_ref(),
         ));
-
-        let (grpc_listener, http_listener, storage_listener) = bind_listeners(&cfg).await?;
-        let grpc_addr = grpc_listener.local_addr().map_err(|e| e.to_string())?;
-        let http_addr = http_listener.local_addr().map_err(|e| e.to_string())?;
-        let storage_addr = storage_listener.local_addr().map_err(|e| e.to_string())?;
-        print_banner(&cfg, grpc_addr, http_addr, storage_addr);
+        print_banner(&cfg, grpc_addr, http_addr, storage_addr, functions_addr);
         print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
+        if let Some(runtime) = &functions_runtime {
+            let names: Vec<&str> = runtime
+                .manifest()
+                .functions
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect();
+            println!("  functions loaded: {}", names.join(", "));
+        }
 
         let enforcer = cfg.rules_enforced.then(|| {
             Arc::new(RulesEnforcer::new(
@@ -354,15 +448,26 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             storage_listener,
             storage,
         ));
-        tokio::select! {
+        let functions_server = match (functions_listener, functions_runtime.clone()) {
+            (Some(listener), Some(runtime)) => tokio::spawn(
+                ftd_adapter_functions::http::serve_functions(listener, runtime),
+            ),
+            _ => tokio::spawn(std::future::pending()),
+        };
+        let outcome = tokio::select! {
             r = grpc => Err(format!("gRPC server stopped: {r:?}")),
             r = http => Err(format!("HTTP server stopped: {r:?}")),
             r = storage_server => Err(format!("Storage server stopped: {r:?}")),
+            r = functions_server => Err(format!("Functions server stopped: {r:?}")),
             _ = tokio::signal::ctrl_c() => {
                 println!("shutting down");
                 Ok::<(), String>(())
             }
+        };
+        if let Some(runtime) = functions_runtime {
+            runtime.runner().shutdown().await;
         }
+        outcome
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,

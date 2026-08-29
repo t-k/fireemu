@@ -161,6 +161,7 @@
         "firestorePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "httpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "storagePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "functionsPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "clockStart": { "type": "string", "format": "date-time" },
         "seed": { "type": "integer", "minimum": 0 },
         "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" }
@@ -200,6 +201,8 @@
       "additionalProperties": false,
       "properties": {
         "manifest": { "type": "string" },
+        "source": { "type": "string", "description": "Functions codebase directory loaded by the runner (discovery)." },
+        "runner": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Runner command; default: node tools/runner-node/index.mjs" },
         "maxGlobalConcurrency": { "type": "integer", "minimum": 1 }
       }
     },

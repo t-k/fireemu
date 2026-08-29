@@ -1,0 +1,27 @@
+[package]
+name = "ftd-adapter-functions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Functions shell: runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy"
+
+[dependencies]
+ftd-core-types = { path = "../ftd-core-types" }
+ftd-core-events = { path = "../ftd-core-events" }
+ftd-core-functions = { path = "../ftd-core-functions" }
+ftd-core-firestore = { path = "../ftd-core-firestore" }
+ftd-core-storage = { path = "../ftd-core-storage" }
+ftd-core-session = { path = "../ftd-core-session" }
+ftd-adapter-grpc = { path = "../ftd-adapter-grpc" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util", "process", "time"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
+[lints]
+workspace = true

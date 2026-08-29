@@ -17,6 +17,7 @@ use crate::identity_toolkit::{handle_with, AuthState, RequestHeaders};
 /// Maximum accepted request body (spec 33.3 input budget).
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
+#[allow(clippy::too_many_lines)]
 async fn respond(
     state: Arc<AuthState>,
     control: Option<Arc<ControlState>>,
@@ -98,6 +99,17 @@ async fn respond(
                 ),
                 Some(json) => {
                     let r = match &control {
+                        Some(c) if method == "POST" && control::is_await_idle_path(&path) => {
+                            if headers
+                                .origin
+                                .as_deref()
+                                .is_some_and(|o| !crate::identity_toolkit::origin_is_local(o))
+                            {
+                                control::handle_with(c, &method, &path, &headers, &json)
+                            } else {
+                                control::await_idle(c, &json).await
+                            }
+                        }
                         Some(c) if control::is_control_path(&path) => {
                             control::handle_with(c, &method, &path, &headers, &json)
                         }

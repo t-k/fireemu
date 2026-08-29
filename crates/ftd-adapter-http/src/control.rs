@@ -8,6 +8,9 @@
 //! POST /v1/sessions/{session}/clock:set       { "instant": "<rfc3339>" }
 //! POST /v1/sessions/{session}/clock:advance   { "seconds": n } | { "millis": n }
 //! POST /v1/sessions/{session}/clock:advanceTo { "instant": "<rfc3339>" }
+//! POST /v1/sessions/{session}:awaitIdle       { "timeoutSeconds": n }
+//! GET  /v1/sessions/{session}/functions
+//! POST /v1/sessions/{session}/functions/{name}:run
 //! ```
 //!
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
@@ -23,6 +26,21 @@ use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
 use crate::identity_toolkit::{JsonResponse, RequestHeaders};
+
+/// The functions runtime as the control API sees it (spec 10.5 `await-idle`, 11.2 clock
+/// operations, manual schedule runs).
+pub trait FunctionsHook: Send + Sync {
+    /// The virtual clock moved: enqueue due schedules and release due retries.
+    fn on_clock_changed(&self);
+    /// Runs a scheduled function now.
+    fn run_schedule(&self, function: &str) -> Result<(), String>;
+    /// Whether no event is pending, leased, running or retry-waiting.
+    fn is_idle(&self) -> bool;
+    /// Notified whenever work completes.
+    fn idle_notify(&self) -> Arc<tokio::sync::Notify>;
+    /// Status JSON (queue depths, functions).
+    fn status(&self) -> Value;
+}
 
 /// Shared control-plane state.
 pub struct ControlState {
@@ -40,6 +58,8 @@ pub struct ControlState {
     pub storage_rules: Arc<RwLock<LoadedRules>>,
     /// Hooks run by `POST /v1/sessions/{s}/reset` (Firestore wipe, Auth wipe, ...).
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
+    /// Functions runtime, when configured.
+    pub functions: Option<Arc<dyn FunctionsHook>>,
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -192,6 +212,80 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         }
         return ok(json!({"session": session, "reset": true, "hooks": state.reset_hooks.len()}));
     }
+    if let Some(rest) = action.strip_prefix("functions") {
+        return functions_route(state, method, rest);
+    }
+    let response = clock_route(state, session, method, action, body);
+    if response.status == 200 && action.starts_with("clock:") {
+        if let Some(f) = &state.functions {
+            f.on_clock_changed();
+        }
+    }
+    response
+}
+
+fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonResponse {
+    let Some(functions) = &state.functions else {
+        return error(404, "NOT_FOUND : no functions runtime is configured");
+    };
+    match (method, rest) {
+        ("GET", "") => ok(functions.status()),
+        ("POST", r) => match r.strip_prefix('/').and_then(|r| r.strip_suffix(":run")) {
+            Some(name) if !name.is_empty() => match functions.run_schedule(name) {
+                Ok(()) => ok(json!({"function": name, "enqueued": true})),
+                Err(e) => error(400, &format!("INVALID_ARGUMENT : {e}")),
+            },
+            _ => error(404, "NOT_FOUND"),
+        },
+        _ => error(404, "NOT_FOUND"),
+    }
+}
+
+/// `POST /v1/sessions/{s}:awaitIdle`: waits until the functions runtime has no outstanding
+/// work (or `timeoutSeconds`, default 30, elapses).
+pub async fn await_idle(state: &ControlState, body: &Value) -> JsonResponse {
+    let timeout = body
+        .get("timeoutSeconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(30.0)
+        .clamp(0.0, 600.0);
+    let Some(functions) = &state.functions else {
+        return ok(json!({"idle": true, "note": "no functions runtime is configured"}));
+    };
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs_f64(timeout);
+    loop {
+        if functions.is_idle() {
+            return ok(json!({"idle": true, "status": functions.status()}));
+        }
+        let notify = functions.idle_notify();
+        let notified = notify.notified();
+        if functions.is_idle() {
+            return ok(json!({"idle": true, "status": functions.status()}));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
+            return JsonResponse {
+                status: 504,
+                body: json!({"error": {"code": 504, "message": "DEADLINE_EXCEEDED : work is still outstanding", "status": functions.status()}}),
+            };
+        }
+    }
+}
+
+/// Whether `path` is the `awaitIdle` endpoint (served asynchronously by the server).
+#[must_use]
+pub fn is_await_idle_path(path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    path.starts_with("/v1/sessions/") && path.ends_with(":awaitIdle")
+}
+
+fn clock_route(
+    state: &ControlState,
+    session: &str,
+    method: &str,
+    action: &str,
+    body: &Value,
+) -> JsonResponse {
     let Ok(mut clock) = state.clock.lock() else {
         return error(500, "INTERNAL");
     };

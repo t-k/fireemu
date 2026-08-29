@@ -7,4 +7,5 @@ pub mod index;
 pub mod path;
 pub mod query;
 pub mod size;
+pub mod store;
 pub mod value;

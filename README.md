@@ -52,6 +52,10 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/functions/nightly:run    
 curl http://127.0.0.1:9099/v1/sessions/default/functions                                      # queue status
 ```
 
+Invocations have a real-time deadline (`timeoutSeconds`); a handler that overruns it is dead-lettered (or retried) but keeps its concurrency slot, and `await-idle` keeps waiting, until it actually finishes. The runner inherits only an allowlisted environment (no cloud credentials; Application Default Credentials are blocked) plus the emulator hosts. Reset while functions are running or writes are in flight is not atomic across Firestore, Storage and the functions runtime: reset between test cases, when the app is quiescent.
+
+Browser pages on a loopback origin must send `Authorization: Bearer <control token>` (printed at start as `FTD_CONTROL_TOKEN`) to privileged control routes (reset, clock, rules, functions, `awaitIdle`); command-line clients need no token.
+
 `tools/sdk-smoke/functions.mjs` with `tools/sdk-smoke/functions-project/` exercises all of it. `firebase-functions/v1` event and schedule functions, other trigger families and DST time zones are declared unsupported in the Capability Manifest.
 
 Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, "127.0.0.1", 8080)`, `connectAuthEmulator(auth, "http://127.0.0.1:9099")`); the Firestore port serves gRPC, REST and the WebChannel transport, and both ports answer CORS preflights. `FTD_TRACE_WEBCHANNEL=1` traces the channel protocol on stderr.

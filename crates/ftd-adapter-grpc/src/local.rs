@@ -166,7 +166,10 @@ impl LocalBackend {
         }
     }
 
-    /// Installs the synchronous commit observer (at most one).
+    /// Installs the synchronous commit observer (at most one). Contract: the sink runs
+    /// inside the database critical section, so it must not call back into this backend
+    /// (self-deadlock) and must not panic (poisoned lock); it should only hand the event to
+    /// its own queue.
     pub fn set_change_sink(&self, sink: ChangeSink) {
         if let Ok(mut slot) = self.change_sink.lock() {
             *slot = Some(sink);

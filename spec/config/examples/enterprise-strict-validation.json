@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "bind": "127.0.0.1",
+  "projects": {
+    "requireDemoPrefix": true
+  },
+  "limits": {
+    "catalog": "firestore-enterprise-native-2026-08-27",
+    "queryCatalog": null,
+    "rulesCatalog": "firebase-rules-2026-08-25",
+    "enforcement": "strict",
+    "warningThresholds": [
+      {"basisPoints": 7500, "severity": "notice"},
+      {"basisPoints": 8500, "severity": "warning"},
+      {"basisPoints": 9500, "severity": "critical"}
+    ],
+    "perLimitWarningThresholds": {
+      "RULES-SOURCE-SIZE": [
+        {"basisPoints": 7500, "severity": "notice"},
+        {"basisPoints": 8500, "severity": "warning"},
+        {"basisPoints": 9500, "severity": "critical"}
+      ]
+    },
+    "warningsAsErrors": [],
+    "quotaAccounting": "observe",
+    "firestorePlan": {
+      "billingEnabled": true,
+      "compositeIndexLimitOverride": null,
+      "singleFieldConfigLimitOverride": null,
+      "enterpriseIndexLimitOverride": null
+    }
+  },
+  "firestore": {
+    "edition": "enterprise",
+    "apiMode": "native",
+    "indexValidationPolicy": "conservative",
+    "indexFile": "firestore.indexes.json",
+    "textIndexDefinitionFile": "firestore.text-indexes.json",
+    "enforceLimits": true,
+    "explain": true,
+    "pipeline": {
+      "enabled": true,
+      "executionMode": "strict-native",
+      "unknownStagePolicy": "reject",
+      "writeStagePolicy": "reject-unimplemented"
+    },
+    "textSearch": {
+      "fidelity": "strict-validation-only",
+      "analyzer": "builtin-unicode-v1",
+      "scorePrecision": "unsupported",
+      "multipleIndexPolicy": "reject",
+      "indexBuildPolicy": "virtual-async",
+      "visibilityPolicy": "atomic-with-commit",
+      "visibilityLag": null,
+      "queryLanguagePolicy": "index-default-or-autodetect",
+      "backendDefaultLanguageOverride": "unresolved",
+      "snapshotPolicy": "materialized",
+      "warnings": {
+        "broadCandidateCount": 10000,
+        "scoreCandidateCount": 5000,
+        "warningsAsErrors": ["FS_TEXT_MISSING_INDEX"]
+      }
+    }
+  },
+  "rules": {
+    "executionMode": "native",
+    "source": "firestore.rules",
+    "staticLimitChecks": true,
+    "runtimeBudgets": true,
+    "compiledSize": {
+      "mode": "estimate",
+      "oracle": "off"
+    },
+    "diagnostics": {
+      "format": "human",
+      "largestContributors": 10
+    }
+  },
+  "storage": {
+    "mode": "native",
+    "objectNameNormalization": "preserve",
+    "persistence": "memory"
+  },
+  "events": {
+    "delivery": "exactly-once-test",
+    "maxAttempts": 5
+  },
+  "scheduler": {
+    "clock": "virtual",
+    "defaultTimeZone": "UTC",
+    "catchUp": "all",
+    "maxCatchUpRuns": 1000
+  },
+  "functions": {
+    "manifest": "functions.test.json",
+    "maxGlobalConcurrency": 16
+  },
+  "trace": {
+    "enabled": true,
+    "canonical": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "limits": { "catalog": "firestore-enterprise-native-2026-08-27", "queryCatalog": null },
+  "firestore": {
+    "edition": "enterprise",
+    "apiMode": "native",
+    "pipeline": { "executionMode": "proxy" },
+    "textSearch": { "fidelity": "upstream-proxy" }
+  }
+}

@@ -39,6 +39,8 @@ jobs:
         run: cargo run -p limit-catalog-gen -- check
       - name: requirement / mutant / loom traceability
         run: cargo run -p traceability-check
+      - name: canonical config schema and examples
+        run: cargo run -p config-schema-check
       - name: loom scenarios
         run: cargo test -p ftd-verification-loom --release
         env:

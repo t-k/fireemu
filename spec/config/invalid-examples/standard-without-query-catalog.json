@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "limits": { "catalog": "firestore-standard-2026-08-25", "queryCatalog": null },
+  "firestore": { "edition": "standard", "apiMode": "native" }
+}

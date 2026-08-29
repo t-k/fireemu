@@ -7,6 +7,7 @@ members = [
     "crates/ftd-core-events",
     "tools/limit-catalog-gen",
     "tools/traceability-check",
+    "tools/config-schema-check",
     "verification/loom",
     "verification/kani",
 ]

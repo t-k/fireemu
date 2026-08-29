@@ -49,6 +49,7 @@ scripts/check-core-deps.sh
 cargo nextest run --workspace --profile pr
 cargo run -p limit-catalog-gen -- check
 cargo run -p traceability-check
+cargo run -p config-schema-check
 RUSTFLAGS="--cfg loom" cargo test -p ftd-verification-loom --release
 TLA2TOOLS_JAR=/path/to/tla2tools.jar verification/tla/run-tlc.sh
 ```

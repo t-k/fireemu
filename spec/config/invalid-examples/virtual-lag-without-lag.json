@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "profile": "compat",
+  "limits": { "catalog": "firestore-enterprise-native-2026-08-27", "queryCatalog": null },
+  "firestore": {
+    "edition": "enterprise",
+    "apiMode": "native",
+    "textSearch": { "visibilityPolicy": "virtual-lag", "visibilityLag": null }
+  }
+}

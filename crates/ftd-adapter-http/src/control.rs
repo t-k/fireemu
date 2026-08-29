@@ -22,7 +22,7 @@ use ftd_core_types::edition::FirestoreEdition;
 use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
-use crate::identity_toolkit::JsonResponse;
+use crate::identity_toolkit::{JsonResponse, RequestHeaders};
 
 /// Shared control-plane state.
 pub struct ControlState {
@@ -62,6 +62,24 @@ pub fn is_control_path(path: &str) -> bool {
 /// Routes one control request.
 #[must_use]
 pub fn handle(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {
+    handle_with(state, method, path, &RequestHeaders::default(), body)
+}
+
+/// Routes one control request with its headers: browser requests from non-loopback origins
+/// are refused (the control API mutates runtime state).
+#[must_use]
+pub fn handle_with(
+    state: &ControlState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+) -> JsonResponse {
+    if let Some(origin) = &headers.origin {
+        if !crate::identity_toolkit::origin_is_local(origin) {
+            return error(403, "FORBIDDEN_ORIGIN");
+        }
+    }
     let path = path.split('?').next().unwrap_or(path);
     match (method, path) {
         ("GET", "/health/live" | "/health/ready") => ok(json!({"status": "ok"})),

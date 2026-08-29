@@ -217,6 +217,8 @@ impl std::error::Error for FirestoreError {}
 struct Transaction {
     read_only: bool,
     read_version: CommitVersion,
+    /// Snapshot time reported for every read inside the transaction.
+    read_time: LogicalInstant,
     started_at: LogicalInstant,
     /// Observed version per read path (`None` = absent at read time).
     read_set: BTreeMap<DocumentPath, Option<CommitVersion>>,
@@ -335,11 +337,13 @@ impl FirestoreState {
     ) -> Result<TransactionId, FirestoreError> {
         self.next_transaction += 1;
         let id = TransactionId(self.next_transaction);
+        let read_time = self.read_time(now);
         self.transactions.insert(
             id.clone(),
             Transaction {
                 read_only,
                 read_version: self.version,
+                read_time,
                 started_at: now,
                 read_set: BTreeMap::new(),
                 queries: Vec::new(),
@@ -373,6 +377,24 @@ impl FirestoreState {
             }
         }
         expired.map_or(Ok(()), |m| Err(FirestoreError::InvalidArgument(m.into())))
+    }
+
+    /// Time reported for a live read at `now`: never earlier than the last commit, so a
+    /// document's `update_time` is always comparable with the `read_time` it was read at.
+    #[must_use]
+    pub fn read_time(&self, now: LogicalInstant) -> LogicalInstant {
+        match self.last_commit_time {
+            Some(last) if last.as_nanos() > now.as_nanos() => last,
+            _ => now,
+        }
+    }
+
+    /// Snapshot time of a transaction (the time its reads report).
+    pub fn transaction_read_time(
+        &self,
+        id: &TransactionId,
+    ) -> Result<LogicalInstant, FirestoreError> {
+        Ok(self.transaction(id)?.read_time)
     }
 
     /// Snapshot version a transaction reads at.
@@ -470,11 +492,15 @@ impl FirestoreState {
             check_limit("FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT", *n)?;
         }
 
+        // Commit times are microsecond-aligned (Firestore update-time precision) and advance
+        // by one microsecond when the clock did not move between commits.
+        let aligned_now =
+            LogicalInstant::from_nanos(now.as_nanos() - now.as_nanos().rem_euclid(1_000));
         let commit_time = match self.last_commit_time {
-            Some(last) if last.as_nanos() >= now.as_nanos() => {
-                LogicalInstant::from_nanos(last.as_nanos() + 1)
+            Some(last) if last.as_nanos() >= aligned_now.as_nanos() => {
+                LogicalInstant::from_nanos(last.as_nanos() + 1_000)
             }
-            _ => now,
+            _ => aligned_now,
         };
 
         // Stage every write against a working copy; fail before touching state. A write
@@ -518,11 +544,12 @@ impl FirestoreState {
             .filter(|(_, (_, changed))| *changed)
             .map(|(p, (d, _))| (p, d))
             .collect();
+        // Every accepted commit consumes a commit time, changed documents or not.
+        self.last_commit_time = Some(commit_time);
         let version = if changed.is_empty() {
             self.version
         } else {
             self.version = next_version;
-            self.last_commit_time = Some(commit_time);
             for (path, doc) in changed {
                 self.history
                     .entry(path)
@@ -876,9 +903,11 @@ fn apply_transform(
     let current = get_field(fields, &t.field).cloned();
     let produced = match &t.kind {
         TransformKind::ServerTimestamp => {
-            let secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000))
+            // REQUEST_TIME is documented with millisecond precision.
+            let millis = now.as_nanos().div_euclid(1_000_000);
+            let secs = i64::try_from(millis.div_euclid(1_000))
                 .map_err(|_| FirestoreError::InvalidArgument("commit time out of range".into()))?;
-            let nanos = u32::try_from(now.as_nanos().rem_euclid(1_000_000_000)).unwrap_or(0);
+            let nanos = u32::try_from(millis.rem_euclid(1_000) * 1_000_000).unwrap_or(0);
             Value::Timestamp(
                 Timestamp::new(secs, nanos).map_err(|_| {
                     FirestoreError::InvalidArgument("commit time out of range".into())

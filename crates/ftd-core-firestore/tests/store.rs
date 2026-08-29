@@ -639,3 +639,29 @@ fn transactions_expire_on_idle_and_total_time() {
         Err(FirestoreError::InvalidArgument(m)) if m.contains("TOTAL")
     ));
 }
+
+#[test]
+fn read_times_never_precede_the_last_commit_and_no_op_commits_still_consume_time() {
+    let mut s = FirestoreState::new();
+    let first = s
+        .commit(&[set("rt/1", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let second = s
+        .commit(&[set("rt/2", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    assert!(second.commit_time.as_nanos() > first.commit_time.as_nanos());
+    // Commit times are microsecond-aligned.
+    assert_eq!(second.commit_time.as_nanos().rem_euclid(1_000), 0);
+    // A live read at the (unchanged) clock reports the last commit time, never earlier.
+    assert_eq!(s.read_time(t(0)), second.commit_time);
+    assert_eq!(s.read_time(t(5)), t(5));
+    // An all-no-op commit still consumes a commit time.
+    let noop = s
+        .commit(&[set("rt/2", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    assert!(noop.commit_time.as_nanos() > second.commit_time.as_nanos());
+    assert_eq!(noop.write_results[0].update_time, Some(second.commit_time));
+    // A transaction reports the snapshot time it started with.
+    let txn = s.begin_transaction(true, t(0)).unwrap();
+    assert_eq!(s.transaction_read_time(&txn).unwrap(), noop.commit_time);
+}

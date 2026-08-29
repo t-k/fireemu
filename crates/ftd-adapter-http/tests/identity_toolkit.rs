@@ -400,3 +400,250 @@ async fn serves_over_a_real_socket() {
     assert_eq!(parsed["email"], "s@example.com");
     server.abort();
 }
+
+// ------------------------------------------------------------------------------------------
+// Admin SDK (project-scoped) routes
+// ------------------------------------------------------------------------------------------
+
+use ftd_adapter_http::identity_toolkit::{handle_with, RequestHeaders};
+
+const ADMIN: &str = "/identitytoolkit.googleapis.com/v1/projects/demo-app";
+
+fn owner() -> RequestHeaders {
+    RequestHeaders {
+        authorization: Some("Bearer owner".to_owned()),
+        origin: None,
+        content_type: Some("application/json".to_owned()),
+    }
+}
+fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
+    let r = handle_with(state, method, path, &owner(), body);
+    (r.status, r.body)
+}
+
+#[test]
+fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_project() {
+    let s = state();
+    let body = json!({"email": "a@example.com", "password": "password1"});
+    let anon = handle_with(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &RequestHeaders::default(),
+        &body,
+    );
+    assert_eq!(anon.status, 401);
+    let mut foreign = owner();
+    foreign.origin = Some("https://evil.example".to_owned());
+    assert_eq!(
+        handle_with(&s, "POST", &format!("{ADMIN}/accounts"), &foreign, &body).status,
+        403
+    );
+    let mut local = owner();
+    local.origin = Some("http://localhost:5173".to_owned());
+    let mut text = owner();
+    text.content_type = Some("text/plain".to_owned());
+    assert_eq!(
+        handle_with(&s, "POST", &format!("{ADMIN}/accounts"), &text, &body).status,
+        415
+    );
+    let (status, _) = admin(
+        &s,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/other/accounts",
+        &body,
+    );
+    assert_eq!(status, 400);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects//accounts:delete",
+        &json!({"localId": "x"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        handle_with(&s, "POST", &format!("{ADMIN}/accounts"), &local, &body).status,
+        200
+    );
+    assert_eq!(
+        admin(&s, "GET", &format!("{ADMIN}/accounts:lookup"), &json!({})).0,
+        405
+    );
+}
+
+#[test]
+fn admin_create_is_atomic_and_typed() {
+    let s = state();
+    // Weak password: nothing is created (the email / uid are not squatted).
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "u-alice", "email": "alice@example.com", "password": "short"}),
+    );
+    assert_eq!(status, 400);
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["u-alice"]}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(body["users"].as_array().map(Vec::len), Some(0));
+    // Wrong JSON types are rejected instead of being treated as absent.
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": 42, "email": "alice@example.com"}),
+    );
+    assert_eq!(status, 400);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "alice@example.com", "disabled": "yes"}),
+    );
+    assert_eq!(status, 400);
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "u-alice", "email": "alice@example.com", "password": "password1", "displayName": "Alice"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["localId"], "u-alice");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "u-alice", "email": "other@example.com"}),
+    );
+    assert_eq!(status, 400, "duplicate uid");
+    // A generated ID never replaces a caller-chosen one.
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "gen@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    assert_ne!(body["localId"], "u-alice");
+}
+
+#[test]
+fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
+    let s = state();
+    for i in 0..5 {
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": format!("u{i}"), "email": format!("u{i}@example.com")}),
+        );
+        assert_eq!(status, 200);
+    }
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["u1", "u3", "u1"], "email": ["u4@example.com", "nobody@example.com"]}),
+    );
+    assert_eq!(status, 200);
+    let ids: Vec<&str> = body["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["localId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["u1", "u3", "u4"]);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [1]}),
+    );
+    assert_eq!(status, 400);
+
+    let (status, page1) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?maxResults=2"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{page1}");
+    assert_eq!(page1["users"].as_array().map(Vec::len), Some(2));
+    let token = page1["nextPageToken"].as_str().unwrap().to_owned();
+    let (status, page2) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?maxResults=2&nextPageToken={token}"),
+        &json!({}),
+    );
+    assert_eq!(status, 200);
+    let token2 = page2["nextPageToken"].as_str().unwrap().to_owned();
+    let (_, page3) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?maxResults=2&nextPageToken={token2}"),
+        &json!({}),
+    );
+    assert_eq!(page3["users"].as_array().map(Vec::len), Some(1));
+    assert!(page3.get("nextPageToken").is_none());
+    let (status, _) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?maxResults=0"),
+        &json!({}),
+    );
+    assert_eq!(status, 400);
+}
+
+#[test]
+fn admin_password_change_revokes_sessions_and_update_is_atomic() {
+    let s = state();
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "p@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    let uid = signed["localId"].as_str().unwrap().to_owned();
+    let refresh = signed["refreshToken"].as_str().unwrap().to_owned();
+    // Weak new password: the claims in the same request are not applied either.
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "x", "customAttributes": "{\"role\":\"admin\"}"}),
+    );
+    assert_eq!(status, 400);
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": uid}),
+    );
+    assert_eq!(looked["users"][0]["customAttributes"], "{}");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "password": "password2"}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(
+        status, 400,
+        "old refresh tokens are revoked by a password change"
+    );
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "p@example.com", "password": "password2", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+}

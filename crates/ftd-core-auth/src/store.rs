@@ -298,7 +298,7 @@ impl AuthStore {
         match id {
             None => self.create_user(new, now),
             Some(id) => {
-                if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+                if id.is_empty() || id.chars().count() > 128 || id.chars().any(char::is_control) {
                     return Err(AuthError::InvalidLocalId);
                 }
                 if self.users.contains_key(&LocalId(id.to_owned())) {
@@ -342,36 +342,57 @@ impl AuthStore {
         }
         let local_id = match self.next_id_override.take() {
             Some(id) => LocalId(id),
-            None => LocalId(self.next_id("u")),
-        };
-        self.users.insert(
-            local_id.clone(),
-            UserRecord {
-                local_id: local_id.clone(),
-                email: new.email,
-                email_verified: new.email_verified,
-                display_name: None,
-                disabled: false,
-                provider: new.provider,
-                custom_claims: CustomClaims::default(),
-                mfa: MfaState::default(),
-                created_at: now,
-                last_sign_in_at: None,
-                tokens_valid_after: now,
-                password: None,
+            None => loop {
+                // Generated IDs share the namespace with caller-chosen ones: skip collisions.
+                let candidate = LocalId(self.next_id("u"));
+                if !self.users.contains_key(&candidate) {
+                    break candidate;
+                }
             },
-        );
+        };
+        let std::collections::btree_map::Entry::Vacant(slot) = self.users.entry(local_id.clone())
+        else {
+            return Err(AuthError::LocalIdExists);
+        };
+        slot.insert(UserRecord {
+            local_id: local_id.clone(),
+            email: new.email,
+            email_verified: new.email_verified,
+            display_name: None,
+            disabled: false,
+            provider: new.provider,
+            custom_claims: CustomClaims::default(),
+            mfa: MfaState::default(),
+            created_at: now,
+            last_sign_in_at: None,
+            tokens_valid_after: now,
+            password: None,
+        });
         Ok(local_id)
     }
 
     /// Minimum password length enforced by Firebase.
     pub const MIN_PASSWORD_CHARS: usize = 6;
 
-    /// Sets a password credential.
-    pub fn set_password(&mut self, uid: &LocalId, password: &str) -> Result<(), AuthError> {
+    /// Validates a password without storing it (lets callers fail before mutating).
+    pub fn validate_password(password: &str) -> Result<(), AuthError> {
         if password.chars().count() < Self::MIN_PASSWORD_CHARS {
             return Err(AuthError::WeakPassword);
         }
+        if password.chars().any(char::is_control) {
+            return Err(AuthError::WeakPassword);
+        }
+        Ok(())
+    }
+
+    /// Removes every refresh token of `uid` (password change, explicit revocation).
+    pub fn revoke_refresh_tokens(&mut self, uid: &LocalId) {
+        self.refresh_tokens.retain(|_, (owner, _)| owner != uid);
+    }
+
+    /// Sets a password credential.
+    pub fn set_password(&mut self, uid: &LocalId, password: &str) -> Result<(), AuthError> {
+        Self::validate_password(password)?;
         let mut salt = [0u8; 16];
         salt[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
         salt[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());

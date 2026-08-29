@@ -240,7 +240,14 @@ impl LocalBackend {
     pub fn batch_get_documents(
         &self,
         req: &pb::BatchGetDocumentsRequest,
-    ) -> Result<(Vec<BatchGetItem>, Vec<u8>), Status> {
+    ) -> Result<
+        (
+            Vec<BatchGetItem>,
+            Vec<u8>,
+            ftd_core_types::time::LogicalInstant,
+        ),
+        Status,
+    > {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
@@ -275,6 +282,12 @@ impl LocalBackend {
                 }
                 None => (None, Vec::new()),
             };
+            let read_time = match &txn {
+                Some(t) => db
+                    .transaction_read_time(t)
+                    .map_err(|e| status_from_error(&e))?,
+                None => db.read_time(now),
+            };
             let mut items = Vec::with_capacity(req.documents.len());
             for (name, path) in req.documents.iter().zip(&paths) {
                 let path = path.clone();
@@ -294,7 +307,7 @@ impl LocalBackend {
                     None => BatchGetItem::Missing(name.clone()),
                 });
             }
-            Ok((items, report))
+            Ok((items, report, read_time))
         })
     }
 
@@ -554,7 +567,12 @@ impl LocalBackend {
                     .run_query(&accepted.query, None)
                     .map_err(|e| status_from_error(&e))?,
             };
-            let read_time = Some(encode_instant(now));
+            let read_time = Some(encode_instant(match &txn {
+                Some(t) => db
+                    .transaction_read_time(t)
+                    .map_err(|e| status_from_error(&e))?,
+                None => db.read_time(now),
+            }));
             let mut responses: Vec<pb::RunQueryResponse> = docs
                 .iter()
                 .map(|d| pb::RunQueryResponse {
@@ -576,14 +594,12 @@ impl LocalBackend {
                 });
             }
             if !report.is_empty() {
-                // A new transaction is announced in a dedicated first response.
+                // A new transaction is announced in a dedicated first response that carries
+                // nothing else (RunQueryResponse contract).
                 responses.insert(
                     0,
                     pb::RunQueryResponse {
                         transaction: report,
-                        document: None,
-                        read_time,
-                        skipped_results: 0,
                         ..Default::default()
                     },
                 );
@@ -658,6 +674,12 @@ impl LocalBackend {
                 }
                 None => None,
             };
+            let read_time = match &txn {
+                Some(t) => db
+                    .transaction_read_time(t)
+                    .map_err(|e| status_from_error(&e))?,
+                None => db.read_time(now),
+            };
             let values = db
                 .run_aggregation(&accepted.query, &aggregations, version)
                 .map_err(|e| status_from_error(&e))?;
@@ -668,7 +690,7 @@ impl LocalBackend {
             Ok(pb::RunAggregationQueryResponse {
                 result: Some(pb::AggregationResult { aggregate_fields }),
                 transaction: report,
-                read_time: Some(encode_instant(now)),
+                read_time: Some(encode_instant(read_time)),
                 explain_metrics: None,
             })
         })

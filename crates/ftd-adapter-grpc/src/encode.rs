@@ -142,9 +142,15 @@ pub fn decode_precondition(
     match &p.condition_type {
         Some(pb::precondition::ConditionType::Exists(e)) => Ok(Some(Precondition::Exists(*e))),
         Some(pb::precondition::ConditionType::UpdateTime(t)) => {
-            if t.nanos < 0 || t.nanos >= 1_000_000_000 {
+            // Firestore timestamps span 0001-01-01..9999-12-31 and update times are
+            // microsecond-aligned; anything else can never match a stored document.
+            if t.nanos < 0
+                || t.nanos >= 1_000_000_000
+                || t.nanos % 1_000 != 0
+                || !(-62_135_596_800..=253_402_300_799).contains(&t.seconds)
+            {
                 return Err(DecodeError::InvalidQuery(
-                    "precondition update_time has invalid nanos".into(),
+                    "precondition update_time must be a valid microsecond-aligned timestamp".into(),
                 ));
             }
             Ok(Some(Precondition::UpdateTime(decode_instant(t))))

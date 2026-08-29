@@ -283,8 +283,8 @@ impl Firestore for GatewayService {
             for name in &request.get_ref().documents {
                 self.authorize_get(&principal, local, name)?;
             }
-            let (items, transaction) = local.batch_get_documents(request.get_ref())?;
-            let read_time = Some(crate::encode::encode_instant(local.now()));
+            let (items, transaction, read_at) = local.batch_get_documents(request.get_ref())?;
+            let read_time = Some(crate::encode::encode_instant(read_at));
             if items.is_empty() && !transaction.is_empty() {
                 // An empty batch still has to hand back the new transaction.
                 let only = pb::BatchGetDocumentsResponse {

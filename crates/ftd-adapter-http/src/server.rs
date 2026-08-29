@@ -12,7 +12,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 use crate::control::{self, ControlState};
-use crate::identity_toolkit::{handle, AuthState};
+use crate::identity_toolkit::{handle_with, AuthState, RequestHeaders};
 
 /// Maximum accepted request body (spec 33.3 input budget).
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -23,7 +23,21 @@ async fn respond(
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().as_str().to_owned();
-    let path = req.uri().path().to_owned();
+    let path = req
+        .uri()
+        .path_and_query()
+        .map_or_else(|| req.uri().path().to_owned(), |pq| pq.as_str().to_owned());
+    let header = |name: &str| {
+        req.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    let headers = RequestHeaders {
+        authorization: header("authorization"),
+        origin: header("origin"),
+        content_type: header("content-type"),
+    };
     // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
     let collected = Limited::new(req.into_body(), MAX_BODY_BYTES)
         .collect()
@@ -48,9 +62,9 @@ async fn respond(
                 Some(json) => {
                     let r = match &control {
                         Some(c) if control::is_control_path(&path) => {
-                            control::handle(c, &method, &path, &json)
+                            control::handle_with(c, &method, &path, &headers, &json)
                         }
-                        _ => handle(&state, &method, &path, &json),
+                        _ => handle_with(&state, &method, &path, &headers, &json),
                     };
                     (r.status, r.body)
                 }

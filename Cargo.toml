@@ -9,6 +9,7 @@ members = [
     "crates/ftd-core-rules",
     "crates/ftd-core-auth",
     "crates/ftd-proto-firestore",
+    "crates/ftd-adapter-grpc",
     "tools/limit-catalog-gen",
     "tools/traceability-check",
     "tools/config-schema-check",

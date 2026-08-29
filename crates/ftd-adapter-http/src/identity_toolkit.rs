@@ -15,7 +15,7 @@
 //!
 //! Error bodies use the Firebase shape `{"error": {"code": 400, "message": "EMAIL_EXISTS"}}`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use ftd_core_auth::base32;
 use ftd_core_auth::claims::{ClaimValue, CustomClaims};
@@ -34,8 +34,8 @@ use serde_json::{json, Value};
 pub struct AuthState {
     /// User store.
     pub store: Mutex<AuthStore>,
-    /// Virtual clock (owned by the session in the full daemon).
-    pub clock: Mutex<VirtualClock>,
+    /// Virtual clock shared with the other adapters.
+    pub clock: Arc<Mutex<VirtualClock>>,
 }
 
 /// An HTTP response: status code and JSON body.

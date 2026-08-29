@@ -22,8 +22,8 @@ fn state() -> AuthState {
             SplitMix64::new(5),
             TotpPolicy::default(),
         )),
-        clock: Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(
-            1_788_004_860,
+        clock: Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
         ))),
     }
 }

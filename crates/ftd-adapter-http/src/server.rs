@@ -11,6 +11,7 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
+use crate::control::{self, ControlState};
 use crate::identity_toolkit::{handle, AuthState};
 
 /// Maximum accepted request body (spec 33.3 input budget).
@@ -18,6 +19,7 @@ pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
 async fn respond(
     state: Arc<AuthState>,
+    control: Option<Arc<ControlState>>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().as_str().to_owned();
@@ -44,7 +46,12 @@ async fn respond(
                     serde_json::json!({"error": {"code": 400, "message": "INVALID_JSON_PAYLOAD"}}),
                 ),
                 Some(json) => {
-                    let r = handle(&state, &method, &path, &json);
+                    let r = match &control {
+                        Some(c) if control::is_control_path(&path) => {
+                            control::handle(c, &method, &path, &json)
+                        }
+                        _ => handle(&state, &method, &path, &json),
+                    };
                     (r.status, r.body)
                 }
             }
@@ -60,12 +67,30 @@ async fn respond(
 
 /// Serves the Identity Toolkit surface on `listener` until the task is aborted.
 pub async fn serve(listener: TcpListener, state: Arc<AuthState>) -> std::io::Result<()> {
+    serve_inner(listener, state, None).await
+}
+
+/// Serves the Identity Toolkit surface plus the control API.
+pub async fn serve_with_control(
+    listener: TcpListener,
+    state: Arc<AuthState>,
+    control: Arc<ControlState>,
+) -> std::io::Result<()> {
+    serve_inner(listener, state, Some(control)).await
+}
+
+async fn serve_inner(
+    listener: TcpListener,
+    state: Arc<AuthState>,
+    control: Option<Arc<ControlState>>,
+) -> std::io::Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let state = state.clone();
+        let control = control.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
-            let svc = service_fn(move |req| respond(state.clone(), req));
+            let svc = service_fn(move |req| respond(state.clone(), control.clone(), req));
             // Connection errors are per-client; the accept loop keeps running.
             let _ = http1::Builder::new().serve_connection(io, svc).await;
         });

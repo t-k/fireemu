@@ -1,0 +1,29 @@
+[package]
+name = "firebase-testd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Deterministic, test-only local Firebase runtime (Firestore gRPC, Auth REST, control API)"
+
+[[bin]]
+name = "firebase-testd"
+path = "src/main.rs"
+
+[dependencies]
+ftd-core-types = { path = "../ftd-core-types" }
+ftd-core-limits = { path = "../ftd-core-limits" }
+ftd-core-session = { path = "../ftd-core-session" }
+ftd-core-firestore = { path = "../ftd-core-firestore" }
+ftd-core-auth = { path = "../ftd-core-auth" }
+ftd-proto-firestore = { path = "../ftd-proto-firestore" }
+ftd-adapter-grpc = { path = "../ftd-adapter-grpc" }
+ftd-adapter-http = { path = "../ftd-adapter-http" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync"] }
+tonic = { version = "0.13", features = ["transport"] }
+
+[lints]
+workspace = true

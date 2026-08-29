@@ -874,7 +874,7 @@ async fn read_time_selectors_serve_historical_snapshots() {
     let before = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/hist/a"),
-            consistency_selector: at(LogicalInstant::from_nanos(t0.as_nanos() - 1)),
+            consistency_selector: at(LogicalInstant::from_nanos(t0.as_nanos() - 1_000)),
             ..Default::default()
         })
         .await
@@ -941,5 +941,192 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::Aborted);
+    handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_at_one() {
+    let (mut client, clock, handle) = start().await;
+    let first = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("rt/a", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .commit_time
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(10))
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("rt/a", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let get_at = |ts: prost_types::Timestamp| pb::GetDocumentRequest {
+        name: format!("{DOCS}/rt/a"),
+        consistency_selector: Some(pb::get_document_request::ConsistencySelector::ReadTime(ts)),
+        ..Default::default()
+    };
+    // Sub-microsecond precision, the future and the distant past are rejected.
+    for (ts, what) in [
+        (
+            prost_types::Timestamp {
+                seconds: first.seconds,
+                nanos: first.nanos + 1,
+            },
+            "nanosecond precision",
+        ),
+        (
+            prost_types::Timestamp {
+                seconds: first.seconds + 3600,
+                nanos: 0,
+            },
+            "future",
+        ),
+        (
+            prost_types::Timestamp {
+                seconds: first.seconds - 7200,
+                nanos: 0,
+            },
+            "older than the retention window",
+        ),
+        (
+            prost_types::Timestamp {
+                seconds: first.seconds,
+                nanos: 1_000_000_000,
+            },
+            "nanos out of range",
+        ),
+    ] {
+        let err = client.get_document(get_at(ts)).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{what}");
+    }
+    // An empty transaction token is not "no transaction".
+    let err = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/rt/a"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                Vec::new(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    // A read-only transaction at the first commit time reads that snapshot.
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadOnly(
+                    pb::transaction_options::ReadOnly {
+                        consistency_selector: Some(
+                            pb::transaction_options::read_only::ConsistencySelector::ReadTime(
+                                first,
+                            ),
+                        ),
+                    },
+                )),
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let doc = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/rt/a"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                txn.clone(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(doc.fields.get("v"), Some(&i(1)));
+    // The same through `new_transaction` on a query.
+    let mut q = query("rt", None);
+    q.consistency_selector = Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+        pb::TransactionOptions {
+            mode: Some(pb::transaction_options::Mode::ReadOnly(
+                pb::transaction_options::ReadOnly {
+                    consistency_selector: Some(
+                        pb::transaction_options::read_only::ConsistencySelector::ReadTime(first),
+                    ),
+                },
+            )),
+        },
+    ));
+    let docs = collect_docs(&mut client, q).await;
+    assert_eq!(docs[0].fields.get("v"), Some(&i(1)));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn list_page_tokens_are_bound_to_their_listing() {
+    let (mut client, _clock, handle) = start().await;
+    let writes = (0..3)
+        .map(|n| update_write(&format!("pg/{n}"), &[("v", i(n))]))
+        .collect();
+    let committed = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let page = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "pg".to_owned(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!page.next_page_token.is_empty());
+    let continued = |token: String, collection: &str, selector| pb::ListDocumentsRequest {
+        parent: DOCS.to_owned(),
+        collection_id: collection.to_owned(),
+        page_size: 1,
+        page_token: token,
+        consistency_selector: selector,
+        ..Default::default()
+    };
+    assert!(client
+        .list_documents(continued(page.next_page_token.clone(), "pg", None))
+        .await
+        .is_ok());
+    let err = client
+        .list_documents(continued(page.next_page_token.clone(), "other", None))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    let err = client
+        .list_documents(continued(
+            page.next_page_token,
+            "pg",
+            Some(pb::list_documents_request::ConsistencySelector::ReadTime(
+                committed.commit_time.unwrap(),
+            )),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
     handle.abort();
 }

@@ -317,3 +317,22 @@ fn rest_requests_are_authorized_like_grpc() {
     );
     assert_eq!(status, 403);
 }
+
+#[test]
+fn rest_consistency_selectors_are_mutually_exclusive() {
+    let s = state(None);
+    let (status, err) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [], "transaction": "AAAA", "readTime": "2026-08-29T12:00:00Z"}),
+    );
+    assert_eq!(status, 400, "{err}");
+    let (status, err) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "n"}]}, "newTransaction": {}, "readTime": "2026-08-29T12:00:00Z"}),
+    );
+    assert_eq!(status, 400, "{err}");
+}

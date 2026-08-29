@@ -715,3 +715,103 @@ service cloud.firestore {
     );
     h.handle.abort();
 }
+
+#[tokio::test]
+async fn refused_transactional_reads_leave_no_trace_in_the_read_set() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /secret/{id} { allow read: if false; }
+    match /mine/{id} { allow read, write: if true; }
+  }
+}",
+    )
+    .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("secret/x", &[("v", s("1"))])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    let txn = h
+        .client
+        .begin_transaction(with_bearer(
+            pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            },
+            &alice_token,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut in_txn = get("secret/x");
+    in_txn.consistency_selector = Some(pb::get_document_request::ConsistencySelector::Transaction(
+        txn.clone(),
+    ));
+    let err = h
+        .client
+        .get_document(with_bearer(in_txn, &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // The forbidden document changes; the refused read must not abort the transaction.
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("secret/x", &[("v", s("2"))])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    let mut c = commit(vec![set_write("mine/y", &[("v", s("1"))])]);
+    c.transaction = txn;
+    assert!(h.client.commit(with_bearer(c, &alice_token)).await.is_ok());
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn batch_gets_share_the_multi_document_access_budget() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /items/{id} {
+      allow get: if !exists(/databases/$(database)/documents/locks/$(id));
+    }
+  }
+}",
+    )
+    .unwrap();
+    let batch = |n: usize| pb::BatchGetDocumentsRequest {
+        database: DB.to_owned(),
+        documents: (0..n).map(|i| format!("{DOCS}/items/{i}")).collect(),
+        ..Default::default()
+    };
+    let mut ok = h
+        .client
+        .batch_get_documents(with_bearer(batch(20), &alice_token))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut count = 0;
+    while let Some(r) = ok.next().await {
+        r.unwrap();
+        count += 1;
+    }
+    assert_eq!(count, 20);
+    let err = h
+        .client
+        .batch_get_documents(with_bearer(batch(21), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"));
+    h.handle.abort();
+}

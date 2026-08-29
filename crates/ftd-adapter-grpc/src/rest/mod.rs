@@ -533,6 +533,7 @@ impl RestState {
                     .collect()
             })
             .unwrap_or_default();
+        exclusive_selectors(body)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(
                 pb::batch_get_documents_request::ConsistencySelector::Transaction(
@@ -593,6 +594,7 @@ impl RestState {
             return Err(Status::invalid_argument("structuredQuery is required"));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        exclusive_selectors(body)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(pb::run_query_request::ConsistencySelector::Transaction(
                 transaction_bytes(Some(t))?,
@@ -660,6 +662,7 @@ impl RestState {
                 "aggregation query requires a structuredQuery",
             ));
         }
+        exclusive_selectors(body)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(
                 pb::run_aggregation_query_request::ConsistencySelector::Transaction(
@@ -767,6 +770,20 @@ fn database_of(resource: &str) -> Result<String, Status> {
         .ok_or_else(|| {
             Status::invalid_argument(format!("{resource} is not a database documents root"))
         })
+}
+
+/// `transaction`, `readTime` and `newTransaction` form a oneof: at most one may be given.
+fn exclusive_selectors(body: &Value) -> Result<(), Status> {
+    let given = ["transaction", "readTime", "newTransaction"]
+        .iter()
+        .filter(|k| body.get(**k).is_some_and(|v| !v.is_null()))
+        .count();
+    if given > 1 {
+        return Err(Status::invalid_argument(
+            "transaction, readTime and newTransaction are mutually exclusive",
+        ));
+    }
+    Ok(())
 }
 
 fn transaction_bytes(v: Option<&Value>) -> Result<Vec<u8>, Status> {

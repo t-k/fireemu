@@ -106,16 +106,25 @@ impl DocumentAccess for AggregateReader<'_> {
     }
 }
 
+/// Maximum distinct `get()` / `exists()` documents of one single-document or query request.
+fn single_max() -> u64 {
+    limit_value("RULES-DOC-ACCESS-SINGLE", 10)
+}
+
 /// Maximum distinct `get()` / `exists()` documents across one multi-document request.
 fn multi_total_max() -> u64 {
+    limit_value("RULES-DOC-ACCESS-MULTI-TOTAL", 20)
+}
+
+fn limit_value(id: &str, fallback: u64) -> u64 {
     ftd_core_limits::catalogs::ALL_CATALOGS
         .iter()
-        .find_map(|c| c.find("RULES-DOC-ACCESS-MULTI-TOTAL"))
+        .find_map(|c| c.find(id))
         .and_then(|l| match l.maximum {
             ftd_core_limits::model::LimitMaximum::Fixed(v) => Some(v),
             _ => None,
         })
-        .unwrap_or(20)
+        .unwrap_or(fallback)
 }
 
 /// Who is making the request.
@@ -146,6 +155,9 @@ pub enum ReadCheck<'a> {
         /// The document as it will be returned.
         snapshot: Option<&'a Document>,
     },
+    /// A multi-document read (`BatchGetDocuments`): every item is a `get`, and the items
+    /// share the `RULES-DOC-ACCESS-MULTI-TOTAL` budget.
+    Documents(&'a [(DocumentPath, Option<Document>)]),
     /// A query (`list`), proven from its constraints.
     Query {
         /// Project / database of the request.
@@ -193,6 +205,22 @@ pub fn read_guard<'a>(
                     version,
                 };
                 r.authorize_get(principal, path, snapshot, &reader)
+            }
+            ReadCheck::Documents(items) => {
+                let Some((first, _)) = items.first() else {
+                    return Ok(());
+                };
+                let parent = Parent {
+                    project: first.project().clone(),
+                    database: first.database().clone(),
+                    document: None,
+                };
+                let reader = StateReader {
+                    db,
+                    parent: &parent,
+                    version,
+                };
+                r.authorize_gets(principal, items, &reader)
             }
             ReadCheck::Query { parent, query } => {
                 let reader = StateReader {
@@ -337,10 +365,58 @@ impl RulesEnforcer {
         self.evaluate(principal, Method::Get, path, snapshot, None, access)
     }
 
+    /// Authorizes a multi-document read: each item is a `get` with its own per-operation
+    /// budget, and the distinct documents accessed across the items are limited by
+    /// `RULES-DOC-ACCESS-MULTI-TOTAL`.
+    pub fn authorize_gets(
+        &self,
+        principal: &Principal,
+        items: &[(DocumentPath, Option<Document>)],
+        access: &dyn DocumentAccess,
+    ) -> Result<(), Status> {
+        if matches!(principal, Principal::Owner) {
+            return Ok(());
+        }
+        let rules = self
+            .rules
+            .read()
+            .map_err(|_| Status::internal("rules lock poisoned"))?;
+        let Some(ruleset) = &rules.ruleset else {
+            return Ok(());
+        };
+        let now = self.now()?;
+        let reader = AggregateReader {
+            inner: access,
+            seen: RefCell::new(BTreeSet::new()),
+        };
+        let multi_total = multi_total_max();
+        for (path, snapshot) in items {
+            evaluate_with(
+                ruleset,
+                principal,
+                Method::Get,
+                path,
+                snapshot.as_ref(),
+                None,
+                now,
+                &reader,
+            )?;
+            let accessed = reader.seen.borrow().len() as u64;
+            if items.len() > 1 && accessed > multi_total {
+                return Err(Status::permission_denied(format!(
+                    "get on {} denied by Security Rules: RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}",
+                    path.relative()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Authorizes a query from its constraints (see the module documentation). One ruleset
-    /// snapshot and one request time serve every disjunction; collection-group queries are
-    /// proven at more than one depth, so a rule has to cover the group with a recursive
-    /// wildcard as in production.
+    /// snapshot, one request time and one `get()` / `exists()` budget serve every proof
+    /// (placeholder depth and disjunction); collection-group queries are proven at more than
+    /// one depth, so a rule has to cover the group with a recursive wildcard as in
+    /// production.
     pub fn authorize_query(
         &self,
         principal: &Principal,
@@ -359,6 +435,11 @@ impl RulesEnforcer {
             return Ok(());
         };
         let now = self.now()?;
+        let reader = AggregateReader {
+            inner: access,
+            seen: RefCell::new(BTreeSet::new()),
+        };
+        let single_max = single_max();
         for placeholder in placeholder_paths(parent, query)? {
             for disjunction in query.dnf() {
                 let ctx = RequestContext {
@@ -374,7 +455,14 @@ impl RulesEnforcer {
                     time_unix_nanos: now.as_nanos(),
                     abstract_path: true,
                 };
-                decide(ruleset, &ctx, Method::List, &placeholder, access)?;
+                decide(ruleset, &ctx, Method::List, &placeholder, &reader)?;
+                let accessed = reader.seen.borrow().len() as u64;
+                if accessed > single_max {
+                    return Err(Status::permission_denied(format!(
+                        "list on {} denied by Security Rules: RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}",
+                        placeholder.relative()
+                    )));
+                }
             }
         }
         Ok(())

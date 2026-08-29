@@ -342,14 +342,39 @@ impl FirestoreState {
         read_only: bool,
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
+        let read_time = self.read_time(now);
+        Ok(self.insert_transaction(read_only, self.version, read_time, now))
+    }
+
+    /// Starts a read-only transaction over the snapshot at `read_time` (the latest version
+    /// committed at or before it); its budgets still run from `now`.
+    pub fn begin_transaction_at(
+        &mut self,
+        read_time: LogicalInstant,
+        now: LogicalInstant,
+    ) -> Result<TransactionId, FirestoreError> {
+        let version = self.version_at(read_time);
+        Ok(self.insert_transaction(true, version, read_time, now))
+    }
+
+    fn insert_transaction(
+        &mut self,
+        read_only: bool,
+        read_version: CommitVersion,
+        read_time: LogicalInstant,
+        now: LogicalInstant,
+    ) -> TransactionId {
+        // Expired transactions are dropped here so abandoned ones never accumulate.
+        let ttl = transaction_ttl();
+        self.transactions
+            .retain(|_, t| !t.finished && elapsed(now, t.started_at) <= ttl);
         self.next_transaction += 1;
         let id = TransactionId(self.next_transaction);
-        let read_time = self.read_time(now);
         self.transactions.insert(
             id.clone(),
             Transaction {
                 read_only,
-                read_version: self.version,
+                read_version,
                 read_time,
                 started_at: now,
                 read_set: BTreeMap::new(),
@@ -358,7 +383,27 @@ impl FirestoreState {
                 finished: false,
             },
         );
-        Ok(id)
+        id
+    }
+
+    /// Forgets a transaction that was never handed to the client (its read was refused).
+    pub fn abandon_transaction(&mut self, id: &TransactionId) {
+        self.transactions.remove(id);
+    }
+
+    /// Records a document read that was served from the transaction's snapshot (after the
+    /// read was authorized), so that a later change aborts the commit.
+    pub fn record_transaction_read(
+        &mut self,
+        id: &TransactionId,
+        path: &DocumentPath,
+        observed: Option<&Document>,
+    ) -> Result<(), FirestoreError> {
+        self.transaction(id)?;
+        if let Some(t) = self.transactions.get_mut(id) {
+            t.read_set.insert(path.clone(), observed.map(|d| d.version));
+        }
+        Ok(())
     }
 
     /// Checks that a transaction is still usable at `now` (total and idle budgets,

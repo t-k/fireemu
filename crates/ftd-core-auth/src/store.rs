@@ -101,6 +101,12 @@ pub struct UserRecord {
     pub email_verified: bool,
     /// Display name.
     pub display_name: Option<String>,
+    /// Photo URL.
+    pub photo_url: Option<String>,
+    /// Phone number (E.164).
+    pub phone_number: Option<String>,
+    /// Creation sequence (stable listing order).
+    pub sequence: u64,
     /// Disabled flag.
     pub disabled: bool,
     /// Provider.
@@ -170,6 +176,10 @@ pub enum AuthError {
     InvalidLocalId,
     /// Caller-chosen user ID already exists.
     LocalIdExists,
+    /// Phone number already used by another user.
+    PhoneNumberExists,
+    /// Phone number is not E.164.
+    InvalidPhoneNumber,
     /// Limit violation.
     LimitExceeded(LimitViolation),
 }
@@ -186,6 +196,8 @@ impl fmt::Display for AuthError {
             Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
             Self::InvalidLocalId => f.write_str("invalid local id"),
             Self::LocalIdExists => f.write_str("local id already exists"),
+            Self::PhoneNumberExists => f.write_str("phone number already exists"),
+            Self::InvalidPhoneNumber => f.write_str("invalid phone number"),
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
         }
     }
@@ -232,6 +244,7 @@ pub struct AuthStore {
     counter: u64,
     refresh_tokens: BTreeMap<String, (LocalId, LogicalInstant)>,
     next_id_override: Option<String>,
+    next_sequence: u64,
 }
 
 impl AuthStore {
@@ -246,6 +259,7 @@ impl AuthStore {
             counter: 0,
             refresh_tokens: BTreeMap::new(),
             next_id_override: None,
+            next_sequence: 0,
         }
     }
 
@@ -327,6 +341,72 @@ impl AuthStore {
         self.refresh_tokens.clear();
     }
 
+    /// Users in creation order (stable `listUsers` paging).
+    #[must_use]
+    pub fn users_by_creation(&self) -> Vec<&UserRecord> {
+        let mut users: Vec<&UserRecord> = self.users.values().collect();
+        users.sort_by_key(|u| u.sequence);
+        users
+    }
+
+    /// User by phone number.
+    #[must_use]
+    pub fn user_by_phone(&self, phone: &str) -> Option<&UserRecord> {
+        self.users
+            .values()
+            .find(|u| u.phone_number.as_deref() == Some(phone))
+    }
+
+    /// Changes the email (unique across users).
+    pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
+        if !email.contains('@') || email.chars().any(char::is_control) {
+            return Err(AuthError::InvalidEmail);
+        }
+        if self
+            .users
+            .values()
+            .any(|u| u.local_id != *uid && u.email.as_deref() == Some(email))
+        {
+            return Err(AuthError::EmailExists);
+        }
+        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        user.email = Some(email.to_owned());
+        Ok(())
+    }
+
+    /// Validates an E.164 phone number (`+` followed by 7..=15 digits).
+    pub fn validate_phone_number(phone: &str) -> Result<(), AuthError> {
+        let digits = phone.strip_prefix('+').unwrap_or("");
+        if digits.is_empty()
+            || !(7..=15).contains(&digits.len())
+            || !digits.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(AuthError::InvalidPhoneNumber);
+        }
+        Ok(())
+    }
+
+    /// Sets or clears the phone number (unique across users).
+    pub fn set_phone_number(
+        &mut self,
+        uid: &LocalId,
+        phone: Option<&str>,
+    ) -> Result<(), AuthError> {
+        if let Some(phone) = phone {
+            Self::validate_phone_number(phone)?;
+            if self
+                .users
+                .values()
+                .any(|u| u.local_id != *uid && u.phone_number.as_deref() == Some(phone))
+            {
+                return Err(AuthError::PhoneNumberExists);
+            }
+        }
+        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        user.phone_number = phone.map(str::to_owned);
+        Ok(())
+    }
+
     /// All user IDs in canonical order.
     #[must_use]
     pub fn all_user_ids(&self) -> Vec<LocalId> {
@@ -366,6 +446,12 @@ impl AuthStore {
             email: new.email,
             email_verified: new.email_verified,
             display_name: None,
+            photo_url: None,
+            phone_number: None,
+            sequence: {
+                self.next_sequence += 1;
+                self.next_sequence
+            },
             disabled: false,
             provider: new.provider,
             custom_claims: CustomClaims::default(),

@@ -69,6 +69,8 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::UserNotFound => error(400, "USER_NOT_FOUND"),
         AuthError::InvalidLocalId => error(400, "INVALID_LOCAL_ID"),
         AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),
+        AuthError::PhoneNumberExists => error(400, "PHONE_NUMBER_EXISTS"),
+        AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),
         AuthError::LimitExceeded(v) => error(400, &format!("INVALID_CLAIMS : {}", v.limit_id)),
     }
 }
@@ -258,7 +260,7 @@ pub fn handle_with(
         }
         return match (method, action) {
             ("POST", "accounts") => admin_create(&mut store, body, at),
-            ("POST", "accounts:lookup") => lookup(&store, body, at),
+            ("POST", "accounts:lookup") => lookup(&store, body, at, true),
             ("POST", "accounts:update") => update(&mut store, body, at),
             ("POST", "accounts:delete") => admin_delete(&mut store, body),
             ("GET" | "POST", "accounts:batchGet") => admin_batch_get(&store, query, body),
@@ -279,7 +281,7 @@ pub fn handle_with(
         "/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken" => {
             sign_in_with_custom_token(&mut store, body, at)
         }
-        "/identitytoolkit.googleapis.com/v1/accounts:lookup" => lookup(&store, body, at),
+        "/identitytoolkit.googleapis.com/v1/accounts:lookup" => lookup(&store, body, at, false),
         "/identitytoolkit.googleapis.com/v1/accounts:update" => update(&mut store, body, at),
         "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:start" => {
             mfa_enrollment_start(&mut store, body, at)
@@ -430,16 +432,27 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         .iter()
         .map(|f| json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "totpInfo": {}}))
         .collect();
+    let mut providers: Vec<Value> = Vec::new();
+    if let Some(email) = &u.email {
+        providers.push(json!({"providerId": "password", "rawId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
+    }
+    if let Some(phone) = &u.phone_number {
+        providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
+    }
     json!({
         "localId": u.local_id.as_str(),
         "email": u.email,
         "displayName": u.display_name,
+        "photoUrl": u.photo_url,
+        "phoneNumber": u.phone_number,
         "emailVerified": u.email_verified,
         "disabled": u.disabled,
         "customAttributes": u.custom_claims.canonical_json(),
+        "providerUserInfo": providers,
         "mfaInfo": mfa,
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
+        "validSince": (u.tokens_valid_after.as_nanos() / 1_000_000_000).to_string(),
     })
 }
 
@@ -506,16 +519,42 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
     Ok(items)
 }
 
-fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
-    let local_ids = match id_list(body, "localId") {
-        Ok(v) => v,
+fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
+    let lists = (|| -> Result<_, JsonResponse> {
+        let federated =
+            match body.get("federatedUserId") {
+                None | Some(Value::Null) => 0,
+                Some(Value::Array(items)) if items.iter().all(Value::is_object) => items.len(),
+                Some(_) => return Err(error(
+                    400,
+                    "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
+                )),
+            };
+        Ok((
+            id_list(body, "localId")?,
+            id_list(body, "email")?,
+            id_list(body, "phoneNumber")?,
+            federated,
+        ))
+    })();
+    let (local_ids, emails, phones, federated) = match lists {
+        Ok(l) => l,
         Err(r) => return r,
     };
-    let emails = match id_list(body, "email") {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    if local_ids.is_empty() && emails.is_empty() {
+    let total = local_ids.len() + emails.len() + phones.len() + federated;
+    if total > MAX_LOOKUP_IDENTIFIERS {
+        return error(
+            400,
+            &format!("INVALID_ARGUMENT : at most {MAX_LOOKUP_IDENTIFIERS} identifiers per lookup"),
+        );
+    }
+    if total == 0 {
+        if admin {
+            return error(
+                400,
+                "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
+            );
+        }
         return match verify(store, body, at) {
             Ok(uid) => JsonResponse {
                 status: 200,
@@ -524,7 +563,8 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
             Err(r) => r,
         };
     }
-    // Resolve every identifier, in request order, without duplicates.
+    // Resolve every identifier, in request order, without duplicates. Federated
+    // identities are never linked in this runtime, so they match nobody.
     let mut found: Vec<LocalId> = Vec::new();
     let mut push = |uid: LocalId| {
         if !found.contains(&uid) {
@@ -538,6 +578,11 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     }
     for email in &emails {
         if let Some(u) = store.user_by_email(email) {
+            push(u.local_id.clone());
+        }
+    }
+    for phone in &phones {
+        if let Some(u) = store.user_by_phone(phone) {
             push(u.local_id.clone());
         }
     }
@@ -570,15 +615,43 @@ fn claims_from_json(v: &JsonValue) -> Option<ClaimValue> {
 }
 
 /// `accounts:update`: used by the Admin SDK for custom claims and disable / enable.
+/// Requested change of an optional attribute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Change {
+    /// Not mentioned by the request.
+    Keep,
+    /// `deleteAttribute` / `deleteProvider`.
+    Clear,
+    /// New value.
+    Set(String),
+}
+
+impl Change {
+    fn apply(self, slot: &mut Option<String>) {
+        match self {
+            Self::Keep => {}
+            Self::Clear => *slot = None,
+            Self::Set(v) => *slot = Some(v),
+        }
+    }
+}
+
 /// Everything an `accounts:update` request asks for, validated before any mutation.
 struct UpdatePlan {
     claims: Option<CustomClaims>,
     password: Option<String>,
-    display_name: Option<String>,
+    email: Option<String>,
+    phone_number: Change,
+    display_name: Change,
+    photo_url: Change,
     email_verified: Option<bool>,
     disable: Option<bool>,
     revoke: bool,
 }
+
+/// Request fields this runtime does not model; a non-empty value is refused instead of
+/// being silently dropped.
+const UNSUPPORTED_UPDATE_FIELDS: &[&str] = &["linkProviderUserInfo", "mfa", "mfaInfo"];
 
 fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     let Ok(JsonValue::Object(parsed)) = ftd_core_types::json::parse(attrs) else {
@@ -599,7 +672,47 @@ fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     Ok(claims)
 }
 
+fn reject_unsupported(body: &Value, fields: &[&str]) -> Result<(), JsonResponse> {
+    for f in fields {
+        let present = match body.get(*f) {
+            None | Some(Value::Null) => false,
+            Some(Value::Array(a)) => !a.is_empty(),
+            Some(Value::Object(o)) => !o.is_empty(),
+            Some(Value::String(s)) => !s.is_empty(),
+            Some(_) => true,
+        };
+        if present {
+            return Err(error(
+                400,
+                &format!("UNSUPPORTED_FIELD : {f} is not supported by this runtime"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn string_list(v: &Value, what: &str) -> Result<Vec<String>, JsonResponse> {
+    let Some(items) = v.as_array() else {
+        return Err(error(
+            400,
+            &format!("INVALID_ARGUMENT : {what} must be an array"),
+        ));
+    };
+    items
+        .iter()
+        .map(|a| {
+            a.as_str().map(str::to_owned).ok_or_else(|| {
+                error(
+                    400,
+                    &format!("INVALID_ARGUMENT : {what} entries must be strings"),
+                )
+            })
+        })
+        .collect()
+}
+
 fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
+    reject_unsupported(body, UNSUPPORTED_UPDATE_FIELDS)?;
     let claims = match opt_str(body, "customAttributes")? {
         Some(attrs) => Some(parse_custom_claims(attrs)?),
         None => None,
@@ -608,10 +721,49 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     if let Some(p) = &password {
         AuthStore::validate_password(p).map_err(|e| auth_error(&e))?;
     }
+    let change = |key: &str| -> Result<Change, JsonResponse> {
+        Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
+    };
+    let mut display_name = change("displayName")?;
+    let mut photo_url = change("photoUrl")?;
+    let mut phone_number = change("phoneNumber")?;
+    if let Change::Set(p) = &phone_number {
+        AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
+    }
+    if let Some(attrs) = body.get("deleteAttribute") {
+        for a in string_list(attrs, "deleteAttribute")? {
+            match a.as_str() {
+                "DISPLAY_NAME" => display_name = Change::Clear,
+                "PHOTO_URL" => photo_url = Change::Clear,
+                other => {
+                    return Err(error(
+                        400,
+                        &format!("INVALID_ARGUMENT : unknown deleteAttribute {other:?}"),
+                    ))
+                }
+            }
+        }
+    }
+    if let Some(providers) = body.get("deleteProvider") {
+        for p in string_list(providers, "deleteProvider")? {
+            match p.as_str() {
+                "phone" => phone_number = Change::Clear,
+                other => {
+                    return Err(error(
+                        400,
+                        &format!("UNSUPPORTED_FIELD : deleteProvider {other:?} is not supported"),
+                    ))
+                }
+            }
+        }
+    }
     Ok(UpdatePlan {
         claims,
         password,
-        display_name: opt_str(body, "displayName")?.map(str::to_owned),
+        email: opt_str(body, "email")?.map(str::to_owned),
+        phone_number,
+        display_name,
+        photo_url,
         email_verified: opt_bool(body, "emailVerified")?,
         disable: opt_bool(body, "disableUser")?,
         revoke: body.get("validSince").is_some(),
@@ -635,14 +787,48 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
         }
     };
     // Validate the whole request before touching the store (a rejected request changes
-    // nothing).
+    // nothing); email / phone uniqueness is part of the validation.
     let plan = match parse_update(body) {
         Ok(p) => p,
         Err(r) => return r,
     };
+    if let Some(email) = &plan.email {
+        if store
+            .user_by_email(email)
+            .is_some_and(|u| u.local_id != uid)
+        {
+            return error(400, "EMAIL_EXISTS");
+        }
+    }
+    if let Change::Set(phone) = &plan.phone_number {
+        if store
+            .user_by_phone(phone)
+            .is_some_and(|u| u.local_id != uid)
+        {
+            return error(400, "PHONE_NUMBER_EXISTS");
+        }
+    }
     if let Some(claims) = plan.claims {
         if let Err(e) = store.set_custom_claims(&uid, claims) {
             return auth_error(&e);
+        }
+    }
+    if let Some(email) = &plan.email {
+        if let Err(e) = store.set_email(&uid, email) {
+            return auth_error(&e);
+        }
+    }
+    match &plan.phone_number {
+        Change::Keep => {}
+        Change::Clear => {
+            if let Err(e) = store.set_phone_number(&uid, None) {
+                return auth_error(&e);
+            }
+        }
+        Change::Set(phone) => {
+            if let Err(e) = store.set_phone_number(&uid, Some(phone)) {
+                return auth_error(&e);
+            }
         }
     }
     if let Some(password) = &plan.password {
@@ -654,9 +840,8 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
         store.revoke_refresh_tokens(&uid);
     }
     if let Some(u) = store.user_mut(&uid) {
-        if let Some(name) = plan.display_name {
-            u.display_name = Some(name);
-        }
+        plan.display_name.apply(&mut u.display_name);
+        plan.photo_url.apply(&mut u.photo_url);
         if let Some(verified) = plan.email_verified {
             u.email_verified = verified;
         }
@@ -678,6 +863,7 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
 /// before the user is inserted, so a rejected request leaves the store unchanged.
 fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     let parsed = (|| -> Result<_, JsonResponse> {
+        reject_unsupported(body, &["mfaInfo", "mfa", "providerUserInfo"])?;
         let email = opt_str(body, "email")?.map(str::to_owned);
         let password = opt_str(body, "password")?.map(str::to_owned);
         if let Some(p) = &password {
@@ -686,19 +872,29 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         if password.is_some() && email.is_none() {
             return Err(error(400, "INVALID_ARGUMENT : password requires an email"));
         }
+        let phone = opt_str(body, "phoneNumber")?.map(str::to_owned);
+        if let Some(p) = &phone {
+            AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
+            if store.user_by_phone(p).is_some() {
+                return Err(error(400, "PHONE_NUMBER_EXISTS"));
+            }
+        }
         Ok((
             email,
             password,
+            phone,
             opt_str(body, "localId")?.map(str::to_owned),
             opt_str(body, "displayName")?.map(str::to_owned),
+            opt_str(body, "photoUrl")?.map(str::to_owned),
             opt_bool(body, "emailVerified")?.unwrap_or(false),
             opt_bool(body, "disabled")?.unwrap_or(false),
         ))
     })();
-    let (email, password, requested_id, display_name, email_verified, disabled) = match parsed {
-        Ok(p) => p,
-        Err(r) => return r,
-    };
+    let (email, password, phone, requested_id, display_name, photo_url, email_verified, disabled) =
+        match parsed {
+            Ok(p) => p,
+            Err(r) => return r,
+        };
     let new_user = match &email {
         Some(email) => NewUser {
             email: Some(email.clone()),
@@ -718,8 +914,13 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
             return auth_error(&e);
         }
     }
+    if let Err(e) = store.set_phone_number(&uid, phone.as_deref()) {
+        let _ = store.delete_user_by_id(uid.as_str());
+        return auth_error(&e);
+    }
     if let Some(u) = store.user_mut(&uid) {
         u.display_name = display_name;
+        u.photo_url = photo_url;
         u.disabled = disabled;
     }
     JsonResponse {
@@ -787,8 +988,8 @@ fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Admin `accounts:batchGet` (`listUsers`): `GET ?maxResults=&nextPageToken=`; the page
-/// token is the last user ID of the previous page (opaque to clients).
+/// Admin `accounts:batchGet` (`listUsers`): `GET ?maxResults=&nextPageToken=`, users in
+/// creation order; the page token is an opaque versioned cursor.
 fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> JsonResponse {
     let params = query_params(query);
     let max_text = params.get("maxResults").cloned().or_else(|| {
@@ -804,7 +1005,7 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
             _ => return error(400, "INVALID_ARGUMENT : maxResults must be 1..=1000"),
         },
     };
-    let after = params
+    let token = params
         .get("nextPageToken")
         .cloned()
         .or_else(|| {
@@ -813,19 +1014,26 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
                 .map(str::to_owned)
         })
         .filter(|t| !t.is_empty());
-    let ids = store.all_user_ids();
-    let page: Vec<&LocalId> = ids
-        .iter()
-        .filter(|uid| after.as_deref().is_none_or(|a| uid.as_str() > a))
+    let after: u64 = match token.as_deref() {
+        None => 0,
+        Some(t) => match t.strip_prefix("v1:").and_then(|n| n.parse::<u64>().ok()) {
+            Some(n) => n,
+            None => return error(400, "INVALID_PAGE_TOKEN"),
+        },
+    };
+    let page: Vec<&ftd_core_auth::store::UserRecord> = store
+        .users_by_creation()
+        .into_iter()
+        .filter(|u| u.sequence > after)
         .take(max + 1)
         .collect();
     let has_more = page.len() > max;
     let page = &page[..page.len().min(max)];
-    let users: Vec<Value> = page.iter().map(|uid| user_json(store, uid)).collect();
+    let users: Vec<Value> = page.iter().map(|u| user_json(store, &u.local_id)).collect();
     let mut response = json!({"kind": "identitytoolkit#DownloadAccountResponse", "users": users});
     if has_more {
         if let Some(last) = page.last() {
-            response["nextPageToken"] = Value::String(last.as_str().to_owned());
+            response["nextPageToken"] = Value::String(format!("v1:{}", last.sequence));
         }
     }
     JsonResponse {

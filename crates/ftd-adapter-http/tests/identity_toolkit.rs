@@ -745,3 +745,148 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         "rejected tokens create nobody"
     );
 }
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
+    let s = state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "u-a", "email": "a@example.com", "phoneNumber": "+15550000001", "photoUrl": "https://x/a.png", "displayName": "A"}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "u-b", "email": "b@example.com"}),
+    );
+    assert_eq!(status, 200);
+    // Uniqueness of email and phone number across users.
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "u-b", "email": "a@example.com"})
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "u-b", "phoneNumber": "+15550000001"})
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": "u-c", "phoneNumber": "+15550000001"})
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "u-b", "phoneNumber": "12345"})
+        )
+        .0,
+        400,
+        "not E.164"
+    );
+    // Unsupported request parts are refused instead of silently dropped.
+    assert_eq!(admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &json!({"localId": "u-b", "linkProviderUserInfo": {"providerId": "google.com", "rawId": "1"}})).0, 400);
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "u-b", "deleteProvider": ["google.com"]})
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": "u-m", "mfaInfo": [{"phoneInfo": "+15550000009"}]})
+        )
+        .0,
+        400
+    );
+    // Applied fields.
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "u-a", "email": "a2@example.com", "phoneNumber": "+15550000002", "deleteAttribute": ["DISPLAY_NAME"], "photoUrl": "https://x/a2.png"}),
+    );
+    assert_eq!(status, 200);
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"phoneNumber": ["+15550000002"]}),
+    );
+    let u = &looked["users"][0];
+    assert_eq!(u["localId"], "u-a");
+    assert_eq!(u["email"], "a2@example.com");
+    assert_eq!(u["photoUrl"], "https://x/a2.png");
+    assert!(u["displayName"].is_null());
+    assert!(
+        u["validSince"].as_str().is_some(),
+        "tokensValidAfterTime source"
+    );
+    assert_eq!(u["providerUserInfo"].as_array().map(Vec::len), Some(2));
+    // deleteProvider phone clears the number; federated lookups match nobody; an admin
+    // lookup without identifiers is an error rather than an ID-token lookup.
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "u-a", "deleteProvider": ["phone"]})
+        )
+        .0,
+        200
+    );
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"phoneNumber": ["+15550000002"], "federatedUserId": [{"providerId": "google.com", "rawId": "1"}]}),
+    );
+    assert_eq!(
+        looked.get("users").map(|u| u.as_array().map(Vec::len)),
+        Some(Some(0))
+    );
+    assert_eq!(
+        admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &json!({})).0,
+        400
+    );
+    // Page tokens are validated.
+    assert_eq!(
+        admin(
+            &s,
+            "GET",
+            &format!("{ADMIN}/accounts:batchGet?nextPageToken=u-a"),
+            &json!({})
+        )
+        .0,
+        400
+    );
+}

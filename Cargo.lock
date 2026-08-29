@@ -206,6 +206,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-core-rules"
+version = "0.1.0"
+dependencies = [
+ "ftd-core-limits",
+ "ftd-core-types",
+ "proptest",
+]
+
+[[package]]
 name = "ftd-core-session"
 version = "0.1.0"
 dependencies = [

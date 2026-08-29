@@ -53,6 +53,7 @@ mod harnesses {
 
     /// INV-EPOCH-001: the guard accepts exactly the current epoch while active.
     #[kani::proof]
+    #[kani::unwind(4)]
     fn epoch_guard_rejects_every_other_epoch() {
         let mut session =
             Session::create(SessionId::new(1), kani::any(), LogicalInstant::UNIX_EPOCH);

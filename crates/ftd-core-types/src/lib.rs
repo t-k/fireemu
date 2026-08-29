@@ -10,4 +10,5 @@
 pub mod determinism;
 pub mod edition;
 pub mod ids;
+pub mod json;
 pub mod time;

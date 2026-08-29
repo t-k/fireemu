@@ -322,6 +322,7 @@ dependencies = [
 name = "ftd-core-rules"
 version = "0.1.0"
 dependencies = [
+ "ftd-core-auth",
  "ftd-core-limits",
  "ftd-core-types",
  "proptest",

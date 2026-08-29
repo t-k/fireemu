@@ -6,6 +6,7 @@
 
 pub mod base32;
 pub mod claims;
+pub mod jwt;
 pub mod mfa;
 pub mod sha1;
 pub mod store;

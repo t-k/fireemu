@@ -20,9 +20,11 @@ mod harnesses {
     /// rejection always takes precedence over warnings.
     #[kani::proof]
     fn limit_boundary_classification() {
-        let maximum: u64 = kani::any();
-        let current: u64 = kani::any();
+        // 16-bit operands keep the u128 ratio arithmetic tractable for the solver.
+        let maximum: u16 = kani::any();
+        let current: u16 = kani::any();
         kani::assume(maximum > 0);
+        let (maximum, current) = (u64::from(maximum), u64::from(current));
         let inclusive = violates_boundary(LimitBoundary::InclusiveMaximum, current, maximum);
         let exclusive = violates_boundary(LimitBoundary::ExclusiveMaximum, current, maximum);
         assert_eq!(inclusive, current > maximum);

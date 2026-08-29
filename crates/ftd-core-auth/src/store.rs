@@ -185,6 +185,21 @@ impl AuthStore {
         &self.policy
     }
 
+    /// Project ID (token audience).
+    #[must_use]
+    pub fn project_id(&self) -> &str {
+        &self.project_id
+    }
+
+    /// Looks up a user by its ID text.
+    #[must_use]
+    pub fn user_by_id(&self, uid: &str) -> Option<&UserRecord> {
+        self.users
+            .iter()
+            .find(|(k, _)| k.as_str() == uid)
+            .map(|(_, u)| u)
+    }
+
     fn next_id(&mut self, prefix: &str) -> String {
         self.counter += 1;
         format!(

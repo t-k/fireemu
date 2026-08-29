@@ -14,6 +14,7 @@ ftd-core-limits = { path = "../ftd-core-limits" }
 
 [dev-dependencies]
 proptest.workspace = true
+ftd-core-auth = { path = "../ftd-core-auth" }
 
 [lints]
 workspace = true

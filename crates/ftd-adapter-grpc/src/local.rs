@@ -26,7 +26,8 @@ use crate::encode::{
     decode_write, encode_document, encode_instant, encode_transaction, encode_value,
     status_from_error,
 };
-use crate::gateway::{Gateway, Rejection};
+use crate::gateway::{AcceptedQuery, Gateway, Rejection};
+use crate::rules::{allow_all, WriteGuard};
 
 /// Local backend state.
 pub struct LocalBackend {
@@ -56,13 +57,80 @@ fn lock_poisoned() -> Status {
     Status::internal("backend state lock poisoned")
 }
 
-/// Response of a batch get.
-#[derive(Debug)]
+/// One item of a batch get (core snapshot; encoded after authorization).
+#[derive(Debug, Clone)]
 pub enum BatchGetItem {
     /// Found document.
-    Found(pb::Document),
+    Found(Document),
     /// Missing document name.
     Missing(String),
+}
+
+impl BatchGetItem {
+    /// Path of the item.
+    pub fn path(&self) -> Result<DocumentPath, Status> {
+        match self {
+            Self::Found(d) => Ok(d.path.clone()),
+            Self::Missing(name) => decode_document_name(name).map_err(status),
+        }
+    }
+
+    /// Snapshot document, if found.
+    #[must_use]
+    pub const fn document(&self) -> Option<&Document> {
+        match self {
+            Self::Found(d) => Some(d),
+            Self::Missing(_) => None,
+        }
+    }
+
+    /// Wire form with the response mask applied.
+    #[must_use]
+    pub fn encode(&self, mask: Option<&[FieldPath]>) -> pb::batch_get_documents_response::Result {
+        match self {
+            Self::Found(d) => {
+                pb::batch_get_documents_response::Result::Found(encode_masked(d, mask))
+            }
+            Self::Missing(n) => pb::batch_get_documents_response::Result::Missing(n.clone()),
+        }
+    }
+}
+
+/// Result of a batch get: snapshots, the transaction to report and the read time.
+#[derive(Debug, Clone)]
+pub struct BatchGetOutcome {
+    /// Items in request order.
+    pub items: Vec<BatchGetItem>,
+    /// New transaction token (empty unless `new_transaction` was requested).
+    pub transaction: Vec<u8>,
+    /// Snapshot time.
+    pub read_time: ftd_core_types::time::LogicalInstant,
+    /// Response mask.
+    pub mask: Option<Vec<FieldPath>>,
+}
+
+/// A single-document read: the exact snapshot the response is built from.
+#[derive(Debug, Clone)]
+pub struct DocumentSnapshot {
+    /// Path.
+    pub path: DocumentPath,
+    /// Snapshot (`None` = missing).
+    pub document: Option<Document>,
+    /// Response mask.
+    pub mask: Option<Vec<FieldPath>>,
+}
+
+impl DocumentSnapshot {
+    /// Wire form (`NOT_FOUND` when missing).
+    pub fn into_response(self) -> Result<pb::Document, Status> {
+        match self.document {
+            Some(d) => Ok(encode_masked(&d, self.mask.as_deref())),
+            None => Err(Status::not_found(format!(
+                "Document not found: {}",
+                self.path.resource_name()
+            ))),
+        }
+    }
 }
 
 impl LocalBackend {
@@ -116,14 +184,37 @@ impl LocalBackend {
         &self,
         parent: &Parent,
         writes: &[Write],
+        guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
         let now = self.now();
         let result = self.with_db(parent, |db| {
+            guard(db, writes, now)?;
             db.commit(writes, None, now)
                 .map_err(|e| status_from_error(&e))
         })?;
         self.publish(parent, result.version);
         Ok(crate::streams::WireCommit::from_result(&result))
+    }
+
+    /// Current version and read time of a database (Listen boundaries, resume tokens).
+    pub fn snapshot(
+        &self,
+        parent: &Parent,
+    ) -> Result<(CommitVersion, ftd_core_types::time::LogicalInstant), Status> {
+        let now = self.now();
+        self.with_db(parent, |db| Ok((db.current_version(), db.read_time(now))))
+    }
+
+    /// Decodes and validates a structured query through the strict gateway.
+    pub fn accepted_query(
+        &self,
+        parent: &Parent,
+        sq: &pb::StructuredQuery,
+    ) -> Result<AcceptedQuery, Status> {
+        let query = decode_structured_query(parent, sq).map_err(status)?;
+        self.gateway
+            .validate_query(&query)
+            .map_err(|r| r.to_status())
     }
 
     /// Runs an accepted query at the latest version and returns core documents.
@@ -218,8 +309,11 @@ impl LocalBackend {
         !matches!(opts.mode, Some(pb::transaction_options::Mode::ReadWrite(_)))
     }
 
-    /// `GetDocument`.
-    pub fn get_document(&self, req: &pb::GetDocumentRequest) -> Result<pb::Document, Status> {
+    /// `GetDocument` as a snapshot (authorize, then [`DocumentSnapshot::into_response`]).
+    pub fn get_document_snapshot(
+        &self,
+        req: &pb::GetDocumentRequest,
+    ) -> Result<DocumentSnapshot, Status> {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
         let txn = match &req.consistency_selector {
@@ -235,38 +329,32 @@ impl LocalBackend {
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let now = self.now();
-        self.with_db(&parent, |db| {
-            let doc = match &txn {
-                Some(t) => {
-                    db.touch_transaction(t, now)
-                        .map_err(|e| status_from_error(&e))?;
-                    db.get_in_transaction(t, &path)
-                        .map_err(|e| status_from_error(&e))?
-                }
-                None => db.get(&path).cloned(),
-            };
-            let mut doc = doc.ok_or_else(|| {
-                Status::not_found(format!("Document not found: {}", path.resource_name()))
-            })?;
-            if let Some(mask) = &mask {
-                doc.fields = project_fields(&doc.fields, mask);
+        let document = self.with_db(&parent, |db| match &txn {
+            Some(t) => {
+                db.touch_transaction(t, now)
+                    .map_err(|e| status_from_error(&e))?;
+                db.get_in_transaction(t, &path)
+                    .map_err(|e| status_from_error(&e))
             }
-            Ok(encode_document(&doc))
+            None => Ok(db.get(&path).cloned()),
+        })?;
+        Ok(DocumentSnapshot {
+            path,
+            document,
+            mask,
         })
+    }
+
+    /// `GetDocument`.
+    pub fn get_document(&self, req: &pb::GetDocumentRequest) -> Result<pb::Document, Status> {
+        self.get_document_snapshot(req)?.into_response()
     }
 
     /// `BatchGetDocuments`: returns the items and the transaction to report (new or given).
     pub fn batch_get_documents(
         &self,
         req: &pb::BatchGetDocumentsRequest,
-    ) -> Result<
-        (
-            Vec<BatchGetItem>,
-            Vec<u8>,
-            ftd_core_types::time::LogicalInstant,
-        ),
-        Status,
-    > {
+    ) -> Result<BatchGetOutcome, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
@@ -317,16 +405,16 @@ impl LocalBackend {
                     None => db.get(&path).cloned(),
                 };
                 items.push(match doc {
-                    Some(mut d) => {
-                        if let Some(mask) = &mask {
-                            d.fields = project_fields(&d.fields, mask);
-                        }
-                        BatchGetItem::Found(encode_document(&d))
-                    }
+                    Some(d) => BatchGetItem::Found(d),
                     None => BatchGetItem::Missing(name.clone()),
                 });
             }
-            Ok((items, report, read_time))
+            Ok(BatchGetOutcome {
+                items,
+                transaction: report,
+                read_time,
+                mask: mask.clone(),
+            })
         })
     }
 
@@ -403,10 +491,23 @@ impl LocalBackend {
         write: Write,
         mask: Option<&pb::DocumentMask>,
     ) -> Result<pb::Document, Status> {
+        self.execute_planned_with(parent, write, mask, &allow_all)
+    }
+
+    /// Executes a single planned write; `guard` runs inside the database critical section
+    /// (Security Rules) right before the commit.
+    pub fn execute_planned_with(
+        &self,
+        parent: &Parent,
+        write: Write,
+        mask: Option<&pb::DocumentMask>,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::Document, Status> {
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.now();
         let (doc, version) = self.with_db(parent, |db| {
+            guard(db, std::slice::from_ref(&write), now)?;
             let result = db
                 .commit(&[write], None, now)
                 .map_err(|e| status_from_error(&e))?;
@@ -460,9 +561,19 @@ impl LocalBackend {
 
     /// `DeleteDocument`.
     pub fn delete_document(&self, req: &pb::DeleteDocumentRequest) -> Result<(), Status> {
+        self.delete_document_with(req, &allow_all)
+    }
+
+    /// `DeleteDocument` with a write guard.
+    pub fn delete_document_with(
+        &self,
+        req: &pb::DeleteDocumentRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
         let now = self.now();
         let version = self.with_db(&parent, |db| {
+            guard(db, std::slice::from_ref(&write), now)?;
             db.commit(&[write], None, now)
                 .map(|r| r.version)
                 .map_err(|e| status_from_error(&e))
@@ -517,10 +628,20 @@ impl LocalBackend {
 
     /// `Commit`.
     pub fn commit(&self, req: &pb::CommitRequest) -> Result<pb::CommitResponse, Status> {
+        self.commit_with(req, &allow_all)
+    }
+
+    /// `Commit` with a write guard.
+    pub fn commit_with(
+        &self,
+        req: &pb::CommitRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::CommitResponse, Status> {
         let (parent, writes) = Self::plan_commit(req)?;
         let txn = Self::txn(&parent, &req.transaction)?;
         let now = self.now();
         let result = self.with_db(&parent, |db| {
+            guard(db, &writes, now)?;
             db.commit(&writes, txn.as_ref(), now)
                 .map_err(|e| status_from_error(&e))
         })?;
@@ -774,6 +895,15 @@ impl LocalBackend {
         &self,
         req: &pb::BatchWriteRequest,
     ) -> Result<pb::BatchWriteResponse, Status> {
+        self.batch_write_with(req, &allow_all)
+    }
+
+    /// `BatchWrite` with a write guard (run per write, inside the critical section).
+    pub fn batch_write_with(
+        &self,
+        req: &pb::BatchWriteRequest,
+        guard: WriteGuard<'_>,
+    ) -> Result<pb::BatchWriteResponse, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
         let decoded: Vec<Result<Write, Status>> = req
@@ -802,6 +932,7 @@ impl LocalBackend {
             let mut statuses = Vec::with_capacity(req.writes.len());
             for decoded in decoded {
                 let outcome = decoded.and_then(|write| {
+                    guard(db, std::slice::from_ref(&write), now)?;
                     db.commit(std::slice::from_ref(&write), None, now)
                         .map_err(|e| status_from_error(&e))
                 });

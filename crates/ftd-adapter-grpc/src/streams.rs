@@ -1,17 +1,20 @@
 //! Streaming RPCs of the local backend: `Write` (handshake + sequential atomic commits) and
 //! `Listen` (initial snapshot, then a diff after every commit on the database).
 //!
-//! `Listen` keeps one target registry per stream. A target is refreshed whenever the
-//! backend publishes a commit on its database; the diff against the last known
-//! `(path, version)` set becomes `DocumentChange` / `DocumentDelete` / `DocumentRemove`
-//! messages, followed by a `CURRENT`/`NO_CHANGE` boundary carrying the read time. Security
-//! Rules are re-checked on every refresh; a denial removes the target with a
-//! `PERMISSION_DENIED` cause, exactly as the service does for one-shot reads.
+//! `Listen` keeps one target registry per stream. Whenever the backend publishes a commit
+//! on the database (or a target is added), every active target is refreshed against one
+//! database snapshot; the diff against its last known `(path, version)` set becomes
+//! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
+//! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
+//! the snapshot version. A target added with a resume token is `RESET` before its replay
+//! (resume history is not kept). Security Rules are re-checked on every refresh; a denial
+//! removes the target with a `PERMISSION_DENIED` cause.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use ftd_core_firestore::path::DocumentPath;
@@ -22,17 +25,18 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::{Status, Streaming};
 
-use crate::decode::{decode_structured_query, parse_parent, Parent};
+use crate::decode::{parse_parent, Parent};
 use crate::encode::{decode_write, encode_document, encode_instant};
-use crate::gateway::{Gateway, Rejection};
+use crate::gateway::Gateway;
 use crate::local::{CommitEvent, LocalBackend};
-use crate::rules::{Principal, RulesEnforcer};
+use crate::rules::{write_guard, Principal, RulesEnforcer};
 
 /// Shared pieces every stream task needs.
 pub struct StreamContext {
     /// Local backend.
     pub local: Arc<LocalBackend>,
-    /// Strict gateway (query validation).
+    /// Strict gateway (kept for parity with the service; queries are validated through the
+    /// backend).
     pub gateway: Arc<Gateway>,
     /// Rules enforcement, if configured.
     pub rules: Option<Arc<RulesEnforcer>>,
@@ -41,16 +45,26 @@ pub struct StreamContext {
 }
 
 fn status(e: crate::decode::DecodeError) -> Status {
-    Rejection::Decode(e).to_status()
+    crate::gateway::Rejection::Decode(e).to_status()
 }
 
 fn database_parent(database: &str) -> Result<Parent, Status> {
     parse_parent(&format!("{database}/documents")).map_err(status)
 }
 
+static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
+
 // ---------------------------------------------------------------------------------------
 // Write stream
 // ---------------------------------------------------------------------------------------
+
+struct WriteStreamState {
+    parent: Option<Parent>,
+    stream_id: String,
+    /// Tokens are issued 1, 2, 3, ...; a request may acknowledge any issued token (clients
+    /// pipeline several batches against the last token they saw).
+    issued: u64,
+}
 
 /// Runs the `Write` stream: the first message (no writes) is the handshake; every later
 /// message commits its writes atomically and answers with results and a fresh token.
@@ -59,12 +73,14 @@ pub async fn write_stream(
     mut inbound: Streaming<pb::WriteRequest>,
     tx: mpsc::Sender<Result<pb::WriteResponse, Status>>,
 ) {
-    let mut parent: Option<Parent> = None;
-    let mut token: u64 = 0;
-    let stream_id = "ftd-write-stream".to_owned();
+    let mut state = WriteStreamState {
+        parent: None,
+        stream_id: format!("ftd-{}", NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)),
+        issued: 0,
+    };
     while let Some(next) = inbound.next().await {
         let Ok(req) = next else { break };
-        let outcome = handle_write_request(&ctx, &mut parent, &mut token, &stream_id, &req);
+        let outcome = handle_write_request(&ctx, &mut state, &req);
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
             break;
@@ -72,32 +88,49 @@ pub async fn write_stream(
     }
 }
 
+fn token_bytes(n: u64) -> Vec<u8> {
+    n.to_be_bytes().to_vec()
+}
+
 fn handle_write_request(
     ctx: &StreamContext,
-    parent: &mut Option<Parent>,
-    token: &mut u64,
-    stream_id: &str,
+    state: &mut WriteStreamState,
     req: &pb::WriteRequest,
 ) -> Result<pb::WriteResponse, Status> {
-    if parent.is_none() {
+    let first = state.parent.is_none();
+    if first {
         if req.database.is_empty() {
             return Err(Status::invalid_argument(
                 "the first Write request must name the database",
             ));
         }
-        *parent = Some(database_parent(&req.database)?);
+        if !req.stream_id.is_empty() || !req.stream_token.is_empty() {
+            return Err(Status::failed_precondition(
+                "write stream resumption is not supported; start a new stream",
+            ));
+        }
+        state.parent = Some(database_parent(&req.database)?);
     }
-    let Some(parent) = parent.as_ref() else {
+    let Some(parent) = state.parent.as_ref() else {
         return Err(Status::internal("write stream without database"));
     };
-    if !req.stream_token.is_empty() && req.stream_token != token.to_be_bytes() {
-        return Err(Status::failed_precondition("unknown write stream token"));
+    if !req.stream_token.is_empty() {
+        let acknowledged: Option<[u8; 8]> = req.stream_token.as_slice().try_into().ok();
+        let acknowledged = acknowledged.map_or(0, u64::from_be_bytes);
+        if acknowledged == 0 || acknowledged > state.issued {
+            return Err(Status::failed_precondition("unknown write stream token"));
+        }
     }
-    *token += 1;
+    state.issued += 1;
+    let stream_id = if first {
+        state.stream_id.clone()
+    } else {
+        String::new()
+    };
     if req.writes.is_empty() {
         return Ok(pb::WriteResponse {
-            stream_id: stream_id.to_owned(),
-            stream_token: token.to_be_bytes().to_vec(),
+            stream_id,
+            stream_token: token_bytes(state.issued),
             write_results: Vec::new(),
             commit_time: None,
         });
@@ -111,15 +144,11 @@ fn handle_write_request(
     for w in &writes {
         LocalBackend::check_database(parent, &w.op.path().resource_name())?;
     }
-    if let Some(rules) = &ctx.rules {
-        for w in &writes {
-            rules.authorize_write(&ctx.principal, &ctx.local, parent, w)?;
-        }
-    }
-    let result = ctx.local.commit_writes(parent, &writes)?;
+    let guard = write_guard(ctx.rules.as_ref(), &ctx.principal);
+    let result = ctx.local.commit_writes(parent, &writes, &*guard)?;
     Ok(pb::WriteResponse {
-        stream_id: stream_id.to_owned(),
-        stream_token: token.to_be_bytes().to_vec(),
+        stream_id,
+        stream_token: token_bytes(state.issued),
         write_results: result.write_results,
         commit_time: result.commit_time,
     })
@@ -131,19 +160,17 @@ fn handle_write_request(
 
 enum TargetKind {
     Documents(Vec<DocumentPath>),
-    Query(Box<QueryTargetState>),
-}
-
-struct QueryTargetState {
-    query: Query,
-    collection_id: String,
+    Query(Box<Query>),
 }
 
 struct TargetState {
     kind: TargetKind,
     known: BTreeMap<DocumentPath, CommitVersion>,
     once: bool,
+    /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
+    /// Responses produced by the last refresh, drained by the caller.
+    pending: Vec<pb::ListenResponse>,
 }
 
 /// Runs the `Listen` stream.
@@ -225,40 +252,33 @@ fn handle_listen_request(
                 )));
             }
             let kind = decode_target(ctx, parent, target)?;
-            let mut state = TargetState {
-                kind,
-                known: BTreeMap::new(),
-                once: target.once,
-                current: false,
-            };
             out.push(target_change(
                 pb::target_change::TargetChangeType::Add,
                 vec![id],
                 None,
                 None,
             ));
-            let read_time = encode_instant(ctx.local.now());
-            match refresh_target(ctx, parent, id, &mut state, out) {
-                Ok(()) => {
-                    state.current = true;
-                    out.push(target_change(
-                        pb::target_change::TargetChangeType::Current,
-                        vec![id],
-                        Some(resume_token(ctx)),
-                        Some(read_time),
-                    ));
-                    out.push(target_change(
-                        pb::target_change::TargetChangeType::NoChange,
-                        vec![],
-                        None,
-                        Some(read_time),
-                    ));
-                    if !state.once {
-                        targets.insert(id, state);
-                    }
-                }
-                Err(e) => out.push(removed_with_cause(id, &e)),
+            if target.resume_type.is_some() {
+                // No resume history is kept: the client drops its cache and replays.
+                out.push(target_change(
+                    pb::target_change::TargetChangeType::Reset,
+                    vec![id],
+                    None,
+                    None,
+                ));
             }
+            targets.insert(
+                id,
+                TargetState {
+                    kind,
+                    known: BTreeMap::new(),
+                    once: target.once,
+                    current: false,
+                    pending: Vec::new(),
+                },
+            );
+            // Every target is brought to the same snapshot before one global boundary.
+            refresh_all(ctx, Some(parent), targets, out);
         }
         Some(pb::listen_request::TargetChange::RemoveTarget(id)) => {
             if targets.remove(id).is_some() {
@@ -284,8 +304,7 @@ fn decode_target(
         Some(pb::target::TargetType::Documents(d)) => {
             let mut paths = Vec::with_capacity(d.documents.len());
             for name in &d.documents {
-                let path = LocalBackend::check_database(parent, name)?;
-                paths.push(path);
+                paths.push(LocalBackend::check_database(parent, name)?);
             }
             Ok(TargetKind::Documents(paths))
         }
@@ -302,24 +321,16 @@ fn decode_target(
                     "query target requires a structured_query",
                 ));
             };
-            let query = decode_structured_query(&query_parent, sq).map_err(status)?;
-            let accepted = ctx
-                .gateway
-                .validate_query(&query)
-                .map_err(|r| r.to_status())?;
-            Ok(TargetKind::Query(Box::new(QueryTargetState {
-                query: accepted.query,
-                collection_id: sq
-                    .from
-                    .first()
-                    .map(|f| f.collection_id.clone())
-                    .unwrap_or_default(),
-            })))
+            let accepted = ctx.local.accepted_query(&query_parent, sq)?;
+            Ok(TargetKind::Query(Box::new(accepted.query)))
         }
         None => Err(Status::invalid_argument("target without target_type")),
     }
 }
 
+/// Refreshes every target against one snapshot, then emits the global boundary. Targets
+/// whose rules now deny are removed with a cause; `once` targets are removed after their
+/// first consistent snapshot.
 fn refresh_all(
     ctx: &StreamContext,
     parent: Option<&Parent>,
@@ -327,12 +338,38 @@ fn refresh_all(
     out: &mut Vec<pb::ListenResponse>,
 ) {
     let Some(parent) = parent else { return };
-    let read_time = encode_instant(ctx.local.now());
+    let (version, read_at) = match ctx.local.snapshot(parent) {
+        Ok(s) => s,
+        Err(e) => {
+            for id in targets.keys() {
+                out.push(removed_with_cause(*id, &e));
+            }
+            targets.clear();
+            return;
+        }
+    };
+    let read_time = encode_instant(read_at);
+    let token = version.value().to_be_bytes().to_vec();
     let mut removed = Vec::new();
     for (id, state) in targets.iter_mut() {
-        if let Err(e) = refresh_target(ctx, parent, *id, state, out) {
-            out.push(removed_with_cause(*id, &e));
-            removed.push(*id);
+        match refresh_target(ctx, parent, *id, state, read_time) {
+            Ok(()) => {
+                out.append(&mut state.pending);
+                if !state.current {
+                    state.current = true;
+                    out.push(target_change(
+                        pb::target_change::TargetChangeType::Current,
+                        vec![*id],
+                        Some(token.clone()),
+                        Some(read_time),
+                    ));
+                }
+            }
+            Err(e) => {
+                state.pending.clear();
+                out.push(removed_with_cause(*id, &e));
+                removed.push(*id);
+            }
         }
     }
     for id in removed {
@@ -345,16 +382,30 @@ fn refresh_all(
         out.push(target_change(
             pb::target_change::TargetChangeType::NoChange,
             vec![*id],
-            Some(resume_token(ctx)),
+            Some(token.clone()),
             Some(read_time),
         ));
     }
     out.push(target_change(
         pb::target_change::TargetChangeType::NoChange,
         vec![],
-        None,
+        Some(token),
         Some(read_time),
     ));
+    let once: Vec<i32> = targets
+        .iter()
+        .filter(|(_, t)| t.once)
+        .map(|(id, _)| *id)
+        .collect();
+    for id in once {
+        targets.remove(&id);
+        out.push(target_change(
+            pb::target_change::TargetChangeType::Remove,
+            vec![id],
+            None,
+            None,
+        ));
+    }
 }
 
 /// Recomputes one target and appends the diff against its last known state.
@@ -363,45 +414,34 @@ fn refresh_target(
     parent: &Parent,
     id: i32,
     state: &mut TargetState,
-    out: &mut Vec<pb::ListenResponse>,
+    read_time: prost_types::Timestamp,
 ) -> Result<(), Status> {
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => {
             let mut docs = Vec::new();
             for path in paths {
+                let doc = ctx.local.current_document(parent, path)?;
                 if let Some(rules) = &ctx.rules {
-                    rules.authorize_get(&ctx.principal, &ctx.local, parent, path)?;
+                    rules.authorize_get(&ctx.principal, path, doc.as_ref())?;
                 }
-                if let Some(d) = ctx.local.current_document(parent, path)? {
+                if let Some(d) = doc {
                     docs.push(d);
                 }
             }
             docs
         }
-        TargetKind::Query(q) => {
-            let docs = ctx.local.run_query_latest(parent, &q.query)?;
+        TargetKind::Query(query) => {
             if let Some(rules) = &ctx.rules {
-                let paths: Vec<DocumentPath> = docs.iter().map(|d| d.path.clone()).collect();
-                let placeholder = crate::rules::placeholder_path(parent, &q.collection_id)?;
-                rules.authorize_list(&ctx.principal, &ctx.local, parent, &paths, &placeholder)?;
+                rules.authorize_query(&ctx.principal, parent, query)?;
             }
-            docs
+            ctx.local.run_query_latest(parent, query)?
         }
     };
-    let read_time = Some(encode_instant(ctx.local.now()));
-    let mut next_known = BTreeMap::new();
+    let mut next_known: BTreeMap<DocumentPath, CommitVersion> = BTreeMap::new();
     for doc in &current {
         next_known.insert(doc.path.clone(), doc.version);
         if state.known.get(&doc.path) != Some(&doc.version) {
-            out.push(pb::ListenResponse {
-                response_type: Some(pb::listen_response::ResponseType::DocumentChange(
-                    pb::DocumentChange {
-                        document: Some(encode_document(doc)),
-                        target_ids: vec![id],
-                        removed_target_ids: vec![],
-                    },
-                )),
-            });
+            out_change(doc, id, &mut state.pending);
         }
     }
     for path in state.known.keys() {
@@ -414,16 +454,16 @@ fn refresh_target(
             pb::listen_response::ResponseType::DocumentRemove(pb::DocumentRemove {
                 document: name,
                 removed_target_ids: vec![id],
-                read_time,
+                read_time: Some(read_time),
             })
         } else {
             pb::listen_response::ResponseType::DocumentDelete(pb::DocumentDelete {
                 document: name,
                 removed_target_ids: vec![id],
-                read_time,
+                read_time: Some(read_time),
             })
         };
-        out.push(pb::ListenResponse {
+        state.pending.push(pb::ListenResponse {
             response_type: Some(response_type),
         });
     }
@@ -431,8 +471,16 @@ fn refresh_target(
     Ok(())
 }
 
-fn resume_token(ctx: &StreamContext) -> Vec<u8> {
-    ctx.local.now().as_nanos().to_be_bytes().to_vec()
+fn out_change(doc: &Document, id: i32, out: &mut Vec<pb::ListenResponse>) {
+    out.push(pb::ListenResponse {
+        response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+            pb::DocumentChange {
+                document: Some(encode_document(doc)),
+                target_ids: vec![id],
+                removed_target_ids: vec![],
+            },
+        )),
+    });
 }
 
 fn target_change(

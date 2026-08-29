@@ -588,6 +588,18 @@ impl FirestoreState {
         None
     }
 
+    /// Result of applying `write` to `current` (the `request.resource` seen by Security
+    /// Rules when several writes of one commit target the same document). Preconditions are
+    /// not checked here.
+    pub fn preview_from(
+        current: Option<Document>,
+        write: &Write,
+        now: LogicalInstant,
+    ) -> Result<Option<Document>, FirestoreError> {
+        let (next, _) = apply_write(write, current, now, CommitVersion::default())?;
+        Ok(next)
+    }
+
     /// Result of applying `write` to the current document without publishing anything (the
     /// `request.resource` seen by Security Rules). Preconditions are not checked here.
     pub fn preview_write(

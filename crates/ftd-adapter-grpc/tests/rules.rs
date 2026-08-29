@@ -51,6 +51,9 @@ service cloud.firestore {
     match /archive/{id} {
       allow read: if request.auth != null && resource.data.owner == request.auth.uid;
     }
+    match /strict/{id} {
+      allow create: if resource.data.x == 1;
+    }
   }
 }
 ";
@@ -302,6 +305,18 @@ async fn owner_bypasses_rules_and_users_are_checked_per_method() {
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
 
+    // A create rule that reads the (absent) existing resource evaluates to false: denied,
+    // never silently allowed.
+    let err = h
+        .client
+        .commit(with_bearer(
+            commit(vec![set_write("strict/s1", &[("x", s("1"))])]),
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
     // A forged / unknown token is UNAUTHENTICATED, not silently anonymous.
     let err = h
         .client
@@ -312,8 +327,24 @@ async fn owner_bypasses_rules_and_users_are_checked_per_method() {
     h.handle.abort();
 }
 
+fn list_where(collection: &str, field: &str, value: pb::Value) -> pb::RunQueryRequest {
+    let mut req = list(collection);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut req.query_type {
+        sq.r#where = Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                field: Some(sq::FieldReference {
+                    field_path: field.to_owned(),
+                }),
+                op: sq::field_filter::Operator::Equal as i32,
+                value: Some(value),
+            })),
+        });
+    }
+    req
+}
+
 #[tokio::test]
-async fn list_is_evaluated_per_document_and_empty_results_do_not_leak() {
+async fn list_is_authorized_from_the_query_constraints() {
     let mut h = start().await;
     let (alice, alice_token) = h.user("alice@example.com");
     let (bob, bob_token) = h.user("bob@example.com");
@@ -328,7 +359,7 @@ async fn list_is_evaluated_per_document_and_empty_results_do_not_leak() {
         .await
         .unwrap();
 
-    // An unfiltered list returns a document bob may not read: denied for bob.
+    // Without an owner constraint the rule cannot be proven: denied, whatever the data.
     let err = h
         .client
         .run_query(with_bearer(list("notes"), &bob_token))
@@ -336,22 +367,13 @@ async fn list_is_evaluated_per_document_and_empty_results_do_not_leak() {
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
 
-    // Filtered on owner: every returned document passes the rule.
-    let mut filtered = list("notes");
-    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut filtered.query_type {
-        sq.r#where = Some(sq::Filter {
-            filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
-                field: Some(sq::FieldReference {
-                    field_path: "owner".to_owned(),
-                }),
-                op: sq::field_filter::Operator::Equal as i32,
-                value: Some(s(&bob)),
-            })),
-        });
-    }
+    // Constrained on owner == bob: the synthetic resource satisfies the rule.
     let mut stream = h
         .client
-        .run_query(with_bearer(filtered, &bob_token))
+        .run_query(with_bearer(
+            list_where("notes", "owner", s(&bob)),
+            &bob_token,
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -363,11 +385,14 @@ async fn list_is_evaluated_per_document_and_empty_results_do_not_leak() {
     }
     assert_eq!(names, vec![format!("{DOCS}/notes/b1")]);
 
-    // Empty collection with a resource-dependent rule: allowed (nothing to leak); an
-    // uncovered path is still denied.
+    // The decision does not depend on stored data: an empty collection behaves the same
+    // (constrained: allowed; unconstrained: denied), so nothing leaks about existence.
     let mut stream = h
         .client
-        .run_query(with_bearer(list("archive"), &alice_token))
+        .run_query(with_bearer(
+            list_where("archive", "owner", s(&alice)),
+            &alice_token,
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -375,11 +400,26 @@ async fn list_is_evaluated_per_document_and_empty_results_do_not_leak() {
     assert!(first.document.is_none());
     let err = h
         .client
+        .run_query(with_bearer(list("archive"), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // Claiming someone else's owner value does not help.
+    let err = h
+        .client
+        .run_query(with_bearer(
+            list_where("notes", "owner", s(&alice)),
+            &bob_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    let err = h
+        .client
         .run_query(with_bearer(list("uncovered"), &alice_token))
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    // ...but a rule that denies regardless of resource still denies on empty results.
     let err = h.client.run_query(list("notes")).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
 

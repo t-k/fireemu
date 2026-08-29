@@ -24,8 +24,17 @@ pub enum RulesValue {
     Map(BTreeMap<String, RulesValue>),
     /// Path (segments without the leading slash).
     Path(Vec<String>),
-    /// Timestamp as Unix seconds.
+    /// Timestamp as Unix nanoseconds (full Firestore precision).
     Timestamp(i64),
+    /// Bytes.
+    Bytes(Vec<u8>),
+    /// Geo point.
+    LatLng {
+        /// Latitude.
+        latitude: f64,
+        /// Longitude.
+        longitude: f64,
+    },
 }
 
 impl RulesValue {
@@ -42,6 +51,8 @@ impl RulesValue {
             Self::Map(_) => "map",
             Self::Path(_) => "path",
             Self::Timestamp(_) => "timestamp",
+            Self::Bytes(_) => "bytes",
+            Self::LatLng { .. } => "latlng",
         }
     }
 
@@ -93,7 +104,12 @@ impl fmt::Display for RulesValue {
                 f.write_str("}")
             }
             Self::Path(segments) => write!(f, "/{}", segments.join("/")),
-            Self::Timestamp(t) => write!(f, "timestamp({t})"),
+            Self::Timestamp(t) => write!(f, "timestamp({t}ns)"),
+            Self::Bytes(b) => write!(f, "bytes({} bytes)", b.len()),
+            Self::LatLng {
+                latitude,
+                longitude,
+            } => write!(f, "latlng({latitude}, {longitude})"),
         }
     }
 }

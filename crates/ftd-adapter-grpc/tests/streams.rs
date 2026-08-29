@@ -268,7 +268,13 @@ async fn listen_delivers_snapshot_then_live_diffs() {
     let initial = next_until(&mut responses, "NO_CHANGE[]").await;
     assert_eq!(
         initial,
-        vec!["ADD[1]", "CHANGE a", "CURRENT[1]", "NO_CHANGE[]"]
+        vec![
+            "ADD[1]",
+            "CHANGE a",
+            "CURRENT[1]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[]"
+        ]
     );
 
     // A commit on the database is pushed as a diff.
@@ -306,7 +312,17 @@ async fn listen_delivers_snapshot_then_live_diffs() {
         .await
         .unwrap();
     let initial = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(initial, vec!["ADD[2]", "CURRENT[2]", "NO_CHANGE[]"]);
+    assert_eq!(
+        initial,
+        vec![
+            "ADD[2]",
+            "CURRENT[2]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[2]",
+            "NO_CHANGE[]"
+        ],
+        "every active target reaches the same snapshot before the global boundary"
+    );
 
     tx.send(pb::ListenRequest {
         database: DB.to_owned(),
@@ -334,7 +350,10 @@ async fn listen_and_write_streams_enforce_rules() {
     assert_eq!(denied, vec!["ADD[7]", "REMOVE[7] cause=7"]);
     tx.send(add_documents_target(8, &["open/x"])).await.unwrap();
     let ok = next_until(&mut responses, "NO_CHANGE[]").await;
-    assert_eq!(ok, vec!["ADD[8]", "CURRENT[8]", "NO_CHANGE[]"]);
+    assert_eq!(
+        ok,
+        vec!["ADD[8]", "CURRENT[8]", "NO_CHANGE[8]", "NO_CHANGE[]"]
+    );
 
     let (wtx, wrx) = mpsc::channel(8);
     let mut writes = client
@@ -358,5 +377,72 @@ async fn listen_and_write_streams_enforce_rules() {
     .unwrap();
     let err = writes.next().await.unwrap().unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_removed() {
+    let (mut client, handle) = start(false).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .write(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: DB.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let handshake = responses.next().await.unwrap().unwrap();
+    assert!(!handshake.stream_id.is_empty());
+    // Two batches queued against the same acknowledged token (what the JS SDK does).
+    for name in ["open/p1", "open/p2"] {
+        tx.send(pb::WriteRequest {
+            writes: vec![set_write(name, &[("v", s("1"))])],
+            stream_token: handshake.stream_token.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+    let first = responses.next().await.unwrap().unwrap();
+    let second = responses.next().await.unwrap().unwrap();
+    assert!(
+        first.stream_id.is_empty(),
+        "the stream id is only announced once"
+    );
+    assert_ne!(first.stream_token, second.stream_token);
+    assert_eq!(second.write_results.len(), 1);
+
+    // A `once` target ends with REMOVE after its consistent snapshot; a resume token
+    // triggers RESET before the replay.
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut once = add_query_target(3, "open");
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut once.target_change {
+        t.once = true;
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(vec![1, 2, 3]));
+    }
+    ltx.send(once).await.unwrap();
+    let trace = next_until(&mut listen, "REMOVE[3]").await;
+    assert_eq!(
+        trace,
+        vec![
+            "ADD[3]",
+            "RESET[3]",
+            "CHANGE p1",
+            "CHANGE p2",
+            "CURRENT[3]",
+            "NO_CHANGE[3]",
+            "NO_CHANGE[]",
+            "REMOVE[3]"
+        ]
+    );
     handle.abort();
 }

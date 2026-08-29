@@ -315,7 +315,7 @@ fn build_request(ctx: &RequestContext) -> RulesValue {
     );
     m.insert(
         "time".to_owned(),
-        RulesValue::Timestamp(ctx.time_unix_seconds),
+        RulesValue::Timestamp(ctx.time_unix_seconds.saturating_mul(1_000_000_000)),
     );
     m.insert(
         "resource".to_owned(),
@@ -807,6 +807,7 @@ fn compare(a: &RulesValue, b: &RulesValue) -> Result<core::cmp::Ordering, EvalEr
     match (a, b) {
         (V::Int(x), V::Int(y)) | (V::Timestamp(x), V::Timestamp(y)) => Ok(x.cmp(y)),
         (V::String(x), V::String(y)) => Ok(x.cmp(y)),
+        (V::Bytes(x), V::Bytes(y)) => Ok(x.cmp(y)),
         (V::Int(_) | V::Float(_), V::Int(_) | V::Float(_)) => as_float(a)?
             .partial_cmp(&as_float(b)?)
             .ok_or_else(|| soft("NaN comparison")),
@@ -990,7 +991,27 @@ fn method_call(
         }
         (V::Timestamp(t), "toMillis") => {
             arity(0)?;
-            V::Int(t.saturating_mul(1_000))
+            V::Int(t.div_euclid(1_000_000))
+        }
+        (V::Timestamp(t), "seconds") => {
+            arity(0)?;
+            V::Int(t.div_euclid(1_000_000_000))
+        }
+        (V::Timestamp(t), "nanos") => {
+            arity(0)?;
+            V::Int(t.rem_euclid(1_000_000_000))
+        }
+        (V::Bytes(b), "size") => {
+            arity(0)?;
+            V::Int(i64::try_from(b.len()).unwrap_or(i64::MAX))
+        }
+        (V::LatLng { latitude, .. }, "latitude") => {
+            arity(0)?;
+            V::Float(*latitude)
+        }
+        (V::LatLng { longitude, .. }, "longitude") => {
+            arity(0)?;
+            V::Float(*longitude)
         }
         (V::Timestamp(_), _) => {
             return Err(EvalError::Unsupported(format!(

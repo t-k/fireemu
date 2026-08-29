@@ -11,14 +11,15 @@ pub mod json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ftd_core_firestore::store::Write;
+use ftd_core_firestore::query::Query;
 use ftd_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
 use tonic::{Code, Status};
 
 use crate::decode::{parse_parent, Parent};
+use crate::encode::encode_instant;
 use crate::gateway::{Gateway, Rejection};
-use crate::local::{BatchGetItem, LocalBackend};
+use crate::local::LocalBackend;
 use crate::rules::{self, Principal, RulesEnforcer};
 use json::{
     aggregation_query_from_json, base64_decode, base64_encode, commit_to_json, document_from_json,
@@ -206,13 +207,20 @@ impl RestState {
         }
     }
 
-    fn authorize_writes(
+    fn write_guard<'a>(&'a self, principal: &'a Principal) -> rules::BoxedWriteGuard<'a> {
+        rules::write_guard(self.rules.as_ref(), principal)
+    }
+
+    fn authorize_query(
         &self,
         principal: &Principal,
         parent: &Parent,
-        writes: &[Write],
+        query: &Query,
     ) -> Result<(), Status> {
-        rules::authorize_writes(self.rules.as_ref(), principal, &self.local, parent, writes)
+        match &self.rules {
+            Some(r) => r.authorize_query(principal, parent, query),
+            None => Ok(()),
+        }
     }
 
     /// Handles one request.
@@ -266,7 +274,6 @@ impl RestState {
         name: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
-        rules::authorize_get(self.rules.as_ref(), principal, &self.local, name)?;
         let req = pb::GetDocumentRequest {
             name: name.to_owned(),
             mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
@@ -278,7 +285,11 @@ impl RestState {
             },
             request_options: None,
         };
-        let doc = self.local.get_document(&req)?;
+        let snapshot = self.local.get_document_snapshot(&req)?;
+        if let Some(rules) = &self.rules {
+            rules.authorize_get(principal, &snapshot.path, snapshot.document.as_ref())?;
+        }
+        let doc = snapshot.into_response()?;
         Ok(ok(document_to_json(&doc)))
     }
 
@@ -302,17 +313,17 @@ impl RestState {
             consistency_selector: None,
             request_options: None,
         };
-        let response = self.local.list_documents(&req)?;
         let parsed = parse_parent(parent).map_err(decode_err)?;
-        let names: Vec<String> = response.documents.iter().map(|d| d.name.clone()).collect();
-        rules::authorize_list(
-            self.rules.as_ref(),
-            principal,
-            &self.local,
-            &parsed,
-            &names,
-            collection_id,
-        )?;
+        let scan = pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: collection_id.to_owned(),
+                all_descendants: false,
+            }],
+            ..Default::default()
+        };
+        let accepted = self.local.accepted_query(&parsed, &scan)?;
+        self.authorize_query(principal, &parsed, &accepted.query)?;
+        let response = self.local.list_documents(&req)?;
         let mut body = json!({"documents": response.documents.iter().map(document_to_json).collect::<Vec<_>>()});
         if !response.next_page_token.is_empty() {
             body["nextPageToken"] = Value::String(response.next_page_token);
@@ -337,10 +348,10 @@ impl RestState {
             request_options: None,
         };
         let (parsed, write) = self.local.plan_create(&req)?;
-        self.authorize_writes(principal, &parsed, std::slice::from_ref(&write))?;
+        let guard = self.write_guard(principal);
         let doc = self
             .local
-            .execute_planned(&parsed, write, req.mask.as_ref())?;
+            .execute_planned_with(&parsed, write, req.mask.as_ref(), &*guard)?;
         Ok(ok(document_to_json(&doc)))
     }
 
@@ -371,10 +382,10 @@ impl RestState {
             request_options: None,
         };
         let (parsed, write) = LocalBackend::plan_update(&req)?;
-        self.authorize_writes(principal, &parsed, std::slice::from_ref(&write))?;
+        let guard = self.write_guard(principal);
         let doc = self
             .local
-            .execute_planned(&parsed, write, req.mask.as_ref())?;
+            .execute_planned_with(&parsed, write, req.mask.as_ref(), &*guard)?;
         Ok(ok(document_to_json(&doc)))
     }
 
@@ -389,9 +400,8 @@ impl RestState {
             current_document: precondition_from_params(params)?,
             request_options: None,
         };
-        let (parsed, write) = LocalBackend::plan_delete(&req)?;
-        self.authorize_writes(principal, &parsed, std::slice::from_ref(&write))?;
-        self.local.delete_document(&req)?;
+        let guard = self.write_guard(principal);
+        self.local.delete_document_with(&req, &*guard)?;
         Ok(ok(json!({})))
     }
 
@@ -454,9 +464,8 @@ impl RestState {
             transaction: transaction_bytes(body.get("transaction"))?,
             request_options: None,
         };
-        let (parsed, writes) = LocalBackend::plan_commit(&req)?;
-        self.authorize_writes(principal, &parsed, &writes)?;
-        let response = self.local.commit(&req)?;
+        let guard = self.write_guard(principal);
+        let response = self.local.commit_with(&req, &*guard)?;
         Ok(ok(commit_to_json(&response)))
     }
 
@@ -472,9 +481,8 @@ impl RestState {
             labels: std::collections::HashMap::new(),
             request_options: None,
         };
-        let (parsed, writes) = LocalBackend::plan_batch_write(&req)?;
-        self.authorize_writes(principal, &parsed, &writes)?;
-        let response = self.local.batch_write(&req)?;
+        let guard = self.write_guard(principal);
+        let response = self.local.batch_write_with(&req, &*guard)?;
         Ok(ok(json!({
             "writeResults": response.write_results.iter().map(write_result_to_json).collect::<Vec<_>>(),
             "status": response.status.iter().map(|s| json!({"code": s.code, "message": s.message})).collect::<Vec<_>>(),
@@ -498,9 +506,6 @@ impl RestState {
                     .collect()
             })
             .unwrap_or_default();
-        for name in &documents {
-            rules::authorize_get(self.rules.as_ref(), principal, &self.local, name)?;
-        }
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(
                 pb::batch_get_documents_request::ConsistencySelector::Transaction(
@@ -521,19 +526,27 @@ impl RestState {
             request_options: None,
             consistency_selector,
         };
-        let (items, transaction, read_at) = self.local.batch_get_documents(&req)?;
-        let read_time = optional_timestamp_to_json(Some(&crate::encode::encode_instant(read_at)));
-        let mut out: Vec<Value> = items
+        let outcome = self.local.batch_get_documents(&req)?;
+        if let Some(rules) = &self.rules {
+            for item in &outcome.items {
+                rules.authorize_get(principal, &item.path()?, item.document())?;
+            }
+        }
+        let read_time = optional_timestamp_to_json(Some(&encode_instant(outcome.read_time)));
+        let mut out: Vec<Value> = outcome
+            .items
             .iter()
-            .map(|item| match item {
-                BatchGetItem::Found(d) => {
-                    json!({"found": document_to_json(d), "readTime": read_time})
+            .map(|item| match item.encode(outcome.mask.as_deref()) {
+                pb::batch_get_documents_response::Result::Found(d) => {
+                    json!({"found": document_to_json(&d), "readTime": read_time})
                 }
-                BatchGetItem::Missing(n) => json!({"missing": n, "readTime": read_time}),
+                pb::batch_get_documents_response::Result::Missing(n) => {
+                    json!({"missing": n, "readTime": read_time})
+                }
             })
             .collect();
-        if !transaction.is_empty() {
-            let token = Value::String(base64_encode(&transaction));
+        if !outcome.transaction.is_empty() {
+            let token = Value::String(base64_encode(&outcome.transaction));
             match out.first_mut() {
                 Some(first) => first["transaction"] = token,
                 None => out.push(json!({"transaction": token, "readTime": read_time})),
@@ -552,11 +565,9 @@ impl RestState {
             return Err(Status::invalid_argument("structuredQuery is required"));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
-        let collection_id = structured
-            .from
-            .first()
-            .map(|f| f.collection_id.clone())
-            .unwrap_or_default();
+        let parsed = parse_parent(resource).map_err(decode_err)?;
+        let accepted = self.local.accepted_query(&parsed, &structured)?;
+        self.authorize_query(principal, &parsed, &accepted.query)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(pb::run_query_request::ConsistencySelector::Transaction(
                 transaction_bytes(Some(t))?,
@@ -578,19 +589,6 @@ impl RestState {
             consistency_selector,
         };
         let (responses, _warnings) = self.local.run_query(&req)?;
-        let parsed = parse_parent(resource).map_err(decode_err)?;
-        let names: Vec<String> = responses
-            .iter()
-            .filter_map(|r| r.document.as_ref().map(|d| d.name.clone()))
-            .collect();
-        rules::authorize_list(
-            self.rules.as_ref(),
-            principal,
-            &self.local,
-            &parsed,
-            &names,
-            &collection_id,
-        )?;
         let out: Vec<Value> = responses
             .iter()
             .map(|r| {
@@ -625,23 +623,16 @@ impl RestState {
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
-        let collection_id = match &aggregation.query_type {
-            Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) => sq
-                .from
-                .first()
-                .map(|f| f.collection_id.clone())
-                .unwrap_or_default(),
-            None => String::new(),
-        };
         let parsed = parse_parent(resource).map_err(decode_err)?;
-        rules::authorize_list(
-            self.rules.as_ref(),
-            principal,
-            &self.local,
-            &parsed,
-            &[],
-            &collection_id,
-        )?;
+        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
+            &aggregation.query_type
+        else {
+            return Err(Status::invalid_argument(
+                "aggregation query requires a structuredQuery",
+            ));
+        };
+        let accepted = self.local.accepted_query(&parsed, sq)?;
+        self.authorize_query(principal, &parsed, &accepted.query)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(
                 pb::run_aggregation_query_request::ConsistencySelector::Transaction(

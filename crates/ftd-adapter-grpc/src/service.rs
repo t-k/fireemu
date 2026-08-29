@@ -18,7 +18,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::decode::{decode_structured_query, parse_parent};
 use crate::gateway::{Gateway, Rejection};
-use crate::local::{BatchGetItem, LocalBackend};
+use crate::local::LocalBackend;
 use crate::rules::{Principal, RulesEnforcer};
 
 /// Boxed response stream.
@@ -77,41 +77,46 @@ impl GatewayService {
         }
     }
 
+    /// Authorizes a single-document read against its snapshot.
     fn authorize_get(
         &self,
         principal: &Principal,
-        local: &LocalBackend,
-        name: &str,
+        path: &ftd_core_firestore::path::DocumentPath,
+        snapshot: Option<&ftd_core_firestore::store::Document>,
     ) -> Result<(), Status> {
-        crate::rules::authorize_get(self.rules.as_ref(), principal, local, name)
+        match &self.rules {
+            Some(r) => r.authorize_get(principal, path, snapshot),
+            None => Ok(()),
+        }
     }
 
-    fn authorize_list(
+    /// Authorizes a query from its constraints.
+    fn authorize_query(
         &self,
         principal: &Principal,
-        local: &LocalBackend,
         parent: &crate::decode::Parent,
-        names: &[String],
-        collection_id: &str,
+        query: &ftd_core_firestore::query::Query,
     ) -> Result<(), Status> {
-        crate::rules::authorize_list(
-            self.rules.as_ref(),
-            principal,
-            local,
-            parent,
-            names,
-            collection_id,
-        )
+        match &self.rules {
+            Some(r) => r.authorize_query(principal, parent, query),
+            None => Ok(()),
+        }
     }
 
-    fn authorize_writes(
-        &self,
-        principal: &Principal,
-        local: &LocalBackend,
-        parent: &crate::decode::Parent,
-        writes: &[ftd_core_firestore::store::Write],
-    ) -> Result<(), Status> {
-        crate::rules::authorize_writes(self.rules.as_ref(), principal, local, parent, writes)
+    /// Write guard for the local backend (runs inside the commit critical section).
+    fn write_guard<'a>(&'a self, principal: &'a Principal) -> crate::rules::BoxedWriteGuard<'a> {
+        crate::rules::write_guard(self.rules.as_ref(), principal)
+    }
+
+    /// Structured query of a `ListDocuments` request (unfiltered collection scan).
+    fn list_query(req: &pb::ListDocumentsRequest) -> pb::StructuredQuery {
+        pb::StructuredQuery {
+            from: vec![pb::structured_query::CollectionSelector {
+                collection_id: req.collection_id.clone(),
+                all_descendants: false,
+            }],
+            ..Default::default()
+        }
     }
 
     fn client(&self) -> Result<FirestoreClient<Channel>, Status> {
@@ -164,17 +169,6 @@ impl GatewayService {
     }
 }
 
-fn collection_of_query(req: &pb::RunQueryRequest) -> String {
-    match &req.query_type {
-        Some(pb::run_query_request::QueryType::StructuredQuery(sq)) => sq
-            .from
-            .first()
-            .map(|f| f.collection_id.clone())
-            .unwrap_or_default(),
-        _ => String::new(),
-    }
-}
-
 fn with_warnings<T>(mut response: Response<T>, warnings: &[String]) -> Response<T> {
     for w in warnings {
         if let Ok(v) = w.parse() {
@@ -192,8 +186,9 @@ impl Firestore for GatewayService {
     ) -> Result<Response<pb::Document>, Status> {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
-            self.authorize_get(&principal, local, &request.get_ref().name)?;
-            return local.get_document(request.get_ref()).map(Response::new);
+            let snapshot = local.get_document_snapshot(request.get_ref())?;
+            self.authorize_get(&principal, &snapshot.path, snapshot.document.as_ref())?;
+            return snapshot.into_response().map(Response::new);
         }
         self.client()?.get_document(request.into_inner()).await
     }
@@ -204,18 +199,11 @@ impl Firestore for GatewayService {
     ) -> Result<Response<pb::ListDocumentsResponse>, Status> {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
-            let response = local.list_documents(request.get_ref())?;
-            let parent = parse_parent(&request.get_ref().parent)
-                .map_err(|e| Rejection::Decode(e).to_status())?;
-            let names: Vec<String> = response.documents.iter().map(|d| d.name.clone()).collect();
-            self.authorize_list(
-                &principal,
-                local,
-                &parent,
-                &names,
-                &request.get_ref().collection_id,
-            )?;
-            return Ok(Response::new(response));
+            let req = request.get_ref();
+            let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+            let accepted = local.accepted_query(&parent, &Self::list_query(req))?;
+            self.authorize_query(&principal, &parent, &accepted.query)?;
+            return local.list_documents(req).map(Response::new);
         }
         self.client()?.list_documents(request.into_inner()).await
     }
@@ -227,8 +215,10 @@ impl Firestore for GatewayService {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
             let (parent, write) = LocalBackend::plan_update(request.get_ref())?;
-            self.authorize_writes(&principal, local, &parent, std::slice::from_ref(&write))?;
-            return local.update_document(request.get_ref()).map(Response::new);
+            let guard = self.write_guard(&principal);
+            return local
+                .execute_planned_with(&parent, write, request.get_ref().mask.as_ref(), &*guard)
+                .map(Response::new);
         }
         self.client()?.update_document(request.into_inner()).await
     }
@@ -239,9 +229,10 @@ impl Firestore for GatewayService {
     ) -> Result<Response<()>, Status> {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
-            let (parent, write) = LocalBackend::plan_delete(request.get_ref())?;
-            self.authorize_writes(&principal, local, &parent, std::slice::from_ref(&write))?;
-            return local.delete_document(request.get_ref()).map(Response::new);
+            let guard = self.write_guard(&principal);
+            return local
+                .delete_document_with(request.get_ref(), &*guard)
+                .map(Response::new);
         }
         self.client()?.delete_document(request.into_inner()).await
     }
@@ -253,22 +244,25 @@ impl Firestore for GatewayService {
     ) -> Result<Response<Self::BatchGetDocumentsStream>, Status> {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
-            for name in &request.get_ref().documents {
-                self.authorize_get(&principal, local, name)?;
+            let outcome = local.batch_get_documents(request.get_ref())?;
+            for item in &outcome.items {
+                self.authorize_get(&principal, &item.path()?, item.document())?;
             }
-            let (items, transaction, read_at) = local.batch_get_documents(request.get_ref())?;
-            let read_time = Some(crate::encode::encode_instant(read_at));
-            if items.is_empty() && !transaction.is_empty() {
+            let read_time = Some(crate::encode::encode_instant(outcome.read_time));
+            if outcome.items.is_empty() && !outcome.transaction.is_empty() {
                 // An empty batch still has to hand back the new transaction.
                 let only = pb::BatchGetDocumentsResponse {
-                    transaction,
+                    transaction: outcome.transaction,
                     read_time,
                     result: None,
                 };
                 return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Ok(only)]))));
             }
-            let responses: Vec<Result<pb::BatchGetDocumentsResponse, Status>> = items
-                .into_iter()
+            let mask = outcome.mask;
+            let transaction = outcome.transaction;
+            let responses: Vec<Result<pb::BatchGetDocumentsResponse, Status>> = outcome
+                .items
+                .iter()
                 .enumerate()
                 .map(|(i, item)| {
                     Ok(pb::BatchGetDocumentsResponse {
@@ -278,14 +272,7 @@ impl Firestore for GatewayService {
                             Vec::new()
                         },
                         read_time,
-                        result: Some(match item {
-                            BatchGetItem::Found(d) => {
-                                pb::batch_get_documents_response::Result::Found(d)
-                            }
-                            BatchGetItem::Missing(n) => {
-                                pb::batch_get_documents_response::Result::Missing(n)
-                            }
-                        }),
+                        result: Some(item.encode(mask.as_deref())),
                     })
                 })
                 .collect();
@@ -315,9 +302,10 @@ impl Firestore for GatewayService {
     ) -> Result<Response<pb::CommitResponse>, Status> {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
-            let (parent, writes) = LocalBackend::plan_commit(request.get_ref())?;
-            self.authorize_writes(&principal, local, &parent, &writes)?;
-            return local.commit(request.get_ref()).map(Response::new);
+            let guard = self.write_guard(&principal);
+            return local
+                .commit_with(request.get_ref(), &*guard)
+                .map(Response::new);
         }
         self.client()?.commit(request.into_inner()).await
     }
@@ -340,19 +328,17 @@ impl Firestore for GatewayService {
         let principal = self.principal(request.metadata())?;
         let req = request.into_inner();
         if let Some(local) = self.local_backend() {
-            let (responses, warnings) = local.run_query(&req)?;
             let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
-            let names: Vec<String> = responses
-                .iter()
-                .filter_map(|r| r.document.as_ref().map(|d| d.name.clone()))
-                .collect();
-            self.authorize_list(
-                &principal,
-                local,
-                &parent,
-                &names,
-                &collection_of_query(&req),
-            )?;
+            let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type
+            else {
+                return Err(Status::invalid_argument(
+                    "RunQuery requires a structured_query",
+                ));
+            };
+            let accepted = local.accepted_query(&parent, sq)?;
+            // Authorized from the query constraints before any data is touched.
+            self.authorize_query(&principal, &parent, &accepted.query)?;
+            let (responses, warnings) = local.run_query(&req)?;
             let stream: Vec<Result<pb::RunQueryResponse, Status>> =
                 responses.into_iter().map(Ok).collect();
             let boxed: Self::RunQueryStream = Box::pin(tokio_stream::iter(stream));
@@ -384,21 +370,26 @@ impl Firestore for GatewayService {
             let principal = self.principal(request.metadata())?;
             let req = request.get_ref();
             let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
-            let collection = match &req.query_type {
+            let sq = match &req.query_type {
                 Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
                     saq,
                 )) => match &saq.query_type {
-                    Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) => sq
-                        .from
-                        .first()
-                        .map(|f| f.collection_id.clone())
-                        .unwrap_or_default(),
-                    None => String::new(),
+                    Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) => sq,
+                    None => {
+                        return Err(Status::invalid_argument(
+                            "aggregation query requires a structured_query",
+                        ))
+                    }
                 },
-                None => String::new(),
+                None => {
+                    return Err(Status::invalid_argument(
+                        "RunAggregationQuery requires a structured_aggregation_query",
+                    ))
+                }
             };
-            // Aggregations return no documents: evaluated like an empty list.
-            self.authorize_list(&principal, local, &parent, &[], &collection)?;
+            let accepted = local.accepted_query(&parent, sq)?;
+            // The underlying query is authorized from its constraints, like a list.
+            self.authorize_query(&principal, &parent, &accepted.query)?;
             let response = local.run_aggregation_query(req)?;
             let stream: Vec<Result<pb::RunAggregationQueryResponse, Status>> = vec![Ok(response)];
             return Ok(Response::new(Box::pin(tokio_stream::iter(stream))));
@@ -450,6 +441,11 @@ impl Firestore for GatewayService {
         request: Request<pb::ListCollectionIdsRequest>,
     ) -> Result<Response<pb::ListCollectionIdsResponse>, Status> {
         if let Some(local) = self.local_backend() {
+            let principal = self.principal(request.metadata())?;
+            if let Some(rules) = &self.rules {
+                // Collection enumeration has no rules equivalent: admin-only under rules.
+                rules.require_owner(&principal, "ListCollectionIds")?;
+            }
             return local
                 .list_collection_ids(request.get_ref())
                 .map(Response::new);
@@ -465,9 +461,10 @@ impl Firestore for GatewayService {
     ) -> Result<Response<pb::BatchWriteResponse>, Status> {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
-            let (parent, writes) = LocalBackend::plan_batch_write(request.get_ref())?;
-            self.authorize_writes(&principal, local, &parent, &writes)?;
-            return local.batch_write(request.get_ref()).map(Response::new);
+            let guard = self.write_guard(&principal);
+            return local
+                .batch_write_with(request.get_ref(), &*guard)
+                .map(Response::new);
         }
         self.client()?.batch_write(request.into_inner()).await
     }
@@ -479,10 +476,9 @@ impl Firestore for GatewayService {
         if let Some(local) = self.local_backend() {
             let principal = self.principal(request.metadata())?;
             let (parent, write) = local.plan_create(request.get_ref())?;
-            self.authorize_writes(&principal, local, &parent, std::slice::from_ref(&write))?;
-            // Execute the planned write so that the auto-generated ID is the authorized one.
+            let guard = self.write_guard(&principal);
             return local
-                .execute_planned(&parent, write, request.get_ref().mask.as_ref())
+                .execute_planned_with(&parent, write, request.get_ref().mask.as_ref(), &*guard)
                 .map(Response::new);
         }
         self.client()?.create_document(request.into_inner()).await

@@ -38,6 +38,16 @@ pub enum IdSyntaxError {
     DotSegment,
     /// The identifier matches the reserved pattern `__.*__`.
     ReservedDunder,
+    /// The identifier contains U+0000 or another C0 / C1 control character.
+    ///
+    /// The official documentation only requires valid UTF-8; rejecting control characters is
+    /// an intentional local hardening (classified `INTENTIONAL_STRICTER` in conformance) so
+    /// that identifiers never smuggle NUL or terminal control sequences into traces, JSON,
+    /// resource names or file paths.
+    ControlCharacter {
+        /// Byte offset of the offending character.
+        offset: usize,
+    },
 }
 
 impl fmt::Display for IdSyntaxError {
@@ -54,6 +64,12 @@ impl fmt::Display for IdSyntaxError {
             Self::ContainsSlash => f.write_str("identifier contains '/'"),
             Self::DotSegment => f.write_str("identifier must not be '.' or '..'"),
             Self::ReservedDunder => f.write_str("identifier matches reserved pattern __.*__"),
+            Self::ControlCharacter { offset } => {
+                write!(
+                    f,
+                    "identifier contains a control character at byte offset {offset}"
+                )
+            }
         }
     }
 }
@@ -96,6 +112,9 @@ fn validate_path_segment(s: &str) -> Result<(), IdSyntaxError> {
     }
     if s.contains('/') {
         return Err(IdSyntaxError::ContainsSlash);
+    }
+    if let Some((offset, _)) = s.char_indices().find(|(_, c)| c.is_control()) {
+        return Err(IdSyntaxError::ControlCharacter { offset });
     }
     if s == "." || s == ".." {
         return Err(IdSyntaxError::DotSegment);

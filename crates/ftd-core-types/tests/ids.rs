@@ -99,3 +99,30 @@ fn epoch_is_monotonic_and_checked() {
     assert!(n > e);
     assert!(Epoch::new(u64::MAX).next().is_none());
 }
+
+#[test]
+fn path_segments_reject_nul_and_control_characters() {
+    // Intentional local hardening: the official rule is only "valid UTF-8", but NUL and
+    // control characters must never reach traces, JSON or resource names.
+    assert_eq!(
+        DocumentId::try_new("a\u{0}b"),
+        Err(IdSyntaxError::ControlCharacter { offset: 1 })
+    );
+    assert_eq!(
+        CollectionId::try_new("\u{1f}"),
+        Err(IdSyntaxError::ControlCharacter { offset: 0 })
+    );
+    assert_eq!(
+        DocumentId::try_new("x\u{7f}"),
+        Err(IdSyntaxError::ControlCharacter { offset: 1 })
+    );
+    // C1 control characters (U+0080..U+009F) are control characters too.
+    assert_eq!(
+        DocumentId::try_new("é\u{85}"),
+        Err(IdSyntaxError::ControlCharacter { offset: 2 })
+    );
+    // Ordinary whitespace, emoji and combining marks stay valid.
+    assert!(DocumentId::try_new("hello world").is_ok());
+    assert!(DocumentId::try_new("か\u{3099}").is_ok());
+    assert!(DocumentId::try_new("\u{1F600}").is_ok());
+}

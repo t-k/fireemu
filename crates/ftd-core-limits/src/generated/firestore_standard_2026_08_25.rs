@@ -50,7 +50,7 @@ pub const CATALOG: LimitCatalog = LimitCatalog {
             enforcement_stage: EnforcementStage::Request,
             implemented: ImplementationStatus::Implemented,
             official_text: "Constraints on collection IDs: valid UTF-8 characters, no longer than 1,500 bytes, cannot contain a forward slash (/), cannot solely consist of a single period (.) or double periods (..), cannot match the regular expression __.*__",
-            notes: "Implemented by ftd_core_types::ids::CollectionId.",
+            notes: "Implemented by ftd_core_types::ids::CollectionId. Local hardening: NUL and other control characters are rejected (INTENTIONAL_STRICTER).",
         },
         LimitDefinition {
             id: "FS-LIMIT-SUBCOLLECTION-DEPTH",
@@ -74,7 +74,7 @@ pub const CATALOG: LimitCatalog = LimitCatalog {
             enforcement_stage: EnforcementStage::Request,
             implemented: ImplementationStatus::Implemented,
             official_text: "Constraints on document IDs: valid UTF-8 characters, no longer than 1,500 bytes, cannot contain a forward slash (/), cannot solely consist of a single period (.) or double periods (..), cannot match the regular expression __.*__",
-            notes: "Implemented by ftd_core_types::ids::DocumentId.",
+            notes: "Implemented by ftd_core_types::ids::DocumentId. Local hardening: NUL and other control characters are rejected (INTENTIONAL_STRICTER).",
         },
         LimitDefinition {
             id: "FS-LIMIT-DOCUMENT-NAME-BYTES",

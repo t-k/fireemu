@@ -18,9 +18,9 @@ deterministic state machine that:
 
 ## Status
 
-Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints) and native Security Rules enforcement on the Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, `list` evaluated per returned document; see `RULES-LIST-APPROX` in `crates/ftd-adapter-grpc/src/rules.rs`).
+Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints, custom token sign-in) and native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`).
 
-The real `firebase-admin` and `firebase` (client) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts. Not implemented yet: `read_time` snapshots, `ListDocuments` pagination, `PartitionQuery`, `ExecutePipeline`, Storage / Functions / Scheduler (Milestones C / D), signed ID tokens.
+The real `firebase-admin`, `firebase` (client, gRPC streams) and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts. Not implemented yet: the browser WebChannel transport of the full web SDK, `read_time` snapshots, `ListDocuments` pagination, `PartitionQuery`, `ExecutePipeline`, Storage / Functions / Scheduler (Milestones C / D), signed ID tokens, inequality constraints in query rules proofs.
 
 ## Run
 
@@ -35,6 +35,7 @@ The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`
 curl -X PUT http://127.0.0.1:9099/v1/rules -H 'content-type: application/json' \
   -d "$(jq -n --rawfile s firestore.rules '{source: $s}')"
 curl -X POST http://127.0.0.1:9099/v1/sessions/default/clock:advance -d '{"seconds": 60}'
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore + Auth state
 ```
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.

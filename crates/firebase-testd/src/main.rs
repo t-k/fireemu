@@ -1,7 +1,7 @@
 //! `firebase-testd` command-line entry point.
 //!
 //! ```text
-//! firebase-testd up [--config firebase-testd.json] [--firestore-port 8080] [--http-port 9099]
+//! firebase-testd up [--config firebase-testd.json] [--firestore-port 8080] [--http-port 9099] [--storage-port 9199]
 //! firebase-testd doctor
 //! firebase-testd capabilities
 //! ```
@@ -34,7 +34,7 @@ use ftd_proto_firestore::google::firestore::v1::firestore_server::FirestoreServe
 use crate::config::RuntimeConfig;
 
 fn usage() -> ExitCode {
-    eprintln!("usage: firebase-testd up [--config <file>] [--firestore-port <n>] [--http-port <n>]\n       firebase-testd doctor\n       firebase-testd capabilities");
+    eprintln!("usage: firebase-testd up [--config <file>] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>]\n       firebase-testd doctor\n       firebase-testd capabilities");
     ExitCode::from(2)
 }
 
@@ -79,6 +79,7 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
     let mut config_path: Option<PathBuf> = None;
     let mut firestore_port: Option<u16> = None;
     let mut http_port: Option<u16> = None;
+    let mut storage_port: Option<u16> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -94,6 +95,15 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
                         .ok_or("--firestore-port needs a value")?
                         .parse()
                         .map_err(|e| format!("--firestore-port: {e}"))?,
+                );
+                i += 2;
+            }
+            "--storage-port" => {
+                storage_port = Some(
+                    args.get(i + 1)
+                        .ok_or("--storage-port needs a value")?
+                        .parse()
+                        .map_err(|e| format!("--storage-port: {e}"))?,
                 );
                 i += 2;
             }
@@ -119,6 +129,9 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
     if let Some(p) = http_port {
         cfg.http_addr = format!("127.0.0.1:{p}");
     }
+    if let Some(p) = storage_port {
+        cfg.storage_addr = format!("127.0.0.1:{p}");
+    }
     Ok(cfg)
 }
 
@@ -132,6 +145,72 @@ fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
         }
         None => Ok(LoadedRules::default()),
     }
+}
+
+fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
+    match &cfg.storage_rules_file {
+        Some(path) => {
+            let source = std::fs::read_to_string(path)
+                .map_err(|e| format!("storage rules source {path}: {e}"))?;
+            LoadedRules::from_source(&source)
+                .map_err(|e| format!("storage rules source {path} does not parse: {e}"))
+        }
+        None => Ok(LoadedRules::default()),
+    }
+}
+
+fn storage_state(
+    cfg: &RuntimeConfig,
+    clock: &Arc<Mutex<VirtualClock>>,
+    auth_store: &Arc<Mutex<AuthStore>>,
+    storage_rules: &Arc<RwLock<LoadedRules>>,
+) -> Arc<ftd_adapter_http::storage::StorageState> {
+    Arc::new(ftd_adapter_http::storage::StorageState {
+        store: Mutex::new(ftd_core_storage::store::StorageState::new(cfg.seed ^ 0x57)),
+        clock: clock.clone(),
+        auth: auth_store.clone(),
+        rules: storage_rules.clone(),
+        project: cfg.auth_project.clone(),
+    })
+}
+
+async fn bind_listeners(
+    cfg: &RuntimeConfig,
+) -> Result<
+    (
+        tokio::net::TcpListener,
+        tokio::net::TcpListener,
+        tokio::net::TcpListener,
+    ),
+    String,
+> {
+    let bind = |addr: &str| {
+        let addr = addr.to_owned();
+        async move {
+            tokio::net::TcpListener::bind(&addr)
+                .await
+                .map_err(|e| format!("bind {addr}: {e}"))
+        }
+    };
+    Ok((
+        bind(&cfg.firestore_addr).await?,
+        bind(&cfg.http_addr).await?,
+        bind(&cfg.storage_addr).await?,
+    ))
+}
+
+fn print_banner(
+    cfg: &RuntimeConfig,
+    grpc_addr: std::net::SocketAddr,
+    http_addr: std::net::SocketAddr,
+    storage_addr: std::net::SocketAddr,
+) {
+    println!("firebase-testd up");
+    println!("  firestore (gRPC + REST): {grpc_addr}   FIRESTORE_EMULATOR_HOST={grpc_addr}");
+    println!("  auth (REST):      {http_addr}   FIREBASE_AUTH_EMULATOR_HOST={http_addr}");
+    println!("  storage (HTTP):   {storage_addr}   FIREBASE_STORAGE_EMULATOR_HOST={storage_addr}   STORAGE_EMULATOR_HOST=http://{storage_addr}");
+    println!("  control API:      http://{http_addr}/v1/  (health: /health/live)");
+    println!("  edition: {}   clock: {}", cfg.edition, cfg.clock_start);
 }
 
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
@@ -151,9 +230,19 @@ fn control_state(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
     rules: &Arc<RwLock<LoadedRules>>,
+    storage_rules: &Arc<RwLock<LoadedRules>>,
     backend: &Arc<LocalBackend>,
     auth_store: &Arc<Mutex<AuthStore>>,
+    storage: &Arc<ftd_adapter_http::storage::StorageState>,
 ) -> ftd_adapter_http::control::ControlState {
+    let storage_reset = {
+        let storage = storage.clone();
+        Arc::new(move || {
+            if let Ok(mut s) = storage.store.lock() {
+                s.clear();
+            }
+        }) as Arc<dyn Fn() + Send + Sync>
+    };
     let firestore_reset = {
         let backend = backend.clone();
         Arc::new(move || backend.reset()) as Arc<dyn Fn() + Send + Sync>
@@ -172,7 +261,8 @@ fn control_state(
         edition: cfg.edition,
         capabilities: control::capabilities_manifest(),
         rules: rules.clone(),
-        reset_hooks: vec![firestore_reset, auth_reset],
+        storage_rules: storage_rules.clone(),
+        reset_hooks: vec![firestore_reset, auth_reset, storage_reset],
     }
 }
 
@@ -211,21 +301,23 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             clock: clock.clone(),
         });
         let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
-        let control = Arc::new(control_state(&cfg, &clock, &rules, &backend, &auth_store));
+        let storage_rules = Arc::new(RwLock::new(load_storage_rules(&cfg)?));
+        let storage = storage_state(&cfg, &clock, &auth_store, &storage_rules);
+        let control = Arc::new(control_state(
+            &cfg,
+            &clock,
+            &rules,
+            &storage_rules,
+            &backend,
+            &auth_store,
+            &storage,
+        ));
 
-        let grpc_listener = tokio::net::TcpListener::bind(&cfg.firestore_addr)
-            .await
-            .map_err(|e| format!("bind {}: {e}", cfg.firestore_addr))?;
-        let http_listener = tokio::net::TcpListener::bind(&cfg.http_addr)
-            .await
-            .map_err(|e| format!("bind {}: {e}", cfg.http_addr))?;
+        let (grpc_listener, http_listener, storage_listener) = bind_listeners(&cfg).await?;
         let grpc_addr = grpc_listener.local_addr().map_err(|e| e.to_string())?;
         let http_addr = http_listener.local_addr().map_err(|e| e.to_string())?;
-        println!("firebase-testd up");
-        println!("  firestore (gRPC + REST): {grpc_addr}   FIRESTORE_EMULATOR_HOST={grpc_addr}");
-        println!("  auth (REST):      {http_addr}   FIREBASE_AUTH_EMULATOR_HOST={http_addr}");
-        println!("  control API:      http://{http_addr}/v1/  (health: /health/live)");
-        println!("  edition: {}   clock: {}", cfg.edition, cfg.clock_start);
+        let storage_addr = storage_listener.local_addr().map_err(|e| e.to_string())?;
+        print_banner(&cfg, grpc_addr, http_addr, storage_addr);
         print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
 
         let enforcer = cfg.rules_enforced.then(|| {
@@ -257,9 +349,14 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             auth,
             control,
         ));
+        let storage_server = tokio::spawn(ftd_adapter_http::storage_server::serve_storage(
+            storage_listener,
+            storage,
+        ));
         tokio::select! {
             r = grpc => Err(format!("gRPC server stopped: {r:?}")),
             r = http => Err(format!("HTTP server stopped: {r:?}")),
+            r = storage_server => Err(format!("Storage server stopped: {r:?}")),
             _ = tokio::signal::ctrl_c() => {
                 println!("shutting down");
                 Ok::<(), String>(())

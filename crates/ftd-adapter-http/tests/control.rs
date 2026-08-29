@@ -20,6 +20,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         edition: FirestoreEdition::Standard,
         capabilities: json!({"schemaVersion": 1}),
         rules: Arc::new(RwLock::new(LoadedRules::default())),
+        storage_rules: Arc::new(RwLock::new(LoadedRules::default())),
         reset_hooks: vec![Arc::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
         })],

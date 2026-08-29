@@ -14,6 +14,7 @@ ftd-core-auth = { path = "../ftd-core-auth" }
 ftd-core-session = { path = "../ftd-core-session" }
 ftd-core-limits = { path = "../ftd-core-limits" }
 ftd-core-rules = { path = "../ftd-core-rules" }
+ftd-core-storage = { path = "../ftd-core-storage" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util"] }
 hyper = { version = "1", features = ["http1", "server"] }

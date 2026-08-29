@@ -34,8 +34,10 @@ pub struct ControlState {
     pub edition: FirestoreEdition,
     /// Capability manifest served at `/v1/capabilities`.
     pub capabilities: Value,
-    /// Loaded Security Rules (shared with the gRPC adapter).
+    /// Loaded Firestore Security Rules (shared with the gRPC adapter).
     pub rules: Arc<RwLock<LoadedRules>>,
+    /// Loaded Storage Security Rules (shared with the Storage adapter).
+    pub storage_rules: Arc<RwLock<LoadedRules>>,
     /// Hooks run by `POST /v1/sessions/{s}/reset` (Firestore wipe, Auth wipe, ...).
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -107,6 +109,9 @@ pub fn handle_with(
             })).collect::<Vec<_>>()
         })),
         (m, p) if p.starts_with("/v1/sessions/") => session_route(state, m, p, body),
+        ("GET" | "PUT" | "DELETE", "/v1/storage/rules") => {
+            rules_route(&state.storage_rules, method, body)
+        }
         ("GET", "/v1/rules") => match state.rules.read() {
             Ok(r) => ok(json!({"loaded": r.is_loaded(), "source": r.source})),
             Err(_) => error(500, "INTERNAL"),
@@ -137,6 +142,41 @@ pub fn handle_with(
             Err(_) => error(500, "INTERNAL"),
         },
         _ => error(404, "NOT_FOUND"),
+    }
+}
+
+/// GET / PUT / DELETE on a rules slot.
+fn rules_route(slot: &RwLock<LoadedRules>, method: &str, body: &Value) -> JsonResponse {
+    match method {
+        "GET" => match slot.read() {
+            Ok(r) => ok(json!({"loaded": r.is_loaded(), "source": r.source})),
+            Err(_) => error(500, "INTERNAL"),
+        },
+        "PUT" => {
+            let Some(source) = body.get("source").and_then(Value::as_str) else {
+                return error(
+                    400,
+                    "INVALID_ARGUMENT : body.source (rules text) is required",
+                );
+            };
+            match LoadedRules::from_source(source) {
+                Ok(loaded) => match slot.write() {
+                    Ok(mut s) => {
+                        *s = loaded;
+                        ok(json!({"loaded": true}))
+                    }
+                    Err(_) => error(500, "INTERNAL"),
+                },
+                Err(e) => error(400, &format!("INVALID_ARGUMENT : rules do not parse: {e}")),
+            }
+        }
+        _ => match slot.write() {
+            Ok(mut s) => {
+                *s = LoadedRules::default();
+                ok(json!({"loaded": false}))
+            }
+            Err(_) => error(500, "INTERNAL"),
+        },
     }
 }
 

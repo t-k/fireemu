@@ -36,7 +36,7 @@ use ftd_core_firestore::value::Value;
 use ftd_core_rules::ast::Ruleset;
 use ftd_core_rules::eval::{
     evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
-    ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
+    RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_rules::value::{AuthContext, RulesValue};
@@ -276,6 +276,7 @@ impl RulesEnforcer {
         for placeholder in placeholder_paths(parent, query)? {
             for disjunction in query.dnf() {
                 let ctx = RequestContext {
+                    service: RulesService::Firestore,
                     method: Method::List,
                     path: rules_path(&placeholder),
                     auth: match principal {
@@ -367,6 +368,7 @@ fn evaluate_with(
     access: &dyn DocumentAccess,
 ) -> Result<(), Status> {
     let ctx = RequestContext {
+        service: RulesService::Firestore,
         method,
         path: rules_path(path),
         auth: match principal {

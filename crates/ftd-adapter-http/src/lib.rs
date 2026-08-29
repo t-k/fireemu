@@ -5,3 +5,5 @@
 pub mod control;
 pub mod identity_toolkit;
 pub mod server;
+pub mod storage;
+pub mod storage_server;

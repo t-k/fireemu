@@ -18,6 +18,7 @@ ftd-core-limits = { path = "../ftd-core-limits" }
 ftd-core-session = { path = "../ftd-core-session" }
 ftd-core-firestore = { path = "../ftd-core-firestore" }
 ftd-core-rules = { path = "../ftd-core-rules" }
+ftd-core-storage = { path = "../ftd-core-storage" }
 ftd-core-auth = { path = "../ftd-core-auth" }
 ftd-proto-firestore = { path = "../ftd-proto-firestore" }
 ftd-adapter-grpc = { path = "../ftd-adapter-grpc" }

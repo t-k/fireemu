@@ -122,7 +122,8 @@ pub fn capabilities_manifest() -> Value {
             "RULES-LINT-1": {"status": "implemented"},
             "RULES-BUDGET-1": {"status": "partial", "implemented": ["expressions 1000", "call depth 20"], "unimplemented": ["document access budgets"]},
             "RULES-1": {"status": "partial", "precision": "conservative", "implemented": ["get / create / update / delete against the returned snapshot or the staged commit", "list / aggregation / Listen queries proven from equality and array-contains constraints (RULES-QUERY-CONSTRAINTS)", "collection groups need a recursive wildcard rule"], "unimplemented": ["get()/exists()/getAfter()", "regular expressions", "timestamp/duration/latlng/math/hashing namespaces", "inequality and request.query in proofs"]},
-            "ST-OBJ-1": {"status": "unimplemented"},
+            "ST-OBJ-1": {"status": "implemented", "implemented": ["Firebase Storage protocol (/v0/b, X-Goog-Upload resumable, download tokens)", "JSON API (/storage/v1, /upload/storage/v1, /download/storage/v1, emulator-style /b paths, Content-Range resumable, rewriteTo)", "generation / metageneration preconditions", "prefix / delimiter listing", "MD5 / CRC32C"], "unimplemented": ["object versioning / archived generations", "ACLs and signed URLs", "compose", "notifications", "Storage triggers (FN-EVT-1)"]},
+            "STORAGE-RULES-1": {"status": "partial", "implemented": ["service firebase.storage: get / list / create / update / delete with request.resource and resource", "Firebase protocol goes through the rules; the JSON API is a privileged surface"], "unimplemented": ["firestore.get() / firestore.exists()", "string.matches() (regular expressions)"]},
             "FN-HTTP-1": {"status": "unimplemented"},
             "FN-EVT-1": {"status": "unimplemented"},
             "FN-SCH-1": {"status": "unimplemented"}

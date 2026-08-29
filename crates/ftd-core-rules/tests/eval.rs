@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use ftd_core_rules::eval::{evaluate_request, Decision, DenyReason, Method, RequestContext};
+use ftd_core_rules::eval::{
+    evaluate_request, Decision, DenyReason, Method, RequestContext, RulesService,
+};
 use ftd_core_rules::parse::parse_ruleset;
 use ftd_core_rules::value::{AuthContext, RulesValue};
 
@@ -66,6 +68,7 @@ fn auth(uid: &str, totp: bool, role: Option<&str>) -> AuthContext {
 
 fn ctx(method: Method, path: &str, auth: Option<AuthContext>) -> RequestContext {
     RequestContext {
+        service: RulesService::Firestore,
         method,
         path: path.to_owned(),
         auth,
@@ -367,6 +370,7 @@ fn abstract_ctx(path: &str, data: Vec<(&str, RulesValue)>) -> RequestContext {
     );
     resource.insert("id".to_owned(), RulesValue::Unknown);
     RequestContext {
+        service: RulesService::Firestore,
         method: Method::List,
         path: path.to_owned(),
         auth: None,
@@ -572,6 +576,7 @@ service cloud.firestore {
     }
     let access = MapAccess(docs);
     let ctx = |path: &str, uid: &str| RequestContext {
+        service: RulesService::Firestore,
         method: Method::Get,
         path: path.to_owned(),
         auth: Some(AuthContext {

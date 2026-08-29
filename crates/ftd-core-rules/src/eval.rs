@@ -76,9 +76,32 @@ fn is_abstract_segment(s: &str) -> bool {
     s == ABSTRACT_SEGMENT || s == ABSTRACT_PREFIX
 }
 
+/// Which `service` block of the ruleset applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RulesService {
+    /// `service cloud.firestore`.
+    #[default]
+    Firestore,
+    /// `service firebase.storage`.
+    Storage,
+}
+
+impl RulesService {
+    /// Name as written in the ruleset.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Firestore => "cloud.firestore",
+            Self::Storage => "firebase.storage",
+        }
+    }
+}
+
 /// Request being authorized.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestContext {
+    /// Service block to evaluate.
+    pub service: RulesService,
     /// Method.
     pub method: Method,
     /// Path relative to the service root, e.g. `/databases/(default)/documents/users/u1`.
@@ -276,7 +299,7 @@ pub fn evaluate_request_with(
     let mut unsupported: Option<String> = None;
     let mut absent_resource_used = false;
     for service in &ruleset.services {
-        if service.name != "cloud.firestore" {
+        if service.name != ctx.service.name() {
             continue;
         }
         let mut scope = Scope {

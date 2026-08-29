@@ -6,7 +6,8 @@
   "scripts": {
     "smoke": "node smoke.mjs",
     "smoke:client": "node client.mjs",
-    "smoke:lite": "node lite.mjs"
+    "smoke:lite": "node lite.mjs",
+    "smoke:storage": "node storage.mjs"
   },
   "dependencies": {
     "firebase": "^12",

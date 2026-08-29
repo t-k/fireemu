@@ -18,18 +18,18 @@ deterministic state machine that:
 
 ## Status
 
-Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints, custom token sign-in) and native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`).
+Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols, Storage Security Rules), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints, custom token sign-in) and native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`).
 
-The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Not implemented yet: `read_time` snapshots, `PartitionQuery`, `ExecutePipeline`, Storage / Functions / Scheduler (Milestones C / D), signed ID tokens, inequality constraints in query rules proofs.
+The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Not implemented yet: `read_time` snapshots, `PartitionQuery`, `ExecutePipeline`, Storage triggers / Functions / Scheduler (Milestone C), signed ID tokens, regular expressions in rules, inequality constraints in query rules proofs.
 
 ## Run
 
 ```sh
-cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099
+cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
 #   optional: --config firebase-testd.json  (see spec/config/firebase-testd.schema.json)
 ```
 
-The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`). Security Rules come from `rules.source` in the config file or at runtime:
+The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`). Storage rules load from `storage.rules` in the config or `PUT /v1/storage/rules`. Security Rules come from `rules.source` in the config file or at runtime:
 
 ```sh
 curl -X PUT http://127.0.0.1:9099/v1/rules -H 'content-type: application/json' \
@@ -51,6 +51,7 @@ Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, 
 | `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator, local execution store (MVCC, transactions, queries, aggregations) | none |
 | `ftd-core-rules` | Security Rules parser, static limit linter (`RULES-LINT-1`) and evaluator subset with runtime budgets | none |
 | `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens, TOTP second factor (RFC 6238) | none |
+| `ftd-core-storage` | Cloud Storage objects: opaque UTF-8 names, generations, metadata, listing, resumable uploads, MD5 / CRC32C | none |
 | `ftd-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
 | `ftd-adapter-grpc` | Firestore v1 service: strict gateway, local backend, `Write` / `Listen` streams, Rules enforcement, optional upstream proxy | tonic, tokio |
 | `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts) and the control API (clock, rules, capabilities) | hyper, tokio, serde_json |

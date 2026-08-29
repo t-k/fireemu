@@ -18,6 +18,8 @@ pub struct RuntimeConfig {
     pub firestore_addr: String,
     /// HTTP (Auth REST + control API) bind address.
     pub http_addr: String,
+    /// Storage bind address.
+    pub storage_addr: String,
     /// Firestore edition.
     pub edition: FirestoreEdition,
     /// API mode.
@@ -36,6 +38,8 @@ pub struct RuntimeConfig {
     pub index_file: Option<String>,
     /// Path of the Security Rules source, if configured.
     pub rules_file: Option<String>,
+    /// Path of the Storage Security Rules source, if configured.
+    pub storage_rules_file: Option<String>,
     /// Whether Security Rules are enforced on the Firestore surface.
     pub rules_enforced: bool,
 }
@@ -45,6 +49,7 @@ impl Default for RuntimeConfig {
         Self {
             firestore_addr: "127.0.0.1:8080".to_owned(),
             http_addr: "127.0.0.1:9099".to_owned(),
+            storage_addr: "127.0.0.1:9199".to_owned(),
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
             index_policy: IndexValidationPolicy::Conservative,
@@ -54,6 +59,7 @@ impl Default for RuntimeConfig {
             auth_project: "demo-app".to_owned(),
             index_file: None,
             rules_file: None,
+            storage_rules_file: None,
             rules_enforced: true,
         }
     }
@@ -96,6 +102,44 @@ impl RuntimeConfig {
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
         Self::from_json(&json)
+    }
+
+    fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
+        for key in d.keys() {
+            if ![
+                "firestorePort",
+                "storagePort",
+                "httpPort",
+                "clockStart",
+                "seed",
+                "authProject",
+            ]
+            .contains(&key.as_str())
+            {
+                return Err(ConfigError(format!("unknown config key daemon.{key}")));
+            }
+        }
+        if let Some(port) = d.get("storagePort").and_then(Value::as_u64) {
+            cfg.storage_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("firestorePort").and_then(Value::as_u64) {
+            cfg.firestore_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("httpPort").and_then(Value::as_u64) {
+            cfg.http_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(start) = d.get("clockStart").and_then(Value::as_str) {
+            cfg.clock_start = LogicalInstant::parse_rfc3339(start)
+                .map_err(|e| ConfigError(format!("daemon.clockStart: {e}")))?;
+        }
+        if let Some(seed) = d.get("seed").and_then(Value::as_u64) {
+            cfg.seed = seed;
+        }
+        if let Some(p) = d.get("authProject").and_then(Value::as_str) {
+            p.clone_into(&mut cfg.auth_project);
+        }
+
+        Ok(())
     }
 
     fn parse_rules(
@@ -175,38 +219,15 @@ impl RuntimeConfig {
             }
         }
         if let Some(d) = obj.get("daemon").and_then(Value::as_object) {
-            for key in d.keys() {
-                if ![
-                    "firestorePort",
-                    "httpPort",
-                    "clockStart",
-                    "seed",
-                    "authProject",
-                ]
-                .contains(&key.as_str())
-                {
-                    return Err(ConfigError(format!("unknown config key daemon.{key}")));
-                }
-            }
-            if let Some(port) = d.get("firestorePort").and_then(Value::as_u64) {
-                cfg.firestore_addr = format!("127.0.0.1:{port}");
-            }
-            if let Some(port) = d.get("httpPort").and_then(Value::as_u64) {
-                cfg.http_addr = format!("127.0.0.1:{port}");
-            }
-            if let Some(start) = d.get("clockStart").and_then(Value::as_str) {
-                cfg.clock_start = LogicalInstant::parse_rfc3339(start)
-                    .map_err(|e| ConfigError(format!("daemon.clockStart: {e}")))?;
-            }
-            if let Some(seed) = d.get("seed").and_then(Value::as_u64) {
-                cfg.seed = seed;
-            }
-            if let Some(p) = d.get("authProject").and_then(Value::as_str) {
-                p.clone_into(&mut cfg.auth_project);
-            }
+            Self::parse_daemon(d, &mut cfg)?;
         }
         if let Some(rules) = obj.get("rules").and_then(Value::as_object) {
             Self::parse_rules(rules, &mut cfg)?;
+        }
+        if let Some(storage) = obj.get("storage").and_then(Value::as_object) {
+            if let Some(source) = storage.get("rules").and_then(Value::as_str) {
+                cfg.storage_rules_file = Some(source.to_owned());
+            }
         }
         if let Some(auth) = obj.get("auth").and_then(Value::as_object) {
             if let Some(mode) = auth.get("idTokenSigning").and_then(Value::as_str) {

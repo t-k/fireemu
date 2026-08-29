@@ -24,7 +24,7 @@ use ftd_core_storage::hash::{crc32c, md5};
 use ftd_core_storage::name::{BucketName, ObjectName};
 use ftd_core_storage::store::{
     MetadataPatch, NewMetadata, ObjectMetadata, Precondition, StorageError,
-    StorageState as ObjectStore, UploadId,
+    StorageState as ObjectStore, UploadId, UploadOptions,
 };
 use ftd_core_types::determinism::Clock;
 use ftd_core_types::time::LogicalInstant;
@@ -42,8 +42,6 @@ pub struct StorageState {
     pub rules: Arc<RwLock<LoadedRules>>,
     /// Project (default buckets `{project}.appspot.com` / `{project}.firebasestorage.app`).
     pub project: String,
-    /// Caller that started each resumable upload (rules run again at finalization).
-    pub upload_principals: Mutex<BTreeMap<String, Principal>>,
 }
 
 /// One HTTP request of the Storage surface.
@@ -141,7 +139,7 @@ fn error_response(dialect: Dialect, status: u16, message: &str) -> StorageRespon
 fn core_err(e: StorageError) -> (u16, String) {
     match e {
         StorageError::NotFound => (404, "Not Found. Could not get object".to_owned()),
-        StorageError::PreconditionFailed(m) => (412, m),
+        StorageError::PreconditionFailed(m) | StorageError::NotModified(m) => (412, m),
         StorageError::TooLarge => (413, "object too large".to_owned()),
         StorageError::MetadataTooLarge => (400, "custom metadata too large".to_owned()),
         StorageError::UploadNotFound => (404, "upload session not found".to_owned()),
@@ -151,6 +149,7 @@ fn core_err(e: StorageError) -> (u16, String) {
         StorageError::UploadFinalized => (400, "upload already finalized".to_owned()),
         StorageError::UploadSizeMismatch => (400, "upload size mismatch".to_owned()),
         StorageError::TooManyUploads => (429, "too many open upload sessions".to_owned()),
+        StorageError::ChecksumMismatch(m) => (400, format!("checksum mismatch: {m}")),
     }
 }
 
@@ -282,7 +281,15 @@ fn find_delimiter(body: &[u8], from: usize, delimiter: &[u8]) -> Option<usize> {
         // A delimiter line is the delimiter followed by `--`, a line break or the end.
         let after = pos + delimiter.len();
         let line_end = matches!(body.get(after), None | Some(b'\r' | b'\n'))
-            || body.get(after..after + 2) == Some(b"--");
+            || (body.get(after..after + 2) == Some(b"--") && {
+                // Closing delimiter: optional transport padding, then a line break or
+                // the end of the body.
+                let mut q = after + 2;
+                while matches!(body.get(q), Some(b' ' | b'\t')) {
+                    q += 1;
+                }
+                matches!(body.get(q), None | Some(b'\r' | b'\n'))
+            });
         if line_start && line_end {
             return Some(pos);
         }
@@ -750,12 +757,32 @@ fn route(path: &str) -> Result<Route, String> {
 
 /// Strictly parsed write preconditions: a malformed value is an error, never ignored.
 fn precondition(params: &BTreeMap<String, String>) -> Result<Precondition, (u16, String)> {
-    Ok(Precondition {
-        if_generation_match: u64_param(params, "ifGenerationMatch")?,
-        if_metageneration_match: u64_param(params, "ifMetagenerationMatch")?,
-        if_generation_not_match: u64_param(params, "ifGenerationNotMatch")?,
-        if_metageneration_not_match: u64_param(params, "ifMetagenerationNotMatch")?,
-    })
+    precondition_named(params, "if")
+}
+
+/// `ifGenerationMatch` & co. (`prefix = "if"`) or `ifSourceGenerationMatch` & co.
+/// (`prefix = "ifSource"`); a match and a not-match predicate on the same field conflict.
+fn precondition_named(
+    params: &BTreeMap<String, String>,
+    prefix: &str,
+) -> Result<Precondition, (u16, String)> {
+    let pre = Precondition {
+        if_generation_match: u64_param(params, &format!("{prefix}GenerationMatch"))?,
+        if_metageneration_match: u64_param(params, &format!("{prefix}MetagenerationMatch"))?,
+        if_generation_not_match: u64_param(params, &format!("{prefix}GenerationNotMatch"))?,
+        if_metageneration_not_match: u64_param(params, &format!("{prefix}MetagenerationNotMatch"))?,
+    };
+    if (pre.if_generation_match.is_some() && pre.if_generation_not_match.is_some())
+        || (pre.if_metageneration_match.is_some() && pre.if_metageneration_not_match.is_some())
+    {
+        return Err((
+            400,
+            format!(
+                "{prefix}...Match and {prefix}...NotMatch on the same field are mutually exclusive"
+            ),
+        ));
+    }
+    Ok(pre)
 }
 
 fn u64_param(params: &BTreeMap<String, String>, key: &str) -> Result<Option<u64>, (u16, String)> {
@@ -790,36 +817,110 @@ fn verify_hashes(
 ) -> Result<([u8; 16], u32), (u16, String)> {
     let digest = md5(bytes);
     let crc = crc32c(bytes);
-    let mut expected: Vec<(String, String)> = Vec::new();
-    if let Some(h) = req.header("x-goog-hash") {
-        for item in h.split(',') {
-            if let Some((k, v)) = item.trim().split_once('=') {
-                expected.push((k.trim().to_ascii_lowercase(), v.trim().to_owned()));
-            }
-        }
-    }
-    if let Some(m) = meta_json {
-        if let Some(v) = m.get("md5Hash").and_then(Value::as_str) {
-            expected.push(("md5".into(), v.to_owned()));
-        }
-        if let Some(v) = m.get("crc32c").and_then(Value::as_str) {
-            expected.push(("crc32c".into(), v.to_owned()));
-        }
-    }
-    for (kind, value) in expected {
-        let actual = match kind.as_str() {
-            "md5" => ftd_core_storage::hash::base64(&digest),
-            "crc32c" => ftd_core_storage::hash::base64(&crc.to_be_bytes()),
-            _ => continue,
-        };
-        if actual != value {
+    let (expected_md5, expected_crc) = declared_hashes(req, meta_json)?;
+    if let Some(e) = expected_md5 {
+        if e != digest {
             return Err((
                 400,
-                format!("{kind} checksum mismatch: expected {value}, received {actual}"),
+                format!(
+                    "md5 checksum mismatch: expected {}, received {}",
+                    ftd_core_storage::hash::base64(&e),
+                    ftd_core_storage::hash::base64(&digest)
+                ),
+            ));
+        }
+    }
+    if let Some(e) = expected_crc {
+        if e != crc {
+            return Err((
+                400,
+                format!(
+                    "crc32c checksum mismatch: expected {}, received {}",
+                    ftd_core_storage::hash::base64(&e.to_be_bytes()),
+                    ftd_core_storage::hash::base64(&crc.to_be_bytes())
+                ),
             ));
         }
     }
     Ok((digest, crc))
+}
+
+/// Checksums the client declared for the whole object: `X-Goog-Hash`, `Content-MD5` and the
+/// `md5Hash` / `crc32c` metadata fields. Malformed values are errors.
+#[allow(clippy::type_complexity)]
+fn declared_hashes(
+    req: &StorageRequest,
+    meta_json: Option<&Value>,
+) -> Result<(Option<[u8; 16]>, Option<u32>), (u16, String)> {
+    let mut md5_b64: Option<String> = None;
+    let mut crc_b64: Option<String> = None;
+    if let Some(h) = req.header("x-goog-hash") {
+        for item in h.split(',') {
+            if let Some((k, v)) = item.trim().split_once('=') {
+                match k.trim().to_ascii_lowercase().as_str() {
+                    "md5" => md5_b64 = Some(v.trim().to_owned()),
+                    "crc32c" => crc_b64 = Some(v.trim().to_owned()),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(v) = req.header("content-md5") {
+        md5_b64 = Some(v.trim().to_owned());
+    }
+    if let Some(m) = meta_json {
+        if let Some(v) = m.get("md5Hash").and_then(Value::as_str) {
+            md5_b64 = Some(v.to_owned());
+        }
+        if let Some(v) = m.get("crc32c").and_then(Value::as_str) {
+            crc_b64 = Some(v.to_owned());
+        }
+    }
+    let md5 = match md5_b64 {
+        None => None,
+        Some(v) => Some(
+            base64_decode(&v)
+                .ok()
+                .and_then(|b| <[u8; 16]>::try_from(b).ok())
+                .ok_or_else(|| (400, format!("malformed md5 checksum {v:?}")))?,
+        ),
+    };
+    let crc = match crc_b64 {
+        None => None,
+        Some(v) => Some(
+            base64_decode(&v)
+                .ok()
+                .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                .map(u32::from_be_bytes)
+                .ok_or_else(|| (400, format!("malformed crc32c checksum {v:?}")))?,
+        ),
+    };
+    Ok((md5, crc))
+}
+
+/// Standard base64 (RFC 4648, padded or unpadded) decoding.
+fn base64_decode(text: &str) -> Result<Vec<u8>, ()> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for c in text.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' => break,
+            _ => return Err(()),
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((acc >> bits) & 0xFF).map_err(|_| ())?);
+        }
+    }
+    Ok(out)
 }
 
 /// Handles one request.
@@ -998,7 +1099,7 @@ fn upload(
     let now = state.now();
     // Continuation of a resumable upload.
     if let Some(upload_id) = params.get("upload_id") {
-        return resumable_continue(state, principal, dialect, upload_id, req, host);
+        return resumable_continue(state, dialect, upload_id, req, host);
     }
     let upload_type = params.get("uploadType").map(String::as_str);
     let protocol = req.header("x-goog-upload-protocol");
@@ -1063,20 +1164,34 @@ fn upload(
         };
         let meta = new_metadata_from_json(&meta_json, declared_ct);
         let pre = precondition(params)?;
+        let (expected_md5, expected_crc32c) = declared_hashes(req, Some(&meta_json))?;
         // Rules run at finalization against the received bytes (as the official Emulator
         // does): the declared size and metadata alone cannot decide rules that inspect the
-        // hashes, and the destination may change while the session is open.
+        // hashes, and the destination may change while the session is open. The session
+        // keeps the credentials it was started with.
+        let authorization = match principal {
+            Principal::Owner => Some("Bearer owner".to_owned()),
+            Principal::Anonymous => None,
+            Principal::User(_) => req.header("authorization").map(str::to_owned),
+        };
         let id = state
             .store
             .lock()
             .map_err(|_| (500, "store poisoned".to_owned()))?
-            .begin_upload(&b, &n, meta, pre, declared_len, now)
+            .begin_upload_with(
+                &b,
+                &n,
+                meta,
+                pre,
+                UploadOptions {
+                    total: declared_len,
+                    authorization,
+                    expected_md5,
+                    expected_crc32c,
+                },
+                now,
+            )
             .map_err(core_err)?;
-        state
-            .upload_principals
-            .lock()
-            .map_err(|_| (500, "principals poisoned".to_owned()))?
-            .insert(id.as_str().to_owned(), principal.clone());
         let session_url = match dialect {
             Dialect::Firebase => format!(
                 "http://{host}/v0/b/{}/o?name={}&upload_id={}&upload_protocol=resumable",
@@ -1178,28 +1293,31 @@ fn finalize_resumable(
     state: &StorageState,
     store: &mut ObjectStore,
     id: &UploadId,
-    fallback: &Principal,
     req: &StorageRequest,
     now: LogicalInstant,
 ) -> Result<ObjectMetadata, (u16, String)> {
-    let principal = state
-        .upload_principals
-        .lock()
-        .map_err(|_| (500, "principals poisoned".to_owned()))?
-        .get(id.as_str())
-        .cloned()
-        .unwrap_or_else(|| fallback.clone());
-    let (b, n, meta, size, hashes) = {
+    // Checksums declared on the finalizing request are verified by the store when it
+    // commits (a mismatch ends the session).
+    let (md5_declared, crc_declared) = declared_hashes(req, None)?;
+    store
+        .set_upload_hashes(id, md5_declared, crc_declared, now)
+        .map_err(core_err)?;
+    let (b, n, meta, size, hashes, authorization) = {
         let pending = store.pending_upload(id, now).map_err(core_err)?;
-        let hashes = verify_hashes(req, None, pending.bytes)?;
         (
             pending.bucket.clone(),
             pending.name.clone(),
             pending.metadata.clone(),
             pending.bytes.len() as u64,
-            hashes,
+            (md5(pending.bytes), crc32c(pending.bytes)),
+            pending.authorization.map(str::to_owned),
         )
     };
+    // The caller is the one that started the session (its credentials are verified again
+    // now, as the official Emulator does).
+    let principal = state
+        .principal(authorization.as_deref())
+        .map_err(|e| (401, e))?;
     let existing = store.get(&b, &n).cloned();
     let method = if existing.is_some() {
         Method::Update
@@ -1222,17 +1340,12 @@ fn finalize_resumable(
             )),
         )
         .map_err(deny)?;
-    let m = store.finalize_upload(id, now).map_err(core_err)?;
-    if let Ok(mut principals) = state.upload_principals.lock() {
-        principals.remove(id.as_str());
-    }
-    Ok(m)
+    store.finalize_upload(id, now).map_err(core_err)
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn resumable_continue(
     state: &StorageState,
-    principal: &Principal,
     dialect: Dialect,
     upload_id: &str,
     req: &StorageRequest,
@@ -1249,9 +1362,6 @@ fn resumable_continue(
         let commands: Vec<&str> = command.split(',').map(str::trim).collect();
         if commands.contains(&"cancel") {
             store.cancel_upload(&id, now).map_err(core_err)?;
-            if let Ok(mut principals) = state.upload_principals.lock() {
-                principals.remove(id.as_str());
-            }
             return Ok(StorageResponse::empty(200).with_header("x-goog-upload-status", "cancelled"));
         }
         if commands.contains(&"query") {
@@ -1279,7 +1389,7 @@ fn resumable_continue(
             return Err((400, "a body needs the upload command".to_owned()));
         }
         if commands.contains(&"finalize") {
-            let m = finalize_resumable(state, &mut store, &id, principal, req, now)?;
+            let m = finalize_resumable(state, &mut store, &id, req, now)?;
             return Ok(
                 StorageResponse::json(200, &metadata_json(dialect, &m, host))
                     .with_header("x-goog-upload-status", "final")
@@ -1342,7 +1452,7 @@ fn resumable_continue(
         (None, _) => true,
     };
     if finalize {
-        let m = finalize_resumable(state, &mut store, &id, principal, req, now)?;
+        let m = finalize_resumable(state, &mut store, &id, req, now)?;
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
     }
     let (received, _) = store.upload_status(&id, now).map_err(core_err)?;
@@ -1485,6 +1595,14 @@ fn object(
                     .map_err(deny)?;
             }
             let meta = meta.ok_or_else(|| (404, "Not Found. Could not get object".to_owned()))?;
+            // Conditional reads: a not-match predicate naming the current value is 304.
+            match precondition(params)?.check(Some(&meta)) {
+                Ok(()) => {}
+                Err(StorageError::NotModified(_)) => {
+                    return Ok(StorageResponse::empty(304).with_header("etag", meta.etag()))
+                }
+                Err(e) => return Err(core_err(e)),
+            }
             if !media {
                 return Ok(StorageResponse::json(
                     200,
@@ -1613,7 +1731,7 @@ fn object(
         "POST" if dialect == Dialect::Firebase => {
             // Resumable continuation posts to the object URL with upload_id.
             if let Some(upload_id) = params.get("upload_id") {
-                return resumable_continue(state, principal, dialect, upload_id, req, host);
+                return resumable_continue(state, dialect, upload_id, req, host);
             }
             Err((405, "method not allowed".to_owned()))
         }
@@ -1650,40 +1768,26 @@ fn rewrite(
         .store
         .lock()
         .map_err(|_| (500, "store poisoned".to_owned()))?;
-    let src = select_generation(store.get(&b, &n).cloned(), params, "sourceGeneration")?
-        .ok_or_else(|| (404, format!("No such object: {bucket}/{name}")))?;
-    let source_pre = Precondition {
-        if_generation_match: u64_param(params, "ifSourceGenerationMatch")?,
-        if_metageneration_match: u64_param(params, "ifSourceMetagenerationMatch")?,
-        if_generation_not_match: u64_param(params, "ifSourceGenerationNotMatch")?,
-        if_metageneration_not_match: u64_param(params, "ifSourceMetagenerationNotMatch")?,
-    };
-    if source_pre
-        .if_generation_match
-        .is_some_and(|g| g != src.generation)
-        || source_pre
-            .if_generation_not_match
-            .is_some_and(|g| g == src.generation)
-        || source_pre
-            .if_metageneration_match
-            .is_some_and(|g| g != src.metageneration)
-        || source_pre
-            .if_metageneration_not_match
-            .is_some_and(|g| g == src.metageneration)
-    {
-        return Err((412, "source precondition failed".to_owned()));
-    }
+    let source_pre = precondition_named(params, "ifSource")?;
     let pre = precondition(params)?;
+    let selected = select_generation(store.get(&b, &n).cloned(), params, "sourceGeneration")?;
+    // The source read is authorized before existence, generation or precondition outcomes
+    // become observable.
     state
         .authorize(
             principal,
             Method::Get,
             &b,
             n.as_str(),
-            Some(storage_rules_value(&src)),
+            selected.as_ref().map(storage_rules_value),
             None,
         )
         .map_err(deny)?;
+    let src = selected.ok_or_else(|| (404, format!("No such object: {bucket}/{name}")))?;
+    source_pre.check(Some(&src)).map_err(|e| match e {
+        StorageError::NotModified(m) => (412, m),
+        other => core_err(other),
+    })?;
     let existing = store.get(&db, &dn).cloned();
     let method = if existing.is_some() {
         Method::Update

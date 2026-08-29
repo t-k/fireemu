@@ -17,8 +17,10 @@ pub const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_CUSTOM_METADATA_BYTES: usize = 8 * 1024;
 /// Resumable upload sessions expire after a week of virtual time (Cloud Storage: 7 days).
 pub const UPLOAD_SESSION_TTL_SECONDS: i64 = 7 * 24 * 3600;
-/// Maximum open upload sessions per store (abandoned sessions expire).
+/// Maximum upload sessions still receiving bytes (abandoned sessions expire).
 pub const MAX_UPLOAD_SESSIONS: usize = 256;
+/// Finished (committed or aborted) sessions kept for status queries; older ones are evicted.
+pub const MAX_FINISHED_UPLOAD_SESSIONS: usize = 256;
 /// Default listing page size.
 pub const DEFAULT_LIST_PAGE_SIZE: usize = 1000;
 
@@ -150,6 +152,56 @@ pub struct Precondition {
     pub if_metageneration_not_match: Option<u64>,
 }
 
+impl Precondition {
+    /// Evaluates the precondition against the current object (`None` = absent). Without a
+    /// live object only `ifGenerationMatch = 0` can hold: every other predicate fails.
+    pub fn check(self, current: Option<&ObjectMetadata>) -> Result<(), StorageError> {
+        let failed = |m: String| Err(StorageError::PreconditionFailed(m));
+        let Some(m) = current else {
+            return match self {
+                Precondition {
+                    if_generation_match: Some(0) | None,
+                    if_metageneration_match: None,
+                    if_generation_not_match: None,
+                    if_metageneration_not_match: None,
+                } => Ok(()),
+                _ => failed("the object does not exist".to_owned()),
+            };
+        };
+        if let Some(expected) = self.if_generation_match {
+            if m.generation != expected {
+                return failed(format!(
+                    "ifGenerationMatch {expected} but the current generation is {}",
+                    m.generation
+                ));
+            }
+        }
+        if let Some(expected) = self.if_metageneration_match {
+            if m.metageneration != expected {
+                return failed(format!(
+                    "ifMetagenerationMatch {expected} but the current metageneration is {}",
+                    m.metageneration
+                ));
+            }
+        }
+        if let Some(unexpected) = self.if_generation_not_match {
+            if m.generation == unexpected {
+                return Err(StorageError::NotModified(format!(
+                    "ifGenerationNotMatch {unexpected} names the current generation"
+                )));
+            }
+        }
+        if let Some(unexpected) = self.if_metageneration_not_match {
+            if m.metageneration == unexpected {
+                return Err(StorageError::NotModified(format!(
+                    "ifMetagenerationNotMatch {unexpected} names the current metageneration"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Errors (the adapters map them to HTTP codes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
@@ -174,6 +226,11 @@ pub enum StorageError {
     UploadSizeMismatch,
     /// Too many open upload sessions.
     TooManyUploads,
+    /// The received bytes do not match the checksum the client declared.
+    ChecksumMismatch(String),
+    /// A not-match precondition named the current generation / metageneration (reads answer
+    /// `304 Not Modified`, writes `412`).
+    NotModified(String),
 }
 
 impl fmt::Display for StorageError {
@@ -190,6 +247,8 @@ impl fmt::Display for StorageError {
             Self::UploadFinalized => f.write_str("upload already finalized"),
             Self::UploadSizeMismatch => f.write_str("upload size differs from the declared total"),
             Self::TooManyUploads => f.write_str("too many open upload sessions"),
+            Self::ChecksumMismatch(m) => write!(f, "checksum mismatch: {m}"),
+            Self::NotModified(m) => write!(f, "not modified: {m}"),
         }
     }
 }
@@ -222,9 +281,27 @@ struct UploadSession {
     metadata: NewMetadata,
     precondition: Precondition,
     total: Option<u64>,
+    /// Credentials the session was started with (the protocol layer re-derives the caller
+    /// from them at finalization).
+    authorization: Option<String>,
+    expected_md5: Option<[u8; 16]>,
+    expected_crc32c: Option<u32>,
     received: Vec<u8>,
     state: UploadState,
     started_at: LogicalInstant,
+}
+
+/// Options of a resumable upload session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UploadOptions {
+    /// Declared total size, if any.
+    pub total: Option<u64>,
+    /// Credentials the session is started with (opaque to the store).
+    pub authorization: Option<String>,
+    /// MD5 the client declared for the whole object.
+    pub expected_md5: Option<[u8; 16]>,
+    /// CRC32C the client declared for the whole object.
+    pub expected_crc32c: Option<u32>,
 }
 
 /// The bytes and metadata an upload would commit (authorization before finalization).
@@ -240,6 +317,8 @@ pub struct PendingUpload<'a> {
     pub bytes: &'a [u8],
     /// Declared total, if any.
     pub total: Option<u64>,
+    /// Credentials the session was started with.
+    pub authorization: Option<&'a str>,
 }
 
 /// Progress of a resumable upload after a chunk.
@@ -325,39 +404,7 @@ impl StorageState {
     }
 
     fn check(current: Option<&ObjectMetadata>, pre: Precondition) -> Result<(), StorageError> {
-        if let Some(expected) = pre.if_generation_match {
-            let actual = current.map_or(0, |m| m.generation);
-            if actual != expected {
-                return Err(StorageError::PreconditionFailed(format!(
-                    "ifGenerationMatch {expected} but the current generation is {actual}"
-                )));
-            }
-        }
-        if let Some(expected) = pre.if_metageneration_match {
-            let actual = current.map_or(0, |m| m.metageneration);
-            if actual != expected {
-                return Err(StorageError::PreconditionFailed(format!(
-                    "ifMetagenerationMatch {expected} but the current metageneration is {actual}"
-                )));
-            }
-        }
-        if let Some(unexpected) = pre.if_generation_not_match {
-            let actual = current.map_or(0, |m| m.generation);
-            if actual == unexpected {
-                return Err(StorageError::PreconditionFailed(format!(
-                    "ifGenerationNotMatch {unexpected} but the current generation is {actual}"
-                )));
-            }
-        }
-        if let Some(unexpected) = pre.if_metageneration_not_match {
-            let actual = current.map_or(0, |m| m.metageneration);
-            if actual == unexpected {
-                return Err(StorageError::PreconditionFailed(format!(
-                    "ifMetagenerationNotMatch {unexpected} but the current metageneration is {actual}"
-                )));
-            }
-        }
-        Ok(())
+        pre.check(current)
     }
 
     /// Writes a new generation of `name` with `bytes` (data replacement bumps the
@@ -597,14 +644,42 @@ impl StorageState {
         total: Option<u64>,
         now: LogicalInstant,
     ) -> Result<UploadId, StorageError> {
-        if total.is_some_and(|t| t > MAX_OBJECT_BYTES) {
+        self.begin_upload_with(
+            bucket,
+            name,
+            metadata,
+            precondition,
+            UploadOptions {
+                total,
+                ..UploadOptions::default()
+            },
+            now,
+        )
+    }
+
+    /// Starts a resumable upload with credentials and declared checksums.
+    pub fn begin_upload_with(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        metadata: NewMetadata,
+        precondition: Precondition,
+        options: UploadOptions,
+        now: LogicalInstant,
+    ) -> Result<UploadId, StorageError> {
+        if options.total.is_some_and(|t| t > MAX_OBJECT_BYTES) {
             return Err(StorageError::TooLarge);
         }
         if custom_metadata_size(&metadata.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
         self.sweep_uploads(now);
-        if self.uploads.len() >= MAX_UPLOAD_SESSIONS {
+        let receiving = self
+            .uploads
+            .values()
+            .filter(|u| u.state == UploadState::Receiving)
+            .count();
+        if receiving >= MAX_UPLOAD_SESSIONS {
             return Err(StorageError::TooManyUploads);
         }
         self.next_upload += 1;
@@ -618,7 +693,10 @@ impl StorageState {
                 name: name.clone(),
                 metadata,
                 precondition,
-                total,
+                total: options.total,
+                authorization: options.authorization,
+                expected_md5: options.expected_md5,
+                expected_crc32c: options.expected_crc32c,
                 received: Vec::new(),
                 state: UploadState::Receiving,
                 started_at: now,
@@ -627,14 +705,49 @@ impl StorageState {
         Ok(id)
     }
 
+    /// Declares (or confirms) the checksums the whole object must have; they are verified
+    /// when the upload finalizes.
+    pub fn set_upload_hashes(
+        &mut self,
+        id: &UploadId,
+        md5: Option<[u8; 16]>,
+        crc32c: Option<u32>,
+        now: LogicalInstant,
+    ) -> Result<(), StorageError> {
+        let u = self.upload_mut(id, now)?;
+        if md5.is_some() {
+            u.expected_md5 = md5;
+        }
+        if crc32c.is_some() {
+            u.expected_crc32c = crc32c;
+        }
+        Ok(())
+    }
+
     fn expired(u: &UploadSession, now: LogicalInstant) -> bool {
         now.checked_duration_since(u.started_at)
             .is_none_or(|d| d > LogicalDuration::from_seconds(UPLOAD_SESSION_TTL_SECONDS))
     }
 
-    /// Drops expired sessions and the buffers of finished ones.
+    /// Drops expired sessions; finished sessions beyond the tombstone cap are evicted oldest
+    /// first (ids are sequence-ordered).
     fn sweep_uploads(&mut self, now: LogicalInstant) {
         self.uploads.retain(|_, u| !Self::expired(u, now));
+        let mut finished = self
+            .uploads
+            .values()
+            .filter(|u| u.state != UploadState::Receiving)
+            .count();
+        if finished > MAX_FINISHED_UPLOAD_SESSIONS {
+            self.uploads.retain(|_, u| {
+                if u.state != UploadState::Receiving && finished > MAX_FINISHED_UPLOAD_SESSIONS {
+                    finished -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
     }
 
     fn upload_mut(
@@ -738,6 +851,7 @@ impl StorageState {
                 metadata: &u.metadata,
                 bytes: &u.received,
                 total: u.total,
+                authorization: u.authorization.as_deref(),
             }),
         }
     }
@@ -761,6 +875,25 @@ impl StorageState {
                 u.received = Vec::new();
                 return Err(StorageError::UploadSizeMismatch);
             }
+            // A checksum failure is terminal: the client has to start a new session.
+            let mismatch = match (u.expected_md5, u.expected_crc32c) {
+                (Some(expected), _) if md5(&u.received) != expected => Some(format!(
+                    "md5 {} declared, {} received",
+                    base64(&expected),
+                    base64(&md5(&u.received))
+                )),
+                (_, Some(expected)) if crc32c(&u.received) != expected => Some(format!(
+                    "crc32c {} declared, {} received",
+                    base64(&expected.to_be_bytes()),
+                    base64(&crc32c(&u.received).to_be_bytes())
+                )),
+                _ => None,
+            };
+            if let Some(m) = mismatch {
+                u.state = UploadState::Aborted;
+                u.received = Vec::new();
+                return Err(StorageError::ChecksumMismatch(m));
+            }
             (
                 u.bucket.clone(),
                 u.name.clone(),
@@ -774,6 +907,7 @@ impl StorageState {
             Err(e) => {
                 if let Some(u) = self.uploads.get_mut(id) {
                     u.state = UploadState::Aborted;
+                    u.received = Vec::new();
                 }
                 return Err(e);
             }

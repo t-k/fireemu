@@ -12,7 +12,6 @@
 mod config;
 mod control;
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, RwLock};
@@ -172,7 +171,6 @@ fn storage_state(
         auth: auth_store.clone(),
         rules: storage_rules.clone(),
         project: cfg.auth_project.clone(),
-        upload_principals: Mutex::new(BTreeMap::new()),
     })
 }
 

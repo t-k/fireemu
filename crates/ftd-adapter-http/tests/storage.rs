@@ -30,7 +30,6 @@ fn state(rules: Option<&str>) -> StorageState {
             LoadedRules::from_source(r).unwrap()
         }))),
         project: "demo-app".to_owned(),
-        upload_principals: Mutex::new(BTreeMap::new()),
     }
 }
 
@@ -823,11 +822,7 @@ service firebase.storage {
         ),
     );
     assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
-    let r = handle(
-        &s,
-        &req("POST", &session, &[("x-goog-upload-command", "query")], b""),
-    );
-    assert_eq!(header(&r, "x-goog-upload-status"), Some("active"));
+    // The integrity failure ends the session: the same bytes cannot be committed later.
     let r = handle(
         &s,
         &req(
@@ -836,6 +831,51 @@ service firebase.storage {
             &[
                 ("x-goog-upload-command", "finalize"),
                 ("x-goog-upload-offset", "3"),
+            ],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        handle(
+            &s,
+            &req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/small%2Fy.bin"),
+                &[("authorization", "Bearer owner")],
+                b""
+            )
+        )
+        .status,
+        404
+    );
+    // A fresh session with the right checksum commits.
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=small%2Fy.bin"),
+            &[
+                ("authorization", &auth),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    let session = header(&r, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
                 (
                     "x-goog-hash",
                     &format!(
@@ -846,7 +886,7 @@ service firebase.storage {
                     ),
                 ),
             ],
-            b"",
+            b"abc",
         ),
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
@@ -1090,4 +1130,94 @@ fn v1_rulesets_never_grant_lists() {
         ),
     );
     assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
+}
+
+#[test]
+fn rewrite_authorizes_the_source_before_revealing_it_and_gets_honour_preconditions() {
+    let s = state(Some(
+        "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /open/{file} { allow read, write: if true; }
+  }
+}",
+    ));
+    let (_uid, auth) = user_token(&s);
+    let (ct, body) = multipart(&json!({"name": "open/src"}), "text/plain", b"src");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200);
+    let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
+    // A denied caller sees 403 whether or not the source exists.
+    for src in ["closed%2Fmissing", "closed%2Fother"] {
+        let r = handle(
+            &s,
+            &req(
+                "POST",
+                &format!("/storage/v1/b/{BUCKET}/o/{src}/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=1"),
+                &[("authorization", &auth)],
+                b"",
+            ),
+        );
+        assert_eq!(r.status, 403, "{src}");
+    }
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/open%2Fsrc/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=999"),
+            &[("authorization", &auth)],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 412, "{}", String::from_utf8_lossy(&r.body));
+    // Conditional reads: not-match naming the current generation is 304, match failing is 412.
+    let object = format!("/storage/v1/b/{BUCKET}/o/open%2Fsrc");
+    let r = handle(
+        &s,
+        &req(
+            "GET",
+            &format!("{object}?ifGenerationNotMatch={generation}"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 304);
+    assert!(r.body.is_empty());
+    let r = handle(
+        &s,
+        &req("GET", &format!("{object}?ifGenerationMatch=999"), &[], b""),
+    );
+    assert_eq!(r.status, 412);
+    let r = handle(
+        &s,
+        &req(
+            "GET",
+            &format!("{object}?ifGenerationMatch=1&ifGenerationNotMatch=2"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 400, "conflicting predicates");
+    // A closing delimiter followed by more text is payload, not the end of the body.
+    let data = b"--ftd-boundary--tail\r\n";
+    let (ct, body) = multipart(&json!({"name": "open/tail"}), "text/plain", data);
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(json_body(&r)["size"], data.len().to_string());
 }

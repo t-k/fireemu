@@ -331,7 +331,7 @@ fn not_match_preconditions_and_patch_apply() {
     };
     assert!(matches!(
         s.delete(&b, &n, not_current),
-        Err(StorageError::PreconditionFailed(_))
+        Err(StorageError::NotModified(_))
     ));
     let other = Precondition {
         if_generation_not_match: Some(m.generation + 1),
@@ -770,4 +770,128 @@ fn upload_sessions_expire_are_capped_and_reject_oversized_totals() {
             t(UPLOAD_SESSION_TTL_SECONDS + 1)
         )
         .is_ok());
+}
+
+#[test]
+fn absent_objects_satisfy_only_if_generation_match_zero() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let n = name("absent");
+    let put = |s: &mut StorageState, pre: Precondition| {
+        s.put(&b, &n, b"x".to_vec(), NewMetadata::default(), pre, t(1))
+    };
+    assert!(matches!(
+        put(
+            &mut s,
+            Precondition {
+                if_generation_not_match: Some(123),
+                ..Precondition::default()
+            }
+        ),
+        Err(StorageError::PreconditionFailed(_))
+    ));
+    assert!(matches!(
+        put(
+            &mut s,
+            Precondition {
+                if_metageneration_match: Some(0),
+                ..Precondition::default()
+            }
+        ),
+        Err(StorageError::PreconditionFailed(_))
+    ));
+    assert!(matches!(
+        put(
+            &mut s,
+            Precondition {
+                if_metageneration_not_match: Some(1),
+                ..Precondition::default()
+            }
+        ),
+        Err(StorageError::PreconditionFailed(_))
+    ));
+    assert!(put(
+        &mut s,
+        Precondition {
+            if_generation_match: Some(0),
+            ..Precondition::default()
+        }
+    )
+    .is_ok());
+}
+
+#[test]
+fn finished_upload_sessions_do_not_count_against_the_open_session_cap() {
+    use ftd_core_storage::store::{MAX_FINISHED_UPLOAD_SESSIONS, MAX_UPLOAD_SESSIONS};
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let mut first: Option<ftd_core_storage::store::UploadId> = None;
+    for i in 0..(MAX_UPLOAD_SESSIONS + MAX_FINISHED_UPLOAD_SESSIONS + 10) {
+        let id = s
+            .begin_upload(
+                &b,
+                &name(&format!("f{i}")),
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                t(0),
+            )
+            .unwrap();
+        s.upload_chunk(&id, 0, b"x", true, t(0)).unwrap();
+        first.get_or_insert(id);
+    }
+    // The oldest finished sessions were evicted; recent ones still answer status queries.
+    assert_eq!(
+        s.upload_status(&first.unwrap(), t(0)),
+        Err(StorageError::UploadNotFound)
+    );
+}
+
+#[test]
+fn declared_checksums_end_the_session_on_mismatch() {
+    use ftd_core_storage::store::UploadOptions;
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let id = s
+        .begin_upload_with(
+            &b,
+            &name("c"),
+            NewMetadata::default(),
+            Precondition::default(),
+            UploadOptions {
+                expected_crc32c: Some(0),
+                authorization: Some("Bearer owner".into()),
+                ..UploadOptions::default()
+            },
+            t(0),
+        )
+        .unwrap();
+    s.append_upload(&id, 0, b"abc", t(0)).unwrap();
+    assert_eq!(
+        s.pending_upload(&id, t(0)).unwrap().authorization,
+        Some("Bearer owner")
+    );
+    assert!(matches!(
+        s.finalize_upload(&id, t(0)),
+        Err(StorageError::ChecksumMismatch(_))
+    ));
+    assert_eq!(
+        s.finalize_upload(&id, t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert!(s.get(&b, &name("c")).is_none());
+    let id = s
+        .begin_upload(
+            &b,
+            &name("c"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    s.set_upload_hashes(&id, Some(ftd_core_storage::hash::md5(b"abc")), None, t(0))
+        .unwrap();
+    s.append_upload(&id, 0, b"abc", t(0)).unwrap();
+    assert!(s.finalize_upload(&id, t(0)).is_ok());
 }

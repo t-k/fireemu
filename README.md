@@ -18,15 +18,16 @@ deterministic state machine that:
 
 ## Status
 
-Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols; Storage Security Rules evaluated at upload finalization against the received bytes), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints, custom token sign-in) and native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`).
+Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols; Storage Security Rules evaluated at upload finalization against the received bytes), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints, custom token sign-in) native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`), and Milestone C (Cloud Functions: a `firebase-functions` v2 codebase runs in the bundled Node runner; Firestore document triggers, Storage object triggers, `onSchedule` driven by the virtual clock, `onRequest` / `onCall` over an HTTP port, retries with virtual-time backoff, `await-idle`).
 
-The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Not implemented yet: `PartitionQuery`, `ExecutePipeline`, Storage triggers / Functions / Scheduler (Milestone C), signed ID tokens, inequality constraints in query rules proofs, Storage object versioning / signed URLs / compose.
+The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Not implemented yet: `PartitionQuery`, `ExecutePipeline`, signed ID tokens, inequality constraints in query rules proofs, Storage object versioning / signed URLs / compose, `firebase-functions/v1` event functions, daylight-saving time zones for schedules.
 
 ## Run
 
 ```sh
 cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
 #   optional: --config firebase-testd.json  (see spec/config/firebase-testd.schema.json)
+#   optional: --functions ./functions --functions-port 5001   (a firebase-functions v2 codebase)
 ```
 
 The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`). Storage rules load from `storage.rules` in the config or `PUT /v1/storage/rules`. Security Rules come from `rules.source` in the config file or at runtime:
@@ -40,6 +41,19 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore 
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 
+### Functions
+
+`--functions <dir>` (or `functions.source` in the config) starts `tools/runner-node/index.mjs` (Node, needs the codebase's own `node_modules` with `firebase-functions` and `firebase-admin`; `express` comes with `firebase-functions`). The runner discovers the exported v2 functions and reports them; the daemon then delivers Firestore document events (`onDocumentCreated` / `Updated` / `Deleted` / `Written` with path parameters), Storage object events (`onObjectFinalized` / `Deleted` / `MetadataUpdated`) and `onSchedule` runs as JSON CloudEvents, and serves `onRequest` / `onCall` at `http://127.0.0.1:5001/{project}/{region}/{function}`. Functions declared with `retry: true` are retried with exponential backoff in virtual time; other failures are dead-lettered.
+
+```sh
+curl -X POST http://127.0.0.1:9099/v1/sessions/default:awaitIdle -d '{"timeoutSeconds": 30}'   # wait for triggers
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/clock:advance -d '{"seconds": 600}'     # runs due schedules (and due retries)
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/functions/nightly:run                  # run a schedule now
+curl http://127.0.0.1:9099/v1/sessions/default/functions                                      # queue status
+```
+
+`tools/sdk-smoke/functions.mjs` with `tools/sdk-smoke/functions-project/` exercises all of it. `firebase-functions/v1` event and schedule functions, other trigger families and DST time zones are declared unsupported in the Capability Manifest.
+
 Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, "127.0.0.1", 8080)`, `connectAuthEmulator(auth, "http://127.0.0.1:9099")`); the Firestore port serves gRPC, REST and the WebChannel transport, and both ports answer CORS preflights. `FTD_TRACE_WEBCHANNEL=1` traces the channel protocol on stderr.
 
 | Crate | Purpose | Dependencies |
@@ -52,9 +66,11 @@ Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, 
 | `ftd-core-rules` | Security Rules parser, static limit linter (`RULES-LINT-1`) and evaluator subset with runtime budgets | none |
 | `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens, TOTP second factor (RFC 6238) | none |
 | `ftd-core-storage` | Cloud Storage objects: opaque UTF-8 names, generations, metadata, listing, resumable uploads, MD5 / CRC32C | none |
+| `ftd-core-functions` | function manifest, document path patterns, cron / App Engine schedules, CloudEvents attributes | none |
 | `ftd-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
 | `ftd-adapter-grpc` | Firestore v1 service: strict gateway, local backend, `Write` / `Listen` streams, Rules enforcement, optional upstream proxy | tonic, tokio |
-| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts) and the control API (clock, rules, capabilities) | hyper, tokio, serde_json |
+| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts), the Storage surface and the control API (clock, rules, capabilities, await-idle) | hyper, tokio, serde_json |
+| `ftd-adapter-functions` | runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy | tokio, hyper, serde_json |
 | `firebase-testd` | the daemon binary (`up`, `doctor`, `capabilities`) | tokio, serde_json |
 
 `ftd-core-*` crates are `std`-only and forbid `unsafe` (ADR-001, ADR-007).

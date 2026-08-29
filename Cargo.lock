@@ -292,6 +292,7 @@ dependencies = [
 name = "ftd-adapter-grpc"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "ftd-core-auth",
  "ftd-core-firestore",
  "ftd-core-limits",
@@ -299,7 +300,11 @@ dependencies = [
  "ftd-core-session",
  "ftd-core-types",
  "ftd-proto-firestore",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "prost-types",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tonic",

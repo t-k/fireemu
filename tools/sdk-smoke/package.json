@@ -5,7 +5,8 @@
   "description": "Runs the real firebase-admin SDK against a running firebase-testd (manual / CI smoke).",
   "scripts": {
     "smoke": "node smoke.mjs",
-    "smoke:client": "node client.mjs"
+    "smoke:client": "node client.mjs",
+    "smoke:lite": "node lite.mjs"
   },
   "dependencies": {
     "firebase": "^12",

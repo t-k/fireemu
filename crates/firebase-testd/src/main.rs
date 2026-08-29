@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_adapter_grpc::gateway::Gateway;
 use ftd_adapter_grpc::local::LocalBackend;
+use ftd_adapter_grpc::rest::RestState;
 use ftd_adapter_grpc::rules::RulesEnforcer;
+use ftd_adapter_grpc::serve::serve_multiplexed;
 use ftd_adapter_grpc::service::GatewayService;
 use ftd_adapter_http::identity_toolkit::AuthState;
 use ftd_core_auth::mfa::TotpPolicy;
@@ -220,29 +222,33 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
         let grpc_addr = grpc_listener.local_addr().map_err(|e| e.to_string())?;
         let http_addr = http_listener.local_addr().map_err(|e| e.to_string())?;
         println!("firebase-testd up");
-        println!("  firestore (gRPC): {grpc_addr}   FIRESTORE_EMULATOR_HOST={grpc_addr}");
+        println!("  firestore (gRPC + REST): {grpc_addr}   FIRESTORE_EMULATOR_HOST={grpc_addr}");
         println!("  auth (REST):      {http_addr}   FIREBASE_AUTH_EMULATOR_HOST={http_addr}");
         println!("  control API:      http://{http_addr}/v1/  (health: /health/live)");
         println!("  edition: {}   clock: {}", cfg.edition, cfg.clock_start);
         print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
 
-        let mut service = GatewayService::local(gateway, backend);
-        if cfg.rules_enforced {
-            service = service.with_rules(Arc::new(RulesEnforcer::new(
-                rules,
-                auth_store,
+        let enforcer = cfg.rules_enforced.then(|| {
+            Arc::new(RulesEnforcer::new(
+                rules.clone(),
+                auth_store.clone(),
                 clock.clone(),
-            )));
-        }
-        let svc = FirestoreServer::new(service);
-        let grpc = tokio::spawn(async move {
-            tonic::transport::Server::builder()
-                .add_service(svc)
-                .serve_with_incoming(
-                    tonic::codegen::tokio_stream::wrappers::TcpListenerStream::new(grpc_listener),
-                )
-                .await
+            ))
         });
+        let mut service = GatewayService::local(gateway.clone(), backend.clone());
+        if let Some(e) = &enforcer {
+            service = service.with_rules(e.clone());
+        }
+        let rest = Arc::new(RestState {
+            local: backend.clone(),
+            gateway: Arc::new(gateway),
+            rules: enforcer,
+        });
+        let grpc = tokio::spawn(serve_multiplexed(
+            grpc_listener,
+            FirestoreServer::new(service),
+            rest,
+        ));
         let http = tokio::spawn(ftd_adapter_http::server::serve_with_control(
             http_listener,
             auth,

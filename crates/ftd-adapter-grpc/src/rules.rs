@@ -80,6 +80,14 @@ impl RulesEnforcer {
         let value = value
             .to_str()
             .map_err(|_| Status::unauthenticated("malformed authorization metadata"))?;
+        self.principal_from_authorization(Some(value))
+    }
+
+    /// Resolves the caller from an `Authorization` header value.
+    pub fn principal_from_authorization(&self, value: Option<&str>) -> Result<Principal, Status> {
+        let Some(value) = value else {
+            return Ok(Principal::Anonymous);
+        };
         let token = value
             .strip_prefix("Bearer ")
             .ok_or_else(|| Status::unauthenticated("authorization must be a Bearer token"))?;
@@ -313,4 +321,70 @@ pub fn resource_value(doc: &Document) -> RulesValue {
         reference_path(&doc.path.resource_name()),
     );
     RulesValue::Map(m)
+}
+
+// ------------------------------------------------------------------------------------------
+// Request-level helpers shared by the gRPC service, the streams and the REST surface
+// ------------------------------------------------------------------------------------------
+
+/// Document path standing in for "any document of this collection" when a list returns
+/// nothing (the wildcard binds to `ftd-placeholder`).
+pub fn placeholder_path(parent: &Parent, collection_id: &str) -> Result<DocumentPath, Status> {
+    let relative = match &parent.document {
+        Some(p) => format!("{}/{collection_id}/ftd-placeholder", p.relative()),
+        None => format!("{collection_id}/ftd-placeholder"),
+    };
+    DocumentPath::parse(&parent.project, &parent.database, &relative)
+        .map_err(|e| Status::invalid_argument(e.to_string()))
+}
+
+/// Authorizes a single-document read by resource name.
+pub fn authorize_get(
+    rules: Option<&Arc<RulesEnforcer>>,
+    principal: &Principal,
+    local: &LocalBackend,
+    name: &str,
+) -> Result<(), Status> {
+    let Some(rules) = rules else { return Ok(()) };
+    let path = crate::encode::decode_document_name(name)
+        .map_err(|e| crate::gateway::Rejection::Decode(e).to_status())?;
+    let parent = crate::decode::parse_parent(name)
+        .map_err(|e| crate::gateway::Rejection::Decode(e).to_status())?;
+    rules.authorize_get(principal, local, &parent, &path)
+}
+
+/// Authorizes a list over the returned document names.
+pub fn authorize_list(
+    rules: Option<&Arc<RulesEnforcer>>,
+    principal: &Principal,
+    local: &LocalBackend,
+    parent: &Parent,
+    names: &[String],
+    collection_id: &str,
+) -> Result<(), Status> {
+    let Some(rules) = rules else { return Ok(()) };
+    let documents = names
+        .iter()
+        .map(|n| {
+            crate::encode::decode_document_name(n)
+                .map_err(|e| crate::gateway::Rejection::Decode(e).to_status())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let placeholder = placeholder_path(parent, collection_id)?;
+    rules.authorize_list(principal, local, parent, &documents, &placeholder)
+}
+
+/// Authorizes every write of a request.
+pub fn authorize_writes(
+    rules: Option<&Arc<RulesEnforcer>>,
+    principal: &Principal,
+    local: &LocalBackend,
+    parent: &Parent,
+    writes: &[Write],
+) -> Result<(), Status> {
+    let Some(rules) = rules else { return Ok(()) };
+    for w in writes {
+        rules.authorize_write(principal, local, parent, w)?;
+    }
+    Ok(())
 }

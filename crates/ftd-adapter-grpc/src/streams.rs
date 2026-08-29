@@ -382,7 +382,7 @@ fn refresh_target(
             let docs = ctx.local.run_query_latest(parent, &q.query)?;
             if let Some(rules) = &ctx.rules {
                 let paths: Vec<DocumentPath> = docs.iter().map(|d| d.path.clone()).collect();
-                let placeholder = placeholder_for(parent, &q.collection_id)?;
+                let placeholder = crate::rules::placeholder_path(parent, &q.collection_id)?;
                 rules.authorize_list(&ctx.principal, &ctx.local, parent, &paths, &placeholder)?;
             }
             docs
@@ -429,15 +429,6 @@ fn refresh_target(
     }
     state.known = next_known;
     Ok(())
-}
-
-fn placeholder_for(parent: &Parent, collection_id: &str) -> Result<DocumentPath, Status> {
-    let relative = match &parent.document {
-        Some(p) => format!("{}/{collection_id}/ftd-placeholder", p.relative()),
-        None => format!("{collection_id}/ftd-placeholder"),
-    };
-    DocumentPath::parse(&parent.project, &parent.database, &relative)
-        .map_err(|e| Status::invalid_argument(e.to_string()))
 }
 
 fn resume_token(ctx: &StreamContext) -> Vec<u8> {

@@ -17,7 +17,6 @@ use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::decode::{decode_structured_query, parse_parent};
-use crate::encode::decode_document_name;
 use crate::gateway::{Gateway, Rejection};
 use crate::local::{BatchGetItem, LocalBackend};
 use crate::rules::{Principal, RulesEnforcer};
@@ -84,12 +83,7 @@ impl GatewayService {
         local: &LocalBackend,
         name: &str,
     ) -> Result<(), Status> {
-        let Some(rules) = &self.rules else {
-            return Ok(());
-        };
-        let path = decode_document_name(name).map_err(|e| Rejection::Decode(e).to_status())?;
-        let parent = parse_parent(name).map_err(|e| Rejection::Decode(e).to_status())?;
-        rules.authorize_get(principal, local, &parent, &path)
+        crate::rules::authorize_get(self.rules.as_ref(), principal, local, name)
     }
 
     fn authorize_list(
@@ -100,15 +94,14 @@ impl GatewayService {
         names: &[String],
         collection_id: &str,
     ) -> Result<(), Status> {
-        let Some(rules) = &self.rules else {
-            return Ok(());
-        };
-        let documents = names
-            .iter()
-            .map(|n| decode_document_name(n).map_err(|e| Rejection::Decode(e).to_status()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let placeholder = placeholder_path(parent, collection_id)?;
-        rules.authorize_list(principal, local, parent, &documents, &placeholder)
+        crate::rules::authorize_list(
+            self.rules.as_ref(),
+            principal,
+            local,
+            parent,
+            names,
+            collection_id,
+        )
     }
 
     fn authorize_writes(
@@ -118,13 +111,7 @@ impl GatewayService {
         parent: &crate::decode::Parent,
         writes: &[ftd_core_firestore::store::Write],
     ) -> Result<(), Status> {
-        let Some(rules) = &self.rules else {
-            return Ok(());
-        };
-        for w in writes {
-            rules.authorize_write(principal, local, parent, w)?;
-        }
-        Ok(())
+        crate::rules::authorize_writes(self.rules.as_ref(), principal, local, parent, writes)
     }
 
     fn client(&self) -> Result<FirestoreClient<Channel>, Status> {
@@ -175,20 +162,6 @@ impl GatewayService {
             .map_err(|r| r.to_status())?;
         Ok(accepted.warnings)
     }
-}
-
-/// Document path standing in for "any document of this collection" when a list returns
-/// nothing (the wildcard binds to `ftd-placeholder`).
-fn placeholder_path(
-    parent: &crate::decode::Parent,
-    collection_id: &str,
-) -> Result<ftd_core_firestore::path::DocumentPath, Status> {
-    let relative = match &parent.document {
-        Some(p) => format!("{}/{collection_id}/ftd-placeholder", p.relative()),
-        None => format!("{collection_id}/ftd-placeholder"),
-    };
-    ftd_core_firestore::path::DocumentPath::parse(&parent.project, &parent.database, &relative)
-        .map_err(|e| Status::invalid_argument(e.to_string()))
 }
 
 fn collection_of_query(req: &pb::RunQueryRequest) -> String {

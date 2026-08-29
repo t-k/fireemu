@@ -110,21 +110,6 @@ mod harnesses {
         assert!(!WorkKind::ScheduledFutureWork.is_fenced(&options));
     }
 
-    fn any_definition(boundary: LimitBoundary, maximum: u64) -> LimitDefinition {
-        LimitDefinition {
-            id: "KANI",
-            class: LimitClass::HardResource,
-            boundary,
-            unit: LimitUnit::Count,
-            maximum: LimitMaximum::Fixed(maximum),
-            precision: EnforcementPrecision::Exact,
-            enforcement_stage: EnforcementStage::Request,
-            implemented: ImplementationStatus::Implemented,
-            official_text: "kani",
-            notes: "",
-        }
-    }
-
     /// Rejection precedes warnings for every value outside the boundary (allocation-free form
     /// of the `evaluate` contract).
     #[kani::proof]

@@ -1,0 +1,16 @@
+[package]
+name = "proto-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "development tool: regenerates crates/ftd-proto-firestore/src/generated from the vendored protos (requires protoc); never linked into the release binary"
+
+[dependencies]
+tonic-build = "0.13"
+prost-build = "0.13"
+
+[lints]
+workspace = true

@@ -8,9 +8,11 @@ members = [
     "crates/ftd-core-firestore",
     "crates/ftd-core-rules",
     "crates/ftd-core-auth",
+    "crates/ftd-proto-firestore",
     "tools/limit-catalog-gen",
     "tools/traceability-check",
     "tools/config-schema-check",
+    "tools/proto-gen",
     "verification/loom",
     "verification/kani",
 ]

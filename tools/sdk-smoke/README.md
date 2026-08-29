@@ -16,7 +16,7 @@ Exercise a running `firebase-testd` with the real Firebase SDKs.
   `FTD_FUNCTIONS_HOST=127.0.0.1:5001`. Run it on a fresh daemon (it fills the database).
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) and open
-  `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>`; the page prints
+  `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FTD_CONTROL_TOKEN>`; the page prints
   its checks as JSON. `FTD_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.
 
 ```sh

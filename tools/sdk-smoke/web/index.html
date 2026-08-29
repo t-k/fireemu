@@ -37,7 +37,10 @@ service cloud.firestore {
   }
 }`;
 (async () => {
-  const put = await fetch(`http://127.0.0.1:${authPort}/v1/rules`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: RULES }) });
+  // A page is a browser origin: privileged control routes need the control token the daemon
+  // prints at start (pass it as ?token=...).
+  const controlToken = params.get("token") || "";
+  const put = await fetch(`http://127.0.0.1:${authPort}/v1/rules`, { method: "PUT", headers: { "content-type": "application/json", authorization: `Bearer ${controlToken}` }, body: JSON.stringify({ source: RULES }) });
   results.push({ name: "rules loaded", ok: put.ok, extra: put.status }); render();
   const app = initializeApp({ projectId: "demo-app", apiKey: "fake-api-key" });
   const auth = getAuth(app);

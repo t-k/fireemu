@@ -40,6 +40,8 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore 
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 
+Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, "127.0.0.1", 8080)`, `connectAuthEmulator(auth, "http://127.0.0.1:9099")`); the Firestore port serves gRPC, REST and the WebChannel transport, and both ports answer CORS preflights. `FTD_TRACE_WEBCHANNEL=1` traces the channel protocol on stderr.
+
 | Crate | Purpose | Dependencies |
 |---|---|---|
 | `ftd-core-types` | validated identifiers, logical time, edition capabilities, deterministic adapters | none |

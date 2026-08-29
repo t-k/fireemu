@@ -505,6 +505,7 @@ fn refresh_target(
                     let reader = crate::rules::StateReader {
                         db,
                         parent: &state.parent,
+                        version: None,
                     };
                     rules.authorize_get(principal, path, doc.as_ref(), &reader)?;
                 }
@@ -519,6 +520,7 @@ fn refresh_target(
                 let reader = crate::rules::StateReader {
                     db,
                     parent: &state.parent,
+                    version: None,
                 };
                 rules.authorize_query(principal, &state.parent, query, &reader)?;
             }

@@ -11,14 +11,12 @@ pub mod json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ftd_core_firestore::query::Query;
 use ftd_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
 use tonic::{Code, Status};
 
-use crate::decode::{parse_parent, Parent};
 use crate::encode::encode_instant;
-use crate::gateway::{Gateway, Rejection};
+use crate::gateway::Gateway;
 use crate::local::LocalBackend;
 use crate::rules::{self, Principal, RulesEnforcer};
 use json::{
@@ -120,10 +118,6 @@ fn bad(e: &JsonError) -> Status {
     Status::invalid_argument(e.to_string())
 }
 
-fn decode_err(e: crate::decode::DecodeError) -> Status {
-    Rejection::Decode(e).to_status()
-}
-
 /// Parsed query parameters (repeated keys keep every value).
 fn query_params(query: &str) -> BTreeMap<String, Vec<String>> {
     fn decode(s: &str) -> String {
@@ -211,45 +205,8 @@ impl RestState {
         rules::write_guard(self.rules.as_ref(), principal)
     }
 
-    fn authorize_query(
-        &self,
-        principal: &Principal,
-        parent: &Parent,
-        query: &Query,
-    ) -> Result<(), Status> {
-        match &self.rules {
-            Some(r) => {
-                let reader = rules::BackendReader {
-                    local: &self.local,
-                    parent,
-                };
-                r.authorize_query(principal, parent, query, &reader)
-            }
-            None => Ok(()),
-        }
-    }
-
-    fn authorize_get(
-        &self,
-        principal: &Principal,
-        path: &ftd_core_firestore::path::DocumentPath,
-        snapshot: Option<&ftd_core_firestore::store::Document>,
-    ) -> Result<(), Status> {
-        match &self.rules {
-            Some(r) => {
-                let parent = Parent {
-                    project: path.project().clone(),
-                    database: path.database().clone(),
-                    document: None,
-                };
-                let reader = rules::BackendReader {
-                    local: &self.local,
-                    parent: &parent,
-                };
-                r.authorize_get(principal, path, snapshot, &reader)
-            }
-            None => Ok(()),
-        }
+    fn read_guard<'a>(&'a self, principal: &'a Principal) -> rules::BoxedReadGuard<'a> {
+        rules::read_guard(self.rules.as_ref(), principal)
     }
 
     /// Handles one request.
@@ -332,8 +289,8 @@ impl RestState {
             },
             request_options: None,
         };
-        let snapshot = self.local.get_document_snapshot(&req)?;
-        self.authorize_get(principal, &snapshot.path, snapshot.document.as_ref())?;
+        let guard = self.read_guard(principal);
+        let snapshot = self.local.get_document_snapshot(&req, &*guard)?;
         let doc = snapshot.into_response()?;
         Ok(ok(document_to_json(&doc)))
     }
@@ -377,17 +334,8 @@ impl RestState {
             },
             request_options: None,
         };
-        let parsed = parse_parent(parent).map_err(decode_err)?;
-        let scan = pb::StructuredQuery {
-            from: vec![pb::structured_query::CollectionSelector {
-                collection_id: collection_id.to_owned(),
-                all_descendants: false,
-            }],
-            ..Default::default()
-        };
-        let accepted = self.local.accepted_query(&parsed, &scan)?;
-        self.authorize_query(principal, &parsed, &accepted.query)?;
-        let response = self.local.list_documents(&req)?;
+        let guard = self.read_guard(principal);
+        let response = self.local.list_documents(&req, &*guard)?;
         let mut body = json!({"documents": response.documents.iter().map(document_to_json).collect::<Vec<_>>()});
         if !response.next_page_token.is_empty() {
             body["nextPageToken"] = Value::String(response.next_page_token);
@@ -610,10 +558,8 @@ impl RestState {
             request_options: None,
             consistency_selector,
         };
-        let outcome = self.local.batch_get_documents(&req)?;
-        for item in &outcome.items {
-            self.authorize_get(principal, &item.path()?, item.document())?;
-        }
+        let guard = self.read_guard(principal);
+        let outcome = self.local.batch_get_documents(&req, &*guard)?;
         let read_time = optional_timestamp_to_json(Some(&encode_instant(outcome.read_time)));
         let mut out: Vec<Value> = outcome
             .items
@@ -647,9 +593,6 @@ impl RestState {
             return Err(Status::invalid_argument("structuredQuery is required"));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
-        let parsed = parse_parent(resource).map_err(decode_err)?;
-        let accepted = self.local.accepted_query(&parsed, &structured)?;
-        self.authorize_query(principal, &parsed, &accepted.query)?;
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(pb::run_query_request::ConsistencySelector::Transaction(
                 transaction_bytes(Some(t))?,
@@ -673,7 +616,8 @@ impl RestState {
             )),
             consistency_selector,
         };
-        let (responses, _warnings) = self.local.run_query(&req)?;
+        let guard = self.read_guard(principal);
+        let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
         let out: Vec<Value> = responses
             .iter()
             .map(|r| {
@@ -708,16 +652,14 @@ impl RestState {
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
-        let parsed = parse_parent(resource).map_err(decode_err)?;
-        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
-            &aggregation.query_type
-        else {
+        if !matches!(
+            aggregation.query_type,
+            Some(pb::structured_aggregation_query::QueryType::StructuredQuery(_))
+        ) {
             return Err(Status::invalid_argument(
                 "aggregation query requires a structuredQuery",
             ));
-        };
-        let accepted = self.local.accepted_query(&parsed, sq)?;
-        self.authorize_query(principal, &parsed, &accepted.query)?;
+        }
         let consistency_selector = if let Some(t) = body.get("transaction") {
             Some(
                 pb::run_aggregation_query_request::ConsistencySelector::Transaction(
@@ -747,7 +689,8 @@ impl RestState {
             ),
             consistency_selector,
         };
-        let response = self.local.run_aggregation_query(&req)?;
+        let guard = self.read_guard(principal);
+        let response = self.local.run_aggregation_query(&req, &*guard)?;
         let fields: serde_json::Map<String, Value> = response
             .result
             .as_ref()

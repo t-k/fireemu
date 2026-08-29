@@ -27,7 +27,7 @@ use crate::encode::{
     status_from_error,
 };
 use crate::gateway::{AcceptedQuery, Gateway, Rejection};
-use crate::rules::{allow_all, WriteGuard};
+use crate::rules::{allow_all, ReadCheck, ReadGuard, WriteGuard};
 
 /// `ListDocuments` page size when the request leaves it unset (the service default).
 pub const DEFAULT_LIST_PAGE_SIZE: usize = 100;
@@ -335,10 +335,12 @@ impl LocalBackend {
         !matches!(opts.mode, Some(pb::transaction_options::Mode::ReadWrite(_)))
     }
 
-    /// `GetDocument` as a snapshot (authorize, then [`DocumentSnapshot::into_response`]).
+    /// `GetDocument` as a snapshot, authorized by `guard` inside the critical section that
+    /// reads it (then [`DocumentSnapshot::into_response`]).
     pub fn get_document_snapshot(
         &self,
         req: &pb::GetDocumentRequest,
+        guard: ReadGuard<'_>,
     ) -> Result<DocumentSnapshot, Status> {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
@@ -353,15 +355,34 @@ impl LocalBackend {
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let now = self.now();
-        let document = self.with_db(&parent, |db| match (&txn, read_at) {
-            (Some(t), _) => {
-                db.touch_transaction(t, now)
-                    .map_err(|e| status_from_error(&e))?;
-                db.get_in_transaction(t, &path)
-                    .map_err(|e| status_from_error(&e))
-            }
-            (None, Some(at)) => Ok(db.get_at(&path, db.version_at(at)).cloned()),
-            (None, None) => Ok(db.get(&path).cloned()),
+        let document = self.with_db(&parent, |db| {
+            let (document, version) = match (&txn, read_at) {
+                (Some(t), _) => {
+                    db.touch_transaction(t, now)
+                        .map_err(|e| status_from_error(&e))?;
+                    let doc = db
+                        .get_in_transaction(t, &path)
+                        .map_err(|e| status_from_error(&e))?;
+                    let version = db
+                        .transaction_read_version(t)
+                        .map_err(|e| status_from_error(&e))?;
+                    (doc, Some(version))
+                }
+                (None, Some(at)) => {
+                    let version = db.version_at(at);
+                    (db.get_at(&path, version).cloned(), Some(version))
+                }
+                (None, None) => (db.get(&path).cloned(), None),
+            };
+            guard(
+                db,
+                version,
+                ReadCheck::Document {
+                    path: &path,
+                    snapshot: document.as_ref(),
+                },
+            )?;
+            Ok(document)
         })?;
         Ok(DocumentSnapshot {
             path,
@@ -371,14 +392,20 @@ impl LocalBackend {
     }
 
     /// `GetDocument`.
-    pub fn get_document(&self, req: &pb::GetDocumentRequest) -> Result<pb::Document, Status> {
-        self.get_document_snapshot(req)?.into_response()
+    pub fn get_document(
+        &self,
+        req: &pb::GetDocumentRequest,
+        guard: ReadGuard<'_>,
+    ) -> Result<pb::Document, Status> {
+        self.get_document_snapshot(req, guard)?.into_response()
     }
 
-    /// `BatchGetDocuments`: returns the items and the transaction to report (new or given).
+    /// `BatchGetDocuments`: returns the items and the transaction to report (new or given);
+    /// every item is authorized by `guard` against the snapshot it is read from.
     pub fn batch_get_documents(
         &self,
         req: &pb::BatchGetDocumentsRequest,
+        guard: ReadGuard<'_>,
     ) -> Result<BatchGetOutcome, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
@@ -425,6 +452,14 @@ impl LocalBackend {
                 (None, Some(at)) => at,
                 (None, None) => db.read_time(now),
             };
+            let version = match (&txn, read_at) {
+                (Some(t), _) => Some(
+                    db.transaction_read_version(t)
+                        .map_err(|e| status_from_error(&e))?,
+                ),
+                (None, Some(at)) => Some(db.version_at(at)),
+                (None, None) => None,
+            };
             let mut items = Vec::with_capacity(req.documents.len());
             for (name, path) in req.documents.iter().zip(&paths) {
                 let path = path.clone();
@@ -435,6 +470,14 @@ impl LocalBackend {
                     (None, Some(at)) => db.get_at(&path, db.version_at(at)).cloned(),
                     (None, None) => db.get(&path).cloned(),
                 };
+                guard(
+                    db,
+                    version,
+                    ReadCheck::Document {
+                        path: &path,
+                        snapshot: doc.as_ref(),
+                    },
+                )?;
                 items.push(match doc {
                     Some(d) => BatchGetItem::Found(d),
                     None => BatchGetItem::Missing(name.clone()),
@@ -693,6 +736,7 @@ impl LocalBackend {
     pub fn run_query(
         &self,
         req: &pb::RunQueryRequest,
+        guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
@@ -733,12 +777,29 @@ impl LocalBackend {
                 }
                 _ => None,
             };
-            let docs = match (&txn, read_at) {
-                (Some(t), _) => db
+            let version = match (&txn, read_at) {
+                (Some(t), _) => Some(
+                    db.transaction_read_version(t)
+                        .map_err(|e| status_from_error(&e))?,
+                ),
+                (None, Some(at)) => Some(db.version_at(at)),
+                (None, None) => None,
+            };
+            // Authorized from the query constraints before any data is touched.
+            guard(
+                db,
+                version,
+                ReadCheck::Query {
+                    parent: &parent,
+                    query: &accepted.query,
+                },
+            )?;
+            let docs = match &txn {
+                Some(t) => db
                     .run_query_in_transaction(t, &accepted.query)
                     .map_err(|e| status_from_error(&e))?,
-                (None, at) => db
-                    .run_query(&accepted.query, at.map(|t| db.version_at(t)))
+                None => db
+                    .run_query(&accepted.query, version)
                     .map_err(|e| status_from_error(&e))?,
             };
             let read_time = Some(encode_instant(match (&txn, read_at) {
@@ -787,6 +848,7 @@ impl LocalBackend {
     pub fn run_aggregation_query(
         &self,
         req: &pb::RunAggregationQueryRequest,
+        guard: ReadGuard<'_>,
     ) -> Result<pb::RunAggregationQueryResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
@@ -840,20 +902,29 @@ impl LocalBackend {
                 }
                 _ => None,
             };
-            // Inside a transaction the aggregation is computed at the snapshot and the query
-            // is recorded so that later changes abort the commit.
             let version = match (&txn, read_at) {
-                (Some(t), _) => {
-                    db.run_query_in_transaction(t, &accepted.query)
-                        .map_err(|e| status_from_error(&e))?;
-                    Some(
-                        db.transaction_read_version(t)
-                            .map_err(|e| status_from_error(&e))?,
-                    )
-                }
+                (Some(t), _) => Some(
+                    db.transaction_read_version(t)
+                        .map_err(|e| status_from_error(&e))?,
+                ),
                 (None, Some(at)) => Some(db.version_at(at)),
                 (None, None) => None,
             };
+            // The underlying query is authorized from its constraints, like a list.
+            guard(
+                db,
+                version,
+                ReadCheck::Query {
+                    parent: &parent,
+                    query: &accepted.query,
+                },
+            )?;
+            // Inside a transaction the aggregation is computed at the snapshot and the query
+            // is recorded so that later changes abort the commit.
+            if let Some(t) = &txn {
+                db.run_query_in_transaction(t, &accepted.query)
+                    .map_err(|e| status_from_error(&e))?;
+            }
             let read_time = match (&txn, read_at) {
                 (Some(t), _) => db
                     .transaction_read_time(t)
@@ -881,6 +952,7 @@ impl LocalBackend {
     pub fn list_documents(
         &self,
         req: &pb::ListDocumentsRequest,
+        guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         // Page tokens are the resource name of the last document of the previous page
@@ -910,12 +982,19 @@ impl LocalBackend {
             None => None,
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        let accepted = self.accepted_query(&parent, &list_query(req))?;
         self.with_db(&parent, |db| {
-            let mut docs = db.list_documents_at(
-                parent.document.as_ref(),
-                &req.collection_id,
-                read_at.map(|t| db.version_at(t)),
-            );
+            let version = read_at.map(|t| db.version_at(t));
+            guard(
+                db,
+                version,
+                ReadCheck::Query {
+                    parent: &parent,
+                    query: &accepted.query,
+                },
+            )?;
+            let mut docs =
+                db.list_documents_at(parent.document.as_ref(), &req.collection_id, version);
             if let Some(after) = &after {
                 docs.retain(|d| d.path.resource_name() > *after);
             }
@@ -1185,4 +1264,16 @@ pub fn document_summary(
     doc: &Document,
 ) -> (String, BTreeMap<String, ftd_core_firestore::value::Value>) {
     (doc.path.relative(), doc.fields.clone())
+}
+
+/// Structured query of a `ListDocuments` request (unfiltered collection scan).
+#[must_use]
+pub fn list_query(req: &pb::ListDocumentsRequest) -> pb::StructuredQuery {
+    pb::StructuredQuery {
+        from: vec![pb::structured_query::CollectionSelector {
+            collection_id: req.collection_id.clone(),
+            all_descendants: false,
+        }],
+        ..Default::default()
+    }
 }

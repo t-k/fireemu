@@ -23,7 +23,8 @@
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_core_auth::jwt::{decode_unsigned, verify_id_token};
@@ -31,7 +32,7 @@ use ftd_core_auth::store::AuthStore;
 use ftd_core_firestore::field_path::FieldPath;
 use ftd_core_firestore::path::DocumentPath;
 use ftd_core_firestore::query::{FieldOp, FilterExpr, Query, UnaryOp};
-use ftd_core_firestore::store::{Document, FirestoreState, Write, WriteOp};
+use ftd_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, WriteOp};
 use ftd_core_firestore::value::Value;
 use ftd_core_rules::ast::Ruleset;
 use ftd_core_rules::eval::{
@@ -48,21 +49,15 @@ use tonic::Status;
 
 use crate::decode::Parent;
 
-/// `get()` / `exists()` over a database snapshot (inside a commit's critical section or a
-/// `Listen` refresh).
+/// `get()` / `exists()` over a database snapshot (inside a read's or commit's critical
+/// section, or a `Listen` refresh); `version` selects the snapshot served (`None` = latest).
 pub struct StateReader<'a> {
     /// Database.
     pub db: &'a FirestoreState,
     /// Project / database of the request.
     pub parent: &'a Parent,
-}
-
-/// `get()` / `exists()` through the backend (unary reads, no lock held).
-pub struct BackendReader<'a> {
-    /// Backend.
-    pub local: &'a crate::local::LocalBackend,
-    /// Project / database of the request.
-    pub parent: &'a Parent,
+    /// Snapshot version the request is served from.
+    pub version: Option<CommitVersion>,
 }
 
 /// Rules path segments (`databases/{db}/documents/...`) → document path in the request's
@@ -87,19 +82,40 @@ fn rules_segments_to_path(parent: &Parent, segments: &[String]) -> Option<Docume
 impl DocumentAccess for StateReader<'_> {
     fn get(&self, segments: &[String]) -> Option<RulesValue> {
         let path = rules_segments_to_path(self.parent, segments)?;
-        self.db.get(&path).map(resource_value)
+        match self.version {
+            Some(v) => self.db.get_at(&path, v).map(resource_value),
+            None => self.db.get(&path).map(resource_value),
+        }
     }
 }
 
-impl DocumentAccess for BackendReader<'_> {
+/// Document accesses of one multi-document request, shared by every operation's evaluation
+/// (`RULES-DOC-ACCESS-MULTI-TOTAL`); each operation keeps its own per-operation cache and
+/// budget.
+struct AggregateReader<'a> {
+    inner: &'a dyn DocumentAccess,
+    seen: RefCell<BTreeSet<Vec<String>>>,
+}
+
+impl DocumentAccess for AggregateReader<'_> {
     fn get(&self, segments: &[String]) -> Option<RulesValue> {
-        let path = rules_segments_to_path(self.parent, segments)?;
-        self.local
-            .current_document(self.parent, &path)
-            .ok()
-            .flatten()
-            .map(|d| resource_value(&d))
+        if let Ok(mut seen) = self.seen.try_borrow_mut() {
+            seen.insert(segments.to_vec());
+        }
+        self.inner.get(segments)
     }
+}
+
+/// Maximum distinct `get()` / `exists()` documents across one multi-document request.
+fn multi_total_max() -> u64 {
+    ftd_core_limits::catalogs::ALL_CATALOGS
+        .iter()
+        .find_map(|c| c.find("RULES-DOC-ACCESS-MULTI-TOTAL"))
+        .and_then(|l| match l.maximum {
+            ftd_core_limits::model::LimitMaximum::Fixed(v) => Some(v),
+            _ => None,
+        })
+        .unwrap_or(20)
 }
 
 /// Who is making the request.
@@ -120,6 +136,76 @@ pub type WriteGuard<'a> =
 /// Owned write guard (see [`write_guard`]).
 pub type BoxedWriteGuard<'a> =
     Box<dyn Fn(&FirestoreState, &[Write], LogicalInstant) -> Result<(), Status> + 'a>;
+
+/// What a read guard authorizes, against the snapshot being served.
+pub enum ReadCheck<'a> {
+    /// One document read (`get`).
+    Document {
+        /// Document.
+        path: &'a DocumentPath,
+        /// The document as it will be returned.
+        snapshot: Option<&'a Document>,
+    },
+    /// A query (`list`), proven from its constraints.
+    Query {
+        /// Project / database of the request.
+        parent: &'a Parent,
+        /// Accepted query.
+        query: &'a Query,
+    },
+}
+
+/// Authorization hook run inside the database critical section of a read: `version` is
+/// the snapshot version served (`None` = latest), so `get()` / `exists()` in the rules see
+/// exactly the state the response is built from.
+pub type ReadGuard<'a> =
+    &'a dyn Fn(&FirestoreState, Option<CommitVersion>, ReadCheck<'_>) -> Result<(), Status>;
+
+/// Owned read guard (see [`read_guard`]).
+pub type BoxedReadGuard<'a> =
+    Box<dyn Fn(&FirestoreState, Option<CommitVersion>, ReadCheck<'_>) -> Result<(), Status> + 'a>;
+
+/// A read guard that allows everything (no rules configured / owner).
+pub fn allow_all_reads(
+    _: &FirestoreState,
+    _: Option<CommitVersion>,
+    _: ReadCheck<'_>,
+) -> Result<(), Status> {
+    Ok(())
+}
+
+/// Builds the read guard for `principal`.
+pub fn read_guard<'a>(
+    rules: Option<&'a Arc<RulesEnforcer>>,
+    principal: &'a Principal,
+) -> BoxedReadGuard<'a> {
+    match rules {
+        Some(r) => Box::new(move |db, version, check| match check {
+            ReadCheck::Document { path, snapshot } => {
+                let parent = Parent {
+                    project: path.project().clone(),
+                    database: path.database().clone(),
+                    document: None,
+                };
+                let reader = StateReader {
+                    db,
+                    parent: &parent,
+                    version,
+                };
+                r.authorize_get(principal, path, snapshot, &reader)
+            }
+            ReadCheck::Query { parent, query } => {
+                let reader = StateReader {
+                    db,
+                    parent,
+                    version,
+                };
+                r.authorize_query(principal, parent, query, &reader)
+            }
+        }),
+        None => Box::new(allow_all_reads),
+    }
+}
 
 /// A guard that allows everything (no rules configured / owner).
 pub fn allow_all(_: &FirestoreState, _: &[Write], _: LogicalInstant) -> Result<(), Status> {
@@ -316,7 +402,16 @@ impl RulesEnforcer {
             return Ok(());
         };
         let at = db.next_commit_time(now);
-        let reader = StateReader { db, parent };
+        let state_reader = StateReader {
+            db,
+            parent,
+            version: None,
+        };
+        let reader = AggregateReader {
+            inner: &state_reader,
+            seen: RefCell::new(BTreeSet::new()),
+        };
+        let multi_total = multi_total_max();
         let mut staged: BTreeMap<DocumentPath, Option<Document>> = BTreeMap::new();
         for write in writes {
             let path = write.op.path();
@@ -348,6 +443,14 @@ impl RulesEnforcer {
                 at,
                 &reader,
             )?;
+            let accessed = reader.seen.borrow().len() as u64;
+            if writes.len() > 1 && accessed > multi_total {
+                return Err(Status::permission_denied(format!(
+                    "{} on {} denied by Security Rules: RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}",
+                    method_name(method),
+                    path.relative()
+                )));
+            }
             if !matches!(write.op, WriteOp::Verify { .. }) {
                 staged.insert(path.clone(), preview);
             }

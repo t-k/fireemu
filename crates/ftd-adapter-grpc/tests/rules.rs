@@ -621,3 +621,97 @@ service cloud.firestore {
         .is_ok());
     h.handle.abort();
 }
+
+#[tokio::test]
+async fn rules_document_access_reads_the_snapshot_being_served() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /gated/{id} {
+      allow get: if get(/databases/$(database)/documents/flags/open).data.on == 'yes';
+    }
+  }
+}",
+    )
+    .unwrap();
+    let first = h
+        .client
+        .commit(with_bearer(
+            commit(vec![
+                set_write("flags/open", &[("on", s("yes"))]),
+                set_write("gated/x", &[("v", s("1"))]),
+            ]),
+            "owner",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("flags/open", &[("on", s("no"))])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    // Latest state: the flag is off.
+    let err = h
+        .client
+        .get_document(with_bearer(get("gated/x"), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // A read_time snapshot: get() in the rules sees the flag as it was at that time.
+    let mut at_first = get("gated/x");
+    at_first.consistency_selector = Some(pb::get_document_request::ConsistencySelector::ReadTime(
+        first.commit_time.unwrap(),
+    ));
+    assert!(h
+        .client
+        .get_document(with_bearer(at_first, &alice_token))
+        .await
+        .is_ok());
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn multi_document_commits_share_the_document_access_budget() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /items/{id} {
+      allow write: if !exists(/databases/$(database)/documents/locks/$(id));
+    }
+  }
+}",
+    )
+    .unwrap();
+    let writes = |n: usize| {
+        (0..n)
+            .map(|i| set_write(&format!("items/{i}"), &[("v", s("1"))]))
+            .collect::<Vec<_>>()
+    };
+    // Twenty distinct exists() documents across the commit fit RULES-DOC-ACCESS-MULTI-TOTAL.
+    assert!(h
+        .client
+        .commit(with_bearer(commit(writes(20)), &alice_token))
+        .await
+        .is_ok());
+    let err = h
+        .client
+        .commit(with_bearer(commit(writes(21)), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(
+        err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"),
+        "{}",
+        err.message()
+    );
+    h.handle.abort();
+}

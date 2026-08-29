@@ -1,13 +1,18 @@
-# SDK smoke test
+# SDK smoke tests
 
-Exercises a running `firebase-testd` with the real `firebase-admin` SDK (Firestore over gRPC,
-Auth over the Identity Toolkit REST subset).
+Exercise a running `firebase-testd` with the real Firebase SDKs.
+
+- `smoke.mjs`: `firebase-admin` (Firestore over gRPC with `Bearer owner`, Auth over the
+  Identity Toolkit REST subset).
+- `client.mjs`: the `firebase` client SDK (Auth sign-up, Firestore `Listen` / `Write`
+  streams) with Security Rules loaded through the control API.
 
 ```sh
 cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 &
 cd tools/sdk-smoke && npm install
-FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
-  GOOGLE_CLOUD_PROJECT=demo-app npm run smoke
+export FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GOOGLE_CLOUD_PROJECT=demo-app
+npm run smoke        # firebase-admin
+npm run smoke:client # firebase client SDK + rules
 ```
 
 Exit code 0 means every check passed; the JSON output lists each check.

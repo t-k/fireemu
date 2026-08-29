@@ -18,7 +18,26 @@ deterministic state machine that:
 
 ## Status
 
-Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation with an optional upstream proxy), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset) and the native Rules evaluator subset are implemented. Local Firestore execution (Milestone E) is not; validated requests are proxied or answered with `UNIMPLEMENTED`.
+Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints) and native Security Rules enforcement on the Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, `list` evaluated per returned document; see `RULES-LIST-APPROX` in `crates/ftd-adapter-grpc/src/rules.rs`).
+
+The real `firebase-admin` and `firebase` (client) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts. Not implemented yet: `read_time` snapshots, `ListDocuments` pagination, `PartitionQuery`, `ExecutePipeline`, Storage / Functions / Scheduler (Milestones C / D), signed ID tokens.
+
+## Run
+
+```sh
+cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099
+#   optional: --config firebase-testd.json  (see spec/config/firebase-testd.schema.json)
+```
+
+The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`). Security Rules come from `rules.source` in the config file or at runtime:
+
+```sh
+curl -X PUT http://127.0.0.1:9099/v1/rules -H 'content-type: application/json' \
+  -d "$(jq -n --rawfile s firestore.rules '{source: $s}')"
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/clock:advance -d '{"seconds": 60}'
+```
+
+Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 
 | Crate | Purpose | Dependencies |
 |---|---|---|
@@ -26,12 +45,13 @@ Milestone A (verification-ready core), Milestone B (strict Firestore gateway: qu
 | `ftd-core-limits` | versioned limit catalogs and the warning / rejection engine | none |
 | `ftd-core-session` | session lifecycle, epoch isolation, virtual clock, idle ledger | none |
 | `ftd-core-events` | event state machine, retry policy, outbox | none |
-| `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator | none |
-| `ftd-core-rules` | Security Rules parser and static limit linter (`RULES-LINT-1`) | none |
+| `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator, local execution store (MVCC, transactions, queries, aggregations) | none |
+| `ftd-core-rules` | Security Rules parser, static limit linter (`RULES-LINT-1`) and evaluator subset with runtime budgets | none |
 | `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens, TOTP second factor (RFC 6238) | none |
 | `ftd-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
-| `ftd-adapter-grpc` | Firestore v1 wire decoding, strict gateway, optional upstream proxy | tonic, tokio |
-| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh) | hyper, tokio, serde_json |
+| `ftd-adapter-grpc` | Firestore v1 service: strict gateway, local backend, `Write` / `Listen` streams, Rules enforcement, optional upstream proxy | tonic, tokio |
+| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts) and the control API (clock, rules, capabilities) | hyper, tokio, serde_json |
+| `firebase-testd` | the daemon binary (`up`, `doctor`, `capabilities`) | tokio, serde_json |
 
 `ftd-core-*` crates are `std`-only and forbid `unsafe` (ADR-001, ADR-007).
 

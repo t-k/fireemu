@@ -114,9 +114,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-verification-kani"
+version = "0.1.0"
+dependencies = [
+ "ftd-core-events",
+ "ftd-core-limits",
+ "ftd-core-session",
+ "ftd-core-types",
+]
+
+[[package]]
 name = "ftd-verification-loom"
 version = "0.1.0"
 dependencies = [
+ "ftd-core-events",
  "ftd-core-session",
  "ftd-core-types",
  "loom",

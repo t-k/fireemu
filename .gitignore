@@ -9,3 +9,4 @@ junit.xml
 verification/tla/states/
 verification/tla/**/states/
 *.tlaps
+.tools/

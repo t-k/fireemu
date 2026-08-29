@@ -1,20 +1,18 @@
 [package]
-name = "ftd-verification-loom"
+name = "ftd-verification-kani"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Loom concurrency scenarios; run with RUSTFLAGS=\"--cfg loom\""
+description = "Kani bounded model checking harnesses; run with `cargo kani`"
 
 [dependencies]
 ftd-core-types = { path = "../../crates/ftd-core-types" }
+ftd-core-limits = { path = "../../crates/ftd-core-limits" }
 ftd-core-session = { path = "../../crates/ftd-core-session" }
 ftd-core-events = { path = "../../crates/ftd-core-events" }
-
-[target.'cfg(loom)'.dependencies]
-loom = "0.7"
 
 [lints]
 workspace = true

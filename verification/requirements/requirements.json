@@ -1,0 +1,274 @@
+{
+  "schemaVersion": 1,
+  "source": "spec sections 21.2, 21.3, 32",
+  "requirements": [
+    {
+      "id": "INV-EPOCH-001",
+      "statement": "Work from an old epoch never mutates the state of the current epoch.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "SessionEpoch.tla::EpochIsolation",
+        "loom": ["stale_epoch_never_mutates_new_state", "reset_races_with_commit"],
+        "kani": "epoch_guard_rejects_every_other_epoch",
+        "property": "prop_epoch_guard_rejects_non_current",
+        "mutation": ["M-EPOCH-001"],
+        "integration": ["crates/ftd-core-session/tests/session.rs", "crates/ftd-core-events/tests/outbox.rs"]
+      }
+    },
+    {
+      "id": "INV-TIME-001",
+      "statement": "Logical time never moves backwards during normal operation.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "SessionEpoch.tla::EpochNeverDecreases",
+        "kani": "virtual_clock_never_moves_backwards",
+        "property": "prop_clock_advance_is_monotonic",
+        "mutation": ["M-SCHED-001"],
+        "integration": ["crates/ftd-core-session/tests/clock.rs"]
+      }
+    },
+    {
+      "id": "INV-EVENT-001",
+      "statement": "A terminal event never returns to a non-terminal state.",
+      "criticality": "critical",
+      "owner": "core-events",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "EventDelivery.tla::NoTerminalRegression",
+        "loom": ["event_success_races_with_retry_timer"],
+        "kani": "terminal_event_rejects_every_transition",
+        "property": "prop_terminal_states_are_absorbing",
+        "mutation": ["M-RETRY-001", "M-RETRY-002"],
+        "integration": ["crates/ftd-core-events/tests/state_machine.rs"]
+      }
+    },
+    {
+      "id": "INV-IDLE-001",
+      "statement": "await-idle must not return while causal work (including child enqueue reservations and Text Index backfill) is active.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AwaitIdle.tla::NoFalseIdle",
+        "loom": ["await_idle_races_with_child_enqueue", "active_work_counter_never_underflows", "await_idle_races_with_text_index_backfill_completion"],
+        "kani": "idle_predicate_never_ignores_active_work",
+        "property": "prop_idle_implies_all_terminal",
+        "mutation": ["M-IDLE-001", "M-IDLE-002", "M-IDLE-003"],
+        "integration": ["crates/ftd-core-session/tests/idle.rs"]
+      }
+    },
+    {
+      "id": "LIVE-RESET-001",
+      "statement": "After a reset begins, the new epoch eventually becomes Active.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "SessionEpoch.tla::ResetEventuallyActivatesNewEpoch",
+        "mutation": ["M-EPOCH-001"],
+        "integration": ["crates/ftd-core-session/tests/session.rs"]
+      }
+    },
+    {
+      "id": "LIVE-DISPATCH-001",
+      "statement": "Under finite retries and fair workers, every event reaches success, dead-letter or cancellation.",
+      "criticality": "critical",
+      "owner": "core-events",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "EventDelivery.tla::EventEventuallyTerminates",
+        "mutation": ["M-RETRY-001", "M-RETRY-002"],
+        "integration": ["crates/ftd-core-events/tests/state_machine.rs"]
+      }
+    },
+    {
+      "id": "LIVE-IDLE-001",
+      "statement": "When external input stops and work is finite, await-idle eventually returns.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AwaitIdle.tla::AwaitIdleEventuallyReturns",
+        "mutation": ["M-IDLE-002"],
+        "integration": ["crates/ftd-core-session/tests/idle.rs"]
+      }
+    },
+    {
+      "id": "INV-LIMIT-001",
+      "statement": "A request that violates a limit or a unique index changes no document, index, outbox or quota state.",
+      "criticality": "critical",
+      "owner": "core-limits",
+      "status": "partial",
+      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E).",
+      "artifacts": {
+        "tla": "LimitRejection.tla::LimitRejectionAtomicity",
+        "kani": "limit_boundary_classification",
+        "property": "prop_boundary_reject_precedes_warning",
+        "mutation": ["M-LIMIT-001", "M-LIMIT-002", "M-LIMIT-004", "M-LIMIT-006"],
+        "integration": ["crates/ftd-core-limits/tests/evaluate.rs", "crates/ftd-core-limits/tests/properties.rs"]
+      }
+    },
+    {
+      "id": "INV-COMMIT-001",
+      "statement": "The write set of one commit is applied entirely or not at all.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "planned",
+      "artifacts": {
+        "tla": "AtomicCommitOutbox.tla::AtomicCommit",
+        "mutation": ["M-COMMIT-001"]
+      }
+    },
+    {
+      "id": "INV-OUTBOX-001",
+      "statement": "When a trigger-relevant change is published, the corresponding logical event exists in the outbox.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "planned",
+      "artifacts": {
+        "tla": "AtomicCommitOutbox.tla::OutboxCompleteness",
+        "mutation": ["M-OUTBOX-001", "M-OUTBOX-002"]
+      }
+    },
+    {
+      "id": "INV-TXN-001",
+      "statement": "Transaction writes are never partially visible.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "planned",
+      "artifacts": {"tla": "FirestoreMvcc.tla::NoPartialTransaction", "mutation": ["M-TXN-001"]}
+    },
+    {
+      "id": "INV-STORAGE-001",
+      "statement": "A generation number is never reused for the same object.",
+      "criticality": "critical",
+      "owner": "core-storage",
+      "status": "planned",
+      "artifacts": {"tla": "StorageGeneration.tla::GenerationMonotonicity", "mutation": ["M-STORAGE-003", "M-STORAGE-004"]}
+    },
+    {
+      "id": "INV-INDEX-001",
+      "statement": "A query accepted as UseIndex by the conservative validator has a supporting index.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "planned",
+      "artifacts": {"kani": "conservative_index_never_false_accepts", "mutation": ["M-INDEX-001", "M-INDEX-002", "M-INDEX-003"]}
+    },
+    {
+      "id": "INV-RULES-001",
+      "statement": "A request that exceeds the expression, document access or call depth budget never reaches allow.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "planned",
+      "artifacts": {"tla": "RulesBudget.tla::NoAllowAfterBudgetExceeded", "mutation": ["M-RULES-002", "M-RULES-003", "M-RULES-004", "M-RULES-005", "M-RULES-014"]}
+    },
+    {
+      "id": "INV-RULES-002",
+      "statement": "Rules budgets are isolated per request and operation.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "planned",
+      "artifacts": {"tla": "RulesBudget.tla::BudgetIsolation", "loom": ["rules_budget_is_never_shared_between_requests"], "mutation": ["M-RULES-006"]}
+    },
+    {
+      "id": "INV-RULES-003",
+      "statement": "A ruleset becomes active only after parse, compile and limit checks; each request observes one immutable version.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "planned",
+      "artifacts": {"tla": "RulesetActivation.tla::AtomicRulesetActivation", "loom": ["ruleset_reload_never_exposes_partial_compile", "inflight_request_keeps_single_ruleset_version"], "mutation": ["M-RULES-010"]}
+    },
+    {
+      "id": "INV-TEXT-001",
+      "statement": "A READY Text Index represents every document version its visibility policy and watermark require.",
+      "criticality": "critical",
+      "owner": "core-text-search",
+      "status": "planned",
+      "artifacts": {"tla": "TextIndexLifecycle.tla::ReadyCompleteness", "mutation": ["M-TEXT-017"]}
+    },
+    {
+      "id": "INV-TEXT-002",
+      "statement": "Search never observes a mix of old posting with new document or new posting with old document.",
+      "criticality": "critical",
+      "owner": "core-text-search",
+      "status": "planned",
+      "artifacts": {"tla": "TextIndexLifecycle.tla::NoPartialVisibility", "loom": ["search_never_observes_partial_posting_update"], "mutation": ["M-TEXT-008", "M-TEXT-009"]}
+    },
+    {
+      "id": "INV-TEXT-003",
+      "statement": "Search never selects a CREATING or NEEDS_REPAIR text index.",
+      "criticality": "critical",
+      "owner": "core-text-search",
+      "status": "planned",
+      "artifacts": {"tla": "TextIndexLifecycle.tla::NoInvalidIndexUse", "loom": ["text_index_ready_publish_races_with_delta_append"], "mutation": ["M-TEXT-005", "M-TEXT-006", "M-TEXT-007"]}
+    },
+    {
+      "id": "INV-TEXT-004",
+      "statement": "Old-epoch backfill or repair workers never change new-epoch index state, postings or watermark.",
+      "criticality": "critical",
+      "owner": "core-text-search",
+      "status": "planned",
+      "artifacts": {"tla": "TextIndexLifecycle.tla::TextIndexEpochSafety", "loom": ["reset_discards_old_text_index_worker"], "mutation": ["M-EPOCH-001"]}
+    },
+    {
+      "id": "INV-PIPE-001",
+      "statement": "Unsupported Pipeline stages, including update(...)/delete() output stages, are rejected explicitly and never skipped.",
+      "criticality": "critical",
+      "owner": "core-pipeline",
+      "status": "planned",
+      "artifacts": {"mutation": ["M-PIPE-001"]}
+    },
+    {
+      "id": "INV-TEXT-RULES-001",
+      "statement": "Pipeline Rules never treat a SearchExpr as a narrowing authorization constraint.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "planned",
+      "artifacts": {"mutation": ["M-TEXT-019"]}
+    },
+    {
+      "id": "REQ-TEXT-SEMANTICS-001",
+      "statement": "Required terms are ANDed and excluded terms remove matches.",
+      "criticality": "critical",
+      "owner": "core-text-search",
+      "status": "planned",
+      "artifacts": {"mutation": ["M-TEXT-001", "M-TEXT-002"]}
+    },
+    {
+      "id": "REQ-ENT-INDEX-001",
+      "statement": "Enterprise Core Queries without an index become full-scan plans and unique index violations are rejected atomically.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "planned",
+      "artifacts": {"mutation": ["M-ENT-INDEX-001", "M-ENT-INDEX-003"]}
+    },
+    {
+      "id": "REQ-SCHED-001",
+      "statement": "Due schedules are enqueued unless the skip policy applies.",
+      "criticality": "critical",
+      "owner": "core-scheduler",
+      "status": "planned",
+      "artifacts": {"tla": "Scheduler.tla::DueScheduleEventuallyRuns", "mutation": ["M-SCHED-002"]}
+    },
+    {
+      "id": "REQ-RULES-STATIC-001",
+      "statement": "Static Rules limits (arguments 7, recursion 0, source size < 256 KiB) are enforced at the documented boundaries.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "planned",
+      "artifacts": {"mutation": ["M-RULES-001", "M-RULES-007", "M-RULES-009", "M-RULES-011", "M-RULES-013"]}
+    },
+    {
+      "id": "REQ-STORAGE-NAME-001",
+      "statement": "Object names are never normalized and percent-decoded exactly once.",
+      "criticality": "critical",
+      "owner": "core-storage",
+      "status": "planned",
+      "artifacts": {"mutation": ["M-STORAGE-001", "M-STORAGE-002"]}
+    }
+  ]
+}

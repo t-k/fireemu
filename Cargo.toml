@@ -8,6 +8,7 @@ members = [
     "tools/limit-catalog-gen",
     "tools/traceability-check",
     "verification/loom",
+    "verification/kani",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ publish = false
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(kani)"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

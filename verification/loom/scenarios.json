@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "source": "spec section 23.3 (single source of truth for Loom scenario names)",
+  "scenarios": [
+    "reset_races_with_commit",
+    "await_idle_races_with_child_enqueue",
+    "event_success_races_with_retry_timer",
+    "close_races_with_dispatch",
+    "snapshot_never_observes_partial_commit",
+    "stale_epoch_never_mutates_new_state",
+    "active_work_counter_never_underflows",
+    "ruleset_reload_never_exposes_partial_compile",
+    "inflight_request_keeps_single_ruleset_version",
+    "rules_budget_is_never_shared_between_requests",
+    "limit_rejection_races_with_reset_without_partial_state",
+    "text_index_backfill_races_with_create",
+    "text_index_backfill_races_with_update",
+    "text_index_backfill_races_with_delete",
+    "text_index_ready_publish_races_with_delta_append",
+    "search_never_observes_partial_posting_update",
+    "index_repair_races_with_write",
+    "reset_discards_old_text_index_worker",
+    "await_idle_races_with_text_index_backfill_completion"
+  ]
+}

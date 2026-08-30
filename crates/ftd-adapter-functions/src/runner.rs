@@ -149,6 +149,7 @@ impl Runner {
         if let Ok(mut child) = self.child.try_lock() {
             if let Some(child) = child.as_mut() {
                 let _ = child.start_kill();
+                kill_process_group(child.id());
             }
         }
         if let Ok(mut stdin) = self.stdin.try_lock() {
@@ -173,6 +174,9 @@ impl Runner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Its own process group, so a reset or shutdown takes the handlers' own
+            // subprocesses down with it.
+            .process_group(0)
             .kill_on_drop(true);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -431,9 +435,25 @@ impl Runner {
             let _ = write_frame(stdin, &json!({"type": "shutdown"})).await;
         }
         if let Some(mut child) = self.child.lock().await.take() {
+            let pid = child.id();
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             let _ = child.kill().await;
+            kill_process_group(pid);
         }
         eprintln!("{} stopped", self.label);
     }
+}
+
+/// Kills the process group the runner leads (`process_group(0)`: its id is the runner's
+/// pid), taking the subprocesses of handlers with it. Best effort, through `kill(1)` (the
+/// core forbids unsafe code, so no direct `killpg`).
+fn kill_process_group(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        return;
+    };
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }

@@ -384,8 +384,19 @@ impl RuntimeConfig {
         if let Some(scheduler) = obj.get("scheduler").and_then(Value::as_object) {
             Self::parse_scheduler(scheduler, &mut cfg)?;
         }
-        if let Some(auth) = obj.get("auth").and_then(Value::as_object) {
-            if let Some(mode) = auth.get("idTokenSigning").and_then(Value::as_str) {
+        if let Some(auth) = obj.get("auth") {
+            let auth = auth
+                .as_object()
+                .ok_or_else(|| ConfigError("auth must be an object".to_owned()))?;
+            for key in auth.keys() {
+                if !["enabled", "projectIssuer", "idTokenSigning", "totp"].contains(&key.as_str()) {
+                    return Err(ConfigError(format!("unknown config key auth.{key}")));
+                }
+            }
+            if let Some(mode) = auth.get("idTokenSigning") {
+                let mode = mode.as_str().ok_or_else(|| {
+                    ConfigError("auth.idTokenSigning must be a string".to_owned())
+                })?;
                 let m = ftd_core_auth::jwt::SigningMode::parse_config(mode)
                     .ok_or_else(|| ConfigError(format!("unknown auth.idTokenSigning {mode:?}")))?;
                 if !m.supported() {
@@ -397,5 +408,48 @@ impl RuntimeConfig {
             }
         }
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn parse(auth: &Value) -> Result<RuntimeConfig, ConfigError> {
+        RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "deterministic",
+            "firestore": {"edition": "standard", "apiMode": "native"},
+            "auth": auth,
+        }))
+    }
+
+    #[test]
+    fn the_auth_section_never_downgrades_silently() {
+        assert_eq!(
+            parse(&json!({"idTokenSigning": "session-rsa"}))
+                .unwrap()
+                .id_token_signing,
+            ftd_core_auth::jwt::SigningMode::SessionRsa
+        );
+        assert_eq!(
+            parse(&json!({"idTokenSingning": "session-rsa"})),
+            Err(ConfigError(
+                "unknown config key auth.idTokenSingning".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&json!({"idTokenSigning": true})),
+            Err(ConfigError(
+                "auth.idTokenSigning must be a string".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&json!("session-rsa")),
+            Err(ConfigError("auth must be an object".to_owned()))
+        );
+        assert!(parse(&json!({"idTokenSigning": "hs256"})).is_err());
     }
 }

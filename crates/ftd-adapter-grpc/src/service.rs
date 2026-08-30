@@ -77,14 +77,45 @@ impl GatewayService {
         }
     }
 
-    /// Read guard for the local backend (runs inside the read's critical section).
-    fn read_guard<'a>(&'a self, principal: &'a Principal) -> crate::rules::BoxedReadGuard<'a> {
-        crate::rules::read_guard(self.rules.as_ref(), principal)
+    /// The caller of a unary request: its principal plus the reset epoch it started in.
+    /// The epoch is read before the token is verified, so a reset that clears the Auth
+    /// store between verification and admission is detected by the guards.
+    fn caller(&self, metadata: &tonic::metadata::MetadataMap) -> Result<Caller, Status> {
+        let epoch = self.local_backend().map_or(0, |l| l.barrier().epoch());
+        Ok(Caller {
+            principal: self.principal(metadata)?,
+            epoch,
+        })
     }
 
-    /// Write guard for the local backend (runs inside the commit critical section).
-    fn write_guard<'a>(&'a self, principal: &'a Principal) -> crate::rules::BoxedWriteGuard<'a> {
-        crate::rules::write_guard(self.rules.as_ref(), principal)
+    /// Read guard for the local backend (runs inside the read's critical section, after
+    /// admission: a caller from a previous epoch is refused there).
+    fn read_guard<'a>(&'a self, caller: &'a Caller) -> crate::rules::BoxedReadGuard<'a> {
+        let inner = crate::rules::read_guard(self.rules.as_ref(), &caller.principal);
+        let Some(local) = self.local_backend() else {
+            return inner;
+        };
+        let barrier = local.barrier();
+        let epoch = caller.epoch;
+        Box::new(move |db, version, check| {
+            same_epoch(&barrier, epoch)?;
+            inner(db, version, check)
+        })
+    }
+
+    /// Write guard for the local backend (runs inside the commit critical section, after
+    /// admission: a caller from a previous epoch is refused there).
+    fn write_guard<'a>(&'a self, caller: &'a Caller) -> crate::rules::BoxedWriteGuard<'a> {
+        let inner = crate::rules::write_guard(self.rules.as_ref(), &caller.principal);
+        let Some(local) = self.local_backend() else {
+            return inner;
+        };
+        let barrier = local.barrier();
+        let epoch = caller.epoch;
+        Box::new(move |db, writes, now| {
+            same_epoch(&barrier, epoch)?;
+            inner(db, writes, now)
+        })
     }
 
     fn client(&self) -> Result<FirestoreClient<Channel>, Status> {
@@ -158,8 +189,8 @@ impl Firestore for GatewayService {
         request: Request<pb::GetDocumentRequest>,
     ) -> Result<Response<pb::Document>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
-            let guard = self.read_guard(&principal);
+            let caller = self.caller(request.metadata())?;
+            let guard = self.read_guard(&caller);
             let snapshot = local.get_document_snapshot(request.get_ref(), &*guard)?;
             return snapshot.into_response().map(Response::new);
         }
@@ -171,8 +202,8 @@ impl Firestore for GatewayService {
         request: Request<pb::ListDocumentsRequest>,
     ) -> Result<Response<pb::ListDocumentsResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
-            let guard = self.read_guard(&principal);
+            let caller = self.caller(request.metadata())?;
+            let guard = self.read_guard(&caller);
             return local
                 .list_documents(request.get_ref(), &*guard)
                 .map(Response::new);
@@ -185,9 +216,9 @@ impl Firestore for GatewayService {
         request: Request<pb::UpdateDocumentRequest>,
     ) -> Result<Response<pb::Document>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
+            let caller = self.caller(request.metadata())?;
             let (parent, write) = LocalBackend::plan_update(request.get_ref())?;
-            let guard = self.write_guard(&principal);
+            let guard = self.write_guard(&caller);
             return local
                 .execute_planned_with(&parent, write, request.get_ref().mask.as_ref(), &*guard)
                 .map(Response::new);
@@ -200,8 +231,8 @@ impl Firestore for GatewayService {
         request: Request<pb::DeleteDocumentRequest>,
     ) -> Result<Response<()>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
-            let guard = self.write_guard(&principal);
+            let caller = self.caller(request.metadata())?;
+            let guard = self.write_guard(&caller);
             return local
                 .delete_document_with(request.get_ref(), &*guard)
                 .map(Response::new);
@@ -215,8 +246,8 @@ impl Firestore for GatewayService {
         request: Request<pb::BatchGetDocumentsRequest>,
     ) -> Result<Response<Self::BatchGetDocumentsStream>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
-            let guard = self.read_guard(&principal);
+            let caller = self.caller(request.metadata())?;
+            let guard = self.read_guard(&caller);
             let outcome = local.batch_get_documents(request.get_ref(), &*guard)?;
             let read_time = Some(crate::encode::encode_instant(outcome.read_time));
             if outcome.items.is_empty() && !outcome.transaction.is_empty() {
@@ -271,8 +302,8 @@ impl Firestore for GatewayService {
         request: Request<pb::CommitRequest>,
     ) -> Result<Response<pb::CommitResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
-            let guard = self.write_guard(&principal);
+            let caller = self.caller(request.metadata())?;
+            let guard = self.write_guard(&caller);
             return local
                 .commit_with(request.get_ref(), &*guard)
                 .map(Response::new);
@@ -295,10 +326,10 @@ impl Firestore for GatewayService {
         &self,
         request: Request<pb::RunQueryRequest>,
     ) -> Result<Response<Self::RunQueryStream>, Status> {
-        let principal = self.principal(request.metadata())?;
+        let caller = self.caller(request.metadata())?;
         let req = request.into_inner();
         if let Some(local) = self.local_backend() {
-            let guard = self.read_guard(&principal);
+            let guard = self.read_guard(&caller);
             let (responses, warnings) = local.run_query(&req, &*guard)?;
             let stream: Vec<Result<pb::RunQueryResponse, Status>> =
                 responses.into_iter().map(Ok).collect();
@@ -328,8 +359,8 @@ impl Firestore for GatewayService {
         request: Request<pb::RunAggregationQueryRequest>,
     ) -> Result<Response<Self::RunAggregationQueryStream>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
-            let guard = self.read_guard(&principal);
+            let caller = self.caller(request.metadata())?;
+            let guard = self.read_guard(&caller);
             let response = local.run_aggregation_query(request.get_ref(), &*guard)?;
             let stream: Vec<Result<pb::RunAggregationQueryResponse, Status>> = vec![Ok(response)];
             return Ok(Response::new(Box::pin(tokio_stream::iter(stream))));
@@ -381,10 +412,10 @@ impl Firestore for GatewayService {
         request: Request<pb::ListCollectionIdsRequest>,
     ) -> Result<Response<pb::ListCollectionIdsResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
+            let caller = self.caller(request.metadata())?;
             if let Some(rules) = &self.rules {
                 // Collection enumeration has no rules equivalent: admin-only under rules.
-                rules.require_owner(&principal, "ListCollectionIds")?;
+                rules.require_owner(&caller.principal, "ListCollectionIds")?;
             }
             return local
                 .list_collection_ids(request.get_ref())
@@ -400,8 +431,8 @@ impl Firestore for GatewayService {
         request: Request<pb::BatchWriteRequest>,
     ) -> Result<Response<pb::BatchWriteResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
-            let guard = self.write_guard(&principal);
+            let caller = self.caller(request.metadata())?;
+            let guard = self.write_guard(&caller);
             return local
                 .batch_write_with(request.get_ref(), &*guard)
                 .map(Response::new);
@@ -414,13 +445,79 @@ impl Firestore for GatewayService {
         request: Request<pb::CreateDocumentRequest>,
     ) -> Result<Response<pb::Document>, Status> {
         if let Some(local) = self.local_backend() {
-            let principal = self.principal(request.metadata())?;
+            let caller = self.caller(request.metadata())?;
             let (parent, write) = local.plan_create(request.get_ref())?;
-            let guard = self.write_guard(&principal);
+            let guard = self.write_guard(&caller);
             return local
                 .execute_planned_with(&parent, write, request.get_ref().mask.as_ref(), &*guard)
                 .map(Response::new);
         }
         self.client()?.create_document(request.into_inner()).await
+    }
+}
+
+/// A unary caller: principal and the reset epoch the request started in.
+struct Caller {
+    principal: Principal,
+    epoch: u64,
+}
+
+/// Refuses work admitted into a later epoch than the one the caller started in.
+fn same_epoch(
+    barrier: &ftd_core_session::barrier::AdmissionBarrier,
+    epoch: u64,
+) -> Result<(), Status> {
+    if barrier.epoch() == epoch {
+        Ok(())
+    } else {
+        Err(Status::unavailable(
+            "the session was reset while the request was in flight; retry against the new session",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use ftd_core_firestore::index::{IndexSet, PlanningContext};
+    use ftd_core_firestore::store::FirestoreState;
+    use ftd_core_session::clock::VirtualClock;
+    use ftd_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use ftd_core_types::time::LogicalInstant;
+
+    use super::*;
+
+    #[test]
+    fn guards_refuse_a_caller_from_before_a_reset() {
+        let gateway = Gateway {
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: ftd_core_firestore::index::IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        let svc = GatewayService::local(gateway, backend.clone());
+        let caller = Caller {
+            principal: Principal::Owner,
+            epoch: backend.barrier().epoch(),
+        };
+        let db = FirestoreState::new();
+        let read = svc.read_guard(&caller);
+        let write = svc.write_guard(&caller);
+        assert!(read(&db, None, crate::rules::ReadCheck::Documents(&[])).is_ok());
+        assert!(write(&db, &[], LogicalInstant::UNIX_EPOCH).is_ok());
+        drop(backend.barrier().exclusive());
+        let refused = read(&db, None, crate::rules::ReadCheck::Documents(&[])).unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::Unavailable);
+        assert_eq!(
+            write(&db, &[], LogicalInstant::UNIX_EPOCH)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unavailable
+        );
     }
 }

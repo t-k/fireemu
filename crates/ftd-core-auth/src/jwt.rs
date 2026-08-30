@@ -117,6 +117,8 @@ pub enum JwtError {
     SigningUnsupported(SigningMode),
     /// The signature does not verify against the session key.
     BadSignature,
+    /// The `kid` header does not name the session key.
+    UnknownKeyId,
 }
 
 impl fmt::Display for JwtError {
@@ -133,6 +135,7 @@ impl fmt::Display for JwtError {
             Self::Revoked => f.write_str("token revoked"),
             Self::SigningUnsupported(m) => write!(f, "signing mode {m:?} is not implemented"),
             Self::BadSignature => f.write_str("token signature does not verify"),
+            Self::UnknownKeyId => f.write_str("token kid does not name the session key"),
         }
     }
 }
@@ -254,6 +257,9 @@ pub fn decode_token(
     if let Some(signer) = signer {
         if alg != signer.alg() {
             return Err(JwtError::UnsupportedAlgorithm(alg.to_owned()));
+        }
+        if header.get("kid").and_then(JsonValue::as_str) != Some(signer.kid()) {
+            return Err(JwtError::UnknownKeyId);
         }
         let signing_input = format!("{header_b64}.{payload}");
         let signature = base64url_decode(signature)?;

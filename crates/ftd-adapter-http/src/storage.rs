@@ -38,8 +38,6 @@ pub type StorageEventSink = Arc<dyn Fn(&StorageEvent) + Send + Sync>;
 pub struct StoreGuard<'a> {
     guard: std::sync::MutexGuard<'a, ObjectStore>,
     sink: Option<&'a StorageEventSink>,
-    /// Released after the store lock (field order): the reset barrier admission.
-    _admitted: Option<ftd_core_session::barrier::Admitted<'a>>,
 }
 
 impl std::ops::Deref for StoreGuard<'_> {
@@ -619,7 +617,6 @@ fn prospective_rules_value(m: &ObjectMetadata) -> RulesValue {
 impl StorageState {
     /// Locks the object store; events produced while locked reach the sink on release.
     pub fn store(&self) -> Result<StoreGuard<'_>, (u16, String)> {
-        let admitted = self.barrier.as_ref().map(|b| b.admit());
         let guard = self
             .store
             .lock()
@@ -627,7 +624,6 @@ impl StorageState {
         Ok(StoreGuard {
             guard,
             sink: self.events.as_ref(),
-            _admitted: admitted,
         })
     }
 
@@ -995,6 +991,10 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
     // The JSON API surface is what the Admin SDK / gcloud use: like the official Emulator
     // it is a privileged surface (rules bypassed) unless the caller presents an end-user
     // `Firebase <token>`; the Firebase protocol always goes through the rules.
+    // Admitted for the whole request, before the token is verified: a reset waits for it,
+    // and a request cannot verify against the old Auth store and then write into the new
+    // session. Requests are synchronous, so the admission is short-lived.
+    let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let authorization = req.header("authorization");
     let principal = match (dialect, authorization) {
         (Dialect::Gcs, None) => Principal::Owner,

@@ -217,7 +217,7 @@ function v1Context(msg) {
         eventId: event.id,
         timestamp: event.time,
         eventType: legacy,
-        resource: event.source,
+        resource: { service: "firestore.googleapis.com", name: event.source },
         params: event.params || {},
       };
     }
@@ -245,7 +245,7 @@ function v1Context(msg) {
         params: {},
       };
     default:
-      return { eventId: event.id, timestamp: event.time, eventType: event.type, resource: event.source, params: {} };
+      return { eventId: event.id, timestamp: event.time, eventType: event.type, resource: { service: "", name: event.source }, params: {} };
   }
 }
 

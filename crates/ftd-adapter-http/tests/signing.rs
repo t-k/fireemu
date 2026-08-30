@@ -72,6 +72,12 @@ fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
     let foreign = encode_with(&claims, Some(other.as_ref()));
     assert!(matches!(
         verify_id_token(&foreign, &store, START),
+        Err(JwtError::UnknownKeyId)
+    ));
+    let foreign_parts: Vec<&str> = foreign.split('.').collect();
+    let relabeled = format!("{}.{}.{}", parts[0], foreign_parts[1], foreign_parts[2]);
+    assert!(matches!(
+        verify_id_token(&relabeled, &store, START),
         Err(JwtError::BadSignature)
     ));
     assert!(matches!(

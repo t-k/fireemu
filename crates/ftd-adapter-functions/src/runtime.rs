@@ -529,9 +529,11 @@ impl FunctionsRuntime {
     pub fn reset(self: &Arc<Self>) {
         let now = self.now();
         self.runner().kill_now();
+        let mut generation = None;
         if let Ok(mut inner) = self.inner.lock() {
             inner.epoch = inner.epoch.next().unwrap_or(inner.epoch);
             let epoch = inner.epoch;
+            generation = Some(epoch);
             inner.outbox.discard_stale(epoch);
             inner.payloads.clear();
             inner.running.clear();
@@ -545,6 +547,13 @@ impl FunctionsRuntime {
             tokio::spawn(async move {
                 match Runner::spawn_spec(&spec).await {
                     Ok(runner) => {
+                        // A later reset supersedes this restart: its own replacement is
+                        // the runner of record and this one must not outlive the kill.
+                        let current = runtime.inner.lock().ok().map(|i| i.epoch);
+                        if current != generation {
+                            runner.kill_now();
+                            return;
+                        }
                         if let Ok(mut slot) = runtime.runner.write() {
                             *slot = Arc::new(runner);
                         }
@@ -759,7 +768,10 @@ impl FunctionsRuntime {
     }
 
     fn dispatch_ready(self: &Arc<Self>) {
-        if !self.runner().is_alive() {
+        // The runner checked here is the one every invocation of this pass goes to: an event
+        // leased before a reset must not reach the runner spawned after it.
+        let runner = self.runner();
+        if !runner.is_alive() {
             // Queued work stays pending and visible in the status; nothing is retried
             // against a dead process.
             return;
@@ -809,10 +821,11 @@ impl FunctionsRuntime {
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
             let runtime = self.clone();
+            let runner = runner.clone();
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
             let retry = spec.retry;
             tokio::spawn(async move {
-                let Invocation { outcome, late } = runtime.runner().invoke(request, timeout).await;
+                let Invocation { outcome, late } = runner.invoke(request, timeout).await;
                 runtime.complete(id, &key, &function_name, attempt, epoch, retry, &outcome);
                 match late {
                     // The handler is still running: its slot stays taken until it finishes

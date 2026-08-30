@@ -9,7 +9,7 @@
 
 use core::cmp::Ordering;
 use core::fmt;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
 use ftd_core_limits::catalogs::FIRESTORE_STANDARD_2026_08_25;
 use ftd_core_limits::evaluate::{evaluate, LimitDisposition, LimitViolation, DEFAULT_THRESHOLDS};
@@ -23,6 +23,12 @@ use crate::query::{Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, U
 use crate::size::document_size;
 use crate::value::{Timestamp, Value, ValueKind};
 
+/// How far back a snapshot selector may reach: the documented Firestore `read_time` window
+/// of one hour (no PITR). The store owns this value because it decides which versions stay
+/// reachable; the gRPC adapter re-declares the same number on the wire
+/// (`ftd_adapter_grpc::local::READ_TIME_RETENTION_SECONDS`) and the two must stay equal.
+pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
+
 /// Monotonic commit version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct CommitVersion(u64);
@@ -32,6 +38,12 @@ impl CommitVersion {
     #[must_use]
     pub const fn value(self) -> u64 {
         self.0
+    }
+
+    /// Rebuilds a version from a wire value (a `Listen` resume token).
+    #[must_use]
+    pub const fn from_value(v: u64) -> Self {
+        Self(v)
     }
 }
 
@@ -247,6 +259,22 @@ struct Transaction {
     finished: bool,
 }
 
+/// Execution counters for one query. Test and verification surface (`FS-QUERY-PERF-*`); the
+/// wire API never exposes them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueryStats {
+    /// Documents visited by the scan.
+    pub scanned: u64,
+    /// Documents that passed scope, filter, ordering and cursors.
+    pub matched: u64,
+    /// Largest number of candidate rows held at once. With a finite `offset + limit` this
+    /// never exceeds that sum, whatever the size of the matched set.
+    pub peak_candidates: u64,
+    /// Documents cloned into the result. Execution borrows every value it filters and orders
+    /// on, so this is the only place where a document's heap-backed fields are copied.
+    pub cloned_documents: u64,
+}
+
 /// One Firestore database.
 #[derive(Debug, Clone, Default)]
 pub struct FirestoreState {
@@ -257,8 +285,14 @@ pub struct FirestoreState {
     transactions: BTreeMap<TransactionId, Transaction>,
     /// Last published commit time; commit times are strictly monotonic per database.
     last_commit_time: Option<LogicalInstant>,
-    /// Commit time of every published version (`read_time` snapshots).
+    /// Commit time of every retained version (`read_time` snapshots).
     commit_times: Vec<(CommitVersion, LogicalInstant)>,
+    /// Versions strictly below this one have been compacted away: no supported read, no
+    /// active transaction and no acceptable resume token can still name them.
+    compaction_floor: CommitVersion,
+    /// Paths whose history still holds something a later compaction could drop (more than
+    /// one version, or a single tombstone). Compaction only visits these.
+    compactable: BTreeSet<DocumentPath>,
 }
 
 fn limit(id: &str) -> &'static ftd_core_limits::model::LimitDefinition {
@@ -360,13 +394,18 @@ impl FirestoreState {
     }
 
     /// Starts a read-only transaction over the snapshot at `read_time` (the latest version
-    /// committed at or before it); its budgets still run from `now`.
+    /// committed at or before it); its budgets still run from `now`. A `read_time` older than
+    /// the retained history is refused instead of being served from unrelated versions.
     pub fn begin_transaction_at(
         &mut self,
         read_time: LogicalInstant,
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
-        let version = self.version_at(read_time);
+        let Some(version) = self.version_at_retained(read_time) else {
+            return Err(FirestoreError::FailedPrecondition(format!(
+                "read_time is older than the retained history ({READ_TIME_RETENTION_SECONDS} s)"
+            )));
+        };
         Ok(self.insert_transaction(true, version, read_time, now))
     }
 
@@ -445,7 +484,9 @@ impl FirestoreState {
     }
 
     /// The version visible at `at` (the latest version committed at or before it; the empty
-    /// database before the first commit).
+    /// database before the first commit). Times older than the retained history clamp to the
+    /// compaction floor, which is the oldest state the store can still describe; use
+    /// [`Self::version_at_retained`] to tell that case apart.
     #[must_use]
     pub fn version_at(&self, at: LogicalInstant) -> CommitVersion {
         let idx = self
@@ -453,7 +494,118 @@ impl FirestoreState {
             .partition_point(|(_, t)| t.as_nanos() <= at.as_nanos());
         idx.checked_sub(1)
             .and_then(|i| self.commit_times.get(i))
-            .map_or(CommitVersion::default(), |(v, _)| *v)
+            .map_or(self.compaction_floor, |(v, _)| *v)
+    }
+
+    /// The version visible at `at`, or `None` when `at` is older than the retained history
+    /// and the answer would be a different snapshot than the caller asked for.
+    #[must_use]
+    pub fn version_at_retained(&self, at: LogicalInstant) -> Option<CommitVersion> {
+        if self.compaction_floor.value() > 0
+            && self
+                .commit_times
+                .first()
+                .is_none_or(|(_, t)| at.as_nanos() < t.as_nanos())
+        {
+            return None;
+        }
+        Some(self.version_at(at))
+    }
+
+    /// Oldest version whose history is still exact. Everything below it was compacted away.
+    #[must_use]
+    pub const fn compaction_floor(&self) -> CommitVersion {
+        self.compaction_floor
+    }
+
+    /// Whether a snapshot at `version` can still be reproduced exactly: not compacted away
+    /// and not ahead of this database. `Listen` checks it before honouring a resume token.
+    #[must_use]
+    pub fn is_retained(&self, version: CommitVersion) -> bool {
+        version >= self.compaction_floor && version <= self.version
+    }
+
+    /// Number of document versions currently retained, tombstones included. Bounded by the
+    /// live document count plus what the retention roots still pin.
+    #[must_use]
+    pub fn retained_versions(&self) -> usize {
+        self.history.values().map(Vec::len).sum()
+    }
+
+    /// Oldest version still stored for any path (`None` when the database is empty).
+    #[must_use]
+    pub fn oldest_retained_version(&self) -> Option<CommitVersion> {
+        self.history
+            .values()
+            .filter_map(|h| h.first().map(|(v, _)| *v))
+            .min()
+    }
+
+    /// Commit time of the oldest snapshot that can still be resolved (`None` before the
+    /// first commit).
+    #[must_use]
+    pub fn oldest_retained_commit_time(&self) -> Option<LogicalInstant> {
+        self.commit_times.first().map(|(_, t)| *t)
+    }
+
+    /// The retention floor at `now`: the oldest version any retention root can still reach.
+    /// The roots are the one-hour `read_time` window ([`READ_TIME_RETENTION_SECONDS`]) and
+    /// the read version of every transaction that is still usable.
+    fn retention_floor(&self, now: LogicalInstant) -> CommitVersion {
+        let window = i128::from(READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
+        let oldest_read = LogicalInstant::from_nanos(now.as_nanos().saturating_sub(window));
+        let mut floor = self.version_at(oldest_read);
+        let ttl = transaction_ttl();
+        for t in self.transactions.values() {
+            if t.finished || elapsed(now, t.started_at) > ttl {
+                continue;
+            }
+            floor = floor.min(t.read_version);
+        }
+        floor.min(self.version)
+    }
+
+    /// Drops every version that no retention root can reach any more and returns the new
+    /// compaction floor. Deterministic: the store runs it itself at the end of every commit,
+    /// so the floor only depends on the commit sequence and the logical times it was given.
+    ///
+    /// Retained: the newest version or tombstone of every path (so live reads never change),
+    /// the newest version at or before the floor of every path (so snapshots at the floor
+    /// stay exact) and everything after the floor. A path whose only remaining version is a
+    /// tombstone at or below the floor is dropped entirely: at every version the store can
+    /// still be asked about, it is indistinguishable from a path that never existed.
+    pub fn compact(&mut self, now: LogicalInstant) -> CommitVersion {
+        let floor = self.retention_floor(now);
+        if floor <= self.compaction_floor {
+            return self.compaction_floor;
+        }
+        self.compaction_floor = floor;
+        let dropped = self.commit_times.partition_point(|(v, _)| *v < floor);
+        self.commit_times.drain(..dropped);
+        let mut compactable = core::mem::take(&mut self.compactable);
+        compactable.retain(|path| {
+            let emptied = match self.history.get_mut(path) {
+                None => return false,
+                Some(h) => {
+                    // Keep the newest version at or before the floor plus everything after
+                    // it; drop the prefix nothing can observe.
+                    let cut = h.partition_point(|(v, _)| *v <= floor).saturating_sub(1);
+                    if cut > 0 {
+                        h.drain(..cut);
+                    }
+                    h.len() == 1 && h[0].1.is_none() && h[0].0 <= floor
+                }
+            };
+            if emptied {
+                self.history.remove(path);
+                return false;
+            }
+            self.history
+                .get(path)
+                .is_some_and(|h| h.len() > 1 || h[0].1.is_none())
+        });
+        self.compactable = compactable;
+        floor
     }
 
     /// Time reported for a live read at `now`: never earlier than the last commit, so a
@@ -625,15 +777,20 @@ impl FirestoreState {
             self.commit_times.push((next_version, commit_time));
             for (path, doc) in changed {
                 let before = self.get(&path).cloned();
+                // A second version, or a tombstone, is something a later compaction can drop.
+                let compactable = self.history.contains_key(&path) || doc.is_none();
                 document_changes.push(DocumentChange {
                     path: path.clone(),
                     before,
                     after: doc.clone(),
                 });
                 self.history
-                    .entry(path)
+                    .entry(path.clone())
                     .or_default()
                     .push((next_version, doc));
+                if compactable {
+                    self.compactable.insert(path);
+                }
             }
             next_version
         };
@@ -642,6 +799,9 @@ impl FirestoreState {
                 t.finished = true;
             }
         }
+        // Retention is owned by the store: every commit drops the history that has fallen
+        // out of the read window and is not pinned by an active transaction.
+        self.compact(now);
         Ok(CommitResult {
             commit_time,
             write_results: results,
@@ -757,11 +917,35 @@ impl FirestoreState {
         query: &Query,
         version: Option<CommitVersion>,
     ) -> Result<Vec<Document>, FirestoreError> {
+        Ok(self.run_query_with_stats(query, version)?.0)
+    }
+
+    /// [`Self::run_query`] with the execution counters (`FS-QUERY-PERF-*`).
+    ///
+    /// Scope, filters, ordering and cursors are evaluated on values borrowed from the stored
+    /// documents, so a row that is scanned and rejected copies nothing. When the query has a
+    /// finite limit, only `offset + limit` candidates are ever held at once (a bounded heap
+    /// keyed by the query order), whatever the size of the matched set; documents are cloned
+    /// once the selection is final.
+    pub fn run_query_with_stats(
+        &self,
+        query: &Query,
+        version: Option<CommitVersion>,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let scope = &query.scope;
         let parent_len = scope.parent.as_ref().map_or(0, |p| p.pairs().len());
         let order = query.effective_order_by();
-        let mut rows: Vec<(Vec<Value>, Document)> = Vec::new();
+        let offset = usize::try_from(query.offset).unwrap_or(usize::MAX);
+        // `offset + limit` rows are enough to answer a query with a finite limit: everything
+        // beyond them is dropped by the truncation anyway.
+        let bound = query
+            .limit
+            .map(|l| usize::try_from(u64::from(query.offset) + u64::from(l)).unwrap_or(usize::MAX));
+        let mut stats = QueryStats::default();
+        let mut heap: BinaryHeap<Candidate<'_>> = BinaryHeap::new();
+        let mut rows: Vec<Candidate<'_>> = Vec::new();
         for doc in self.live_documents(version) {
+            stats.scanned += 1;
             let in_scope = if scope.all_descendants {
                 doc.path.collection_id() == &scope.collection_id
             } else {
@@ -783,29 +967,52 @@ impl FirestoreState {
             let Some(key) = order_key(doc, &order) else {
                 continue;
             };
-            rows.push((key, doc.clone()));
+            // Cursors are a predicate on the order key alone, so they are applied before the
+            // selection instead of after a full sort.
+            if !cursor_admits(&key, query.start_at.as_ref(), query.end_at.as_ref(), &order) {
+                continue;
+            }
+            stats.matched += 1;
+            let candidate = Candidate {
+                key,
+                doc,
+                order: &order,
+            };
+            match bound {
+                Some(0) => {}
+                Some(k) if heap.len() >= k => {
+                    // The heap holds the `k` smallest rows seen so far; its root is the
+                    // largest of them.
+                    if heap.peek().is_some_and(|worst| candidate < *worst) {
+                        heap.pop();
+                        heap.push(candidate);
+                    }
+                }
+                Some(_) => heap.push(candidate),
+                None => rows.push(candidate),
+            }
+            stats.peak_candidates = stats.peak_candidates.max((heap.len() + rows.len()) as u64);
         }
-        rows.sort_by(|a, b| compare_keys(&a.0, &b.0, &order));
-        let mut selected: Vec<Document> = rows
-            .into_iter()
-            .filter(|(key, _)| {
-                cursor_admits(key, query.start_at.as_ref(), query.end_at.as_ref(), &order)
-            })
-            .map(|(_, d)| d)
-            .collect();
-        let offset = usize::try_from(query.offset).unwrap_or(usize::MAX);
+        let mut selected: Vec<Candidate<'_>> = if bound.is_some() {
+            heap.into_sorted_vec()
+        } else {
+            rows.sort_by(|a, b| compare_keys(&a.key, &b.key, &order));
+            rows
+        };
         if offset > 0 {
             selected.drain(..offset.min(selected.len()));
         }
         if let Some(limit) = query.limit {
             selected.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         }
+        stats.cloned_documents = selected.len() as u64;
+        let mut out: Vec<Document> = selected.into_iter().map(|c| c.doc.clone()).collect();
         if let Some(projection) = &query.projection {
-            for d in &mut selected {
+            for d in &mut out {
                 d.fields = project(&d.fields, projection);
             }
         }
-        Ok(selected)
+        Ok((out, stats))
     }
 
     /// Runs aggregations over the query results.
@@ -1114,14 +1321,97 @@ fn apply_transform(
     Ok(reported)
 }
 
-fn field_value(doc: &Document, path: &FieldPath) -> Option<Value> {
-    if path.is_document_name() {
-        return Some(Value::Reference(doc.path.resource_name()));
-    }
-    get_field(&doc.fields, path).cloned()
+/// A queried field as execution sees it: borrowed from the stored document, or the
+/// document's own name. `__name__` is compared segment-wise against the path so that a
+/// scanned row never renders its resource name.
+#[derive(Debug, Clone, Copy)]
+enum FieldRef<'a> {
+    /// A stored field value.
+    Stored(&'a Value),
+    /// The document name (`__name__`), ordered as a reference.
+    Name(&'a DocumentPath),
 }
 
-fn same_type(a: &Value, b: &Value) -> bool {
+impl<'a> FieldRef<'a> {
+    fn kind(self) -> ValueKind {
+        match self {
+            Self::Stored(v) => v.kind(),
+            Self::Name(_) => ValueKind::Reference,
+        }
+    }
+
+    /// The stored value, or `None` for `__name__` (which is never an array or a map).
+    fn stored(self) -> Option<&'a Value> {
+        match self {
+            Self::Stored(v) => Some(v),
+            Self::Name(_) => None,
+        }
+    }
+
+    fn is_null(self) -> bool {
+        matches!(self, Self::Stored(Value::Null))
+    }
+
+    fn is_nan(self) -> bool {
+        matches!(self, Self::Stored(Value::Double(d)) if d.is_nan())
+    }
+
+    fn cmp_value(self, other: &Value) -> Ordering {
+        match self {
+            Self::Stored(v) => v.canonical_cmp(other),
+            Self::Name(p) => match other {
+                Value::Reference(name) => p.cmp_reference(name),
+                _ => ValueKind::Reference.cmp(&other.kind()),
+            },
+        }
+    }
+
+    fn cmp_ref(self, other: Self) -> Ordering {
+        match (self, other) {
+            (Self::Stored(a), Self::Stored(b)) => a.canonical_cmp(b),
+            (Self::Name(a), Self::Name(b)) => a.cmp_resource_name(b),
+            (Self::Name(_), Self::Stored(v)) => ValueKind::Reference.cmp(&v.kind()),
+            (Self::Stored(v), Self::Name(_)) => v.kind().cmp(&ValueKind::Reference),
+        }
+    }
+}
+
+/// One row kept for selection: the order key borrows from `doc`, so a candidate that is
+/// later dropped costs no copy of the document.
+struct Candidate<'a> {
+    key: Vec<FieldRef<'a>>,
+    doc: &'a Document,
+    order: &'a [OrderClause],
+}
+
+impl PartialEq for Candidate<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Candidate<'_> {}
+
+impl PartialOrd for Candidate<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Candidate<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare_keys(&self.key, &other.key, self.order)
+    }
+}
+
+fn field_value<'a>(doc: &'a Document, path: &FieldPath) -> Option<FieldRef<'a>> {
+    if path.is_document_name() {
+        return Some(FieldRef::Name(&doc.path));
+    }
+    get_field(&doc.fields, path).map(FieldRef::Stored)
+}
+
+fn same_type_as(a: FieldRef<'_>, b: &Value) -> bool {
     let ka = a.kind();
     let kb = b.kind();
     ka == kb
@@ -1134,6 +1424,14 @@ fn equal(a: &Value, b: &Value) -> bool {
         return false;
     }
     a.canonical_cmp(b) == Ordering::Equal
+}
+
+/// Equality between a queried field and a query operand (`NaN` equals nothing).
+fn equal_ref(a: FieldRef<'_>, b: &Value) -> bool {
+    if a.is_nan() || matches!(b, Value::Double(d) if d.is_nan()) {
+        return false;
+    }
+    a.cmp_value(b) == Ordering::Equal
 }
 
 fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreError> {
@@ -1157,12 +1455,10 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
         FilterExpr::Unary { field, op } => {
             let v = field_value(doc, field);
             match op {
-                UnaryOp::IsNull => matches!(v, Some(Value::Null)),
-                UnaryOp::IsNotNull => matches!(v, Some(x) if x != Value::Null),
-                UnaryOp::IsNan => matches!(v, Some(Value::Double(d)) if d.is_nan()),
-                UnaryOp::IsNotNan => {
-                    matches!(v, Some(x) if !matches!(x, Value::Double(d) if d.is_nan()))
-                }
+                UnaryOp::IsNull => matches!(v, Some(x) if x.is_null()),
+                UnaryOp::IsNotNull => matches!(v, Some(x) if !x.is_null()),
+                UnaryOp::IsNan => matches!(v, Some(x) if x.is_nan()),
+                UnaryOp::IsNotNan => matches!(v, Some(x) if !x.is_nan()),
             }
         }
         FilterExpr::Field { field, op, value } => {
@@ -1170,16 +1466,16 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                 return Ok(false);
             };
             match op {
-                FieldOp::Equal => equal(&v, value),
-                FieldOp::NotEqual => !equal(&v, value) && !matches!(v, Value::Null),
+                FieldOp::Equal => equal_ref(v, value),
+                FieldOp::NotEqual => !equal_ref(v, value) && !v.is_null(),
                 FieldOp::LessThan
                 | FieldOp::LessThanOrEqual
                 | FieldOp::GreaterThan
                 | FieldOp::GreaterThanOrEqual => {
-                    if !same_type(&v, value) || matches!(v, Value::Double(d) if d.is_nan()) {
+                    if !same_type_as(v, value) || v.is_nan() {
                         return Ok(false);
                     }
-                    let ord = v.canonical_cmp(value);
+                    let ord = v.cmp_value(value);
                     match op {
                         FieldOp::LessThan => ord == Ordering::Less,
                         FieldOp::LessThanOrEqual => ord != Ordering::Greater,
@@ -1188,19 +1484,19 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                     }
                 }
                 FieldOp::ArrayContains => {
-                    matches!(&v, Value::Array(items) if items.iter().any(|i| equal(i, value)))
+                    matches!(v.stored(), Some(Value::Array(items)) if items.iter().any(|i| equal(i, value)))
                 }
                 FieldOp::In => {
-                    matches!(value, Value::Array(candidates) if candidates.iter().any(|c| equal(&v, c)))
+                    matches!(value, Value::Array(candidates) if candidates.iter().any(|c| equal_ref(v, c)))
                 }
                 FieldOp::NotIn => {
                     // `not-in` never matches null fields, and a null candidate matches nothing.
                     matches!(value, Value::Array(candidates)
-                        if !candidates.iter().any(|c| equal(&v, c) || matches!(c, Value::Null)))
-                        && !matches!(v, Value::Null)
+                        if !candidates.iter().any(|c| equal_ref(v, c) || matches!(c, Value::Null)))
+                        && !v.is_null()
                 }
-                FieldOp::ArrayContainsAny => match (&v, value) {
-                    (Value::Array(items), Value::Array(candidates)) => {
+                FieldOp::ArrayContainsAny => match (v.stored(), value) {
+                    (Some(Value::Array(items)), Value::Array(candidates)) => {
                         items.iter().any(|i| candidates.iter().any(|c| equal(i, c)))
                     }
                     _ => false,
@@ -1210,13 +1506,28 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
     })
 }
 
-fn order_key(doc: &Document, order: &[OrderClause]) -> Option<Vec<Value>> {
+fn order_key<'a>(doc: &'a Document, order: &[OrderClause]) -> Option<Vec<FieldRef<'a>>> {
     order.iter().map(|o| field_value(doc, &o.field)).collect()
 }
 
-fn compare_keys(a: &[Value], b: &[Value], order: &[OrderClause]) -> Ordering {
+fn compare_keys(a: &[FieldRef<'_>], b: &[FieldRef<'_>], order: &[OrderClause]) -> Ordering {
     for ((x, y), clause) in a.iter().zip(b).zip(order) {
-        let ord = x.canonical_cmp(y);
+        let ord = x.cmp_ref(*y);
+        let ord = match clause.direction {
+            Direction::Ascending => ord,
+            Direction::Descending => ord.reverse(),
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    Ordering::Equal
+}
+
+/// Compares an order key with a cursor's values, clause by clause.
+fn compare_cursor(key: &[FieldRef<'_>], values: &[Value], order: &[OrderClause]) -> Ordering {
+    for ((x, y), clause) in key.iter().zip(values).zip(order) {
+        let ord = x.cmp_value(y);
         let ord = match clause.direction {
             Direction::Ascending => ord,
             Direction::Descending => ord.reverse(),
@@ -1229,14 +1540,13 @@ fn compare_keys(a: &[Value], b: &[Value], order: &[OrderClause]) -> Ordering {
 }
 
 fn cursor_admits(
-    key: &[Value],
+    key: &[FieldRef<'_>],
     start: Option<&Cursor>,
     end: Option<&Cursor>,
     order: &[OrderClause],
 ) -> bool {
     if let Some(c) = start {
-        let n = c.values.len().min(key.len());
-        let ord = compare_keys(&key[..n], &c.values[..n], &order[..n]);
+        let ord = compare_cursor(key, &c.values, order);
         let ok = match ord {
             Ordering::Greater => true,
             Ordering::Equal => c.before,
@@ -1247,8 +1557,7 @@ fn cursor_admits(
         }
     }
     if let Some(c) = end {
-        let n = c.values.len().min(key.len());
-        let ord = compare_keys(&key[..n], &c.values[..n], &order[..n]);
+        let ord = compare_cursor(key, &c.values, order);
         let ok = match ord {
             Ordering::Less => true,
             Ordering::Equal => !c.before,

@@ -13,7 +13,9 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
-use fireemu_core_firestore::store::{get_field, Document, FirestoreState, Write, WriteOp};
+use fireemu_core_firestore::store::{
+    get_field, Aggregation, Document, FirestoreState, Write, WriteOp,
+};
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
@@ -30,9 +32,12 @@ fn reference_field(doc: &Document, path: &FieldPath) -> Option<Value> {
     get_field(&doc.fields, path).cloned()
 }
 
+/// Equality of a stored value with a filter operand: NaN equals nothing, and neither does a
+/// null operand (null is matched through the unary filters; the official emulator answers
+/// the raw field filter the same way, see conformance/src/firestore-probe queries/filters).
 fn reference_equal(a: &Value, b: &Value) -> bool {
     let nan = |v: &Value| matches!(v, Value::Double(d) if d.is_nan());
-    !nan(a) && !nan(b) && a.canonical_cmp(b) == Ordering::Equal
+    !nan(a) && !nan(b) && *b != Value::Null && a.canonical_cmp(b) == Ordering::Equal
 }
 
 fn reference_comparable(a: &Value, b: &Value) -> bool {
@@ -60,6 +65,9 @@ fn reference_filter(filter: &FilterExpr, doc: &Document) -> bool {
             let Some(v) = reference_field(doc, field) else {
                 return false;
             };
+            if *value == Value::Null {
+                return false;
+            }
             let is_nan = matches!(v, Value::Double(d) if d.is_nan());
             match op {
                 FieldOp::Equal => reference_equal(&v, value),
@@ -642,6 +650,174 @@ fn a_finite_limit_bounds_candidates_and_only_selected_documents_are_cloned() {
     assert_eq!(stats.cloned_documents, 1);
 
     // Without a limit the caller asked for the whole result, so every match is returned.
+    let (docs, stats) = db.run_query_with_stats(&base, None).unwrap();
+    assert_eq!(docs.len(), 500);
+    assert_eq!(stats.cloned_documents, 500);
+}
+
+// ---------------------------------------------------------------------------------------
+// Aggregations (FS-AGG-PERF-*)
+// ---------------------------------------------------------------------------------------
+
+/// The materializing reference: aggregate over the documents the reference executor
+/// returns, with the documented numeric semantics.
+#[allow(clippy::cast_precision_loss)]
+fn reference_aggregate(selected: &[Document], aggregation: &Aggregation) -> Value {
+    let numeric = |field: &FieldPath| -> (f64, i64, bool, u64) {
+        let mut as_double = 0.0f64;
+        let mut as_integer = 0i64;
+        let mut any_double = false;
+        let mut contributors = 0u64;
+        for d in selected {
+            match get_field(&d.fields, field) {
+                Some(Value::Integer(i)) => {
+                    as_integer = as_integer.saturating_add(*i);
+                    as_double += *i as f64;
+                    contributors += 1;
+                }
+                Some(Value::Double(x)) => {
+                    any_double = true;
+                    as_double += x;
+                    contributors += 1;
+                }
+                _ => {}
+            }
+        }
+        (as_double, as_integer, any_double, contributors)
+    };
+    match aggregation {
+        Aggregation::Count { up_to } => {
+            let n = u64::try_from(selected.len()).unwrap();
+            Value::Integer(i64::try_from(up_to.map_or(n, |cap| n.min(cap))).unwrap())
+        }
+        Aggregation::Sum(field) => {
+            let (as_double, as_integer, any_double, _) = numeric(field);
+            if any_double {
+                Value::Double(as_double)
+            } else {
+                Value::Integer(as_integer)
+            }
+        }
+        Aggregation::Avg(field) => {
+            let (as_double, as_integer, any_double, contributors) = numeric(field);
+            if contributors == 0 {
+                Value::Null
+            } else if any_double {
+                Value::Double(as_double / contributors as f64)
+            } else {
+                Value::Double(as_integer as f64 / contributors as f64)
+            }
+        }
+    }
+}
+
+/// FS-AGG-PERF-03 / FS-AGG-PERF-04: the streaming aggregations agree with the materializing
+/// reference over the same generated queries -- filters, ordering, cursors, offset, limit,
+/// projection, missing fields, mixed integer / double contributors, NaN, empty results and
+/// `count.up_to` -- and never clone a document.
+#[test]
+fn streaming_aggregations_agree_with_the_materializing_reference() {
+    let aggregations = [
+        Aggregation::Count { up_to: None },
+        Aggregation::Count { up_to: Some(3) },
+        Aggregation::Count { up_to: Some(0) },
+        Aggregation::Sum(fp("a")),
+        Aggregation::Avg(fp("a")),
+        Aggregation::Sum(fp("m.k")),
+        Aggregation::Avg(fp("m.k")),
+        Aggregation::Sum(fp("missing")),
+        Aggregation::Avg(fp("missing")),
+    ];
+    for seed in 0..12u64 {
+        let mut g = Gen::new(0xa66_0000 + seed);
+        let (db, docs) = corpus(&mut g);
+        for case in 0..120u32 {
+            let query = g.query(&docs);
+            let (got, stats) = db
+                .run_aggregation_with_stats(&query, &aggregations, None)
+                .unwrap();
+            // An aggregation reads the stored fields: a projection selects what a result
+            // returns and takes nothing away from what `sum` / `avg` see.
+            let mut unprojected = query.clone();
+            unprojected.projection = None;
+            let selected = reference_run(&docs, &unprojected);
+            let want: Vec<Value> = aggregations
+                .iter()
+                .map(|a| reference_aggregate(&selected, a))
+                .collect();
+            assert_eq!(
+                format!("{got:#?}"),
+                format!("{want:#?}"),
+                "seed {seed} case {case}: streaming and reference aggregations differ for {query:?}"
+            );
+            assert_eq!(stats.cloned_documents, 0, "seed {seed} case {case}");
+            if query.limit.is_none() && query.offset == 0 {
+                assert_eq!(
+                    stats.peak_candidates, 0,
+                    "seed {seed} case {case}: an unbounded aggregation retains no candidate"
+                );
+            } else if let Some(limit) = query.limit {
+                assert!(stats.peak_candidates <= u64::from(query.offset) + u64::from(limit));
+            }
+        }
+    }
+}
+
+/// FS-AGG-PERF-01 / FS-AGG-PERF-02 / FS-AGG-PERF-05: a count, a sum and an average over 500
+/// documents carrying a 4 KiB payload each clone nothing and, without offset or limit,
+/// retain no candidate. The counters are the evidence: the retained payload of a scalar
+/// aggregation is zero documents whatever the size of the matched set. Elapsed time is
+/// printed for the record (`cargo nextest run ... --no-capture`), never asserted.
+#[test]
+fn scalar_aggregations_retain_no_document_payload() {
+    let db = large_collection(500);
+    let base = Query::new(QueryScope {
+        parent: None,
+        collection_id: collection("items"),
+        all_descendants: false,
+    });
+    let aggregations = [
+        Aggregation::Count { up_to: None },
+        Aggregation::Sum(fp("n")),
+        Aggregation::Avg(fp("n")),
+    ];
+
+    let started = std::time::Instant::now();
+    let (values, stats) = db
+        .run_aggregation_with_stats(&base, &aggregations, None)
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(values[0], Value::Integer(500));
+    assert_eq!(values[1], Value::Integer((0..500).sum()));
+    assert_eq!(values[2], Value::Double(249.5));
+    assert_eq!(stats.scanned, 500);
+    assert_eq!(stats.matched, 500);
+    assert_eq!(stats.cloned_documents, 0, "no document is copied");
+    assert_eq!(stats.peak_candidates, 0, "no candidate is retained");
+    println!(
+        "aggregation over 500 x 4 KiB documents: cloned={} peak_candidates={} elapsed={elapsed:?}",
+        stats.cloned_documents, stats.peak_candidates
+    );
+
+    // With a limit the selection needs its bounded heap of borrowed rows, and still no copy.
+    let mut top = base.clone();
+    top.limit = Some(10);
+    top.offset = 5;
+    let (values, stats) = db
+        .run_aggregation_with_stats(&top, &aggregations, None)
+        .unwrap();
+    assert_eq!(values[0], Value::Integer(10));
+    assert_eq!(stats.cloned_documents, 0);
+    assert_eq!(stats.peak_candidates, 15);
+
+    // `up_to` caps the count and nothing else.
+    let (values, stats) = db
+        .run_aggregation_with_stats(&base, &[Aggregation::Count { up_to: Some(7) }], None)
+        .unwrap();
+    assert_eq!(values, vec![Value::Integer(7)]);
+    assert_eq!(stats.cloned_documents, 0);
+
+    // The ordered path used by `run_query` is unchanged: a full result still clones every row.
     let (docs, stats) = db.run_query_with_stats(&base, None).unwrap();
     assert_eq!(docs.len(), 500);
     assert_eq!(stats.cloned_documents, 500);

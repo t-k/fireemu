@@ -163,10 +163,18 @@ fn not_in_limits() {
         field("a", FieldOp::NotIn, Value::Array(vec![Value::Integer(1)])),
         field("b", FieldOp::NotEqual, Value::Integer(2)),
     ]);
+    // The combination is structurally invalid in every edition (one negating filter per
+    // query), so canonicalization refuses it before the catalog limit is consulted; the
+    // catalog limit still describes the same query on its own.
+    assert_eq!(
+        base()
+            .with_filter(combo.clone())
+            .canonicalize()
+            .unwrap_err(),
+        fireemu_core_firestore::query::QueryError::MultipleNegations
+    );
     let err = base()
         .with_filter(combo)
-        .canonicalize()
-        .unwrap()
         .check_standard_limits()
         .unwrap_err();
     assert!(err

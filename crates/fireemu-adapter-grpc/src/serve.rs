@@ -64,6 +64,13 @@ fn json_response(r: &RestResponse, origin: Option<&str>) -> Response<OutBody> {
             .body(full(Bytes::from(html.to_owned())))
             .unwrap_or_else(|_| Response::new(full(Bytes::new())));
     }
+    // An unknown route answers plain text, as the official emulator's HTTP adapter does.
+    if let Some(text) = r.body[crate::rest::TEXT_KEY].as_str() {
+        return cors_headers(Response::builder().status(r.status), origin)
+            .header("content-type", "text/plain; charset=utf-8")
+            .body(full(Bytes::from(text.to_owned())))
+            .unwrap_or_else(|_| Response::new(full(Bytes::new())));
+    }
     let text = serde_json::to_vec(&r.body).unwrap_or_default();
     cors_headers(Response::builder().status(r.status), origin)
         .header("content-type", "application/json; charset=utf-8")

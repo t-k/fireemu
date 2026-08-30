@@ -88,9 +88,9 @@
       "maximum": 1048576,
       "precision": "boundary-conformance",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum size for a document: 1 MiB (1,048,576 bytes)",
-      "notes": "Uses the official storage-size formula (spec 8.10.5)."
+      "notes": "Uses the official storage-size formula (spec 8.10.5). Enforced on every write that produces a document (fireemu_core_firestore::store::validate_document)."
     },
     {
       "id": "FS-LIMIT-FIELD-NAME",
@@ -136,9 +136,9 @@
       "maximum": 20,
       "precision": "exact",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum depth of fields in a map or array: 20",
-      "notes": "Each map or array level adds one."
+      "notes": "Each map or array level adds one. Enforced on every write that produces a document (fireemu_core_firestore::store::validate_document)."
     },
     {
       "id": "FS-LIMIT-API-REQUEST-BYTES",
@@ -160,9 +160,9 @@
       "maximum": 270,
       "precision": "exact",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum time a transaction can run: 270 seconds",
-      "notes": "Logical clock in the deterministic profile, monotonic clock in compat."
+      "notes": "Enforced on the virtual clock: a transaction older than the budget is finished and every later use of it is INVALID_ARGUMENT (fireemu_core_firestore::store::FirestoreState::touch_transaction)."
     },
     {
       "id": "FS-LIMIT-TRANSACTION-IDLE-TIME",
@@ -172,9 +172,9 @@
       "maximum": 60,
       "precision": "exact",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum idle time for a transaction: 60 seconds",
-      "notes": "The idle deadline is refreshed on every transaction activity."
+      "notes": "The idle deadline is refreshed on every transaction activity; enforced on the virtual clock (fireemu_core_firestore::store::FirestoreState::touch_transaction)."
     },
     {
       "id": "FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT",
@@ -184,16 +184,19 @@
       "maximum": 500,
       "precision": "exact",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum number of field transformations that can be performed on a single document in a Commit operation or in a transaction: 500",
-      "notes": ""
+      "notes": "Enforced per commit, summed over every write that targets the same document (fireemu_core_firestore::store::FirestoreState::commit)."
     },
     {
       "id": "FS-LIMIT-COMPOSITE-INDEXES",
       "class": "plan-capacity",
       "boundary": "inclusive-maximum",
       "unit": "count",
-      "maximum": { "billingDisabled": 200, "billingEnabled": 1000 },
+      "maximum": {
+        "billingDisabled": 200,
+        "billingEnabled": 1000
+      },
       "precision": "exact",
       "enforcementStage": "config-load",
       "implemented": "unsupported",
@@ -205,7 +208,10 @@
       "class": "plan-capacity",
       "boundary": "inclusive-maximum",
       "unit": "count",
-      "maximum": { "billingDisabled": 200, "billingEnabled": 1000 },
+      "maximum": {
+        "billingDisabled": 200,
+        "billingEnabled": 1000
+      },
       "precision": "exact",
       "enforcementStage": "config-load",
       "implemented": "unsupported",

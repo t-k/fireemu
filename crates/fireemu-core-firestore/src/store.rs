@@ -20,6 +20,7 @@ use fireemu_core_limits::plan::FirestorePlanProfile;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::field_path::FieldPath;
+use crate::limits;
 use crate::path::DocumentPath;
 use crate::query::{Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, UnaryOp};
 use crate::size::document_size;
@@ -290,11 +291,28 @@ pub struct QueryStats {
     pub cloned_documents: u64,
 }
 
+/// Which catalog limits a database refuses.
+///
+/// Every limit the pinned official Firestore emulator refuses is refused under either
+/// scope. The difference is the limits only production enforces: the `strict` profile
+/// refuses them too, the `firebase` profile admits the request the way the official
+/// emulator does, so a suite written against the official emulator sees the same answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LimitScope {
+    /// Every enforced limit, production's set (the `strict` profile).
+    #[default]
+    Production,
+    /// Only the limits the official emulator refuses too (the `firebase` profile).
+    OfficialEmulator,
+}
+
 /// One Firestore database.
 #[derive(Debug, Clone, Default)]
 pub struct FirestoreState {
     /// Version history per path; `None` entries are tombstones.
     history: BTreeMap<DocumentPath, Vec<(CommitVersion, Option<Document>)>>,
+    /// Which limits commits refuse.
+    limit_scope: LimitScope,
     version: CommitVersion,
     next_transaction: u64,
     transactions: BTreeMap<TransactionId, Transaction>,
@@ -338,11 +356,11 @@ fn seconds_limit(id: &str, fallback: i64) -> LogicalDuration {
 }
 
 fn transaction_ttl() -> LogicalDuration {
-    seconds_limit("FS-LIMIT-TRANSACTION-TOTAL-TIME", 270)
+    seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)
 }
 
 fn transaction_idle_ttl() -> LogicalDuration {
-    seconds_limit("FS-LIMIT-TRANSACTION-IDLE-TIME", 60)
+    seconds_limit(limits::TRANSACTION_IDLE_TIME, 60)
 }
 
 fn elapsed(now: LogicalInstant, earlier: LogicalInstant) -> LogicalDuration {
@@ -355,6 +373,21 @@ impl FirestoreState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Empty database refusing the limits of `scope`.
+    #[must_use]
+    pub fn with_limit_scope(scope: LimitScope) -> Self {
+        Self {
+            limit_scope: scope,
+            ..Self::default()
+        }
+    }
+
+    /// Which limits commits refuse.
+    #[must_use]
+    pub const fn limit_scope(&self) -> LimitScope {
+        self.limit_scope
     }
 
     /// Latest commit version.
@@ -405,6 +438,41 @@ impl FirestoreState {
     #[must_use]
     pub fn documents(&self) -> Vec<Document> {
         self.live_documents(None).cloned().collect()
+    }
+
+    /// The visible state of this database as an independent copy: the newest version of
+    /// every live document, and nothing of the running session.
+    ///
+    /// This is what a named snapshot retains. The version history, the tombstones, the open
+    /// transactions and the commit-time index that serve `read_time` selectors and `Listen`
+    /// resume tokens are not copied: a restore is a new epoch in which every stream has
+    /// ended and every transaction is gone, so nothing could ask for them, and copying them
+    /// would make a snapshot cost the whole retained history rather than the live data. The
+    /// copy keeps the commit version and the last commit time, so commits after a restore
+    /// stay monotonic, and its compaction floor is that version: a `read_time` before it or
+    /// a resume token from before it is refused exactly as after a compaction.
+    #[must_use]
+    pub fn visible_snapshot(&self) -> Self {
+        let history = self
+            .history
+            .iter()
+            .filter_map(|(path, versions)| {
+                let (version, document) = versions.last()?;
+                let document = document.as_ref()?;
+                Some((path.clone(), vec![(*version, Some(document.clone()))]))
+            })
+            .collect();
+        Self {
+            history,
+            limit_scope: self.limit_scope,
+            version: self.version,
+            next_transaction: self.next_transaction,
+            transactions: BTreeMap::new(),
+            last_commit_time: self.last_commit_time,
+            commit_times: self.commit_times.last().copied().into_iter().collect(),
+            compaction_floor: self.version,
+            compactable: BTreeSet::new(),
+        }
     }
 
     /// Installs `documents` as one commit, keeping the creation and update times they
@@ -735,11 +803,13 @@ impl FirestoreState {
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
         match self.transactions.get(id) {
             Some(t) if !t.finished => Ok(t),
-            Some(_) => Err(FirestoreError::InvalidArgument(
-                "transaction already finished".into(),
+            // A finished transaction is reported the way the official emulator reports it:
+            // `ABORTED`, which is the code the SDKs retry a transaction on.
+            Some(_) => Err(FirestoreError::Aborted(
+                "The referenced transaction has expired or is no longer valid.".into(),
             )),
             None => Err(FirestoreError::InvalidArgument(
-                "unknown transaction".into(),
+                "Invalid transaction.".into(),
             )),
         }
     }
@@ -766,15 +836,24 @@ impl FirestoreState {
         id: &TransactionId,
         query: &Query,
     ) -> Result<Vec<Document>, FirestoreError> {
+        Ok(self.run_query_in_transaction_with_stats(id, query)?.0)
+    }
+
+    /// [`Self::run_query_in_transaction`] with the execution counters.
+    pub fn run_query_in_transaction_with_stats(
+        &mut self,
+        id: &TransactionId,
+        query: &Query,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
         let read_version = self.transaction(id)?.read_version;
-        let docs = self.run_query(query, Some(read_version))?;
+        let (docs, stats) = self.run_query_with_stats(query, Some(read_version))?;
         if let Some(t) = self.transactions.get_mut(id) {
             for d in &docs {
                 t.read_set.insert(d.path.clone(), Some(d.version));
             }
             t.queries.push((query.clone(), fingerprint(&docs)));
         }
-        Ok(docs)
+        Ok((docs, stats))
     }
 
     /// Rolls back (finishes) a transaction.
@@ -812,11 +891,16 @@ impl FirestoreState {
             }
         }
 
-        let mut transforms_per_document: BTreeMap<&DocumentPath, u64> = BTreeMap::new();
-        for write in writes {
-            let n = transforms_per_document.entry(write.op.path()).or_default();
-            *n += write.transforms.len() as u64;
-            check_limit("FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT", *n)?;
+        // The transform budget is production's alone: the official emulator applies any
+        // number of transforms (measured by `conformance/src/firestore-probe`), so only the
+        // production scope refuses the commit.
+        if self.limit_scope == LimitScope::Production {
+            let mut transforms_per_document: BTreeMap<&DocumentPath, u64> = BTreeMap::new();
+            for write in writes {
+                let n = transforms_per_document.entry(write.op.path()).or_default();
+                *n += write.transforms.len() as u64;
+                check_limit(limits::FIELD_TRANSFORMS_PER_DOCUMENT, *n)?;
+            }
         }
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
@@ -841,13 +925,18 @@ impl FirestoreState {
             if let Some(doc) = &next {
                 validate_document(doc)?;
             }
+            if matches!(write.op, WriteOp::Verify { .. }) {
+                // A verify changes nothing and reports the document's current update time,
+                // the time of the state it verified.
+                result.update_time = current.as_ref().map(|c| c.update_time);
+            }
             let unchanged = match (&current, &next) {
                 (Some(c), Some(n)) => c.fields == n.fields,
                 (None, None) => true,
                 _ => false,
             };
             if unchanged {
-                // A no-op Set keeps the existing update time; a verify reports none.
+                // A no-op Set keeps the existing update time.
                 if let (Some(c), false) = (&current, matches!(write.op, WriteOp::Verify { .. })) {
                     result.update_time = Some(c.update_time);
                 }
@@ -994,6 +1083,39 @@ impl FirestoreState {
             .collect()
     }
 
+    /// Paths directly under `parent` in `collection_id` that hold no document but have
+    /// descendants (`ListDocuments` with `show_missing`), by name, as of `version`.
+    #[must_use]
+    pub fn list_missing_parents_at(
+        &self,
+        parent: Option<&DocumentPath>,
+        collection_id: &str,
+        version: Option<CommitVersion>,
+    ) -> Vec<DocumentPath> {
+        let parent_len = parent.map_or(0, |p| p.pairs().len());
+        let depth = parent_len + 1;
+        let mut present: BTreeSet<&DocumentPath> = BTreeSet::new();
+        let mut candidates: BTreeSet<DocumentPath> = BTreeSet::new();
+        for d in self.live_documents(version) {
+            let pairs = d.path.pairs();
+            if pairs.len() < depth
+                || pairs[parent_len].0.as_str() != collection_id
+                || parent.is_some_and(|p| pairs[..parent_len] != *p.pairs())
+            {
+                continue;
+            }
+            if pairs.len() == depth {
+                present.insert(&d.path);
+            } else {
+                candidates.insert(d.path.ancestor(depth));
+            }
+        }
+        candidates
+            .into_iter()
+            .filter(|p| !present.contains(p))
+            .collect()
+    }
+
     /// Collection IDs directly under `parent` (root when `None`), sorted.
     #[must_use]
     pub fn list_collection_ids(&self, parent: Option<&DocumentPath>) -> Vec<String> {
@@ -1030,6 +1152,35 @@ impl FirestoreState {
         query: &Query,
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        let mut out: Vec<Document> = Vec::new();
+        let mut stats = self.select(query, version, Consumption::Ordered, |doc| {
+            out.push(doc.clone());
+        })?;
+        stats.cloned_documents = out.len() as u64;
+        if let Some(projection) = &query.projection {
+            for d in &mut out {
+                d.fields = project(&d.fields, projection);
+            }
+        }
+        Ok((out, stats))
+    }
+
+    /// Feeds every document the query selects to `sink`, borrowed from the store, in query
+    /// order when `consumption` asks for it.
+    ///
+    /// This is the one selection routine: [`Self::run_query_with_stats`] clones what it
+    /// receives, [`Self::run_aggregation_with_stats`] folds it into accumulators. An
+    /// unordered consumer of a query without offset or limit is served straight from the
+    /// scan -- no candidate is retained at all -- because nothing it computes depends on the
+    /// order of the rows. The counters describe the selection; `cloned_documents` is left
+    /// at zero for the caller to set.
+    fn select<'a, F: FnMut(&'a Document)>(
+        &'a self,
+        query: &Query,
+        version: Option<CommitVersion>,
+        consumption: Consumption,
+        mut sink: F,
+    ) -> Result<QueryStats, FirestoreError> {
         let scope = &query.scope;
         let parent_len = scope.parent.as_ref().map_or(0, |p| p.pairs().len());
         let order = query.effective_order_by();
@@ -1039,13 +1190,20 @@ impl FirestoreState {
         let bound = query
             .limit
             .map(|l| usize::try_from(u64::from(query.offset) + u64::from(l)).unwrap_or(usize::MAX));
+        let streaming = consumption == Consumption::Unordered && bound.is_none() && offset == 0;
         let mut stats = QueryStats::default();
-        let mut heap: BinaryHeap<Candidate<'_>> = BinaryHeap::new();
-        let mut rows: Vec<Candidate<'_>> = Vec::new();
+        let mut heap: BinaryHeap<Candidate<'a, '_>> = BinaryHeap::new();
+        let mut rows: Vec<Candidate<'a, '_>> = Vec::new();
         for doc in self.live_documents(version) {
             stats.scanned += 1;
             let in_scope = if scope.all_descendants {
+                // A collection group under a parent document: every document of a
+                // collection with that id anywhere below the parent.
                 doc.path.collection_id() == &scope.collection_id
+                    && scope.parent.as_ref().is_none_or(|p| {
+                        doc.path.pairs().len() > parent_len
+                            && doc.path.pairs()[..parent_len] == *p.pairs()
+                    })
             } else {
                 doc.path.pairs().len() == parent_len + 1
                     && doc.path.collection_id() == &scope.collection_id
@@ -1071,6 +1229,10 @@ impl FirestoreState {
                 continue;
             }
             stats.matched += 1;
+            if streaming {
+                sink(doc);
+                continue;
+            }
             let candidate = Candidate {
                 key,
                 doc,
@@ -1091,7 +1253,10 @@ impl FirestoreState {
             }
             stats.peak_candidates = stats.peak_candidates.max((heap.len() + rows.len()) as u64);
         }
-        let mut selected: Vec<Candidate<'_>> = if bound.is_some() {
+        if streaming {
+            return Ok(stats);
+        }
+        let mut selected: Vec<Candidate<'a, '_>> = if bound.is_some() {
             heap.into_sorted_vec()
         } else {
             rows.sort_by(|a, b| compare_keys(&a.key, &b.key, &order));
@@ -1103,14 +1268,10 @@ impl FirestoreState {
         if let Some(limit) = query.limit {
             selected.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         }
-        stats.cloned_documents = selected.len() as u64;
-        let mut out: Vec<Document> = selected.into_iter().map(|c| c.doc.clone()).collect();
-        if let Some(projection) = &query.projection {
-            for d in &mut out {
-                d.fields = project(&d.fields, projection);
-            }
+        for candidate in selected {
+            sink(candidate.doc);
         }
-        Ok((out, stats))
+        Ok(stats)
     }
 
     /// Runs aggregations over the query results.
@@ -1120,37 +1281,109 @@ impl FirestoreState {
         aggregations: &[Aggregation],
         version: Option<CommitVersion>,
     ) -> Result<Vec<Value>, FirestoreError> {
-        let docs = self.run_query(query, version)?;
-        aggregations
+        Ok(self
+            .run_aggregation_with_stats(query, aggregations, version)?
+            .0)
+    }
+
+    /// [`Self::run_aggregation`] with the execution counters (`FS-AGG-PERF-*`).
+    ///
+    /// The aggregations fold over the selected documents as the selection produces them:
+    /// a count keeps a counter, a sum its numeric accumulator, an average the sum and the
+    /// number of contributors. No document is cloned (`cloned_documents` is always zero),
+    /// and a query without offset or limit retains no candidate either, so the memory an
+    /// aggregation costs is independent of the number and size of the matching documents.
+    pub fn run_aggregation_with_stats(
+        &self,
+        query: &Query,
+        aggregations: &[Aggregation],
+        version: Option<CommitVersion>,
+    ) -> Result<(Vec<Value>, QueryStats), FirestoreError> {
+        for aggregation in aggregations {
+            if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
+                if field.is_document_name() {
+                    return Err(FirestoreError::InvalidArgument(
+                        "Aggregations are not supported for the property: __key__".into(),
+                    ));
+                }
+            }
+        }
+        let mut accumulators: Vec<Accumulator> = aggregations
             .iter()
-            .map(|a| {
-                Ok(match a {
-                    Aggregation::Count { up_to } => {
-                        let n = docs.len() as u64;
-                        Value::Integer(
-                            i64::try_from(up_to.map_or(n, |cap| n.min(cap))).unwrap_or(i64::MAX),
-                        )
+            .map(|_| Accumulator::default())
+            .collect();
+        let stats = self.select(query, version, Consumption::Unordered, |doc| {
+            for (aggregation, accumulator) in aggregations.iter().zip(&mut accumulators) {
+                accumulator.fold(aggregation, doc);
+            }
+        })?;
+        let values = aggregations
+            .iter()
+            .zip(accumulators)
+            .map(|(aggregation, accumulator)| accumulator.finish(aggregation))
+            .collect();
+        Ok((values, stats))
+    }
+}
+
+/// Whether a consumer of a selection needs the rows in query order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Consumption {
+    /// The rows are returned, so they arrive in query order.
+    Ordered,
+    /// The rows are folded into something order-independent (an aggregation).
+    Unordered,
+}
+
+/// The scalar state of one aggregation while the selection streams past it.
+#[derive(Debug, Default)]
+struct Accumulator {
+    /// Selected documents (`count`).
+    count: u64,
+    /// Running numeric sum (`sum`, `avg`); integers saturate, as documented.
+    sum: Option<Value>,
+    /// Documents that contributed a numeric value to `sum`.
+    contributors: u64,
+}
+
+impl Accumulator {
+    fn fold(&mut self, aggregation: &Aggregation, doc: &Document) {
+        match aggregation {
+            Aggregation::Count { .. } => self.count += 1,
+            Aggregation::Sum(field) | Aggregation::Avg(field) => {
+                if let Some(v) = get_field(&doc.fields, field) {
+                    if is_number(v) {
+                        let sum = self.sum.take().unwrap_or(Value::Integer(0));
+                        self.sum = Some(add_aggregated(&sum, v));
+                        self.contributors += 1;
                     }
-                    Aggregation::Sum(field) => sum_values(&docs, field).0,
-                    Aggregation::Avg(field) => {
-                        let (sum, count) = sum_values(&docs, field);
-                        if count == 0 {
-                            Value::Null
-                        } else {
-                            #[allow(clippy::cast_precision_loss)]
-                            let total = match sum {
-                                Value::Integer(i) => i as f64,
-                                Value::Double(d) => d,
-                                _ => 0.0,
-                            };
-                            #[allow(clippy::cast_precision_loss)]
-                            let divisor = count as f64;
-                            Value::Double(total / divisor)
-                        }
-                    }
-                })
-            })
-            .collect()
+                }
+            }
+        }
+    }
+
+    fn finish(self, aggregation: &Aggregation) -> Value {
+        match aggregation {
+            Aggregation::Count { up_to } => {
+                let n = self.count;
+                Value::Integer(i64::try_from(up_to.map_or(n, |cap| n.min(cap))).unwrap_or(i64::MAX))
+            }
+            Aggregation::Sum(_) => self.sum.unwrap_or(Value::Integer(0)),
+            Aggregation::Avg(_) => {
+                if self.contributors == 0 {
+                    return Value::Null;
+                }
+                #[allow(clippy::cast_precision_loss)]
+                let total = match self.sum {
+                    Some(Value::Integer(i)) => i as f64,
+                    Some(Value::Double(d)) => d,
+                    _ => 0.0,
+                };
+                #[allow(clippy::cast_precision_loss)]
+                let divisor = self.contributors as f64;
+                Value::Double(total / divisor)
+            }
+        }
     }
 }
 
@@ -1232,10 +1465,6 @@ fn apply_write(
                     base
                 }
             };
-            check_limit(
-                "FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT",
-                write.transforms.len() as u64,
-            )?;
             let mut transform_results = Vec::with_capacity(write.transforms.len());
             for t in &write.transforms {
                 let produced = apply_transform(&mut next_fields, t, now)?;
@@ -1264,13 +1493,59 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
         FieldPath::from_segments([name.as_str()])
             .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))?;
         check_limit(
-            "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH",
+            limits::NESTED_MAP_ARRAY_DEPTH,
             u64::from(value.nesting_depth()),
         )?;
+        validate_value(value, false)?;
     }
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
-    check_limit("FS-LIMIT-DOCUMENT-BYTES", size.total)
+    check_limit(limits::DOCUMENT_BYTES, size.total)
+}
+
+/// The value rules every stored value obeys: an array never holds an array directly, and a
+/// reference names a document (`projects/{p}/databases/{d}/documents/` plus an even number
+/// of non-empty segments).
+fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreError> {
+    match value {
+        Value::Array(items) => {
+            if inside_array {
+                return Err(FirestoreError::InvalidArgument(
+                    "Nested arrays are not allowed".into(),
+                ));
+            }
+            items.iter().try_for_each(|v| validate_value(v, true))
+        }
+        Value::Map(fields) => fields.values().try_for_each(|v| validate_value(v, false)),
+        Value::Reference(name) => validate_reference(name),
+        _ => Ok(()),
+    }
+}
+
+fn validate_reference(name: &str) -> Result<(), FirestoreError> {
+    let malformed = || {
+        FirestoreError::InvalidArgument(format!(
+            "Document name {name:?} is not a document path: projects/{{project}}/databases/{{database}}/documents/{{collection}}/{{document}}..."
+        ))
+    };
+    let segments: Vec<&str> = name.split('/').collect();
+    if segments.len() < 7
+        || segments[0] != "projects"
+        || segments[2] != "databases"
+        || segments[4] != "documents"
+        || segments[1].is_empty()
+        || segments[3].is_empty()
+    {
+        return Err(malformed());
+    }
+    let relative = &segments[5..];
+    if relative.len() % 2 != 0 || relative.iter().any(|s| s.is_empty()) {
+        return Err(FirestoreError::InvalidArgument(format!(
+            "Document parent name {name:?} lacks \"/\" at index {}.",
+            name.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Navigates a field path.
@@ -1330,6 +1605,18 @@ fn add_numbers(a: &Value, b: &Value) -> Value {
         }
         (Value::Double(x), Value::Double(y)) => Value::Double(x + y),
         (_, other) => other.clone(),
+    }
+}
+
+/// Addition for `sum` / `avg`: an integer sum that overflows becomes a double, as the
+/// backend and the official emulator report it (a transform increment saturates instead).
+#[allow(clippy::cast_precision_loss)]
+fn add_aggregated(a: &Value, b: &Value) -> Value {
+    match (a, b) {
+        (Value::Integer(x), Value::Integer(y)) => x
+            .checked_add(*y)
+            .map_or_else(|| Value::Double(*x as f64 + *y as f64), Value::Integer),
+        _ => add_numbers(a, b),
     }
 }
 
@@ -1479,27 +1766,27 @@ impl<'a> FieldRef<'a> {
 
 /// One row kept for selection: the order key borrows from `doc`, so a candidate that is
 /// later dropped costs no copy of the document.
-struct Candidate<'a> {
-    key: Vec<FieldRef<'a>>,
-    doc: &'a Document,
-    order: &'a [OrderClause],
+struct Candidate<'d, 'o> {
+    key: Vec<FieldRef<'d>>,
+    doc: &'d Document,
+    order: &'o [OrderClause],
 }
 
-impl PartialEq for Candidate<'_> {
+impl PartialEq for Candidate<'_, '_> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
 
-impl Eq for Candidate<'_> {}
+impl Eq for Candidate<'_, '_> {}
 
-impl PartialOrd for Candidate<'_> {
+impl PartialOrd for Candidate<'_, '_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Candidate<'_> {
+impl Ord for Candidate<'_, '_> {
     fn cmp(&self, other: &Self) -> Ordering {
         compare_keys(&self.key, &other.key, self.order)
     }
@@ -1566,6 +1853,14 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
             let Some(v) = field_value(doc, field) else {
                 return Ok(false);
             };
+            // A null operand matches nothing under any field operator: null is compared
+            // through the unary `IS_NULL` / `IS_NOT_NULL` filters, which is what the SDKs
+            // send for `== null` / `!= null`, and the official emulator answers the raw
+            // field filter the same way. A null candidate inside an `in` /
+            // `array-contains-any` list is ignored for the same reason.
+            if matches!(value, Value::Null) {
+                return Ok(false);
+            }
             match op {
                 FieldOp::Equal => equal_ref(v, value),
                 FieldOp::NotEqual => !equal_ref(v, value) && !v.is_null(),
@@ -1588,7 +1883,8 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                     matches!(v.stored(), Some(Value::Array(items)) if items.iter().any(|i| equal(i, value)))
                 }
                 FieldOp::In => {
-                    matches!(value, Value::Array(candidates) if candidates.iter().any(|c| equal_ref(v, c)))
+                    matches!(value, Value::Array(candidates)
+                        if candidates.iter().any(|c| !matches!(c, Value::Null) && equal_ref(v, c)))
                 }
                 FieldOp::NotIn => {
                     // `not-in` never matches null fields, and a null candidate matches nothing.
@@ -1598,7 +1894,11 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                 }
                 FieldOp::ArrayContainsAny => match (v.stored(), value) {
                     (Some(Value::Array(items)), Value::Array(candidates)) => {
-                        items.iter().any(|i| candidates.iter().any(|c| equal(i, c)))
+                        items.iter().any(|i| {
+                            candidates
+                                .iter()
+                                .any(|c| !matches!(c, Value::Null) && equal(i, c))
+                        })
                     }
                     _ => false,
                 },
@@ -1687,19 +1987,4 @@ pub fn project(
         }
     }
     out
-}
-
-/// Sum of numeric values of `field` and the number of numeric contributors.
-fn sum_values(docs: &[Document], field: &FieldPath) -> (Value, u64) {
-    let mut sum = Value::Integer(0);
-    let mut count = 0u64;
-    for d in docs {
-        if let Some(v) = get_field(&d.fields, field) {
-            if is_number(v) {
-                sum = add_numbers(&sum, v);
-                count += 1;
-            }
-        }
-    }
-    (sum, count)
 }

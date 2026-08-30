@@ -16,9 +16,9 @@
       "maximum": 30,
       "precision": "exact",
       "enforcementStage": "query-plan",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Cloud Firestore limits a query to a maximum of 30 disjunctions in disjunctive normal form; this limit is fixed and cannot be changed",
-      "notes": "Counted on the canonical DNF of the filter. `in` and `array-contains-any` values contribute to this count and have no separate ID."
+      "notes": "Counted on the canonical DNF of the filter. `in` and `array-contains-any` values contribute to this count and have no separate ID. Evaluated by Query::check_standard_limits on every query: refused under the strict profile, observed as an FS_LIMIT_OBSERVED warning under firebase, except that the official emulator refuses this one too, so it is refused under both (OFFICIAL_EMULATOR_REFUSES)."
     },
     {
       "id": "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION",
@@ -28,9 +28,9 @@
       "maximum": 1,
       "precision": "exact",
       "enforcementStage": "query-plan",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "You can use at most one array-contains clause per disjunction (or group)",
-      "notes": ""
+      "notes": "Evaluated by Query::check_standard_limits on every query: refused under the strict profile, observed as an FS_LIMIT_OBSERVED warning under firebase, except that the official emulator refuses this one too, so it is refused under both (OFFICIAL_EMULATOR_REFUSES)."
     },
     {
       "id": "FS-QUERY-LIMIT-ARRAY-CONTAINS-COMBINATION",
@@ -40,9 +40,9 @@
       "maximum": 0,
       "precision": "exact",
       "enforcementStage": "query-plan",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "You can't combine array-contains with array-contains-any in the same disjunction",
-      "notes": "Maximum 0 combinations per disjunction."
+      "notes": "Maximum 0 combinations per disjunction. Evaluated by Query::check_standard_limits on every query: refused under the strict profile, observed as an FS_LIMIT_OBSERVED warning under firebase."
     },
     {
       "id": "FS-QUERY-LIMIT-NOT-IN-VALUES",
@@ -52,9 +52,9 @@
       "maximum": 10,
       "precision": "exact",
       "enforcementStage": "query-plan",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "not-in supports up to 10 comparison values",
-      "notes": ""
+      "notes": "Evaluated by Query::check_standard_limits on every query: refused under the strict profile, observed as an FS_LIMIT_OBSERVED warning under firebase."
     },
     {
       "id": "FS-QUERY-LIMIT-NOT-IN-NEQ-COMBINATION",
@@ -64,9 +64,9 @@
       "maximum": 0,
       "precision": "exact",
       "enforcementStage": "query-plan",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "You can't combine not-in and != in a compound query",
-      "notes": "Replaces the older 'only one not-in or != per query' wording; maximum 0 combinations."
+      "notes": "Replaces the older 'only one not-in or != per query' wording; maximum 0 combinations. Evaluated by Query::check_standard_limits on every query: refused under the strict profile, observed as an FS_LIMIT_OBSERVED warning under firebase."
     },
     {
       "id": "FS-QUERY-LIMIT-INEQUALITY-FIELDS",
@@ -76,9 +76,9 @@
       "maximum": 10,
       "precision": "exact",
       "enforcementStage": "query-plan",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "A query can have a maximum of 10 range or inequality fields",
-      "notes": "Distinct field count on the canonical filter."
+      "notes": "Distinct field count on the canonical filter. Evaluated by Query::check_standard_limits on every query: refused under the strict profile, observed as an FS_LIMIT_OBSERVED warning under firebase."
     },
     {
       "id": "FS-QUERY-LIMIT-COMPONENTS",
@@ -88,9 +88,9 @@
       "maximum": 100,
       "precision": "exact",
       "enforcementStage": "query-plan",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "The sum of filters, sort orders, and parent document path (1 for a subcollection, 0 for a root collection) in a query cannot exceed 100, based on the disjunctive normal form of the query",
-      "notes": "Exact calculator with a per-component breakdown."
+      "notes": "Exact calculator with a per-component breakdown. Evaluated by Query::check_standard_limits on every query: refused under the strict profile, observed as an FS_LIMIT_OBSERVED warning under firebase."
     }
   ]
 }

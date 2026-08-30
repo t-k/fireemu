@@ -4,6 +4,7 @@
 
 use core::fmt;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -429,7 +430,8 @@ pub struct ListPage {
 #[derive(Debug, Clone)]
 pub struct StorageState {
     objects: BTreeMap<(BucketName, ObjectName), ObjectMetadata>,
-    blobs: BTreeMap<BlobId, Vec<u8>>,
+    /// Object data, shared by reference with every snapshot that captured the same blob.
+    blobs: BTreeMap<BlobId, Arc<Vec<u8>>>,
     uploads: BTreeMap<UploadId, UploadSession>,
     next_blob: u64,
     next_generation: u64,
@@ -515,7 +517,7 @@ impl StorageState {
         let blobs = objects
             .values()
             .filter_map(|m| self.blobs.get_key_value(&m.blob))
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (*k, Arc::clone(v)))
             .collect();
         let uploads = self
             .uploads
@@ -549,7 +551,7 @@ impl StorageState {
         for (k, v) in &captured.objects {
             if owned(k.0.as_str()) {
                 if let Some(bytes) = captured.blobs.get(&v.blob) {
-                    self.blobs.insert(v.blob, bytes.clone());
+                    self.blobs.insert(v.blob, Arc::clone(bytes));
                 }
                 self.objects.insert(k.clone(), v.clone());
             }
@@ -572,6 +574,29 @@ impl StorageState {
         self.events.clear();
     }
 
+    /// Bytes of object data this state retains, each blob counted once (`SNAP-MEM-01`).
+    #[must_use]
+    pub fn retained_blob_bytes(&self) -> u64 {
+        self.blobs.values().map(|b| b.len() as u64).sum()
+    }
+
+    /// Bytes of object data shared with `other` by allocation: blobs whose buffer is the
+    /// same `Arc` on both sides, so capturing or restoring them copied nothing
+    /// (`SNAP-MEM-02`).
+    #[must_use]
+    pub fn blob_bytes_shared_with(&self, other: &Self) -> u64 {
+        self.blobs
+            .iter()
+            .filter_map(|(id, bytes)| {
+                other
+                    .blobs
+                    .get(id)
+                    .filter(|theirs| Arc::ptr_eq(bytes, theirs))
+                    .map(|_| bytes.len() as u64)
+            })
+            .sum()
+    }
+
     /// Takes the events recorded since the last call.
     pub fn drain_events(&mut self) -> Vec<StorageEvent> {
         std::mem::take(&mut self.events)
@@ -590,7 +615,7 @@ impl StorageState {
     /// Object bytes.
     #[must_use]
     pub fn bytes(&self, meta: &ObjectMetadata) -> &[u8] {
-        self.blobs.get(&meta.blob).map_or(&[], Vec::as_slice)
+        self.blobs.get(&meta.blob).map_or(&[], |b| b.as_slice())
     }
 
     fn check(current: Option<&ObjectMetadata>, pre: Precondition) -> Result<(), StorageError> {
@@ -653,7 +678,7 @@ impl StorageState {
         if let Some(old) = self.objects.insert(key, meta.clone()) {
             self.blobs.remove(&old.blob);
         }
-        self.blobs.insert(blob, bytes);
+        self.blobs.insert(blob, Arc::new(bytes));
         self.events.push(StorageEvent::Finalized(meta.clone()));
         Ok(meta)
     }
@@ -914,7 +939,7 @@ impl StorageState {
         {
             self.blobs.remove(&old.blob);
         }
-        self.blobs.insert(blob, bytes);
+        self.blobs.insert(blob, Arc::new(bytes));
         Ok(meta)
     }
 

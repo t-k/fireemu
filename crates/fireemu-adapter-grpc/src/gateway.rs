@@ -38,7 +38,14 @@ impl Rejection {
             Self::InvalidQuery(m) => tonic::Status::invalid_argument(m.clone()),
             Self::QueryLimits(v) => {
                 let lines: Vec<String> = v.iter().map(|x| format!("{}: {} ({} > {})", x.limit_id, x.detail, x.current, x.maximum)).collect();
-                tonic::Status::invalid_argument(format!("query limit violation: {}", lines.join("; ")))
+                let message = format!("query limit violation: {}", lines.join("; "));
+                // A second array-contains clause is FAILED_PRECONDITION on the backend and
+                // the official emulator; every other limit is INVALID_ARGUMENT.
+                if v.iter().all(|x| x.limit_id == "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION") {
+                    tonic::Status::failed_precondition(message)
+                } else {
+                    tonic::Status::invalid_argument(message)
+                }
             }
             Self::MissingIndex { fragment, description } => tonic::Status::failed_precondition(format!(
                 "The query requires an index. {description}\nAdd to firestore.indexes.json:\n{fragment}"
@@ -76,6 +83,17 @@ pub struct AcceptedQuery {
     pub warnings: Vec<String>,
 }
 
+/// The Standard query limits the pinned official Firestore emulator refuses as well, as
+/// measured by `conformance/src/firestore-probe` (`errors/rest-shapes`): more than 30
+/// disjunctions (`'IN' supports up to 30 comparison values.`) and a second `array-contains`
+/// clause (`Only a single array-contains clause is allowed in a query`). They are refused
+/// whatever `enforce_limits` says, so the `firebase` profile answers what the official
+/// emulator answers.
+pub const OFFICIAL_EMULATOR_REFUSES: &[&str] = &[
+    "FS-QUERY-LIMIT-DNF-DISJUNCTIONS",
+    "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION",
+];
+
 /// Strict gateway configuration.
 #[derive(Debug, Clone)]
 pub struct Gateway {
@@ -106,11 +124,16 @@ impl Gateway {
         let mut warnings = Vec::new();
         if self.ctx.edition == FirestoreEdition::Standard {
             if let Err(violations) = canonical.check_standard_limits() {
-                if self.enforce_limits {
-                    return Err(Rejection::QueryLimits(violations));
+                // The limits the official emulator refuses too are refused under either
+                // setting; the switch only decides the production-only ones.
+                let (refused, observed): (Vec<_>, Vec<_>) = violations.into_iter().partition(|v| {
+                    self.enforce_limits || OFFICIAL_EMULATOR_REFUSES.contains(&v.limit_id)
+                });
+                if !refused.is_empty() {
+                    return Err(Rejection::QueryLimits(refused));
                 }
                 warnings.extend(
-                    violations
+                    observed
                         .iter()
                         .map(|v| format!("FS_LIMIT_OBSERVED:{}", v.limit_id)),
                 );

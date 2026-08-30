@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "profile": "firebase",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "rules": "firestore-probe.rules"
+  },
+  "daemon": { "clockStart": "2026-01-02T03:04:05Z" }
+}

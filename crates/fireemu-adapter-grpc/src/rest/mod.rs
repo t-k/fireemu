@@ -135,6 +135,19 @@ fn ok(body: Value) -> RestResponse {
     RestResponse { status: 200, body }
 }
 
+/// The single key of a response whose body is plain text rather than JSON (the server
+/// renders it with `text/plain`), used for the `404 Not Found` of an unknown route.
+pub const TEXT_KEY: &str = "fireemuText";
+
+/// `404 Not Found` as plain text: what the official emulator's HTTP adapter answers for a
+/// path or method it has no route for, before any JSON error envelope exists.
+fn not_found_text() -> RestResponse {
+    RestResponse {
+        status: 404,
+        body: json!({TEXT_KEY: "Not Found\n"}),
+    }
+}
+
 fn bad(e: &JsonError) -> Status {
     Status::invalid_argument(e.to_string())
 }
@@ -343,13 +356,10 @@ impl RestState {
             parts.next(),
             parts.next(),
         ) else {
-            return Err(Status::not_found(format!("unknown path {}", req.path)));
+            return Ok(not_found_text());
         };
         if req.method != "DELETE" {
-            return Err(Status::invalid_argument(format!(
-                "{} is not supported on {}; only DELETE clears the emulator's documents",
-                req.method, req.path
-            )));
+            return Ok(not_found_text());
         }
         if project.is_empty() || database.is_empty() {
             return Err(Status::invalid_argument(
@@ -407,7 +417,9 @@ impl RestState {
             Status::invalid_argument("rules.files[0].content must be the rules source")
         })?;
         match rules.replace_source(source) {
-            Ok(()) => Ok(ok(json!({"issues": []}))),
+            // No issues: `{}`, the proto3 JSON of an empty list (what the official
+            // emulator answers).
+            Ok(()) => Ok(ok(json!({}))),
             Err(rules::RulesLoadError::Compile(e)) => Err(Status::invalid_argument(format!(
                 "Error compiling rules:\nL{}:{} {}",
                 e.line, e.column, e.message
@@ -467,17 +479,27 @@ impl RestState {
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
         // The custom-method suffix is recognised on the raw path (an encoded colon inside a
         // document ID is data, not routing syntax); segments are decoded afterwards.
+        if let Some(rest) = decode_path(&req.path)?.strip_prefix("/emulator/v1/projects/") {
+            return self.emulator_route(req, rest);
+        }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
+            // A colon in the last segment is routing syntax (a document ID carries it
+            // percent-encoded), so an unknown method is a route that does not exist -- never
+            // a collection whose ID happens to contain the colon.
+            Some((_, a)) if !a.contains('/') => return Ok(not_found_text()),
             _ => (req.path.as_str(), None),
         };
         let decoded = decode_path(raw_resource)?;
-        if let Some(rest) = decoded.strip_prefix("/emulator/v1/projects/") {
-            return self.emulator_route(req, rest);
-        }
         let Some(path) = decoded.strip_prefix("/v1/") else {
-            return Err(Status::not_found(format!("unknown path {}", req.path)));
+            return Ok(not_found_text());
         };
+        // Only the documents surface is served: `/v1/projects/{p}/databases` and the
+        // database resources are the Admin API, which the official emulator has no route
+        // for either.
+        if !path.contains("/documents") {
+            return Ok(not_found_text());
+        }
         let params = query_params(&req.query);
         // App Check, once the route and the target project are resolved and before the
         // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
@@ -485,7 +507,7 @@ impl RestState {
         let principal = self.principal(req.authorization.as_deref())?;
         if let Some(action) = action {
             if req.method != "POST" {
-                return Err(Status::invalid_argument(format!("{action} requires POST")));
+                return Ok(not_found_text());
             }
             return self.custom_method(&principal, path, action, &req.body);
         }
@@ -507,9 +529,11 @@ impl RestState {
             ) => self.create(&principal, &parent, &collection_id, &params, &req.body),
             ("PATCH", Target::Resource(name)) => self.patch(&principal, &name, &params, &req.body),
             ("DELETE", Target::Resource(name)) => self.delete(&principal, &name, &params),
-            (m, _) => Err(Status::invalid_argument(format!(
-                "{m} is not supported on {path}"
+            ("DELETE", Target::Collection { .. }) => Err(Status::invalid_argument(format!(
+                "Document name \"{path}\" lacks \"/\" at index {}.",
+                path.len()
             ))),
+            _ => Ok(not_found_text()),
         }
     }
 
@@ -593,7 +617,7 @@ impl RestState {
         if !response.next_page_token.is_empty() {
             body["nextPageToken"] = Value::String(response.next_page_token);
         }
-        Ok(ok(body))
+        Ok(ok(json::without_empty(body)))
     }
 
     fn create(
@@ -705,6 +729,7 @@ impl RestState {
             }
             "runQuery" => self.run_query(principal, resource, body),
             "runAggregationQuery" => self.run_aggregation_query(principal, resource, body),
+            "partitionQuery" => self.partition_query(principal, resource, body),
             "listCollectionIds" => {
                 if let Some(rules) = &self.rules {
                     rules.require_owner(principal, "listCollectionIds")?;
@@ -730,8 +755,79 @@ impl RestState {
                 }
                 Ok(ok(out))
             }
-            other => Err(Status::not_found(format!("unknown method {other}"))),
+            _ => Ok(not_found_text()),
         }
+    }
+
+    /// `:partitionQuery`, which the official emulator answers `UNIMPLEMENTED` (a documented
+    /// divergence: fireemu serves it).
+    fn partition_query(
+        &self,
+        principal: &Caller,
+        resource: &str,
+        body: &Value,
+    ) -> Result<RestResponse, Status> {
+        json::strict_keys(
+            body,
+            &[
+                "structuredQuery",
+                "partitionCount",
+                "pageToken",
+                "pageSize",
+                "readTime",
+            ],
+        )
+        .map_err(|e| bad(&e))?;
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "partitionQuery")?;
+        }
+        let Some(sq) = body.get("structuredQuery") else {
+            return Err(Status::invalid_argument("structuredQuery is required"));
+        };
+        let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        let partition_count = match body.get("partitionCount") {
+            None => 0,
+            Some(Value::String(s)) => s
+                .parse::<i64>()
+                .map_err(|_| Status::invalid_argument("partitionCount must be an integer"))?,
+            Some(Value::Number(n)) => n
+                .as_i64()
+                .ok_or_else(|| Status::invalid_argument("partitionCount must be an integer"))?,
+            Some(_) => {
+                return Err(Status::invalid_argument(
+                    "partitionCount must be an integer",
+                ))
+            }
+        };
+        let response = self.local.partition_query(&pb::PartitionQueryRequest {
+            parent: resource.to_owned(),
+            partition_count,
+            page_token: body
+                .get("pageToken")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            page_size: json::int32(body.get("pageSize"), "pageSize")
+                .map_err(|e| bad(&e))?
+                .unwrap_or(0),
+            query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
+                structured,
+            )),
+            consistency_selector: json::read_time_from_json(body)
+                .map_err(|e| bad(&e))?
+                .map(pb::partition_query_request::ConsistencySelector::ReadTime),
+            request_options: None,
+        })?;
+        let mut out = json!({
+            "partitions": response.partitions.iter().map(|c| json!({
+                "values": c.values.iter().map(value_to_json).collect::<Vec<_>>(),
+                "before": c.before,
+            })).collect::<Vec<_>>(),
+        });
+        if !response.next_page_token.is_empty() {
+            out["nextPageToken"] = Value::String(response.next_page_token);
+        }
+        Ok(ok(out))
     }
 
     fn commit(
@@ -740,6 +836,7 @@ impl RestState {
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        json::strict_keys(body, &["writes", "transaction"]).map_err(|e| bad(&e))?;
         let req = pb::CommitRequest {
             database: database_of(resource)?,
             writes: writes_from_json(body)?,
@@ -757,6 +854,7 @@ impl RestState {
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        json::strict_keys(body, &["writes", "labels"]).map_err(|e| bad(&e))?;
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
             writes: writes_from_json(body)?,
@@ -765,10 +863,10 @@ impl RestState {
         };
         let guard = self.write_guard(principal);
         let response = self.local.batch_write_with(&req, &*guard)?;
-        Ok(ok(json!({
+        Ok(ok(json::without_empty(json!({
             "writeResults": response.write_results.iter().map(write_result_to_json).collect::<Vec<_>>(),
             "status": response.status.iter().map(|s| json!({"code": s.code, "message": s.message})).collect::<Vec<_>>(),
-        })))
+        }))))
     }
 
     fn batch_get(
@@ -777,6 +875,17 @@ impl RestState {
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        json::strict_keys(
+            body,
+            &[
+                "documents",
+                "mask",
+                "transaction",
+                "newTransaction",
+                "readTime",
+            ],
+        )
+        .map_err(|e| bad(&e))?;
         let documents: Vec<String> = body
             .get("documents")
             .and_then(Value::as_array)
@@ -830,11 +939,10 @@ impl RestState {
             })
             .collect();
         if !outcome.transaction.is_empty() {
+            // The new transaction is announced in a response of its own, ahead of the
+            // documents, as the official emulator streams it.
             let token = Value::String(base64_encode(&outcome.transaction));
-            match out.first_mut() {
-                Some(first) => first["transaction"] = token,
-                None => out.push(json!({"transaction": token, "readTime": read_time})),
-            }
+            out.insert(0, json!({"transaction": token}));
         }
         Ok(ok(Value::Array(out)))
     }
@@ -845,6 +953,17 @@ impl RestState {
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        json::strict_keys(
+            body,
+            &[
+                "structuredQuery",
+                "transaction",
+                "newTransaction",
+                "readTime",
+                "explainOptions",
+            ],
+        )
+        .map_err(|e| bad(&e))?;
         let Some(sq) = body.get("structuredQuery") else {
             return Err(Status::invalid_argument("structuredQuery is required"));
         };
@@ -891,6 +1010,12 @@ impl RestState {
                 if r.skipped_results != 0 {
                     v["skippedResults"] = json!(r.skipped_results);
                 }
+                if matches!(
+                    r.continuation_selector,
+                    Some(pb::run_query_response::ContinuationSelector::Done(true))
+                ) {
+                    v["done"] = json!(true);
+                }
                 v
             })
             .collect();
@@ -903,6 +1028,17 @@ impl RestState {
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
+        json::strict_keys(
+            body,
+            &[
+                "structuredAggregationQuery",
+                "transaction",
+                "newTransaction",
+                "readTime",
+                "explainOptions",
+            ],
+        )
+        .map_err(|e| bad(&e))?;
         let Some(saq) = body.get("structuredAggregationQuery") else {
             return Err(Status::invalid_argument(
                 "structuredAggregationQuery is required",
@@ -959,7 +1095,7 @@ impl RestState {
                     .collect()
             })
             .unwrap_or_default();
-        let mut v = json!({"result": {"aggregateFields": fields}, "readTime": optional_timestamp_to_json(response.read_time.as_ref())});
+        let mut v = json!({"result": {"aggregateFields": fields}, "readTime": optional_timestamp_to_json(response.read_time.as_ref()), "done": true});
         if !response.transaction.is_empty() {
             v["transaction"] = Value::String(base64_encode(&response.transaction));
         }

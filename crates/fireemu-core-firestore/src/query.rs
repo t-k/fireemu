@@ -228,6 +228,13 @@ pub enum QueryError {
         /// Effective order-by length.
         order_by: usize,
     },
+    /// More than one of `!=`, `not-in`, `IS_NOT_NAN` and `IS_NOT_NULL` in one query.
+    MultipleNegations,
+    /// The effective ordering names a field after `__name__`, which is unique, so the
+    /// extra clause could never take effect.
+    OrderAfterDocumentName,
+    /// A filter on `__name__` compares against something other than a document reference.
+    NameFilterValue,
 }
 
 impl fmt::Display for QueryError {
@@ -251,6 +258,13 @@ impl fmt::Display for QueryError {
                     "cursor has {cursor} values but the order-by has {order_by} fields"
                 )
             }
+            Self::MultipleNegations => f.write_str(
+                "Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query.",
+            ),
+            Self::OrderAfterDocumentName => {
+                f.write_str("order by clause cannot contain more fields after the key")
+            }
+            Self::NameFilterValue => f.write_str("__key__ filter value must be a Key"),
         }
     }
 }
@@ -318,17 +332,32 @@ impl Query {
     pub fn canonicalize(&self) -> Result<Self, QueryError> {
         let filter = match &self.filter {
             None => None,
-            Some(f) => {
-                let c = canonicalize_filter(f)?;
-                check_not_in_rules(&c)?;
-                Some(c)
-            }
+            Some(f) => match canonicalize_filter(f)? {
+                // An empty composite constrains nothing: the query runs unfiltered, which
+                // is what the official emulator does with it.
+                FilterExpr::And(children) if children.is_empty() => None,
+                c => {
+                    check_not_in_rules(&c)?;
+                    check_negation_rules(&c)?;
+                    check_name_filters(&c)?;
+                    Some(c)
+                }
+            },
         };
         let q = Self {
             filter,
             ..self.clone()
         };
-        let arity = q.effective_order_by().len();
+        let order = q.effective_order_by();
+        // `__name__` is unique, so a clause after it could never decide anything; the
+        // backend refuses such an ordering rather than silently ignoring the clause. It
+        // arises when an inequality field is appended after an explicit `__name__` order.
+        if let Some(position) = order.iter().position(|o| o.field.is_document_name()) {
+            if position + 1 < order.len() {
+                return Err(QueryError::OrderAfterDocumentName);
+            }
+        }
+        let arity = order.len();
         for cursor in [&q.start_at, &q.end_at].into_iter().flatten() {
             if cursor.values.len() > arity {
                 return Err(QueryError::CursorArityMismatch {
@@ -554,6 +583,54 @@ fn check_not_in_rules(f: &FilterExpr) -> Result<(), QueryError> {
     Ok(())
 }
 
+/// At most one negating filter (`!=`, `not-in`, `IS_NOT_NAN`, `IS_NOT_NULL`) per query,
+/// as the `StructuredQuery` contract requires of each of them.
+fn check_negation_rules(f: &FilterExpr) -> Result<(), QueryError> {
+    fn count(f: &FilterExpr) -> u64 {
+        match f {
+            FilterExpr::Field {
+                op: FieldOp::NotEqual | FieldOp::NotIn,
+                ..
+            }
+            | FilterExpr::Unary {
+                op: UnaryOp::IsNotNan | UnaryOp::IsNotNull,
+                ..
+            } => 1,
+            FilterExpr::Field { .. } | FilterExpr::Unary { .. } => 0,
+            FilterExpr::And(children) | FilterExpr::Or(children) => {
+                children.iter().map(count).sum()
+            }
+        }
+    }
+    if count(f) > 1 {
+        return Err(QueryError::MultipleNegations);
+    }
+    Ok(())
+}
+
+/// A filter on `__name__` compares document references and nothing else (an `in` /
+/// `not-in` list holds references only).
+fn check_name_filters(f: &FilterExpr) -> Result<(), QueryError> {
+    match f {
+        FilterExpr::Field { field, value, .. } if field.is_document_name() => {
+            let ok = match value {
+                Value::Reference(_) => true,
+                Value::Array(items) => items.iter().all(|v| matches!(v, Value::Reference(_))),
+                _ => false,
+            };
+            if ok {
+                Ok(())
+            } else {
+                Err(QueryError::NameFilterValue)
+            }
+        }
+        FilterExpr::Field { .. } | FilterExpr::Unary { .. } => Ok(()),
+        FilterExpr::And(children) | FilterExpr::Or(children) => {
+            children.iter().try_for_each(check_name_filters)
+        }
+    }
+}
+
 fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {
     match f {
         FilterExpr::Field { field, op, value } => {
@@ -577,9 +654,6 @@ fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {
 }
 
 fn canonicalize_composite(children: &[FilterExpr], is_and: bool) -> Result<FilterExpr, QueryError> {
-    if children.is_empty() {
-        return Err(QueryError::EmptyComposite);
-    }
     let mut flat: Vec<FilterExpr> = Vec::new();
     for child in children {
         let c = canonicalize_filter(child)?;
@@ -587,8 +661,14 @@ fn canonicalize_composite(children: &[FilterExpr], is_and: bool) -> Result<Filte
             (FilterExpr::And(inner), true) | (FilterExpr::Or(inner), false) => {
                 flat.extend(inner.iter().cloned());
             }
+            // An empty composite of either kind constrains nothing, so it drops out of
+            // its parent (and an empty top-level one becomes "no filter").
+            (FilterExpr::And(inner) | FilterExpr::Or(inner), _) if inner.is_empty() => {}
             _ => flat.push(c),
         }
+    }
+    if flat.is_empty() {
+        return Ok(FilterExpr::And(Vec::new()));
     }
     flat.sort();
     flat.dedup();

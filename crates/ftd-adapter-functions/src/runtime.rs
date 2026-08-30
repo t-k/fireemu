@@ -38,6 +38,12 @@ use crate::runner::{Invocation, InvokeOutcome, Runner, SpawnSpec};
 /// Default maximum schedule runs enqueued per clock advance and job (spec 11.6); the rest
 /// stays due and is enqueued as invocations complete, so nothing is discarded.
 pub const MAX_CATCH_UP_RUNS: usize = 1000;
+/// Invocation records the runtime keeps for inspection (`GET .../functions`, the UI log
+/// stream, `history()`). Older ones are dropped; the cumulative counters in `status()` are
+/// not affected.
+pub const MAX_RETAINED_INVOCATIONS: usize = 1000;
+/// Dead-letter records the runtime keeps, under the same budget rules.
+pub const MAX_RETAINED_DEAD_LETTERS: usize = 500;
 /// Default attempts (first delivery included) for functions declared with `retry`.
 pub const RETRY_MAX_ATTEMPTS: u32 = 4;
 /// Base backoff of the first retry (virtual time).
@@ -155,6 +161,99 @@ pub struct InvocationRecord {
     pub outcome: String,
 }
 
+/// A retained diagnostic record with the position a reader resumes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SequencedRecord {
+    /// Position in the runtime's diagnostic stream. Strictly increasing, never reused, and
+    /// unaffected by eviction, so two identical records are still told apart.
+    pub sequence: u64,
+    /// The record itself.
+    pub record: InvocationRecord,
+}
+
+/// Where a reader of the diagnostic history left off.
+///
+/// The generation is the runtime epoch the position belongs to. A reset bumps it, so a cursor
+/// taken before a reset is refused and the reader starts again from a snapshot rather than
+/// interpreting the new session's records as a continuation of the old one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryCursor {
+    /// Runtime epoch the position belongs to.
+    pub generation: u64,
+    /// Sequence of the last record the reader has.
+    pub sequence: u64,
+}
+
+/// The answer to [`FunctionsRuntime::history_since`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistorySlice {
+    /// The cursor to pass next time.
+    pub cursor: HistoryCursor,
+    /// The records after the cursor that was given, or the whole retained window on a resync.
+    pub records: Vec<SequencedRecord>,
+    /// Whether the cursor could not be honoured (another generation, or older than the
+    /// retained window) and `records` is a fresh snapshot rather than a delta.
+    pub resync: bool,
+}
+
+/// A bounded diagnostic log: the newest `retention` records, each with its sequence.
+#[derive(Debug)]
+struct RecordLog {
+    records: std::collections::VecDeque<SequencedRecord>,
+    retention: usize,
+    /// The sequence of the newest record ever appended, eviction included.
+    last: u64,
+    /// The oldest sequence still retained; when the log is empty, one past `last`.
+    oldest: u64,
+}
+
+impl RecordLog {
+    fn new(retention: usize) -> Self {
+        Self {
+            records: std::collections::VecDeque::new(),
+            retention: retention.max(1),
+            last: 0,
+            oldest: 1,
+        }
+    }
+
+    fn push(&mut self, sequence: u64, record: InvocationRecord) {
+        self.records.push_back(SequencedRecord { sequence, record });
+        self.last = sequence;
+        self.trim();
+    }
+
+    fn set_retention(&mut self, retention: usize) {
+        self.retention = retention.max(1);
+        self.trim();
+    }
+
+    fn trim(&mut self) {
+        while self.records.len() > self.retention {
+            self.records.pop_front();
+        }
+        self.oldest = self.records.front().map_or(self.last + 1, |r| r.sequence);
+    }
+
+    fn window(&self) -> Vec<InvocationRecord> {
+        self.records.iter().map(|r| r.record.clone()).collect()
+    }
+
+    /// The records after `sequence`, or `None` when some of them have been evicted.
+    fn since(&self, sequence: u64) -> Option<Vec<SequencedRecord>> {
+        if sequence > self.last || sequence + 1 < self.oldest {
+            return None;
+        }
+        Some(
+            self.records
+                .iter()
+                .filter(|r| r.sequence > sequence)
+                .cloned()
+                .collect(),
+        )
+    }
+}
+
 struct Inner {
     outbox: Outbox,
     payloads: BTreeMap<EventId, (String, Value)>,
@@ -165,8 +264,17 @@ struct Inner {
     next_event: u64,
     epoch: Epoch,
     jobs: Vec<ScheduledJob>,
-    history: Vec<InvocationRecord>,
-    dead_letters: Vec<InvocationRecord>,
+    /// The retained window of invocation records.
+    history: RecordLog,
+    /// The retained window of dead letters.
+    dead_letters: RecordLog,
+    /// Next sequence for a diagnostic record; shared by both logs, never reset.
+    next_sequence: u64,
+    /// Successful invocations since the runtime started. Survives eviction.
+    succeeded_total: u64,
+    /// Dead-lettered invocations and overlap rejections since the runtime started. Survives
+    /// eviction.
+    dead_lettered_total: u64,
     /// Schedule runs became due beyond the catch-up cap and still have to be enqueued.
     catch_up_pending: bool,
     /// Schedule search steps taken by the `latest` / `none` catch-up policies since the
@@ -177,6 +285,27 @@ struct Inner {
     /// Events held back by a `delay` fault until the virtual clock reaches the instant,
     /// with the outcome the same rule set decided for them.
     delayed: BTreeMap<EventId, Held>,
+}
+
+impl Inner {
+    /// Appends an invocation record, giving it the next sequence and counting a success. The
+    /// cumulative counter is kept outside the log, so it stays exact once records are evicted.
+    fn record_invocation(&mut self, record: InvocationRecord) {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        if record.outcome == "ok" {
+            self.succeeded_total += 1;
+        }
+        self.history.push(sequence, record);
+    }
+
+    /// Appends a dead letter, giving it the next sequence and counting it.
+    fn record_dead_letter(&mut self, record: InvocationRecord) {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.dead_lettered_total += 1;
+        self.dead_letters.push(sequence, record);
+    }
 }
 
 /// What a completion did to the event's record.
@@ -268,8 +397,11 @@ impl FunctionsRuntime {
                 next_event: 0,
                 epoch: Epoch::initial(),
                 jobs,
-                history: Vec::new(),
-                dead_letters: Vec::new(),
+                history: RecordLog::new(MAX_RETAINED_INVOCATIONS),
+                dead_letters: RecordLog::new(MAX_RETAINED_DEAD_LETTERS),
+                next_sequence: 1,
+                succeeded_total: 0,
+                dead_lettered_total: 0,
                 catch_up_pending: false,
                 catch_up_steps: 0,
                 overlap_rejected: 0,
@@ -668,7 +800,7 @@ impl FunctionsRuntime {
         // is exact up to the catch-up cap and "at least" beyond it, so neither the work nor
         // the retained history grows with the size of the jump.
         for (function, count) in skipped {
-            inner.history.push(InvocationRecord {
+            inner.record_invocation(InvocationRecord {
                 event_id: 0,
                 function,
                 attempt: 0,
@@ -779,7 +911,7 @@ impl FunctionsRuntime {
             || inner.payloads.values().any(|(f, _)| f == function);
         match self.config.overlap {
             OverlapPolicy::Skip if busy => {
-                inner.history.push(InvocationRecord {
+                inner.record_invocation(InvocationRecord {
                     event_id: 0,
                     function: function.to_owned(),
                     attempt: 0,
@@ -789,7 +921,7 @@ impl FunctionsRuntime {
             }
             OverlapPolicy::Reject if busy => {
                 inner.overlap_rejected += 1;
-                inner.dead_letters.push(InvocationRecord {
+                inner.record_dead_letter(InvocationRecord {
                     event_id: 0,
                     function: function.to_owned(),
                     attempt: 0,
@@ -930,8 +1062,6 @@ impl FunctionsRuntime {
         };
         let mut pending = 0;
         let mut retry_waiting = 0;
-        let mut dead = 0;
-        let mut succeeded = 0;
         for id in inner.payloads.keys() {
             if let Some(r) = inner.outbox.record(*id) {
                 match r.state() {
@@ -941,18 +1071,14 @@ impl FunctionsRuntime {
                 }
             }
         }
-        for r in &inner.history {
-            if r.outcome == "ok" {
-                succeeded += 1;
-            }
-        }
-        dead += inner.dead_letters.len();
+        // `succeeded` and `deadLettered` are cumulative and counted as the records are made,
+        // so evicting the diagnostic window never moves them.
         json!({
             "pending": pending,
             "running": inner.running.len(),
             "retryWaiting": retry_waiting,
-            "succeeded": succeeded,
-            "deadLettered": dead,
+            "succeeded": inner.succeeded_total,
+            "deadLettered": inner.dead_lettered_total,
             "catchUpPending": inner.catch_up_pending,
             "overlapRejected": inner.overlap_rejected,
             "timeZoneDatabase": crate::zone::database_version(),
@@ -991,22 +1117,77 @@ impl FunctionsRuntime {
         self.inner.lock().map(|i| i.catch_up_steps).unwrap_or(0)
     }
 
-    /// Invocation history (oldest first).
+    /// The retained window of invocation records, oldest first. Records older than the
+    /// retention budget ([`MAX_RETAINED_INVOCATIONS`]) are no longer there; the cumulative
+    /// counters in [`Self::status`] still account for them.
     #[must_use]
     pub fn history(&self) -> Vec<InvocationRecord> {
         self.inner
             .lock()
-            .map(|i| i.history.clone())
+            .map(|i| i.history.window())
             .unwrap_or_default()
     }
 
-    /// Dead-lettered invocations.
+    /// The retained window of dead letters, oldest first ([`MAX_RETAINED_DEAD_LETTERS`]).
     #[must_use]
     pub fn dead_letters(&self) -> Vec<InvocationRecord> {
         self.inner
             .lock()
-            .map(|i| i.dead_letters.clone())
+            .map(|i| i.dead_letters.window())
             .unwrap_or_default()
+    }
+
+    /// The invocation records after `cursor`, for a reader that follows the history
+    /// incrementally (the UI log stream).
+    ///
+    /// `None` asks for a snapshot of the retained window. A cursor from another generation, or
+    /// one older than the retained window, cannot be answered with a delta: the whole window
+    /// comes back with `resync` set, and the reader replaces what it holds. The returned
+    /// cursor is the position to pass next time.
+    #[must_use]
+    pub fn history_since(&self, cursor: Option<HistoryCursor>) -> HistorySlice {
+        let Ok(inner) = self.inner.lock() else {
+            return HistorySlice {
+                cursor: HistoryCursor {
+                    generation: 0,
+                    sequence: 0,
+                },
+                records: Vec::new(),
+                resync: true,
+            };
+        };
+        let generation = inner.epoch.value();
+        let delta = cursor
+            .filter(|c| c.generation == generation)
+            .and_then(|c| inner.history.since(c.sequence));
+        let (records, resync) = match delta {
+            Some(records) => (records, false),
+            None => (
+                inner.history.records.iter().cloned().collect::<Vec<_>>(),
+                cursor.is_some(),
+            ),
+        };
+        let sequence = records
+            .last()
+            .map_or_else(|| inner.history.last, |r| r.sequence);
+        HistorySlice {
+            cursor: HistoryCursor {
+                generation,
+                sequence,
+            },
+            records,
+            resync,
+        }
+    }
+
+    /// Sets the diagnostic retention budget: how many invocation records and dead letters the
+    /// runtime keeps. The defaults are [`MAX_RETAINED_INVOCATIONS`] and
+    /// [`MAX_RETAINED_DEAD_LETTERS`]; lowering it drops the oldest records at once.
+    pub fn set_retention(&self, invocations: usize, dead_letters: usize) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.history.set_retention(invocations);
+            inner.dead_letters.set_retention(dead_letters);
+        }
     }
 
     /// The runner address for an HTTP function, if it exists.
@@ -1045,7 +1226,7 @@ impl FunctionsRuntime {
             if let Ok(mut inner) = self.inner.lock() {
                 inner.next_event += 1;
                 let event_id = inner.next_event;
-                inner.history.push(InvocationRecord {
+                inner.record_invocation(InvocationRecord {
                     event_id: u128::from(event_id),
                     function: target.function.clone(),
                     attempt: 1,
@@ -1102,7 +1283,7 @@ impl FunctionsRuntime {
             Err(_) => "timeout".to_owned(),
         };
         if let Ok(mut inner) = self.inner.lock() {
-            inner.history.push(InvocationRecord {
+            inner.record_invocation(InvocationRecord {
                 event_id: id.value(),
                 function: target.function.clone(),
                 attempt: 1,
@@ -1366,7 +1547,7 @@ impl FunctionsRuntime {
                 InvokeOutcome::TimedOut => "timeout".to_owned(),
                 InvokeOutcome::RunnerGone(e) => format!("runner gone: {e}"),
             };
-            inner.history.push(InvocationRecord {
+            inner.record_invocation(InvocationRecord {
                 event_id: id.value(),
                 function: function.to_owned(),
                 attempt,
@@ -1409,7 +1590,7 @@ impl FunctionsRuntime {
                 }
                 Ok(Retirement::DeadLettered) => {
                     inner.payloads.remove(&id);
-                    inner.dead_letters.push(InvocationRecord {
+                    inner.record_dead_letter(InvocationRecord {
                         event_id: id.value(),
                         function: function.to_owned(),
                         attempt,

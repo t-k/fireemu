@@ -21,6 +21,11 @@ import {
 } from "../api/functions";
 
 const MAX_LINES = 2000;
+/**
+ * Invocation rows kept in the browser. The server retains a bounded window too, so a
+ * long-running session cannot grow either collection without limit.
+ */
+const MAX_INVOCATIONS = 500;
 
 const describeTrigger = (trigger: TriggerInfo): string => {
   switch (trigger.kind) {
@@ -184,22 +189,33 @@ const Functions: Component = () => {
   );
   const [lines, setLines] = createSignal<string[]>([]);
   const [invocations, setInvocations] = createSignal<InvocationInfo[]>([]);
+  const [truncated, setTruncated] = createSignal(false);
   const [connected, setConnected] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const configured = () => overview()?.unwrapOr(null)?.configured ?? false;
   const [logBox, setLogBox] = createSignal<HTMLPreElement>();
 
+  const keepRecent = (records: InvocationInfo[]): InvocationInfo[] => {
+    setTruncated(records.length > MAX_INVOCATIONS);
+    return records.slice(-MAX_INVOCATIONS);
+  };
+
   onMount(() => {
     const stop = subscribeLogs(
       (e) => {
         if (e.kind === "snapshot") {
           setLines(e.logs.slice(-MAX_LINES));
-          setInvocations(e.invocations);
+          setInvocations(keepRecent(e.invocations));
         } else if (e.kind === "log") {
           setLines((l) => [...l, e.line].slice(-MAX_LINES));
+        } else if (e.kind === "resync") {
+          // The server could not answer this connection's cursor (a reset, or records that
+          // fell out of its retention window): replace the list rather than append a gap.
+          setInvocations(keepRecent(e.invocations));
+          void refetchStatus();
         } else {
-          setInvocations((i) => [...i, e.record]);
+          setInvocations((i) => keepRecent([...i, e.record]));
           void refetchStatus();
         }
         setConnected(true);
@@ -316,6 +332,11 @@ const Functions: Component = () => {
                 when={invocations().length > 0}
                 fallback={<p class="text-sm text-zinc-500">{t("functions.noInvocations")}</p>}
               >
+                <Show when={truncated()}>
+                  <p class="mb-1 text-xs text-zinc-500" data-testid="invocations-truncated">
+                    {t("functions.invocationsTruncated", { count: MAX_INVOCATIONS })}
+                  </p>
+                </Show>
                 <div class="max-h-64 overflow-auto">
                   <table class="table" data-testid="invocation-table">
                     <thead>

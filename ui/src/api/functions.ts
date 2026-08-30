@@ -31,6 +31,8 @@ export type InvocationInfo = {
   function: string;
   attempt: number;
   outcome: string;
+  /** Position in the runtime's diagnostic stream; absent on the overview payload. */
+  sequence?: number;
 };
 
 export type FunctionsOverview = {
@@ -47,10 +49,16 @@ export type FunctionsOverview = {
 export const functionsOverview = (): ResultAsync<FunctionsOverview, ApiError> =>
   request<FunctionsOverview>("GET", "functions");
 
+/**
+ * The stream sends the retained window once, then one `invocation` per new record. A `resync`
+ * replaces the list: the runtime reset (a new generation) or the records this client was
+ * missing fell out of the server's retention window, so a delta would leave a gap.
+ */
 export type LogEvent =
-  | { kind: "snapshot"; logs: string[]; invocations: InvocationInfo[] }
+  | { kind: "snapshot"; generation: number; logs: string[]; invocations: InvocationInfo[] }
   | { kind: "log"; line: string }
-  | { kind: "invocation"; record: InvocationInfo };
+  | { kind: "invocation"; record: InvocationInfo }
+  | { kind: "resync"; generation: number; invocations: InvocationInfo[] };
 
 const parse = (event: SseEvent): LogEvent | null => {
   try {
@@ -58,6 +66,7 @@ const parse = (event: SseEvent): LogEvent | null => {
     if (event.event === "snapshot") {
       return {
         kind: "snapshot",
+        generation: Number(data.generation ?? 0),
         logs: (data.logs as string[]) ?? [],
         invocations: (data.invocations as InvocationInfo[]) ?? [],
       };
@@ -67,6 +76,13 @@ const parse = (event: SseEvent): LogEvent | null => {
     }
     if (event.event === "invocation") {
       return { kind: "invocation", record: data as unknown as InvocationInfo };
+    }
+    if (event.event === "resync") {
+      return {
+        kind: "resync",
+        generation: Number(data.generation ?? 0),
+        invocations: (data.invocations as InvocationInfo[]) ?? [],
+      };
     }
     return null;
   } catch {

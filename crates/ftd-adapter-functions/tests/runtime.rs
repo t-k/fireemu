@@ -1033,3 +1033,142 @@ fn the_bounded_run_window_matches_enumeration_in_iana_zones() {
         }
     }
 }
+
+#[tokio::test]
+async fn diagnostic_retention_is_bounded_and_counters_survive_eviction() {
+    // FN-RET-01 / 03 / 04: completing twice the retention budget leaves a bounded window in
+    // the order the records were made, while the cumulative counters keep every outcome.
+    let (runtime, _clock) = start().await;
+    runtime.set_retention(8, 4);
+    for i in 0..20 {
+        let ids = runtime.publish("jobs", &[json!({"n": i})]);
+        assert_eq!(ids.len(), 1);
+    }
+    assert!(
+        runtime.await_idle(Duration::from_secs(10)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    let history = runtime.history();
+    assert_eq!(history.len(), 8, "the retained window is bounded");
+    assert!(
+        history.iter().all(|r| r.function == "onJob"),
+        "the newest records are the ones kept: {history:?}"
+    );
+    // Oldest first inside the window: the event IDs increase.
+    let ids: Vec<u128> = history.iter().map(|r| r.event_id).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "order inside the window is preserved");
+    // The cumulative counter kept every success, evicted records included.
+    assert_eq!(runtime.status()["succeeded"], 20);
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn history_cursors_deliver_deltas_and_resync_across_eviction_and_reset() {
+    // FN-RET-05 / 06: two readers at different cursors each receive only what they are
+    // missing; identical records are still told apart by their sequence; a cursor that fell
+    // out of the retained window, and one from before a reset, are answered with an explicit
+    // resync instead of a duplicate or a gap.
+    use ftd_adapter_functions::runtime::CatchUpPolicy;
+    let (runtime, clock) = start_with_policies(
+        ftd_adapter_functions::runtime::OverlapPolicy::Allow,
+        CatchUpPolicy::None,
+    )
+    .await;
+    runtime.set_retention(8, 8);
+
+    // A reader from the start sees the empty snapshot.
+    let first = runtime.history_since(None);
+    assert!(first.records.is_empty() && !first.resync);
+    let generation = first.cursor.generation;
+
+    // Two identical skipped-schedule records: same function, same outcome text.
+    for _ in 0..2 {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(15 * 60))
+            .unwrap();
+        runtime.on_clock_changed();
+    }
+    let delta = runtime.history_since(Some(first.cursor));
+    assert!(!delta.resync);
+    let skipped: Vec<&str> = delta
+        .records
+        .iter()
+        .filter(|r| r.record.function == "tick")
+        .map(|r| r.record.outcome.as_str())
+        .collect();
+    assert_eq!(
+        skipped,
+        vec![
+            "skipped: catch-up none (3 runs)",
+            "skipped: catch-up none (3 runs)"
+        ],
+        "identical records, delivered once each"
+    );
+    let sequences: Vec<u64> = delta.records.iter().map(|r| r.sequence).collect();
+    let mut unique = sequences.clone();
+    unique.dedup();
+    assert_eq!(sequences, unique, "sequences are distinct and increasing");
+    assert!(sequences.windows(2).all(|w| w[0] < w[1]));
+
+    // A second reader still on the first cursor gets exactly the same delta; a reader on the
+    // new cursor gets nothing.
+    let again = runtime.history_since(Some(first.cursor));
+    assert_eq!(again.records, delta.records, "cursors are independent");
+    let caught_up = runtime.history_since(Some(delta.cursor));
+    assert!(caught_up.records.is_empty() && !caught_up.resync);
+
+    // More records than the window holds: the stale cursor can no longer be answered.
+    let stale = delta.cursor;
+    for _ in 0..12 {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(15 * 60))
+            .unwrap();
+        runtime.on_clock_changed();
+    }
+    let expired = runtime.history_since(Some(stale));
+    assert!(expired.resync, "an evicted cursor forces a resync");
+    assert_eq!(expired.records.len(), 8, "the resync carries the window");
+    assert_eq!(expired.cursor.generation, generation);
+
+    // A reset bumps the generation: the cursor from the previous one is refused as well.
+    let before_reset = expired.cursor;
+    runtime.reset();
+    let after_reset = runtime.history_since(Some(before_reset));
+    assert!(after_reset.resync, "a pre-reset cursor forces a resync");
+    assert_ne!(
+        after_reset.cursor.generation, before_reset.generation,
+        "the reset bumped the generation"
+    );
+    // The records committed before the reset are still visible (cross-epoch history).
+    assert!(after_reset
+        .records
+        .iter()
+        .any(|r| r.record.function == "tick"));
+    // Sequences keep increasing across the reset, so no record is mistaken for another.
+    let highest = after_reset
+        .records
+        .iter()
+        .map(|r| r.sequence)
+        .max()
+        .unwrap_or(0);
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(15 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    let fresh = runtime.history_since(Some(after_reset.cursor));
+    assert!(!fresh.resync);
+    assert!(
+        fresh.records.iter().all(|r| r.sequence > highest),
+        "sequences continue past the reset"
+    );
+    runtime.runner().shutdown().await;
+}

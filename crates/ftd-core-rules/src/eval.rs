@@ -348,7 +348,11 @@ pub fn evaluate_request_with(
             resource: resource_value,
             access,
             doc_cache: BTreeMap::new(),
-            doc_reads_max: limit_max("RULES-DOC-ACCESS-SINGLE"),
+            doc_reads_max: limit_max(match ctx.service {
+                RulesService::Firestore => "RULES-DOC-ACCESS-SINGLE",
+                // Storage rules may call firestore.get() / exists() twice per request.
+                RulesService::Storage => "STORAGE-RULES-FIRESTORE-ACCESS",
+            }),
             wildcard_zero_or_more: ruleset.version.as_deref() == Some("2"),
             resource_absent: ctx.resource.is_none(),
             absent_resource_used: core::cell::Cell::new(false),

@@ -454,8 +454,10 @@ async fn pubsub_messages_and_auth_user_events_reach_their_functions() {
     let uid = store
         .create_user(NewUser::email("u@example.com"), START)
         .unwrap();
+    let mut events = store.take_user_events();
+    assert_eq!(events.len(), 1);
     store.delete_user_by_id(uid.as_str()).unwrap();
-    let events = store.take_user_events();
+    events.extend(store.take_user_events());
     assert_eq!(events.len(), 2);
     assert!(store.take_user_events().is_empty(), "drained once");
     for e in &events {

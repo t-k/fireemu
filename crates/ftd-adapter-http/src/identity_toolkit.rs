@@ -46,6 +46,10 @@ pub struct AuthState {
     pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
     /// User lifecycle observer; `None` drops the events.
     pub events: Option<AuthEventSink>,
+    /// The control token browser pages must present (`Authorization: Bearer`) to reach the
+    /// emulator inspection routes (they expose action codes, SMS codes and account wipes).
+    /// `None` refuses every browser-origin request there.
+    pub control_token: Option<String>,
 }
 
 /// Hands the user events a request produced to the sink once the handler released the
@@ -57,10 +61,12 @@ struct EventDrain<'a> {
 
 impl Drop for EventDrain<'_> {
     fn drop(&mut self) {
-        let Ok(mut store) = self.store.lock() else {
-            return;
+        // Taken under the lock, delivered without it: a sink that calls back into Auth
+        // must not deadlock, and other Auth requests are not held up by the sink.
+        let events = match self.store.lock() {
+            Ok(mut store) => store.take_user_events(),
+            Err(_) => return,
         };
-        let events = store.take_user_events();
         if let Some(sink) = self.sink {
             for e in &events {
                 sink(e);
@@ -329,6 +335,18 @@ pub fn handle_with(
             if !origin_is_local(origin) {
                 return error(403, "FORBIDDEN_ORIGIN");
             }
+            // A page on localhost reads secrets here only with the control token.
+            let presented = headers
+                .authorization
+                .as_deref()
+                .and_then(|a| a.strip_prefix("Bearer "))
+                .map(str::trim);
+            if state.control_token.is_none() || presented != state.control_token.as_deref() {
+                return error(
+                    403,
+                    "CONTROL_TOKEN_REQUIRED : browser requests to the emulator routes need Authorization: Bearer <control token>",
+                );
+            }
         }
         if project != store.project_id() {
             return error(400, "INVALID_PROJECT_ID");
@@ -523,10 +541,24 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         Ok(uid) => uid,
         Err(e) => return auth_error(&e),
     };
-    let factors = mfa_info(store, &uid);
+    finish_sign_in(store, &uid, at, None, &[])
+}
+
+/// Completes a first-factor sign-in: a pending credential when the user has second
+/// factors enrolled (every sign-in route enforces MFA, not only passwords), otherwise
+/// tokens for `provider` with `extra` fields merged in.
+fn finish_sign_in(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    at: LogicalInstant,
+    provider: Option<ftd_core_auth::store::Provider>,
+    extra: &[(&str, Value)],
+) -> JsonResponse {
+    let factors = mfa_info(store, uid);
     if !factors.is_empty() {
         // Second factor required: no ID token yet, only a pending credential.
-        return match store.start_mfa_sign_in(&uid, at) {
+        let email = store.user(uid).and_then(|u| u.email.clone());
+        return match store.start_mfa_sign_in(uid, at) {
             Ok(pending) => JsonResponse {
                 status: 200,
                 body: json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email}),
@@ -534,8 +566,13 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
             Err(e) => mfa_error(&e),
         };
     }
-    match issue_tokens(store, &uid, None, at) {
-        Ok(body) => JsonResponse { status: 200, body },
+    match issue_tokens_with(store, uid, None, at, None, provider) {
+        Ok(mut body) => {
+            for (k, v) in extra {
+                body[*k] = v.clone();
+            }
+            JsonResponse { status: 200, body }
+        }
         Err(r) => r,
     }
 }
@@ -975,7 +1012,7 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
 fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     // `applyActionCode`: an email verification / change code instead of a session.
     if let Some(code) = str_field(body, "oobCode") {
-        return apply_oob_code(store, code);
+        return apply_oob_code(store, code, at);
     }
     let local_id = match opt_str(body, "localId") {
         Ok(v) => v,
@@ -1610,7 +1647,7 @@ fn reset_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Js
     if store.user(&uid).is_none_or(|u| u.disabled) {
         return error(400, "USER_DISABLED");
     }
-    if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset)) {
+    if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
         return auth_error(&e);
     }
     if let Err(e) = store.set_password(&uid, new_password) {
@@ -1630,7 +1667,7 @@ fn reset_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Js
 
 /// `accounts:update` with an `oobCode` (`applyActionCode`): `VERIFY_EMAIL` marks the
 /// address verified, `VERIFY_AND_CHANGE_EMAIL` switches to the new address.
-fn apply_oob_code(store: &mut AuthStore, code: &str) -> JsonResponse {
+fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> JsonResponse {
     let Some(entry) = store.oob_code(code).cloned() else {
         return error(400, "INVALID_OOB_CODE");
     };
@@ -1639,7 +1676,7 @@ fn apply_oob_code(store: &mut AuthStore, code: &str) -> JsonResponse {
     };
     match entry.request_type {
         OobRequestType::VerifyEmail => {
-            if let Err(e) = store.consume_oob_code(code, None) {
+            if let Err(e) = store.consume_oob_code(code, None, at) {
                 return auth_error(&e);
             }
             if let Some(u) = store.user_mut(&uid) {
@@ -1650,10 +1687,10 @@ fn apply_oob_code(store: &mut AuthStore, code: &str) -> JsonResponse {
             let Some(new_email) = entry.new_email.clone() else {
                 return error(400, "INVALID_OOB_CODE");
             };
-            if let Err(e) = store.set_email(&uid, &new_email) {
+            if let Err(e) = store.consume_oob_code(code, None, at) {
                 return auth_error(&e);
             }
-            if let Err(e) = store.consume_oob_code(code, None) {
+            if let Err(e) = store.set_email(&uid, &new_email) {
                 return auth_error(&e);
             }
             if let Some(u) = store.user_mut(&uid) {
@@ -1686,10 +1723,8 @@ fn sign_in_with_email_link(
     if !matches {
         return error(400, "INVALID_OOB_CODE");
     }
-    if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn)) {
-        return auth_error(&e);
-    }
-    // With a session: link the (now verified) email to that user instead.
+    // With a session: link the (now verified) email to that user instead. The code is
+    // consumed only once the request is known to succeed.
     if str_field(body, "idToken").is_some() {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
@@ -1700,6 +1735,9 @@ fn sign_in_with_email_link(
             .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
+        }
+        if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
+            return auth_error(&e);
         }
         if let Err(e) = store.set_email(&uid, email) {
             return auth_error(&e);
@@ -1718,28 +1756,23 @@ fn sign_in_with_email_link(
             Err(r) => r,
         };
     }
+    if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
+        return auth_error(&e);
+    }
     let (uid, is_new) = match store.sign_in_with_email_link(email, at) {
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
-    match issue_tokens_with(
+    finish_sign_in(
         store,
         &uid,
-        None,
         at,
-        None,
         Some(ftd_core_auth::store::Provider::EmailLink),
-    ) {
-        Ok(mut tokens) => {
-            tokens["kind"] = json!("identitytoolkit#EmailLinkSigninResponse");
-            tokens["isNewUser"] = json!(is_new);
-            JsonResponse {
-                status: 200,
-                body: tokens,
-            }
-        }
-        Err(r) => r,
-    }
+        &[
+            ("kind", json!("identitytoolkit#EmailLinkSigninResponse")),
+            ("isNewUser", json!(is_new)),
+        ],
+    )
 }
 
 // ---- phone sign-in ----------------------------------------------------------------------
@@ -1770,7 +1803,8 @@ fn sign_in_with_phone_number(
     else {
         return error(400, "MISSING_SESSION_INFO");
     };
-    let verified = match store.verify_phone_code(session, code) {
+    // Checked first, consumed once the request is known to succeed.
+    let verified = match store.check_phone_code(session, code, at) {
         Ok(v) => v,
         Err(e) => return auth_error(&e),
     };
@@ -1788,6 +1822,7 @@ fn sign_in_with_phone_number(
         {
             return error(400, "PHONE_NUMBER_EXISTS");
         }
+        store.consume_phone_code(session);
         if let Err(e) = store.set_phone_number(&uid, Some(&verified.phone_number)) {
             return auth_error(&e);
         }
@@ -1803,28 +1838,21 @@ fn sign_in_with_phone_number(
             Err(r) => r,
         };
     }
+    store.consume_phone_code(session);
     let (uid, is_new) = match store.sign_in_with_phone(&verified.phone_number, at) {
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
-    match issue_tokens_with(
+    finish_sign_in(
         store,
         &uid,
-        None,
         at,
-        None,
         Some(ftd_core_auth::store::Provider::Phone),
-    ) {
-        Ok(mut tokens) => {
-            tokens["phoneNumber"] = json!(verified.phone_number);
-            tokens["isNewUser"] = json!(is_new);
-            JsonResponse {
-                status: 200,
-                body: tokens,
-            }
-        }
-        Err(r) => r,
-    }
+        &[
+            ("phoneNumber", json!(verified.phone_number)),
+            ("isNewUser", json!(is_new)),
+        ],
+    )
 }
 
 // ---- federated sign-in (fixture identity providers) --------------------------------------
@@ -1876,6 +1904,11 @@ fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> 
         display_name: str_field(&payload, "name").map(str::to_owned),
         photo_url: str_field(&payload, "picture").map(str::to_owned),
     };
+    // Only an email the provider marks verified may match an existing account.
+    let email_verified = payload
+        .get("email_verified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let (uid, is_new) = if str_field(body, "idToken").is_some() {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
@@ -1886,41 +1919,33 @@ fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> 
         }
         (uid, false)
     } else {
-        match store.sign_in_with_idp(identity.clone(), at) {
+        match store.sign_in_with_idp(identity.clone(), email_verified, at) {
             Ok(r) => r,
             Err(e) => return auth_error(&e),
         }
     };
-    match issue_tokens_with(
+    let verified = store.user(&uid).is_some_and(|u| u.email_verified);
+    finish_sign_in(
         store,
         &uid,
-        None,
         at,
-        None,
         Some(ftd_core_auth::store::Provider::Federated(
             provider_id.clone(),
         )),
-    ) {
-        Ok(mut tokens) => {
-            let verified = store.user(&uid).is_some_and(|u| u.email_verified);
-            tokens["kind"] = json!("identitytoolkit#VerifyAssertionResponse");
-            tokens["providerId"] = json!(provider_id);
-            tokens["federatedId"] = json!(sub);
-            tokens["rawId"] = json!(sub);
-            tokens["oauthIdToken"] = json!(token);
-            tokens["isNewUser"] = json!(is_new);
-            tokens["emailVerified"] = json!(verified);
-            tokens["displayName"] = json!(identity.display_name);
-            tokens["fullName"] = json!(identity.display_name);
-            tokens["photoUrl"] = json!(identity.photo_url);
-            tokens["rawUserInfo"] = json!(payload.to_string());
-            JsonResponse {
-                status: 200,
-                body: tokens,
-            }
-        }
-        Err(r) => r,
-    }
+        &[
+            ("kind", json!("identitytoolkit#VerifyAssertionResponse")),
+            ("providerId", json!(provider_id)),
+            ("federatedId", json!(sub)),
+            ("rawId", json!(sub)),
+            ("oauthIdToken", json!(token)),
+            ("isNewUser", json!(is_new)),
+            ("emailVerified", json!(verified)),
+            ("displayName", json!(identity.display_name)),
+            ("fullName", json!(identity.display_name)),
+            ("photoUrl", json!(identity.photo_url)),
+            ("rawUserInfo", json!(payload.to_string())),
+        ],
+    )
 }
 
 /// `accounts:createAuthUri` (`fetchSignInMethodsForEmail`): whether the email is
@@ -1970,7 +1995,7 @@ fn finalize_phone_enrollment(
     else {
         return error(400, "INVALID_CODE : missing sessionInfo or code");
     };
-    let verified = match store.verify_phone_code(session, code) {
+    let verified = match store.verify_phone_code(session, code, at) {
         Ok(v) => v,
         Err(e) => return auth_error(&e),
     };
@@ -2082,7 +2107,7 @@ fn finalize_phone_sign_in(
     else {
         return error(400, "INVALID_CODE : missing sessionInfo or code");
     };
-    let verified = match store.verify_phone_code(session, code) {
+    let verified = match store.verify_phone_code(session, code, at) {
         Ok(v) => v,
         Err(e) => return auth_error(&e),
     };

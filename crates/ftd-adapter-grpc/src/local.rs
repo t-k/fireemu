@@ -560,6 +560,11 @@ impl LocalBackend {
         // against a half-reset session.
         let _admitted = self.barrier.admit();
         let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
+        // An actor staged by a guard whose commit then failed must not be attributed to
+        // this critical section's commit.
+        if let Ok(mut actor) = self.pending_actor.lock() {
+            actor.take();
+        }
         let db = dbs
             .entry((
                 parent.project.as_str().to_owned(),

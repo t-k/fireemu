@@ -421,8 +421,14 @@ pub struct AuthStore {
     signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
     oob_codes: BTreeMap<String, OobCode>,
     verification_codes: BTreeMap<String, VerificationCode>,
-    user_events: Vec<UserEvent>,
+    created_users: Vec<LocalId>,
+    deleted_users: Vec<UserRecord>,
 }
+
+/// Email action codes expire after an hour of virtual time.
+pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
+/// Phone verification codes expire after ten minutes of virtual time.
+pub const SMS_CODE_TTL_SECONDS: i64 = 600;
 
 impl AuthStore {
     /// Installs the ID token signer (RS256 session key). Tokens issued afterwards are
@@ -452,13 +458,36 @@ impl AuthStore {
             signer: None,
             oob_codes: BTreeMap::new(),
             verification_codes: BTreeMap::new(),
-            user_events: Vec::new(),
+            created_users: Vec::new(),
+            deleted_users: Vec::new(),
         }
     }
 
-    /// User lifecycle events recorded since the last call (Auth triggers).
+    /// User lifecycle events recorded since the last call (Auth triggers). A created user
+    /// is reported as it is now (password, phone, profile and factors applied after the
+    /// insert included); a user created and deleted in between (a rolled-back multi-step
+    /// create) produces no event.
     pub fn take_user_events(&mut self) -> Vec<UserEvent> {
-        std::mem::take(&mut self.user_events)
+        let created = std::mem::take(&mut self.created_users);
+        let deleted = std::mem::take(&mut self.deleted_users);
+        let mut events = Vec::new();
+        for uid in &created {
+            if let Some(user) = self.users.get(uid) {
+                events.push(UserEvent {
+                    kind: UserEventKind::Created,
+                    user: user.clone(),
+                });
+            }
+        }
+        for user in deleted {
+            if !created.contains(&user.local_id) {
+                events.push(UserEvent {
+                    kind: UserEventKind::Deleted,
+                    user,
+                });
+            }
+        }
+        events
     }
 
     /// TOTP policy.
@@ -529,10 +558,7 @@ impl AuthStore {
         let key = LocalId(uid.to_owned());
         let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
         self.refresh_tokens.retain(|_, s| s.uid != key);
-        self.user_events.push(UserEvent {
-            kind: UserEventKind::Deleted,
-            user,
-        });
+        self.deleted_users.push(user);
         Ok(())
     }
 
@@ -673,12 +699,7 @@ impl AuthStore {
             federated: Vec::new(),
             password: None,
         });
-        if let Some(user) = self.users.get(&local_id) {
-            self.user_events.push(UserEvent {
-                kind: UserEventKind::Created,
-                user: user.clone(),
-            });
-        }
+        self.created_users.push(local_id.clone());
         Ok(local_id)
     }
 
@@ -727,6 +748,7 @@ impl AuthStore {
         &mut self,
         code: &str,
         expected: Option<OobRequestType>,
+        now: LogicalInstant,
     ) -> Result<OobCode, AuthError> {
         let matches = self
             .oob_codes
@@ -735,7 +757,19 @@ impl AuthStore {
         if !matches {
             return Err(AuthError::InvalidOobCode);
         }
+        if self
+            .oob_codes
+            .get(code)
+            .is_some_and(|c| Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now))
+        {
+            self.oob_codes.remove(code);
+            return Err(AuthError::InvalidOobCode);
+        }
         self.oob_codes.remove(code).ok_or(AuthError::InvalidOobCode)
+    }
+
+    fn expired(created_at: LogicalInstant, ttl_seconds: i64, now: LogicalInstant) -> bool {
+        now.as_nanos() - created_at.as_nanos() > i128::from(ttl_seconds) * 1_000_000_000
     }
 
     /// Creates a phone verification code for `phone` (a deterministic six-digit code).
@@ -772,17 +806,37 @@ impl AuthStore {
         &mut self,
         session_info: &str,
         code: &str,
+        now: LogicalInstant,
+    ) -> Result<VerificationCode, AuthError> {
+        let entry = self.check_phone_code(session_info, code, now)?;
+        self.consume_phone_code(session_info);
+        Ok(entry)
+    }
+
+    /// Checks a phone verification code without consuming it (callers validate the rest
+    /// of the request first, so a rejected request does not burn the code).
+    pub fn check_phone_code(
+        &self,
+        session_info: &str,
+        code: &str,
+        now: LogicalInstant,
     ) -> Result<VerificationCode, AuthError> {
         let entry = self
             .verification_codes
             .get(session_info)
             .ok_or(AuthError::InvalidSessionInfo)?;
+        if Self::expired(entry.created_at, SMS_CODE_TTL_SECONDS, now) {
+            return Err(AuthError::InvalidSessionInfo);
+        }
         if entry.code != code {
             return Err(AuthError::InvalidVerificationCode);
         }
-        self.verification_codes
-            .remove(session_info)
-            .ok_or(AuthError::InvalidSessionInfo)
+        Ok(entry.clone())
+    }
+
+    /// Consumes a phone verification session.
+    pub fn consume_phone_code(&mut self, session_info: &str) {
+        self.verification_codes.remove(session_info);
     }
 
     /// Signs in with a verified phone number: the user owning it, or a new phone user.
@@ -891,14 +945,18 @@ impl AuthStore {
     pub fn sign_in_with_idp(
         &mut self,
         identity: FederatedIdentity,
+        email_verified: bool,
         now: LogicalInstant,
     ) -> Result<(LocalId, bool), AuthError> {
+        // Only an email the provider vouches for may claim an existing account: an
+        // assertion with an unverified email must not take over the user owning it.
         let existing = self
             .user_by_federated(&identity.provider_id, &identity.raw_id)
             .or_else(|| {
                 identity
                     .email
                     .as_deref()
+                    .filter(|_| email_verified)
                     .and_then(|e| self.user_by_email(e))
             })
             .map(|u| (u.local_id.clone(), u.disabled));
@@ -913,7 +971,7 @@ impl AuthStore {
         let uid = self.create_user(
             NewUser {
                 email: identity.email.clone(),
-                email_verified: identity.email.is_some(),
+                email_verified: identity.email.is_some() && email_verified,
                 provider: Provider::Federated(identity.provider_id.clone()),
             },
             now,

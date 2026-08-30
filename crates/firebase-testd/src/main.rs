@@ -724,6 +724,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             clock: clock.clone(),
             barrier: Some(barrier.clone()),
             events: functions_runtime.as_ref().map(functions::auth_sink),
+            control_token: Some(control_token.clone()),
         });
         let storage = storage_state(
             &cfg,

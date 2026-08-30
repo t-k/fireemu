@@ -106,6 +106,7 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
         barrier: None,
         events: None,
+        control_token: None,
     };
     let r = handle(
         &state,
@@ -157,6 +158,7 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
         barrier: None,
         events: None,
+        control_token: None,
     };
     let r = handle(&plain, "GET", JWKS_PATHS[0], &json!({}));
     assert_eq!(r.body, json!({"keys": []}));

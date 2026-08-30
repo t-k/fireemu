@@ -524,6 +524,32 @@ fn resolve_project(dir: &Path, requested: Option<&str>) -> Result<Option<String>
     Ok(config::resolve_project_alias(&rc, requested)?)
 }
 
+/// A port given on the command line overrides `firebase.json`, which overrides the canonical
+/// configuration; the Hub and UI ports also remember that they were asked for explicitly.
+fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
+    if let Some(p) = raw.firestore_port {
+        cfg.firestore_addr = with_port(&cfg.firestore_addr, p);
+    }
+    if let Some(p) = raw.http_port {
+        cfg.http_addr = with_port(&cfg.http_addr, p);
+    }
+    if let Some(p) = raw.storage_port {
+        cfg.storage_addr = with_port(&cfg.storage_addr, p);
+    }
+    if let Some(p) = raw.functions_port {
+        cfg.functions_addr = with_port(&cfg.functions_addr, p);
+    }
+    if let Some(p) = raw.hub_port {
+        cfg.hub_addr = with_port(&cfg.hub_addr, p);
+        cfg.hub_addr_explicit = true;
+    }
+    if let Some(p) = raw.ui_port {
+        cfg.ui_addr = with_port(&cfg.ui_addr, p);
+        cfg.ui_enabled = p != 0;
+        cfg.ui_addr_explicit = true;
+    }
+}
+
 fn parse_options(args: &[String]) -> Result<Options, CliError> {
     let raw = parse_raw_options(args)?;
     let only = raw.only.clone().unwrap_or_default();
@@ -578,27 +604,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         cfg.functions_source = None;
         cfg.functions_loaded.clear();
     }
-    if let Some(p) = raw.firestore_port {
-        cfg.firestore_addr = with_port(&cfg.firestore_addr, p);
-    }
-    if let Some(p) = raw.http_port {
-        cfg.http_addr = with_port(&cfg.http_addr, p);
-    }
-    if let Some(p) = raw.storage_port {
-        cfg.storage_addr = with_port(&cfg.storage_addr, p);
-    }
-    if let Some(p) = raw.functions_port {
-        cfg.functions_addr = with_port(&cfg.functions_addr, p);
-    }
-    if let Some(p) = raw.hub_port {
-        cfg.hub_addr = with_port(&cfg.hub_addr, p);
-        cfg.hub_addr_explicit = true;
-    }
-    if let Some(p) = raw.ui_port {
-        cfg.ui_addr = with_port(&cfg.ui_addr, p);
-        cfg.ui_enabled = p != 0;
-        cfg.ui_addr_explicit = true;
-    }
+    apply_port_overrides(&mut cfg, &raw);
     if let Some(dir) = raw.functions_source {
         // `--functions <dir>` names exactly one codebase, whatever `firebase.json` declares.
         cfg.functions_source = Some(dir);

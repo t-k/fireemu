@@ -1016,16 +1016,7 @@
               "crates/fireemu-adapter-functions/tests/runtime.rs"
             ],
             "conformance": [
-              {
-                "fixture": "functions/callable-error-envelope",
-                "excludedSteps": [
-                  {
-                    "step": "unknown-callable",
-                    "issue": "docs.local/issues/open/close-functions-emulator-compatibility-gaps.md",
-                    "reason": "the 404 body of an unknown callable differs in length from the official emulator's"
-                  }
-                ]
-              },
+              "functions/callable-error-envelope",
               "functions/callable-auth-context",
               "functions/http-routing-cors-and-timeouts"
             ]

@@ -1201,3 +1201,30 @@ async fn the_observation_front_serves_only_the_selected_sessions_project() {
         "only a callable name is a counter label: {counters:?}"
     );
 }
+
+#[tokio::test]
+async fn concurrent_event_streams_are_bounded_and_the_surplus_is_refused() {
+    // The UI caps concurrent event streams (`sse::MAX_STREAMS`) so a runaway client cannot pile
+    // up tasks that poll the runtime. Every slot is served; the next stream is refused with 429
+    // rather than admitted. The commit stream fills the slots without a functions runtime.
+    let s = state();
+    let watch = "/ui/api/firestore/watch?project=demo-app";
+    let mut held = Vec::new();
+    for _ in 0..fireemu_adapter_ui::sse::MAX_STREAMS {
+        let r = handle(&s, &request("GET", watch, &Value::Null)).await;
+        assert_eq!(r.status, 200);
+        match r.body {
+            UiBody::Stream(rx) => held.push(rx),
+            UiBody::Full(_) => panic!("the watch route answers with a stream"),
+        }
+    }
+    let refused = handle(&s, &request("GET", watch, &Value::Null)).await;
+    assert_eq!(refused.status, 429);
+    let body = refused.body_json().unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("RESOURCE_EXHAUSTED"));
+    // Holding the receivers keeps the slots taken; dropping them lets the tasks end.
+    drop(held);
+}

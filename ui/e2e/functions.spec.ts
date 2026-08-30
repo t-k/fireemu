@@ -40,4 +40,31 @@ test.describe("Functions", () => {
     await expect(page.getByTestId("invocation-table")).toContainText("mirrorTodo");
     await expect(page.getByTestId("function-logs")).toContainText("mirrorTodo");
   });
+
+  test("filters invocations by function and logs by text", async ({ page, request }) => {
+    await gotoApp(page, "/functions");
+    await page.getByTestId("run-tick").click();
+    await page.getByTestId("await-idle").click();
+    await api(request, "PATCH", `${DOCS}/todos/t9`, {
+      fields: { title: { stringValue: "Filter me" } },
+    });
+    await page.getByTestId("await-idle").click();
+    const invocations = page.getByTestId("invocation-table");
+    await expect(invocations).toContainText("tick");
+    await expect(invocations).toContainText("mirrorTodo");
+
+    // The invocation filter narrows the table to one function.
+    await page.getByTestId("invocation-function-filter").selectOption("tick");
+    await expect(invocations).toContainText("tick");
+    await expect(invocations).not.toContainText("mirrorTodo");
+    await page.getByTestId("invocation-function-filter").selectOption("");
+    await expect(invocations).toContainText("mirrorTodo");
+
+    // The log text filter is a live substring; a query that matches nothing says so.
+    const logs = page.getByTestId("function-logs");
+    await page.getByTestId("log-text-filter").fill("mirrorTodo");
+    await expect(logs).toContainText("mirrorTodo");
+    await page.getByTestId("log-text-filter").fill("zzz-no-such-line-zzz");
+    await expect(logs).toContainText("No log lines match the filter");
+  });
 });

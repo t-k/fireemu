@@ -1,6 +1,6 @@
 # Firebase App Check support specification
 
-- Status: proposed
+- Status: proposed (review decisions of 2026-08-30 applied; see section 25)
 - Specification date: 2026-08-30
 - Target: `firebase-testd`
 - Initial delivery: baseline App Check for Auth, Cloud Firestore, Cloud Storage for Firebase, and callable Cloud Functions
@@ -95,7 +95,7 @@ The capability manifest shall add the following entries. An entry must remain `u
 
 ### 7.1 Core crate
 
-A new `ftd-core-app-check` crate shall contain only deterministic domain logic and shall follow ADR-001. Network I/O, HTTP, process environment, and RSA key ownership remain in adapters.
+A new `ftd-core-app-check` crate shall contain only deterministic domain logic and shall follow ADR-001. Network I/O, HTTP, process environment, RSA key ownership, and every cryptographic primitive remain outside the core: the core defines small traits for the SHA-256 digest of a debug secret and for constant-time digest comparison (and for the RS256 signer, matching the existing Auth pattern), and the runtime shell implements them with standard crates (`sha2`, `subtle`, `rsa`). The core never contains a hand-written hash or comparison routine; in particular the Rules `hashing` namespace implementation in `ftd-core-rules` is not shared, since it declares itself unsuitable for runtime collision resistance.
 
 The core owns these concepts:
 
@@ -112,7 +112,7 @@ App Check identity must not be added to the existing Auth `Principal`. The crede
 
 ### 7.2 Signing boundary
 
-The runtime shell owns a dedicated App Check RS256 key pair. It must not reuse the Firebase Auth signing key. On a normal start, the key and a 256-bit instance secret are generated from the operating system CSPRNG and are never exported. Tests may inject a seed through an internal dependency-injection seam that is unavailable in canonical configuration and production-like CLI startup. Derivation from an injected seed uses an App Check-specific domain separator. Two normal daemon instances with identical project configuration must still reject each other's tokens.
+The runtime shell owns a dedicated App Check RS256 key pair, generated once per daemon instance (never per project). It must not reuse the Firebase Auth signing key. On a normal start, the key is generated from the operating system CSPRNG and is never exported (the daemon already draws its control token and runner secret from the CSPRNG, so it is not a seed-only reproducible process). Tests inject a seed through constructor injection of an `AppCheckKeySource` / signer factory, never through a `RuntimeConfig` field: configuration values and test dependencies stay separate, and the seam is unavailable in canonical configuration and production-like CLI startup. When both `auth.idTokenSigning = "session-rsa"` and `appCheck.enabled` are set, two keys are generated; they may be generated concurrently (`spawn_blocking`). Derivation from an injected seed uses an App Check-specific domain separator. Two normal daemon instances with identical project configuration must still reject each other's tokens.
 
 The signer implements a small core trait with `alg`, `kid`, `sign`, `verify`, and `public_jwk_json`, matching the existing Auth key-isolation pattern. Its `kid` begins with `ftd-app-check-` and is derived from the public key. Each project epoch is an unpredictable 128-bit value generated at project creation and every invalidating lifecycle transition. Key or epoch rotation and publication occur under the admission barrier: new requests see either the entire old state or the entire new state. Private keys and instance secrets use zeroizing, redacting non-`Debug` wrappers. Epochs use a redacting non-`Debug` wrapper. The raw epoch necessarily appears as the signed `ftd_epoch` claim and in decoded callable claims returned to the token holder; it is an opaque binding value, not an independent credential. It must not additionally appear in configuration output, traces, snapshots, logs, UI responses, panic messages, or debug formatting.
 
@@ -150,7 +150,7 @@ The canonical JSON Schema shall add this optional top-level section:
 {
   "appCheck": {
     "enabled": true,
-    "tokenSigning": "session-rsa",
+    "tokenSigning": "instance-rsa",
     "tokenTtlSeconds": 3600,
     "apps": [
       {
@@ -175,7 +175,7 @@ The canonical JSON Schema shall add this optional top-level section:
 The schema and Rust loader shall enforce the same rules:
 
 - `enabled` defaults to `false` so existing projects preserve current behavior.
-- `tokenSigning` accepts only `session-rsa` in the first implementation. Unsigned modes are rejected.
+- `tokenSigning` accepts only `instance-rsa` in the first implementation (the name differs from Auth's `session-rsa` on purpose: the App Check key belongs to the daemon instance, not to the reproducible session seed). Unsigned modes are rejected.
 - `tokenTtlSeconds` defaults to `3600` and must be between 1,800 seconds and 604,800 seconds inclusive, matching the documented production session-token TTL range.
 - `apps` defaults to an empty list. Duplicate `(projectId, appId)` entries are rejected.
 - Across all app entries, one project ID maps to exactly one project number, one project number maps to exactly one project ID, and one app ID belongs to exactly one such project. Conflicts in either mapping direction and cross-project app ID reuse are rejected.
@@ -274,7 +274,7 @@ The local session token is an RS256 JWT with `typ: JWT`, the local App Check `ki
 | `aud` | array containing `projects/{projectNumber}` and `projects/{projectId}` |
 | `iat` | virtual-clock Unix seconds at exchange |
 | `exp` | `iat + tokenTtlSeconds` |
-| `jti` | instance-authenticated, unique token ID within the project epoch |
+| `jti` | unique token ID within the project epoch (epoch plus an atomic counter) |
 | `ftd_epoch` | current project session epoch; local-only private claim |
 
 The verifier shall require:
@@ -289,7 +289,7 @@ The verifier shall require:
 8. an `ftd_epoch` equal to the current project session epoch;
 9. a non-empty `jti`.
 
-The issuer creates `jti` from an atomic project-epoch counter authenticated with the instance secret. Concurrent exchanges cannot reuse a token ID. Reset and restore rotate the epoch before resetting the counter, so counter reuse cannot recreate a valid token. Focused tests may reproduce IDs only by injecting the same test seed and operation order.
+The issuer creates `jti` from the project epoch and an atomic per-epoch counter. No separate HMAC is needed: the whole JWT is RS256-signed, so `jti` is authenticated by the signature; uniqueness comes from the epoch plus the counter. Concurrent exchanges cannot reuse a token ID. Reset and restore rotate the epoch before resetting the counter, so counter reuse cannot recreate a valid token. Focused tests may reproduce IDs only by injecting the same test seed and operation order.
 
 Token verification uses the virtual clock. It does not consult Auth users, API keys, request origins, or Security Rules. The token's `app_id` convenience property is derived from `sub` when exposing callable context; it need not be a duplicate JWT claim.
 
@@ -380,11 +380,11 @@ The runner sets `FIREBASE_DEBUG_MODE=true` and enables only the `skipTokenVerifi
 
 For a valid token, v2 `request.app` and v1 `context.app` contain the app ID and decoded claims. When the callable declares `enforceAppCheck: true`, missing or invalid input returns the callable 401 `UNAUTHENTICATED` envelope before the user handler runs. When false or omitted, missing or invalid input invokes the handler with `app` undefined. Raw `onRequest` functions preserve `X-Firebase-AppCheck` and receive no automatic verification context.
 
-`consumeAppCheckToken: true` is unsupported in the initial delivery. The implementation must detect it during function discovery and fail the function manifest closed with `APP_CHECK_REPLAY_UNSUPPORTED`; it must not expose `alreadyConsumed: false` unconditionally. If current `firebase-functions` metadata does not expose this option, `APPCHECK-FUNCTIONS-1` cannot be marked complete until a version-bounded discovery mechanism or trusted runner protocol extension makes detection reliable. Unknown metadata shapes are startup errors, not warnings.
+`consumeAppCheckToken: true` is unsupported in the initial delivery. Current `firebase-functions` keeps the option inside the callable wrapper's closure (v1 and v2 alike; `__endpoint.callableTrigger` is an empty object), so reading `__endpoint` / `__trigger` cannot reveal it. Discovery therefore needs a version-bounded loader instrumentation in the runner (wrapping the `onCall` exports of the installed, supported `firebase-functions` versions before user code loads, capturing the options) or an explicit trusted runner protocol extension. The fail-closed interpretation is three-valued: `true` obtained → discovery fails with `APP_CHECK_REPLAY_UNSUPPORTED`; `false` obtained reliably → callable App Check may be enabled; the value cannot be obtained → starting Functions with App Check enabled fails at startup. The value is never guessed as `false`, because a hidden `consumeAppCheckToken: true` would otherwise run with `alreadyConsumed: false`. Unknown metadata shapes are startup errors, not warnings.
 
 ## 14. Lifecycle, sessions, reset, and snapshots
 
-Static app registrations and static debug-token digests are configuration and survive project reset. Dynamically registered debug tokens belong to the project registry and are removed when that session project is deleted. Apps cannot be registered dynamically in the initial delivery. A session project without a statically configured project number and app cannot use App Check; adding one requires configuration and daemon restart in the initial delivery.
+Static app registrations and static debug-token digests are configuration and survive project reset. Dynamically registered debug tokens belong to the project registry and are removed when that session project is deleted. Apps cannot be registered dynamically in the initial delivery. `POST /v1/sessions` does not register apps, but a session whose project ID is statically configured in `appCheck.apps` uses that registration; a project without a static registration cannot use App Check, and adding one requires configuration and a daemon restart in the initial delivery (accepting `appCheck.apps` in the session creation body is a later feature).
 
 Reset, restore, and project deletion advance or replace the project App Check epoch. All previously issued tokens then fail with `WrongEpoch`. Issued tokens, raw debug secrets, private signing material, instance secrets, and epochs are never serialized.
 
@@ -647,3 +647,14 @@ Until these fixtures exist, the specified local behavior in this document is nor
 - [Use the debug provider in web apps](https://firebase.google.com/docs/app-check/web/debug-provider)
 - [Firebase Admin Node App Check verifier](https://github.com/firebase/firebase-admin-node/blob/main/src/app-check/token-verifier.ts)
 - [Firebase Functions callable App Check handling](https://github.com/firebase/firebase-functions/blob/master/src/common/providers/https.ts)
+
+## 25. Review decisions (2026-08-30)
+
+Decisions taken on the implementation review, applied to the sections above:
+
+1. The App Check key is generated from the OS CSPRNG once per daemon instance; the test seam is constructor injection (`AppCheckKeySource` / signer factory), not a configuration field. `tokenSigning` is `instance-rsa`.
+2. No cryptographic primitive lives in `ftd-core-app-check`: SHA-256 and constant-time comparison come from standard crates behind core-defined traits implemented by the shell; the Rules hashing implementation is not reused. `jti` is epoch plus an atomic counter, authenticated by the JWT signature itself.
+3. The callable trusted protocol verifies the Authorization ID token against the target project's `AuthRegistry` and the virtual clock, admits only `Principal::User` (never `Bearer owner`), rejects duplicate Authorization fields, and strips every original Authorization before reinserting exactly one verified token; the unsafe decoder in `firebase-functions` fills `uid` from `sub`, so RS256 session tokens populate callable context too.
+4. `consumeAppCheckToken` detection is three-valued and fail-closed as described in section 13.4; an undeterminable value fails Functions startup with App Check enabled.
+5. Sessions: only projects with a static `appCheck.apps` registration can use App Check; `POST /v1/sessions` neither registers apps nor blocks a statically registered project.
+6. One App Check key per daemon; concurrent generation with the Auth session key when both are enabled.

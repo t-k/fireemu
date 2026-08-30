@@ -111,6 +111,92 @@ fn only_selects_the_variables_the_command_receives() {
     assert!(!env.contains_key("STORAGE_EMULATOR_HOST"));
 }
 
+/// A canonical configuration with App Check enabled for one app of `demo-exec`.
+fn app_check_config(dir: &Path) -> PathBuf {
+    let path = dir.join("firebase-testd.json");
+    std::fs::write(
+        &path,
+        r#"{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "firestore": { "edition": "standard", "apiMode": "native" },
+  "appCheck": {
+    "enabled": true,
+    "tokenSigning": "instance-rsa",
+    "apps": [
+      {
+        "projectId": "demo-exec",
+        "projectNumber": "1234567890",
+        "appId": "1:1234567890:web:local-test-app",
+        "debugTokenSha256": [
+          "db8055e0e0307d5a016bec4dc338d69875eb0fb7e614a8b125b08fb082095d98"
+        ]
+      }
+    ]
+  }
+}
+"#,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn app_check_variables_are_exported_only_when_the_service_is_selected() {
+    let dir = scratch("appcheck");
+    let config = app_check_config(&dir);
+    let out = dir.join("env.txt");
+    let output = daemon()
+        .args(["--config"])
+        .arg(&config)
+        .args(["--project", "demo-exec", "--", "sh", "-c"])
+        .arg(format!("env > {}", out.display()))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let env = env_file(&out);
+    let host = &env["FTD_APP_CHECK_EMULATOR_HOST"];
+    assert!(host.starts_with("127.0.0.1:"), "{host}");
+    // App Check shares the Auth/control listener.
+    assert_eq!(host, &env["FIREBASE_AUTH_EMULATOR_HOST"]);
+    assert_eq!(
+        env["FTD_APP_CHECK_JWKS_URL"],
+        format!("http://{host}/v1/jwks")
+    );
+    // No raw debug secret is generated or exported implicitly.
+    assert!(env.keys().all(|k| !k.contains("DEBUG_TOKEN")));
+
+    // Neither `appcheck` nor `functions` selected: the routes and the variables are gone.
+    let out = dir.join("env-unselected.txt");
+    let output = daemon()
+        .args(["--config"])
+        .arg(&config)
+        .args([
+            "--project",
+            "demo-exec",
+            "--only",
+            "auth,firestore",
+            "--",
+            "sh",
+            "-c",
+        ])
+        .arg(format!("env > {}", out.display()))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let env = env_file(&out);
+    assert!(!env.contains_key("FTD_APP_CHECK_EMULATOR_HOST"));
+    assert!(!env.contains_key("FTD_APP_CHECK_JWKS_URL"));
+}
+
 #[test]
 fn the_exit_status_of_the_command_is_propagated() {
     let output = daemon()

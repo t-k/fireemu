@@ -18,8 +18,6 @@ import {
   assertSucceeds,
   withFunctionTriggersDisabled,
 } from "@firebase/rules-unit-testing";
-import { initializeApp, deleteApp } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
 
 function check(label, condition) {
   if (!condition) throw new Error(`FAILED: ${label}`);
@@ -57,28 +55,14 @@ async function main() {
   const env = await initializeTestEnvironment({});
   check("initializeTestEnvironment discovered the suite through the hub", true);
 
-  // Two published divergences from the official emulator, both about the token
-  // `authenticatedContext` mints through `@firebase/util`'s createMockUserToken:
-  //
-  //  - it defaults to `iat: 0`, so `exp` is 3600 -- a token that expired in 1970. fireemu
-  //    verifies every ID token against its virtual clock, so the smoke states the issue
-  //    time instead of relying on a token the daemon is right to reject;
-  //  - its `sub` names a user that need not exist. fireemu resolves the subject against the
-  //    project's Auth store, so the users the contexts stand for are created first.
-  //
-  // Both are recorded in README.md; a project moving from the official emulator has to do
-  // the same two things until they are closed.
-  const admin = initializeApp({ projectId: process.env.GCLOUD_PROJECT }, "rut-admin");
-  for (const uid of ["alice", "bob"]) {
-    await getAuth(admin)
-      .createUser({ uid })
-      .catch((e) => {
-        if (e.code !== "auth/uid-already-exists") throw e;
-      });
-  }
-  const iat = Math.floor(Date.now() / 1000);
-  const alice = env.authenticatedContext("alice", { iat });
-  const bob = env.authenticatedContext("bob", { iat });
+  // Nothing below prepares the tokens `authenticatedContext` mints. Under the `firebase`
+  // compatibility profile -- the one this smoke's config selects, and the daemon's default --
+  // fireemu accepts the mock tokens `@firebase/util`'s createMockUserToken produces exactly
+  // as the official emulators do: `iat` defaults to 0, so `exp` is an hour after the epoch
+  // and nobody reads it, and `sub` names a user the Auth emulator has never seen. Under
+  // `strict` both of those are refused, which is the whole difference the profiles exist for.
+  const alice = env.authenticatedContext("alice");
+  const bob = env.authenticatedContext("bob");
   const anon = env.unauthenticatedContext();
 
   // --- the rules the daemon loaded are the ones being enforced -----------------------
@@ -140,7 +124,6 @@ async function main() {
   });
 
   await env.cleanup();
-  await deleteApp(admin);
   console.log("rules-unit-testing smoke: ok");
 }
 

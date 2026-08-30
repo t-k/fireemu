@@ -89,26 +89,45 @@ Keeping those five lists apart is what stops extra strictness from reading as pa
 
 ## Compatibility profiles
 
-Two profiles are declared as configuration key sets:
+Two profiles are declared as configuration key sets, and the canonical schema's top-level
+`profile` key selects one at runtime:
 
-- **`firebase`** reproduces what the pinned suite ships and Firebase documents, including its
-  documented limitations. Nothing in this profile may refuse a request the official emulator
-  admits.
+- **`firebase`** (the default) reproduces what the pinned suite ships and Firebase documents,
+  including its documented limitations. Nothing in this profile may refuse a request the
+  official emulator admits.
 - **`strict`** adds fireemu's own validation. Every key here may only refuse more than the
   official emulator, and every refusal it adds must be published as a capability precision or as
   a documented divergence in `conformance/divergences.json`.
 
-One value is worth calling out, and the contract records it as an explicit
-`officialEmulatorDivergence`: `firestore.indexValidationPolicy = firebase` reproduces the
-Firebase *backend*, which refuses a query whose composite index is missing, while the pinned
-official Firestore *emulator* serves it. A run that must reproduce the emulator rather than the
-backend sets `emulator`. Both are official behaviour of a different oracle; `conservative` is
-neither, and belongs to the `strict` profile.
+The daemon derives three settings from the profile — `firestore.indexValidationPolicy`,
+`firestore.enforceLimits`, and how a caller's ID token is verified on the Firestore and Storage
+Security Rules surfaces — and an explicit configuration key always wins over the profile's
+default for it. `fireemu capabilities` and `GET /v1/capabilities` publish the active profile and
+the start banner prints it. The remaining keys a profile names are declared and not yet derived
+from it; `profileStatus` in the contract lists exactly which, so the gap between the declaration
+and the switch is written down rather than assumed.
 
-There is no single runtime switch that applies a profile yet: the canonical schema's top-level
-`profile` key is accepted and not yet interpreted. `compat-check` checks every key and value both
-profiles name against `spec/config/fireemu.schema.json`, so the sets cannot drift from the
-configuration surface.
+Where the `firebase` profile cannot reproduce the official emulator exactly, the difference is
+recorded in that profile's `officialEmulatorDivergences`, whose `key` names either a
+configuration key or the profile-derived behaviour. Two are recorded today:
+
+- `firestore.indexValidationPolicy = emulator` is what the profile sets, because the pinned
+  official Firestore emulator does not check composite indexes at all. The `firebase` *value* of
+  that key reproduces the Firebase *backend*, which refuses the same query; a run whose oracle is
+  production rather than the emulator names it explicitly. `conservative` is neither, and belongs
+  to the `strict` profile.
+- ID token verification on the Rules surfaces: the official emulators verify nothing at all — the
+  Storage emulator runs `jwt.decode` and the Firestore emulator was measured to admit an unknown
+  subject, a 1970 expiry, a missing issuer, another project's audience and a garbage `RS256`
+  signature. The `firebase` profile reproduces the part `@firebase/rules-unit-testing` depends on
+  and keeps two refusals the official emulators do not make: the audience must name the project,
+  and a signed token must verify. Both are refusals of requests the official emulator admits,
+  which is why they are recorded rather than left implicit.
+
+`compat-check` checks every key and value both profiles name against
+`spec/config/fireemu.schema.json`, and checks that the profile names the contract declares are
+exactly the values that schema's `profile` key accepts, so neither the sets nor the names can
+drift from the configuration surface.
 
 ## The capability manifest is a data file
 
@@ -130,7 +149,7 @@ malformed file fails the test suite as well.
 | `CC-05` | a README that does not carry the version-qualified claim sentence of the contract |
 | `CC-06` | a deferred or not-planned product that reads as supported: named in a manifest `implemented` list, named on a README line with no scope disclaimer, carrying a parity claim, or declaring no prohibited terms at all |
 | `CC-07` | contradictory public statements (below) |
-| `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow |
+| `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow; a profile name the schema's `profile` key does not accept (a profile no run can select is a document, not a switch), and a name that key accepts which the contract does not declare |
 
 Evidence names resolve the way `tools/traceability-check` resolves them, so the two gates agree
 on what "an existing test" means: a `tests` name is a function defined in a Rust file under a

@@ -44,12 +44,26 @@ fireemu is compatible with the listed Local Emulator Suite products as shipped b
 
 ### Compatibility profiles
 
-fireemu is deliberately stricter than the official emulators in places. The contract separates the two so that extra strictness can never be read as parity, and both profiles are declared key sets you write into a `fireemu.json`:
+fireemu is deliberately stricter than the official emulators in places. The contract separates the two so that extra strictness can never be read as parity, and the top-level `profile` key of `fireemu.json` selects one:
 
-- **`firebase`** reproduces what the pinned suite ships and Firebase documents, including its documented limitations. It sets `firestore.indexValidationPolicy: "firebase"`, `firestore.enforceLimits: false`, `limits.enforcement: "observe"`, `limits.quotaAccounting: "off"`, `limits.warningsAsErrors: []`, `rules.staticLimitChecks: false`, `rules.runtimeBudgets: false`, `auth.idTokenSigning: "unsigned-emulator"`, `appCheck.enabled: false`, `events.delivery: "at-least-once"`, `scheduler.clock: "wall"` and `projects.requireDemoPrefix: false`. Nothing in this profile may refuse a request the official emulator admits. One value is worth naming: `firestore.indexValidationPolicy: "firebase"` reproduces the Firebase backend, which refuses a query whose composite index is missing, while the official Firestore emulator serves it -- set `"emulator"` when the emulator, rather than the backend, is the behaviour you need.
-- **`strict`** adds fireemu's own validation on top: `firestore.indexValidationPolicy: "conservative"`, `firestore.enforceLimits: true`, `limits.enforcement: "strict"`, `limits.quotaAccounting: "observe"`, `rules.staticLimitChecks: true`, `rules.runtimeBudgets: true`, `auth.idTokenSigning: "session-rsa"`, `appCheck.enabled: true`, `events.delivery: "exactly-once-test"`, `scheduler.clock: "virtual"` and `projects.requireDemoPrefix: true`. Every key here may only refuse more than the official emulator, and every refusal it adds is published as a capability precision or as a documented divergence in `conformance/divergences.json`.
+```json
+{ "schemaVersion": 1, "profile": "firebase", "firestore": { "edition": "standard", "apiMode": "native" } }
+```
 
-There is no single runtime switch that applies a profile yet: the canonical schema's top-level `profile` key is accepted and not yet interpreted. `compat-check` checks every key and value both profiles name against `spec/config/fireemu.schema.json`, so the sets cannot drift from the configuration surface.
+- **`firebase`** (the default) reproduces what the pinned suite ships and Firebase documents, including its documented limitations. Nothing in this profile may refuse a request the official emulator admits.
+- **`strict`** adds fireemu's own validation on top. Every key here may only refuse more than the official emulator, and every refusal it adds is published as a capability precision or as a documented divergence in `conformance/divergences.json`.
+
+The daemon derives three settings from the profile, and any explicit key wins over its default:
+
+| Setting | `firebase` | `strict` |
+| --- | --- | --- |
+| `firestore.indexValidationPolicy` | `emulator`: a query whose composite index is not configured runs as if it existed, with an `FS_EMULATOR_INDEX_ASSUMED` warning naming the index production would need. The pinned official Firestore emulator does not check indexes at all. | `conservative`: the query is refused with `FAILED_PRECONDITION` and the `firestore.indexes.json` fragment, before it runs. |
+| `firestore.enforceLimits` | `false`: a Standard query limit violation is reported as an `FS_LIMIT_OBSERVED:<limit id>` warning and the query runs. | `true`: the query is refused with `INVALID_ARGUMENT` and the violated limit. |
+| ID tokens on the Firestore and Storage Rules surfaces | the unsigned mock tokens the official emulators admit are admitted: `request.auth` is built from the claims as given, so a `sub` naming no user and an `exp` nobody reads are both fine (this is what makes `@firebase/rules-unit-testing` work unchanged). | the full verification stands: issuer, audience, expiry on the virtual clock, a subject that names a user of the project's Auth store, and revocation. |
+
+Two checks stay on in **both** profiles, and the contract records them as deliberate divergences of the `firebase` profile because the official emulators do not make them: a token's audience must name the project, so a token can never cross a session or project boundary, and a token that claims to be signed must verify against the session key, so a forged `RS256` token never becomes an identity. Set `firestore.indexValidationPolicy: "firebase"` explicitly for a run whose oracle is the Firebase *backend* — which refuses the unindexed query — rather than the emulator.
+
+`fireemu capabilities` and `GET /v1/capabilities` publish the active profile, and the start banner prints it. The remaining keys each profile declares (`limits.enforcement`, `limits.quotaAccounting`, `limits.warningsAsErrors`, `rules.staticLimitChecks`, `rules.runtimeBudgets`, `auth.idTokenSigning`, `appCheck.enabled`, `events.delivery`, `scheduler.clock`, `projects.requireDemoPrefix`) are still written into a configuration file by hand; `compat-check` checks every key and value both profiles name against `spec/config/fireemu.schema.json`, and that the two profile names are exactly the values that schema's `profile` key accepts, so neither the sets nor the names can drift from the configuration surface.
 
 ## Status
 
@@ -210,10 +224,7 @@ Each `/emulators` entry carries `name`, `host`, `port`, `pid` and its `listen` s
 const env = await initializeTestEnvironment({});
 ```
 
-`tools/sdk-smoke/rules-unit-testing.mjs` is that script end to end. Two things a suite moving from the official emulator has to do until the matching Auth gaps close, both because fireemu verifies ID tokens where the official emulator does not:
-
-- pass an `iat` to `authenticatedContext` — `createMockUserToken` defaults to `iat: 0`, so `exp` is `3600` and the token expired in 1970, which fireemu's virtual clock rightly refuses;
-- create the users the contexts stand for, because fireemu resolves an ID token's subject against the project's Auth store.
+`tools/sdk-smoke/rules-unit-testing.mjs` is that script end to end, and it runs unmodified: under the default `firebase` profile a suite moving from the official emulator changes nothing. `authenticatedContext("alice")` mints the token `@firebase/util`'s `createMockUserToken` produces — unsigned, `iat: 0` so `exp` is an hour after the epoch, and a `sub` naming a user the Auth emulator has never seen — and fireemu builds `request.auth` from it exactly as the official Firestore and Storage emulators do. Under `strict` the same token is refused, because there the subject must name a user of the project's Auth store and the expiry must hold on the virtual clock.
 
 **Background triggers.** Disabling them **drops** the Firestore, Storage, Pub/Sub and Auth events that arrive while they are off; nothing is held and nothing is replayed when they come back. That is what the official emulator does (its background-trigger route answers `204` and discards the body), and it is the property the switch exists for: seeding data must not fire the triggers a later assertion depends on. HTTP and callable invocations, manual `functions/{name}:run` requests and virtual-clock schedule runs keep working throughout, and events already accepted are still delivered and retried.
 
@@ -275,10 +286,10 @@ pnpm -C ui test && pnpm -C ui e2e          # unit tests; Playwright against a re
 
 ### Composite indexes
 
-`firestore.indexValidationPolicy` decides what happens to a query whose composite index is not in `firestore.indexFile`:
+`firestore.indexValidationPolicy` decides what happens to a query whose composite index is not in `firestore.indexFile`. The compatibility profile sets its default (`emulator` under `firebase`, `conservative` under `strict`); naming the key overrides that:
 
-- `conservative` (default) and `firebase`: the query is refused with `FAILED_PRECONDITION` and the `firestore.indexes.json` fragment production would need, before it runs.
-- `emulator`: the query runs as if the index existed, which is what the Firebase Emulator Suite does; the gateway records an `FS_EMULATOR_INDEX_ASSUMED` warning. Use it for projects that never maintained an index file; it says nothing about production index conformance.
+- `emulator`: the query runs as if the index existed, which is what the Firebase Emulator Suite does; the gateway records an `FS_EMULATOR_INDEX_ASSUMED` warning naming the index production would need. It says nothing about production index conformance.
+- `conservative` and `firebase`: the query is refused with `FAILED_PRECONDITION` and the `firestore.indexes.json` fragment, before it runs. `firebase` is the Firebase backend's behaviour; `conservative` never accepts a query without a proven supporting index.
 
 ### Firestore history retention
 

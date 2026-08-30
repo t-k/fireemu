@@ -85,8 +85,9 @@ disabled -- asserting both that the trigger did not run and that re-enabling rep
   -- sh -c 'cd tools/sdk-smoke && node rules-unit-testing.mjs'
 ```
 
-Two things the script has to do that the official emulator does not require, both because
-fireemu verifies ID tokens where the official emulator waves them through: it passes an `iat`
-to `authenticatedContext` (`createMockUserToken` defaults to `iat: 0`, so `exp` is `3600` and
-the token expired in 1970) and it creates the users the contexts stand for (fireemu resolves a
-token's subject against the project's Auth store). Both are noted in place in the script.
+The script does nothing the official emulator does not require: `fireemu.rules-unit-testing.json`
+selects the `firebase` compatibility profile (also the default), under which fireemu admits the
+unsigned mock tokens `createMockUserToken` mints -- `iat: 0`, so `exp` is an hour after the
+epoch, and a `sub` naming a user nobody created -- exactly as the official Firestore and
+Storage emulators do. Running the same script under `"profile": "strict"` fails at the first
+`authenticatedContext` call, which is the point of the two profiles.

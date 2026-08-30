@@ -811,13 +811,14 @@
       "statement": "Every word of the public compatibility claim has a testable definition: the claim sentence, the pinned baseline it is qualified by, the products it enumerates and the profile it holds under are one machine-readable contract, and the README may not state it differently.",
       "criticality": "important",
       "owner": "compat-contract",
-      "status": "partial",
-      "note": "spec/compatibility/contract.json carries the claim sentence, the pinned firebase-tools 15.28.2 baseline with its lockfile integrity, installed manifest digest, bundled emulator versions and the 2026-08-30 audit date, the official documentation URLs, and the two compatibility profiles as declared configuration key sets. tools/compat-check CC-05 fails when README.md does not carry that sentence verbatim (whitespace-normalized, so wrapping is allowed) and CC-08 fails when a profile names a key or a value spec/config/fireemu.schema.json does not define. Partial: the profiles are declared key sets rather than a runtime switch -- the canonical schema's top-level profile key is still accepted and not interpreted -- so no test yet runs the same official-limitation scenario under both profiles and proves that only the strict one adds a rejection. An upstream upgrade is fail-closed in three places: CC-02 compares baseline.version with the version conformance/package.json installs, requires the claim sentence to name it, and keeps failing until any surface the new release adds is enumerated with a scope.",
+      "status": "implemented",
+      "note": "spec/compatibility/contract.json carries the claim sentence, the pinned firebase-tools 15.28.2 baseline with its lockfile integrity, installed manifest digest, bundled emulator versions and the 2026-08-30 audit date, the official documentation URLs, and the two compatibility profiles. tools/compat-check CC-05 fails when README.md does not carry that sentence verbatim (whitespace-normalized, so wrapping is allowed) and CC-08 fails when a profile names a key or a value spec/config/fireemu.schema.json does not define, or when the profile names the contract declares are not exactly the values that schema's profile key accepts. The profile is now a runtime switch rather than a declared key set: the schema's top-level profile key takes firebase (the default, the profile the claim is made under) or strict, the loader derives firestore.indexValidationPolicy, firestore.enforceLimits and the ID-token semantics of the Security Rules surfaces from it with any explicit key winning, fireemu capabilities and GET /v1/capabilities publish the active profile and the banner prints it. the_same_official_limitation_is_served_under_firebase_and_refused_under_strict runs one official limitation under both profiles against a started daemon. The keys each profile declares but the loader does not yet derive are listed in the contract's profileStatus. An upstream upgrade is fail-closed in three places: CC-02 compares baseline.version with the version conformance/package.json installs, requires the claim sentence to name it, and keeps failing until any surface the new release adds is enumerated with a scope.",
       "artifacts": {
         "conformance": "spec/compatibility/contract.json",
         "integration": [
           "tools/compat-check/tests/contract_rules.rs",
-          "tools/compat-check/src/lib.rs"
+          "tools/compat-check/src/lib.rs",
+          "crates/fireemu/tests/profiles.rs"
         ]
       }
     },
@@ -840,13 +841,14 @@
       "statement": "Extra strictness cannot masquerade as parity: every behaviour in which fireemu refuses what the official emulator admits is published with its own precision, and the compatibility profile that reproduces official behaviour is separated from the one that adds validation.",
       "criticality": "important",
       "owner": "compat-contract",
-      "status": "partial",
-      "note": "Each claim in the contract separates the documented official limitations it must reproduce, the fireemu-only behaviours with their precision, the production-only behaviour that is out of scope, and the preview surfaces whose compatibility is narrower. The firebase profile records that it may add no rejection and names the one value worth calling out: firestore.indexValidationPolicy = firebase reproduces the Firebase backend while emulator reproduces the pinned official emulator, and conservative is neither. conformance/divergences.json remains the executed half: a row may only leave debt by naming the text that publishes it, and check gates it against the recorded fireemu value. Partial: no test runs one official-limitation scenario under both profiles and proves that only strict adds a rejection, because no runtime switch applies a profile yet.",
+      "status": "implemented",
+      "note": "Each claim in the contract separates the documented official limitations it must reproduce, the fireemu-only behaviours with their precision, the production-only behaviour that is out of scope, and the preview surfaces whose compatibility is narrower. conformance/divergences.json remains the executed half: a row may only leave debt by naming the text that publishes it, and check gates it against the recorded fireemu value. The both-profile scenario now exists as a test: the_same_official_limitation_is_served_under_firebase_and_refused_under_strict starts a daemon under each profile and asserts that the unindexed query the pinned official Firestore emulator serves is served under firebase and refused under strict with the firestore.indexes.json fragment, so only strict adds the rejection. The same shape is proved for the other two derived settings: the_limit_switch_turns_a_refusal_into_an_observation for Standard query limits, and the mock-token tests on all three Rules surfaces (the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admits on gRPC, the_profile_decides_whether_rest_admits_a_mock_token on REST, the_profile_decides_whether_storage_rules_admit_a_mock_token on Storage) with the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify as the strict half. Where the firebase profile cannot match the official emulator exactly -- it still binds a token's audience to the project and still verifies a signed token -- the contract records both as officialEmulatorDivergences of that profile rather than leaving the strictness implicit.",
       "artifacts": {
         "conformance": "conformance/divergences.json",
         "integration": [
           "tools/compat-check/tests/contract_rules.rs",
-          "conformance/src/diff.test.mjs"
+          "conformance/src/diff.test.mjs",
+          "crates/fireemu/tests/profiles.rs"
         ]
       }
     },

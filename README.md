@@ -18,9 +18,9 @@ deterministic state machine that:
 
 ## Status
 
-Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols; Storage Security Rules evaluated at upload finalization against the received bytes), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth core + TOTP over the Identity Toolkit REST subset, Admin SDK account endpoints, custom token sign-in) native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`), and Milestone C (Cloud Functions: a `firebase-functions` v2 codebase runs in the bundled Node runner; Firestore document triggers, Storage object triggers, `onSchedule` driven by the virtual clock, `onRequest` / `onCall` over an HTTP port, retries with virtual-time backoff, `await-idle`).
+Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols; Storage Security Rules evaluated at upload finalization against the received bytes), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth over the Identity Toolkit REST subset: password / anonymous / custom token / email link / phone / fixture identity provider sign-in, email actions with codes readable from `/emulator/v1/projects/{p}/oobCodes`, TOTP and phone second factors, Admin SDK account endpoints) native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`), and Milestone C (Cloud Functions: a `firebase-functions` v2 codebase runs in the bundled Node runner; Firestore document triggers, Storage object triggers, `onSchedule` driven by the virtual clock, `onRequest` / `onCall` over an HTTP port, retries with virtual-time backoff, `await-idle`).
 
-The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Not implemented yet: `PartitionQuery`, `ExecutePipeline`, signed ID tokens, inequality constraints in query rules proofs, Storage object versioning / signed URLs / compose, `firebase-functions/v1` event functions, daylight-saving time zones for schedules.
+The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Rules cover `get()` / `exists()` / `getAfter()`, the `timestamp` / `duration` / `latlng` / `math` / `hashing` namespaces, `map.diff()`, query proofs from equality / `in` / `!=` / `not-in` / array / range constraints and `request.query`, and `firestore.get()` in Storage rules. `Listen` resumes from a token or read time by replaying only the changes since (MVCC history), and `PartitionQuery` splits collection groups for parallel readers. Not implemented yet: `ExecutePipeline`, Storage object versioning / signed URLs / compose.
 
 ## Run
 
@@ -28,7 +28,16 @@ The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChann
 cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
 #   optional: --config firebase-testd.json  (see spec/config/firebase-testd.schema.json)
 #   optional: --functions ./functions --functions-port 5001   (a firebase-functions v2 codebase)
+#   optional: --firebase-json firebase.json --project my-app   (rules, indexes, ports from a Firebase project)
 ```
+
+`firebase-testd exec` is the `firebase emulators:exec` equivalent: it serves the same, runs a command once every listener is bound, stops everything when the command exits and exits with its status.
+
+```sh
+firebase-testd exec --firebase-json firebase.json --project my-app --only auth,firestore,storage -- vitest run
+```
+
+The command receives `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST` (those named by `--only`; every service listens regardless), `FTD_FUNCTIONS_HOST` when a functions codebase is loaded, `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`, and `FTD_CONTROL_TOKEN` / `FTD_CONTROL_URL` for the control API. SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signal`) and nothing is left listening or running. `--firebase-json` maps `firestore.rules`, `firestore.indexes`, `storage.rules`, `emulators.*.port` and, when `functions` is selected, `functions.source`; entries without an equivalent (`emulators.pubsub`, `database`, ...) are named in a notice and ignored. Ports given on the command line override it.
 
 The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`). Storage rules load from `storage.rules` in the config or `PUT /v1/storage/rules`. Security Rules come from `rules.source` in the config file or at runtime:
 
@@ -37,9 +46,46 @@ curl -X PUT http://127.0.0.1:9099/v1/rules -H 'content-type: application/json' \
   -d "$(jq -n --rawfile s firestore.rules '{source: $s}')"
 curl -X POST http://127.0.0.1:9099/v1/sessions/default/clock:advance -d '{"seconds": 60}'
 curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore + Auth state
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/snapshots -d '{"name": "seeded"}'          # capture everything
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/snapshots/seeded:restore                  # put it back, atomically
+curl -X PUT  http://127.0.0.1:9099/v1/sessions/default/faultPlan -d '{"rules": [{"match": {"operation": "firestore.commit", "nth": 2}, "action": {"type": "returnError", "code": "ABORTED"}}]}'
 ```
 
+Sessions are isolated by project: `POST /v1/sessions -d '{"project": "demo-b", "buckets": ["extra-bucket"], "apiKeys": ["key-b"]}'` gives `demo-b` its own Firestore databases, Storage buckets (its `demo-b.appspot.com` / `demo-b.firebasestorage.app` plus the ones it declares), Auth store, fault plan, snapshots and text indexes. Admin SDK routes under `projects/demo-b/...` use its store; client SDK routes reach it through a declared API key (`?key=key-b`), the audience of the ID token they carry, or the refresh token they present. ID tokens are accepted only by the project of their audience (a `demo-b` token on `demo-app` data or buckets is `UNAUTHENTICATED`, as in production). `POST /v1/sessions/demo-b/reset` wipes only that project, `DELETE /v1/sessions/demo-b` removes it, and a reset of `default` wipes everything except the registered sessions; the clock, rules and functions are shared by every session.
+
+Snapshots copy what the session owns (its Firestore databases, Storage objects, Auth users, fault plan and text indexes) and, for the default session, the shared parts (the clock, both rulesets, the auto-ID generator) in one exclusive section (a restore of the default session is a new epoch: streams end, the functions runtime resets; outstanding functions work is not captured); they live in memory. Fault plans (spec 18) name an operation (`firestore.commit` / `read` / `beginTransaction`, `storage.upload` / `read` / `delete` / `list`, `functions.invoke` / `deliver`; a rule with only an `eventType` is a `functions.deliver` rule), optionally the nth occurrence (counted per function when one is named) and a function, and an action that applies to that operation (`returnError` with a gRPC name or HTTP code, `delay` seconds, `duplicate` count, `crashRunner`, `timeout`, `deadLetter`, `transactionConflict`, `dropConnection`); a combination the adapters would ignore is refused. `functions.invoke` rules also apply to HTTP invocations and to scheduled or manual runs; a `delay` holds an event until the virtual clock reaches the instant and then applies the other actions of the rule set. `dropConnection` closes the connection (or resets the gRPC stream) instead of answering on the Firestore, Storage and functions ports; over WebChannel it is reported as `UNAVAILABLE`, and for event invocations it is a failed attempt. `GET .../faultPlan` shows what fired.
+
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
+
+### Emulator UI
+
+The daemon serves an Emulator UI on `--ui-port` (default 4000, best effort: a busy port only disables it; `--ui-port 0` turns it off) at `http://127.0.0.1:4000/ui`: an overview, a Firestore data browser with a typed field editor and live updates, Auth users with custom claims / second factors / pending action codes, Storage objects, Functions (registered triggers, invocation history, a live log stream, manual schedule runs and Pub/Sub publishes), both rulesets, and the runtime controls (virtual clock, snapshots, fault plans, sessions). Its API under `/ui/api/` is a same-origin, privileged front to the existing surfaces (Firestore REST as owner, the Identity Toolkit admin routes, the Storage JSON API, the control API); every request to it must present the control token in `Authorization: Bearer` (the served page carries it; a query parameter is not accepted), the listener answers only to loopback `Host`s, the page ships a Content Security Policy that keeps it out of other sites' frames, object downloads through the front are always attachments, and at most 64 event streams are open at once. Functions and Pub/Sub routes belong to the default session; the Storage page lists the selected session's buckets.
+
+The app lives in `ui/` (Solid, Vite, Tailwind) and is embedded into the binary at compile time; a binary built without it serves a placeholder page that says so:
+
+```sh
+pnpm -C ui install && pnpm -C ui build     # writes ui/dist (not committed)
+cargo build --release -p firebase-testd    # embeds it
+pnpm -C ui test && pnpm -C ui e2e          # unit tests; Playwright against a real daemon
+```
+
+### Composite indexes
+
+`firestore.indexValidationPolicy` decides what happens to a query whose composite index is not in `firestore.indexFile`:
+
+- `conservative` (default) and `firebase`: the query is refused with `FAILED_PRECONDITION` and the `firestore.indexes.json` fragment production would need, before it runs.
+- `emulator`: the query runs as if the index existed, which is what the Firebase Emulator Suite does; the gateway records an `FS_EMULATOR_INDEX_ASSUMED` warning. Use it for projects that never maintained an index file; it says nothing about production index conformance.
+
+### Clock
+
+The virtual clock starts at the wall-clock time unless `daemon.clockStart` pins it (a pinned start keeps runs reproducible; an unpinned one keeps the ID tokens the daemon issues valid for SDKs that check expiry against real time, such as the Admin SDK's `verifyIdToken`). Either way the clock only moves through the control API afterwards.
+
+### ID tokens
+
+`auth.idTokenSigning` picks the token format:
+
+- `unsigned-emulator` (default): `alg: none`, the Firebase Auth Emulator format. The Admin SDK accepts these tokens whenever `FIREBASE_AUTH_EMULATOR_HOST` is set, and it accepts nothing else in that mode.
+- `session-rsa`: RS256 with a 2048-bit RSA key derived deterministically from the session seed (`kid` is the SHA-256 prefix of the modulus). The JWKS is served at `/.well-known/jwks.json` and at `/www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com` on the HTTP port, for backends that verify tokens with a JOSE library against a configurable JWKS URL. Once the signer is installed, every surface (Identity Toolkit, Firestore rules, Storage rules) refuses unsigned and foreign-signed tokens. Keep the default when the Admin SDK's `verifyIdToken` is on the path: `firebase-admin` skips key fetching in emulator mode and only accepts `alg: none`.
 
 ### Functions
 
@@ -52,11 +98,11 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/functions/nightly:run    
 curl http://127.0.0.1:9099/v1/sessions/default/functions                                      # queue status
 ```
 
-Invocations have a real-time deadline (`timeoutSeconds`); a handler that overruns it is dead-lettered (or retried) but keeps its concurrency slot, and `await-idle` keeps waiting, until it actually finishes. The runner inherits only an allowlisted environment (no cloud credentials; Application Default Credentials are blocked) plus the emulator hosts. Reset while functions are running or writes are in flight is not atomic across Firestore, Storage and the functions runtime: reset between test cases, when the app is quiescent.
+Invocations have a real-time deadline (`timeoutSeconds`); a handler that overruns it is dead-lettered (or retried) but keeps its concurrency slot, and `await-idle` keeps waiting, until it actually finishes. The runner inherits only an allowlisted environment (no cloud credentials; Application Default Credentials are blocked) plus the emulator hosts. `POST /v1/sessions/{s}/reset` waits for requests in flight, wipes Firestore, Auth and Storage, and kills and restarts the runner, so a handler that was still running cannot write into the new session. Schedules accept IANA time zones with daylight-saving rules (`scheduler.defaultTimeZone`, `timeZone` on the function); `scheduler.overlap` chooses `allow` (default), `skip`, `queue` or `reject` for a run that comes due while the previous one is still queued or running. `firebase-functions/v1` firestore, storage and `pubsub.schedule` handlers are supported alongside v2.
 
 Browser pages on a loopback origin must send `Authorization: Bearer <control token>` (printed at start as `FTD_CONTROL_TOKEN`) to privileged control routes (reset, clock, rules, functions, `awaitIdle`); command-line clients need no token.
 
-`tools/sdk-smoke/functions.mjs` with `tools/sdk-smoke/functions-project/` exercises all of it. `firebase-functions/v1` event and schedule functions, other trigger families and DST time zones are declared unsupported in the Capability Manifest.
+Pub/Sub topic triggers (`onMessagePublished`, v1 `topic().onPublish`) receive messages published through the control API (`POST /v1/sessions/default/pubsub/topics/{topic}:publish` with `{"messages": [{"json": {...}, "attributes": {...}}]}`, or the Pub/Sub REST shape `/v1/projects/{project}/topics/{topic}:publish` with base64 `data`). Auth user created / deleted events reach v1 `auth.user().onCreate` / `onDelete` handlers. `*WithAuthContext` Firestore triggers carry `authtype` / `authid` of the principal that committed. `scheduler.catchUp` chooses what happens to schedule runs that became due while the clock moved: `all` (default), `latest` (one run per job), `none`. `tools/sdk-smoke/functions.mjs` with `tools/sdk-smoke/functions-project/` exercises all of it (pin the clock with `--config tools/sdk-smoke/firebase-testd.smoke.json`: schedule counts depend on it). Not modelled: blocking identity functions (`beforeUserCreated` / `beforeUserSignedIn`), Realtime Database and Remote Config triggers (there is no such service in the daemon).
 
 Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, "127.0.0.1", 8080)`, `connectAuthEmulator(auth, "http://127.0.0.1:9099")`); the Firestore port serves gRPC, REST and the WebChannel transport, and both ports answer CORS preflights. `FTD_TRACE_WEBCHANNEL=1` traces the channel protocol on stderr.
 
@@ -68,12 +114,12 @@ Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, 
 | `ftd-core-events` | event state machine, retry policy, outbox | none |
 | `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator, local execution store (MVCC, transactions, queries, aggregations) | none |
 | `ftd-core-rules` | Security Rules parser, static limit linter (`RULES-LINT-1`) and evaluator subset with runtime budgets | none |
-| `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens, TOTP second factor (RFC 6238) | none |
+| `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens and the `IdTokenSigner` contract for signed ones, TOTP second factor (RFC 6238) | none |
 | `ftd-core-storage` | Cloud Storage objects: opaque UTF-8 names, generations, metadata, listing, resumable uploads, MD5 / CRC32C | none |
 | `ftd-core-functions` | function manifest, document path patterns, cron / App Engine schedules, CloudEvents attributes | none |
 | `ftd-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
 | `ftd-adapter-grpc` | Firestore v1 service: strict gateway, local backend, `Write` / `Listen` streams, Rules enforcement, optional upstream proxy | tonic, tokio |
-| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts), the Storage surface and the control API (clock, rules, capabilities, await-idle) | hyper, tokio, serde_json |
+| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts), RS256 session signing + JWKS, the Storage surface and the control API (clock, rules, capabilities, await-idle) | hyper, tokio, serde_json, rsa, sha2 |
 | `ftd-adapter-functions` | runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy | tokio, hyper, serde_json |
 | `firebase-testd` | the daemon binary (`up`, `doctor`, `capabilities`) | tokio, serde_json |
 

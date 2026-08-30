@@ -143,6 +143,11 @@ pub enum IndexValidationPolicy {
     Firebase,
     /// Sound: never accepts a query without a proven supporting index.
     Conservative,
+    /// Firebase Emulator Suite parity: every composite index a query needs is assumed to
+    /// exist (`AssumedIndex`), so a project without `firestore.indexes.json` runs the same
+    /// queries it runs against the Emulator. Structural validation and the Standard query
+    /// limits are unchanged; it says nothing about production index conformance.
+    Emulator,
 }
 
 /// Planning inputs.
@@ -185,6 +190,12 @@ pub enum IndexDecision {
         /// Required index.
         requirement: IndexDefinition,
     },
+    /// `IndexValidationPolicy::Emulator`: the required composite index is not configured but
+    /// the query is served as if it were (what the Firebase Emulator does).
+    AssumedIndex {
+        /// The index production would require.
+        requirement: IndexDefinition,
+    },
     /// The query uses an operator the validator does not model; never treated as index-free.
     Unsupported {
         /// Feature.
@@ -199,6 +210,13 @@ impl fmt::Display for IndexDecision {
             Self::FullScanAllowed { plan } => write!(f, "full scan of {}", plan.collection_scope),
             Self::MissingRequired { requirement } => {
                 write!(f, "missing index {}", describe(requirement))
+            }
+            Self::AssumedIndex { requirement } => {
+                write!(
+                    f,
+                    "assumed index {} (emulator policy)",
+                    describe(requirement)
+                )
             }
             Self::Unsupported { feature } => write!(f, "unsupported: {feature}"),
         }
@@ -434,6 +452,7 @@ pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> Index
     let group = query.scope.all_descendants;
     let effective_order = query.effective_order_by();
     let mut chosen: Option<IndexDefinition> = None;
+    let mut assumed: Option<IndexDefinition> = None;
     for disjunction in query.dnf() {
         let req = requirement_for(&disjunction, &effective_order);
         if let Some(auto) = automatic_index_for(&req, indexes, collection, group) {
@@ -448,6 +467,12 @@ pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> Index
             chosen.get_or_insert(i.clone());
         } else {
             let requirement = required_index(&req, collection, group);
+            if ctx.policy == IndexValidationPolicy::Emulator
+                && ctx.edition == FirestoreEdition::Standard
+            {
+                assumed.get_or_insert(requirement);
+                continue;
+            }
             return match ctx.edition {
                 FirestoreEdition::Standard => IndexDecision::MissingRequired { requirement },
                 FirestoreEdition::Enterprise => IndexDecision::FullScanAllowed {
@@ -463,6 +488,9 @@ pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> Index
                 },
             };
         }
+    }
+    if let Some(requirement) = assumed {
+        return IndexDecision::AssumedIndex { requirement };
     }
     match chosen {
         Some(index) => IndexDecision::UseIndex { index },

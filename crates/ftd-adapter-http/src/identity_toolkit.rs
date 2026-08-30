@@ -20,10 +20,11 @@ use std::sync::{Arc, Mutex};
 
 use ftd_core_auth::base32;
 use ftd_core_auth::claims::{ClaimValue, CustomClaims};
-use ftd_core_auth::jwt::{encode_unsigned, verify_id_token, JwtError};
+use ftd_core_auth::jwt::{encode_with, verify_id_token, JwtError};
 use ftd_core_auth::mfa::MfaError;
 use ftd_core_auth::store::{
-    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, SecondFactorAssertion,
+    AuthError, AuthStore, FederatedIdentity, LocalId, NewUser, OobRequestType, PendingSignInId,
+    SecondFactorAssertion, VerificationPurpose,
 };
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::Clock;
@@ -31,12 +32,52 @@ use ftd_core_types::json::JsonValue;
 use ftd_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
+/// Observer of user lifecycle events (Auth triggers), called after each request while
+/// the store is locked, in the order the events happened.
+pub type AuthEventSink = Arc<dyn Fn(&ftd_core_auth::store::UserEvent) + Send + Sync>;
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
     pub store: Arc<Mutex<AuthStore>>,
     /// Virtual clock shared with the other adapters.
     pub clock: Arc<Mutex<VirtualClock>>,
+    /// Session admission barrier (reset waits for requests in flight), when shared.
+    pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
+    /// User lifecycle observer; `None` drops the events.
+    pub events: Option<AuthEventSink>,
+    /// The control token browser pages must present (`Authorization: Bearer`) to reach the
+    /// emulator inspection routes (they expose action codes, SMS codes and account wipes).
+    /// `None` refuses every browser-origin request there.
+    pub control_token: Option<String>,
+    /// Which session declared which API key (client SDK routes of a session project).
+    pub tenancy: Option<ftd_core_session::tenancy::SharedTenancy>,
+    /// Stores of the other session projects: project-scoped routes (`projects/{p}/...`,
+    /// `/emulator/v1/projects/{p}/...`) of a registered project use its own store.
+    pub registry: Option<Arc<ftd_core_auth::store::AuthRegistry>>,
+}
+
+/// Hands the user events a request produced to the sink once the handler released the
+/// store (drops after it; before the admission is released).
+struct EventDrain<'a> {
+    store: Arc<Mutex<AuthStore>>,
+    sink: Option<&'a AuthEventSink>,
+}
+
+impl Drop for EventDrain<'_> {
+    fn drop(&mut self) {
+        // Taken under the lock, delivered without it: a sink that calls back into Auth
+        // must not deadlock, and other Auth requests are not held up by the sink.
+        let events = match self.store.lock() {
+            Ok(mut store) => store.take_user_events(),
+            Err(_) => return,
+        };
+        if let Some(sink) = self.sink {
+            for e in &events {
+                sink(e);
+            }
+        }
+    }
 }
 
 /// An HTTP response: status code and JSON body.
@@ -71,6 +112,11 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),
         AuthError::PhoneNumberExists => error(400, "PHONE_NUMBER_EXISTS"),
         AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),
+        AuthError::EmailNotFound => error(400, "EMAIL_NOT_FOUND"),
+        AuthError::InvalidOobCode => error(400, "INVALID_OOB_CODE"),
+        AuthError::InvalidSessionInfo => error(400, "INVALID_SESSION_INFO"),
+        AuthError::InvalidVerificationCode => error(400, "INVALID_CODE"),
+        AuthError::FederatedUserIdAlreadyLinked => error(400, "FEDERATED_USER_ID_ALREADY_LINKED"),
         AuthError::LimitExceeded(v) => error(400, &format!("INVALID_CLAIMS : {}", v.limit_id)),
     }
 }
@@ -84,6 +130,7 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
             error(400, "INVALID_SESSION_INFO")
         }
         MfaError::NoEnrolledFactor => error(400, "MFA_ENROLLMENT_NOT_FOUND"),
+        MfaError::TooManyFactors => error(400, "SECOND_FACTOR_LIMIT_EXCEEDED"),
         MfaError::LimitExceeded(_) => error(400, "SECOND_FACTOR_EXISTS"),
         MfaError::UserDisabled => error(400, "USER_DISABLED"),
         MfaError::UserNotFound => error(400, "USER_NOT_FOUND"),
@@ -153,7 +200,7 @@ fn issue_tokens_with(
         )
         .map_err(|e| auth_error(&e))?;
     Ok(json!({
-        "idToken": encode_unsigned(&claims),
+        "idToken": encode_with(&claims, store.signer()),
         "refreshToken": refresh,
         "expiresIn": "3600",
         "localId": uid.as_str(),
@@ -162,7 +209,11 @@ fn issue_tokens_with(
 }
 
 fn verify(store: &AuthStore, body: &Value, at: LogicalInstant) -> Result<LocalId, JsonResponse> {
-    let token = str_field(body, "idToken").ok_or_else(|| error(400, "MISSING_ID_TOKEN"))?;
+    let token = match body.get("idToken") {
+        None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
+        Some(Value::String(t)) => t.as_str(),
+        Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
+    };
     let v = verify_id_token(token, store, at).map_err(|e| jwt_error(&e))?;
     store
         .user_by_id(&v.uid)
@@ -179,6 +230,8 @@ pub struct RequestHeaders {
     pub origin: Option<String>,
     /// `Content-Type` header.
     pub content_type: Option<String>,
+    /// `Host` header (action links name this daemon).
+    pub host: Option<String>,
 }
 
 /// Whether a browser `Origin` names this machine (loopback) — the only origins allowed to
@@ -243,8 +296,15 @@ pub fn handle(state: &AuthState, method: &str, path: &str, body: &Value) -> Json
     handle_with(state, method, path, &RequestHeaders::default(), body)
 }
 
+/// Where the session's JWKS is served (the Google path the SDKs know, and the well-known one).
+pub const JWKS_PATHS: &[&str] = &[
+    "/.well-known/jwks.json",
+    "/www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com",
+];
+
 /// Routes one request with its headers (privileged routes check them).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn handle_with(
     state: &AuthState,
     method: &str,
@@ -257,9 +317,55 @@ pub fn handle_with(
         None => (path, None),
     };
     let at = now(state);
-    let Ok(mut store) = state.store.lock() else {
+    let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    let store_arc = select_store(state, path, query, body);
+    // The functions runtime belongs to the default session: only its users' lifecycle
+    // events reach the Auth triggers.
+    let default_store = Arc::ptr_eq(&store_arc, &state.store);
+    let _drain = EventDrain {
+        store: store_arc.clone(),
+        sink: state.events.as_ref().filter(|_| default_store),
+    };
+    let Ok(mut store) = store_arc.lock() else {
         return error(500, "INTERNAL");
     };
+    if method == "GET" && JWKS_PATHS.contains(&path) {
+        // The public keys signed ID tokens verify against (empty for unsigned sessions).
+        let keys: Vec<Value> = store
+            .signer()
+            .and_then(|s| serde_json::from_str::<Value>(&s.public_jwk_json()).ok())
+            .into_iter()
+            .collect();
+        return JsonResponse {
+            status: 200,
+            body: json!({"keys": keys}),
+        };
+    }
+    // Emulator inspection routes (what tests read instead of an inbox or an SMS).
+    if let Some(rest) = path.strip_prefix("/emulator/v1/projects/") {
+        let (project, resource) = rest.split_once('/').unwrap_or((rest, ""));
+        if let Some(origin) = &headers.origin {
+            if !origin_is_local(origin) {
+                return error(403, "FORBIDDEN_ORIGIN");
+            }
+            // A page on localhost reads secrets here only with the control token.
+            let presented = headers
+                .authorization
+                .as_deref()
+                .and_then(|a| a.strip_prefix("Bearer "))
+                .map(str::trim);
+            if state.control_token.is_none() || presented != state.control_token.as_deref() {
+                return error(
+                    403,
+                    "CONTROL_TOKEN_REQUIRED : browser requests to the emulator routes need Authorization: Bearer <control token>",
+                );
+            }
+        }
+        if project != store.project_id() {
+            return error(400, "INVALID_PROJECT_ID");
+        }
+        return emulator_route(&mut store, method, resource, headers);
+    }
     // Admin SDK paths are project-scoped: /identitytoolkit.googleapis.com/v1/projects/{p}/accounts...
     let admin = path
         .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
@@ -274,9 +380,20 @@ pub fn handle_with(
             ("POST", "accounts:update") => update(&mut store, body, at),
             ("POST", "accounts:delete") => admin_delete(&mut store, body),
             ("GET" | "POST", "accounts:batchGet") => admin_batch_get(&store, query, body),
-            (_, "accounts" | "accounts:lookup" | "accounts:update" | "accounts:delete") => {
-                error(405, "METHOD_NOT_ALLOWED")
+            // Admin link generators: the code and link come back to the caller.
+            ("POST", "accounts:sendOobCode") => {
+                let mut with_link = body.clone();
+                with_link["returnOobLink"] = json!(true);
+                send_oob_code(&mut store, &with_link, at, headers)
             }
+            (
+                _,
+                "accounts"
+                | "accounts:lookup"
+                | "accounts:update"
+                | "accounts:delete"
+                | "accounts:sendOobCode",
+            ) => error(405, "METHOD_NOT_ALLOWED"),
             _ => error(404, "NOT_FOUND"),
         };
     }
@@ -293,22 +410,134 @@ pub fn handle_with(
         }
         "/identitytoolkit.googleapis.com/v1/accounts:lookup" => lookup(&store, body, at, false),
         "/identitytoolkit.googleapis.com/v1/accounts:update" => update(&mut store, body, at),
+        "/identitytoolkit.googleapis.com/v1/accounts:sendOobCode" => {
+            send_oob_code(&mut store, body, at, headers)
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:resetPassword" => {
+            reset_password(&mut store, body, at)
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink" => {
+            sign_in_with_email_link(&mut store, body, at)
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode" => {
+            send_verification_code(&mut store, body, at)
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber" => {
+            sign_in_with_phone_number(&mut store, body, at)
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithIdp" => {
+            sign_in_with_idp(&mut store, body, at)
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:createAuthUri" => {
+            create_auth_uri(&store, body)
+        }
         "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:start" => {
             mfa_enrollment_start(&mut store, body, at)
         }
         "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:finalize" => {
             mfa_enrollment_finalize(&mut store, body, at)
         }
-        "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:start" => error(
-            400,
-            "INVALID_MFA_PENDING_CREDENTIAL : TOTP sign-in has no start step",
-        ),
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:withdraw" => {
+            mfa_enrollment_withdraw(&mut store, body, at)
+        }
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:start" => {
+            mfa_sign_in_start(&mut store, body, at)
+        }
         "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize" => {
             mfa_sign_in_finalize(&mut store, body, at)
         }
         "/securetoken.googleapis.com/v1/token" => refresh(&mut store, body, at),
         _ => error(404, "NOT_FOUND"),
     }
+}
+
+/// The store a request is for. Project-scoped routes (Admin SDK, emulator inspection)
+/// name their project; client SDK routes of a session project are recognised by the API
+/// key the session declared, by the audience of the ID token they carry, or by the store
+/// that issued their refresh token; everything else is the default project's.
+fn select_store(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+    body: &Value,
+) -> Arc<Mutex<AuthStore>> {
+    let Some(registry) = &state.registry else {
+        return state.store.clone();
+    };
+    let scoped_project = path
+        .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
+        .or_else(|| path.strip_prefix("/emulator/v1/projects/"))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|p| !p.is_empty());
+    if let Some(project) = scoped_project {
+        return registry
+            .store_for(project)
+            .unwrap_or_else(|| state.store.clone());
+    }
+    // Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode them.
+    let api_key = query
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("key=")))
+        .map(percent_decode);
+    if let Some(key) = api_key.as_deref() {
+        let project = state
+            .tenancy
+            .as_ref()
+            .and_then(|t| t.read().ok())
+            .and_then(|t| t.project_of_api_key(key).map(str::to_owned));
+        if let Some(store) = project.and_then(|p| registry.store_for(&p)) {
+            return store;
+        }
+    }
+    if let Some(token) = str_field(body, "idToken") {
+        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+        let aud = ftd_core_auth::jwt::decode_token(token, signer.as_deref())
+            .ok()
+            .and_then(|d| {
+                d.payload
+                    .get("aud")
+                    .and_then(ftd_core_types::json::JsonValue::as_str)
+                    .map(str::to_owned)
+            });
+        if let Some(store) = aud.and_then(|a| registry.store_for(&a)) {
+            return store;
+        }
+    }
+    if let Some(token) = str_field(body, "refresh_token") {
+        if let Some(store) = registry.find(|s| s.refresh_session(token).is_ok()) {
+            return store;
+        }
+    }
+    state.store.clone()
+}
+
+/// `%XX` sequences and `+` decoded (invalid sequences are kept as they are).
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let digit = |b: u8| (b as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (digit(bytes[i + 1]), digit(bytes[i + 2])) {
+                    out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'?'));
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
@@ -414,19 +643,24 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         Ok(uid) => uid,
         Err(e) => return auth_error(&e),
     };
-    let factors: Vec<Value> = store
-        .user(&uid)
-        .map(|u| {
-            u.mfa
-                .totp_factors()
-                .iter()
-                .map(|f| json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "totpInfo": {}}))
-                .collect()
-        })
-        .unwrap_or_default();
+    finish_sign_in(store, &uid, at, None, &[])
+}
+
+/// Completes a first-factor sign-in: a pending credential when the user has second
+/// factors enrolled (every sign-in route enforces MFA, not only passwords), otherwise
+/// tokens for `provider` with `extra` fields merged in.
+fn finish_sign_in(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    at: LogicalInstant,
+    provider: Option<ftd_core_auth::store::Provider>,
+    extra: &[(&str, Value)],
+) -> JsonResponse {
+    let factors = mfa_info(store, uid);
     if !factors.is_empty() {
         // Second factor required: no ID token yet, only a pending credential.
-        return match store.start_mfa_sign_in(&uid, at) {
+        let email = store.user(uid).and_then(|u| u.email.clone());
+        return match store.start_mfa_sign_in(uid, at) {
             Ok(pending) => JsonResponse {
                 status: 200,
                 body: json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email}),
@@ -434,8 +668,13 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
             Err(e) => mfa_error(&e),
         };
     }
-    match issue_tokens(store, &uid, None, at) {
-        Ok(body) => JsonResponse { status: 200, body },
+    match issue_tokens_with(store, uid, None, at, None, provider) {
+        Ok(mut body) => {
+            for (k, v) in extra {
+                body[*k] = v.clone();
+            }
+            JsonResponse { status: 200, body }
+        }
         Err(r) => r,
     }
 }
@@ -444,18 +683,21 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     let Some(u) = store.user(uid) else {
         return Value::Null;
     };
-    let mfa: Vec<Value> = u
-        .mfa
-        .totp_factors()
-        .iter()
-        .map(|f| json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "totpInfo": {}}))
-        .collect();
+    let mfa = mfa_info(store, uid);
     let mut providers: Vec<Value> = Vec::new();
     if let Some(email) = &u.email {
-        providers.push(json!({"providerId": "password", "rawId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
+        let provider_id = if store.has_password(uid) {
+            "password"
+        } else {
+            "emailLink"
+        };
+        providers.push(json!({"providerId": provider_id, "rawId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
     }
     if let Some(phone) = &u.phone_number {
         providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
+    }
+    for f in &u.federated {
+        providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
     }
     json!({
         "localId": u.local_id.as_str(),
@@ -539,10 +781,18 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
 
 fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
     let lists = (|| -> Result<_, JsonResponse> {
-        let federated =
+        let federated: Vec<(String, String)> =
             match body.get("federatedUserId") {
-                None | Some(Value::Null) => 0,
-                Some(Value::Array(items)) if items.iter().all(Value::is_object) => items.len(),
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) if items.iter().all(Value::is_object) => items
+                    .iter()
+                    .map(|i| {
+                        (
+                            str_field(i, "providerId").unwrap_or("").to_owned(),
+                            str_field(i, "rawId").unwrap_or("").to_owned(),
+                        )
+                    })
+                    .collect(),
                 Some(_) => return Err(error(
                     400,
                     "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
@@ -559,7 +809,7 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         Ok(l) => l,
         Err(r) => return r,
     };
-    let total = local_ids.len() + emails.len() + phones.len() + federated;
+    let total = local_ids.len() + emails.len() + phones.len() + federated.len();
     if total > MAX_LOOKUP_IDENTIFIERS {
         return error(
             400,
@@ -601,6 +851,11 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
     }
     for phone in &phones {
         if let Some(u) = store.user_by_phone(phone) {
+            push(u.local_id.clone());
+        }
+    }
+    for (provider_id, raw_id) in &federated {
+        if let Some(u) = store.user_by_federated(provider_id, raw_id) {
             push(u.local_id.clone());
         }
     }
@@ -665,11 +920,65 @@ struct UpdatePlan {
     email_verified: Option<bool>,
     disable: Option<bool>,
     revoke: bool,
+    /// `linkProviderUserInfo`.
+    link: Option<FederatedIdentity>,
+    /// `deleteProvider` entries naming federated providers.
+    unlink: Vec<String>,
+    /// `mfa.enrollments` (phone factors replace the current ones).
+    phone_factors: Option<Vec<(String, Option<String>)>>,
 }
 
 /// Request fields this runtime does not model; a non-empty value is refused instead of
 /// being silently dropped.
-const UNSUPPORTED_UPDATE_FIELDS: &[&str] = &["linkProviderUserInfo", "mfa", "mfaInfo"];
+const UNSUPPORTED_UPDATE_FIELDS: &[&str] = &["mfaInfo"];
+
+/// `{providerId, rawId, email?, displayName?, photoUrl?}` of a link request.
+fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
+    let provider_id = opt_str(v, "providerId")?
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT : providerId is required"))?;
+    let raw_id = opt_str(v, "rawId")?
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT : rawId is required"))?;
+    if matches!(provider_id, "password" | "phone" | "emailLink") {
+        return Err(error(
+            400,
+            "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
+        ));
+    }
+    Ok(FederatedIdentity {
+        provider_id: provider_id.to_owned(),
+        raw_id: raw_id.to_owned(),
+        email: opt_str(v, "email")?.map(str::to_owned),
+        display_name: opt_str(v, "displayName")?.map(str::to_owned),
+        photo_url: opt_str(v, "photoUrl")?.map(str::to_owned),
+    })
+}
+
+/// Phone factors of `mfaInfo` / `mfa.enrollments` entries (`{phoneInfo, displayName}`).
+fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>, JsonResponse> {
+    let Some(items) = entries.as_array() else {
+        return Err(error(
+            400,
+            "INVALID_ARGUMENT : enrollments must be an array",
+        ));
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(phone) = str_field(item, "phoneInfo") else {
+            return Err(error(
+                400,
+                "INVALID_ARGUMENT : only phone second factors (phoneInfo) can be enrolled by an admin",
+            ));
+        };
+        AuthStore::validate_phone_number(phone).map_err(|e| auth_error(&e))?;
+        out.push((
+            phone.to_owned(),
+            opt_str(item, "displayName")?.map(str::to_owned),
+        ));
+    }
+    Ok(out)
+}
 
 fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     let Ok(JsonValue::Object(parsed)) = ftd_core_types::json::parse(attrs) else {
@@ -762,19 +1071,29 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
             }
         }
     }
+    let mut unlink = Vec::new();
     if let Some(providers) = body.get("deleteProvider") {
         for p in string_list(providers, "deleteProvider")? {
             match p.as_str() {
                 "phone" => phone_number = Change::Clear,
-                other => {
+                "password" | "emailLink" => {
                     return Err(error(
                         400,
-                        &format!("UNSUPPORTED_FIELD : deleteProvider {other:?} is not supported"),
+                        &format!("UNSUPPORTED_FIELD : deleteProvider {p:?} is not supported"),
                     ))
                 }
+                _ => unlink.push(p),
             }
         }
     }
+    let link = match body.get("linkProviderUserInfo") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(parse_identity(v)?),
+    };
+    let phone_factors = match body.get("mfa").and_then(|m| m.get("enrollments")) {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(parse_phone_factors(v)?),
+    };
     Ok(UpdatePlan {
         claims,
         password,
@@ -785,10 +1104,18 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         email_verified: opt_bool(body, "emailVerified")?,
         disable: opt_bool(body, "disableUser")?,
         revoke: body.get("validSince").is_some(),
+        link,
+        unlink,
+        phone_factors,
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    // `applyActionCode`: an email verification / change code instead of a session.
+    if let Some(code) = str_field(body, "oobCode") {
+        return apply_oob_code(store, code, at);
+    }
     let local_id = match opt_str(body, "localId") {
         Ok(v) => v,
         Err(r) => return r,
@@ -826,9 +1153,32 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
             return error(400, "PHONE_NUMBER_EXISTS");
         }
     }
+    if let Some(identity) = &plan.link {
+        if store
+            .user_by_federated(&identity.provider_id, &identity.raw_id)
+            .is_some_and(|u| u.local_id != uid)
+        {
+            return error(400, "FEDERATED_USER_ID_ALREADY_LINKED");
+        }
+    }
     if let Some(claims) = plan.claims {
         if let Err(e) = store.set_custom_claims(&uid, claims) {
             return auth_error(&e);
+        }
+    }
+    if let Some(identity) = plan.link {
+        if let Err(e) = store.link_federated(&uid, identity) {
+            return auth_error(&e);
+        }
+    }
+    for provider in &plan.unlink {
+        if let Err(e) = store.unlink_federated(&uid, provider) {
+            return auth_error(&e);
+        }
+    }
+    if let Some(factors) = plan.phone_factors {
+        if let Err(e) = store.set_phone_factors(&uid, factors, at) {
+            return mfa_error(&e);
         }
     }
     if let Some(email) = &plan.email {
@@ -881,7 +1231,7 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
 /// before the user is inserted, so a rejected request leaves the store unchanged.
 fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     let parsed = (|| -> Result<_, JsonResponse> {
-        reject_unsupported(body, &["mfaInfo", "mfa", "providerUserInfo"])?;
+        reject_unsupported(body, &["mfa", "providerUserInfo"])?;
         let email = opt_str(body, "email")?.map(str::to_owned);
         let password = opt_str(body, "password")?.map(str::to_owned);
         if let Some(p) = &password {
@@ -897,6 +1247,10 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
                 return Err(error(400, "PHONE_NUMBER_EXISTS"));
             }
         }
+        let factors = match body.get("mfaInfo") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(v) => parse_phone_factors(v)?,
+        };
         Ok((
             email,
             password,
@@ -906,13 +1260,23 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
             opt_str(body, "photoUrl")?.map(str::to_owned),
             opt_bool(body, "emailVerified")?.unwrap_or(false),
             opt_bool(body, "disabled")?.unwrap_or(false),
+            factors,
         ))
     })();
-    let (email, password, phone, requested_id, display_name, photo_url, email_verified, disabled) =
-        match parsed {
-            Ok(p) => p,
-            Err(r) => return r,
-        };
+    let (
+        email,
+        password,
+        phone,
+        requested_id,
+        display_name,
+        photo_url,
+        email_verified,
+        disabled,
+        factors,
+    ) = match parsed {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
     let new_user = match &email {
         Some(email) => NewUser {
             email: Some(email.clone()),
@@ -940,6 +1304,10 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         u.display_name = display_name;
         u.photo_url = photo_url;
         u.disabled = disabled;
+    }
+    if let Err(e) = store.set_phone_factors(&uid, factors, at) {
+        let _ = store.delete_user_by_id(uid.as_str());
+        return mfa_error(&e);
     }
     JsonResponse {
         status: 200,
@@ -1065,8 +1433,27 @@ fn mfa_enrollment_start(store: &mut AuthStore, body: &Value, at: LogicalInstant)
         Ok(uid) => uid,
         Err(r) => return r,
     };
+    if let Some(phone) = body.get("phoneEnrollmentInfo") {
+        let Some(number) = str_field(phone, "phoneNumber") else {
+            return error(400, "INVALID_PHONE_NUMBER : phoneNumber is required");
+        };
+        return match store.send_verification_code(
+            number,
+            VerificationPurpose::Enrollment { uid },
+            at,
+        ) {
+            Ok(code) => JsonResponse {
+                status: 200,
+                body: json!({"phoneSessionInfo": {"sessionInfo": code.session_info}}),
+            },
+            Err(e) => auth_error(&e),
+        };
+    }
     if body.get("totpEnrollmentInfo").is_none() {
-        return error(400, "INVALID_ARGUMENT : only TOTP enrollment is supported");
+        return error(
+            400,
+            "INVALID_ARGUMENT : totpEnrollmentInfo or phoneEnrollmentInfo is required",
+        );
     }
     match store.start_totp_enrollment(&uid, at) {
         Ok(material) => {
@@ -1108,6 +1495,9 @@ fn mfa_enrollment_finalize(
         Ok(uid) => uid,
         Err(r) => return r,
     };
+    if let Some(phone) = body.get("phoneVerificationInfo") {
+        return finalize_phone_enrollment(store, &uid, phone, body, at);
+    }
     let info = body.get("totpVerificationInfo");
     let session = info
         .and_then(|i| i.get("sessionInfo"))
@@ -1145,6 +1535,9 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     let Some(pending) = str_field(body, "mfaPendingCredential") else {
         return error(400, "MISSING_MFA_PENDING_CREDENTIAL");
     };
+    if let Some(phone) = body.get("phoneVerificationInfo") {
+        return finalize_phone_sign_in(store, pending, phone, at);
+    }
     let code = parse_code(
         body.get("totpVerificationInfo")
             .and_then(|i| i.get("verificationCode")),
@@ -1182,7 +1575,7 @@ fn refresh(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
         Ok(claims) => JsonResponse {
             status: 200,
             body: json!({
-                "id_token": encode_unsigned(&claims),
+                "id_token": encode_with(&claims, store.signer()),
                 "refresh_token": token,
                 "expires_in": "3600",
                 "token_type": "Bearer",
@@ -1191,5 +1584,709 @@ fn refresh(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
             }),
         },
         Err(e) => auth_error(&e),
+    }
+}
+
+// ---- email actions --------------------------------------------------------------------
+
+/// `mfaInfo` entries of every enrolled factor.
+fn mfa_info(store: &AuthStore, uid: &LocalId) -> Vec<Value> {
+    let Some(u) = store.user(uid) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Value> = u
+        .mfa
+        .totp_factors()
+        .iter()
+        .map(|f| json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "totpInfo": {}}))
+        .collect();
+    out.extend(u.mfa.phone_factors().iter().map(|f| {
+        json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "phoneInfo": f.phone_number})
+    }));
+    out
+}
+
+/// The action link of an email action (what the Emulator's console prints).
+fn oob_link(
+    headers: &RequestHeaders,
+    request_type: OobRequestType,
+    code: &str,
+    body: &Value,
+) -> String {
+    let host = headers.host.as_deref().unwrap_or("127.0.0.1:9099");
+    let mode = match request_type {
+        OobRequestType::PasswordReset => "resetPassword",
+        OobRequestType::VerifyEmail => "verifyEmail",
+        OobRequestType::EmailSignIn => "signIn",
+        OobRequestType::VerifyAndChangeEmail => "verifyAndChangeEmail",
+    };
+    let mut link = format!(
+        "http://{host}/emulator/action?mode={mode}&lang=en&oobCode={code}&apiKey=fake-api-key"
+    );
+    if let Some(url) = str_field(body, "continueUrl") {
+        link.push_str("&continueUrl=");
+        link.push_str(&percent_encode(url));
+    }
+    link
+}
+
+fn percent_encode(s: &str) -> String {
+    use std::fmt::Write as _;
+    s.bytes()
+        .fold(String::with_capacity(s.len()), |mut out, b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                out.push(b as char);
+            } else {
+                let _ = write!(out, "%{b:02X}");
+            }
+            out
+        })
+}
+
+/// `accounts:sendOobCode`: `PASSWORD_RESET` (email), `VERIFY_EMAIL` (idToken),
+/// `EMAIL_SIGNIN` (email), `VERIFY_AND_CHANGE_EMAIL` (idToken + newEmail). Nothing is
+/// mailed: the code is kept for `/emulator/v1/projects/{p}/oobCodes`, and returned here
+/// with its link when `returnOobLink` is set (the Admin SDK's link generators).
+fn send_oob_code(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    headers: &RequestHeaders,
+) -> JsonResponse {
+    let Some(request_type) = str_field(body, "requestType").and_then(OobRequestType::parse) else {
+        return error(400, "INVALID_REQ_TYPE");
+    };
+    let (email, uid, new_email) = match request_type {
+        OobRequestType::PasswordReset => {
+            let Some(email) = str_field(body, "email") else {
+                return error(400, "MISSING_EMAIL");
+            };
+            match store.user_by_email(email) {
+                Some(u) => (email.to_owned(), Some(u.local_id.clone()), None),
+                None => return error(400, "EMAIL_NOT_FOUND"),
+            }
+        }
+        OobRequestType::EmailSignIn => {
+            let Some(email) = str_field(body, "email") else {
+                return error(400, "MISSING_EMAIL");
+            };
+            if !email.contains('@') {
+                return error(400, "INVALID_EMAIL");
+            }
+            let uid = store.user_by_email(email).map(|u| u.local_id.clone());
+            (email.to_owned(), uid, None)
+        }
+        OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => {
+            // A session, or (Admin link generators) the email itself.
+            let uid = match (str_field(body, "idToken"), str_field(body, "email")) {
+                (Some(_), _) => match verify(store, body, at) {
+                    Ok(uid) => uid,
+                    Err(r) => return r,
+                },
+                (None, Some(email)) => match store.user_by_email(email) {
+                    Some(u) => u.local_id.clone(),
+                    None => return error(400, "EMAIL_NOT_FOUND"),
+                },
+                (None, None) => return error(400, "MISSING_ID_TOKEN"),
+            };
+            let Some(email) = store.user(&uid).and_then(|u| u.email.clone()) else {
+                return error(400, "MISSING_EMAIL : the user has no email");
+            };
+            let new_email = if request_type == OobRequestType::VerifyAndChangeEmail {
+                let Some(new_email) = str_field(body, "newEmail") else {
+                    return error(400, "MISSING_NEW_EMAIL");
+                };
+                if store
+                    .user_by_email(new_email)
+                    .is_some_and(|u| u.local_id != uid)
+                {
+                    return error(400, "EMAIL_EXISTS");
+                }
+                Some(new_email.to_owned())
+            } else {
+                None
+            };
+            (email, Some(uid), new_email)
+        }
+    };
+    let code = store.create_oob_code(request_type, &email, uid, new_email, at);
+    let mut response =
+        json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
+    if body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
+        response["oobCode"] = json!(code);
+        response["oobLink"] = json!(oob_link(headers, request_type, &code, body));
+    }
+    JsonResponse {
+        status: 200,
+        body: response,
+    }
+}
+
+/// `accounts:resetPassword`: verifies a `PASSWORD_RESET` code (`verifyPasswordResetCode`)
+/// and, with `newPassword`, consumes it and sets the password (`confirmPasswordReset`).
+fn reset_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    let Some(code) = str_field(body, "oobCode") else {
+        return error(400, "MISSING_OOB_CODE");
+    };
+    let Some(entry) = store.oob_code(code).cloned() else {
+        return error(400, "INVALID_OOB_CODE");
+    };
+    if entry.request_type != OobRequestType::PasswordReset {
+        return error(400, "INVALID_OOB_CODE");
+    }
+    let Some(uid) = entry.uid.clone() else {
+        return error(400, "INVALID_OOB_CODE");
+    };
+    let Some(new_password) = str_field(body, "newPassword") else {
+        return JsonResponse {
+            status: 200,
+            body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
+        };
+    };
+    if let Err(e) = AuthStore::validate_password(new_password) {
+        return auth_error(&e);
+    }
+    if store.user(&uid).is_none_or(|u| u.disabled) {
+        return error(400, "USER_DISABLED");
+    }
+    if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
+        return auth_error(&e);
+    }
+    if let Err(e) = store.set_password(&uid, new_password) {
+        return auth_error(&e);
+    }
+    // A reset ends every existing session and verifies the address (the user read the mail).
+    let _ = store.revoke_tokens(&uid, at);
+    store.revoke_refresh_tokens(&uid);
+    if let Some(u) = store.user_mut(&uid) {
+        u.email_verified = true;
+    }
+    JsonResponse {
+        status: 200,
+        body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
+    }
+}
+
+/// `accounts:update` with an `oobCode` (`applyActionCode`): `VERIFY_EMAIL` marks the
+/// address verified, `VERIFY_AND_CHANGE_EMAIL` switches to the new address.
+fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> JsonResponse {
+    let Some(entry) = store.oob_code(code).cloned() else {
+        return error(400, "INVALID_OOB_CODE");
+    };
+    let Some(uid) = entry.uid.clone() else {
+        return error(400, "INVALID_OOB_CODE");
+    };
+    match entry.request_type {
+        OobRequestType::VerifyEmail => {
+            if let Err(e) = store.consume_oob_code(code, None, at) {
+                return auth_error(&e);
+            }
+            if let Some(u) = store.user_mut(&uid) {
+                u.email_verified = true;
+            }
+        }
+        OobRequestType::VerifyAndChangeEmail => {
+            let Some(new_email) = entry.new_email.clone() else {
+                return error(400, "INVALID_OOB_CODE");
+            };
+            if let Err(e) = store.consume_oob_code(code, None, at) {
+                return auth_error(&e);
+            }
+            if let Err(e) = store.set_email(&uid, &new_email) {
+                return auth_error(&e);
+            }
+            if let Some(u) = store.user_mut(&uid) {
+                u.email_verified = true;
+            }
+        }
+        OobRequestType::PasswordReset | OobRequestType::EmailSignIn => {
+            return error(400, "INVALID_OOB_CODE");
+        }
+    }
+    let email = store.user(&uid).and_then(|u| u.email.clone());
+    JsonResponse {
+        status: 200,
+        body: json!({"kind": "identitytoolkit#SetAccountInfoResponse", "localId": uid.as_str(), "email": email, "emailVerified": true}),
+    }
+}
+
+/// `accounts:signInWithEmailLink`: an `EMAIL_SIGNIN` code for `email`.
+fn sign_in_with_email_link(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let (Some(email), Some(code)) = (str_field(body, "email"), str_field(body, "oobCode")) else {
+        return error(400, "MISSING_OOB_CODE");
+    };
+    let matches = store
+        .oob_code(code)
+        .is_some_and(|c| c.request_type == OobRequestType::EmailSignIn && c.email == email);
+    if !matches {
+        return error(400, "INVALID_OOB_CODE");
+    }
+    // With a session: link the (now verified) email to that user instead. The code is
+    // consumed only once the request is known to succeed.
+    if body.get("idToken").is_some_and(|t| !t.is_null()) {
+        let uid = match verify(store, body, at) {
+            Ok(uid) => uid,
+            Err(r) => return r,
+        };
+        if store
+            .user_by_email(email)
+            .is_some_and(|u| u.local_id != uid)
+        {
+            return error(400, "EMAIL_EXISTS");
+        }
+        if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
+            return auth_error(&e);
+        }
+        if let Err(e) = store.set_email(&uid, email) {
+            return auth_error(&e);
+        }
+        if let Some(u) = store.user_mut(&uid) {
+            u.email_verified = true;
+        }
+        return match issue_tokens(store, &uid, None, at) {
+            Ok(mut tokens) => {
+                tokens["isNewUser"] = json!(false);
+                JsonResponse {
+                    status: 200,
+                    body: tokens,
+                }
+            }
+            Err(r) => r,
+        };
+    }
+    if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
+        return auth_error(&e);
+    }
+    let (uid, is_new) = match store.sign_in_with_email_link(email, at) {
+        Ok(r) => r,
+        Err(e) => return auth_error(&e),
+    };
+    finish_sign_in(
+        store,
+        &uid,
+        at,
+        Some(ftd_core_auth::store::Provider::EmailLink),
+        &[
+            ("kind", json!("identitytoolkit#EmailLinkSigninResponse")),
+            ("isNewUser", json!(is_new)),
+        ],
+    )
+}
+
+// ---- phone sign-in ----------------------------------------------------------------------
+
+/// `accounts:sendVerificationCode`: no SMS is sent; the code is kept for
+/// `/emulator/v1/projects/{p}/verificationCodes` (reCAPTCHA tokens are not checked).
+fn send_verification_code(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    let Some(phone) = str_field(body, "phoneNumber") else {
+        return error(400, "MISSING_PHONE_NUMBER");
+    };
+    match store.send_verification_code(phone, VerificationPurpose::SignIn, at) {
+        Ok(code) => JsonResponse {
+            status: 200,
+            body: json!({"sessionInfo": code.session_info}),
+        },
+        Err(e) => auth_error(&e),
+    }
+}
+
+/// `accounts:signInWithPhoneNumber`: `sessionInfo` + `code`; with an `idToken` the number
+/// is linked to that user instead of signing in.
+fn sign_in_with_phone_number(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let (Some(session), Some(code)) = (str_field(body, "sessionInfo"), str_field(body, "code"))
+    else {
+        return error(400, "MISSING_SESSION_INFO");
+    };
+    // Checked first, consumed once the request is known to succeed.
+    let verified = match store.check_phone_code(session, code, at) {
+        Ok(v) => v,
+        Err(e) => return auth_error(&e),
+    };
+    if verified.purpose != VerificationPurpose::SignIn {
+        return error(400, "INVALID_SESSION_INFO");
+    }
+    if body.get("idToken").is_some_and(|t| !t.is_null()) {
+        let uid = match verify(store, body, at) {
+            Ok(uid) => uid,
+            Err(r) => return r,
+        };
+        if store
+            .user_by_phone(&verified.phone_number)
+            .is_some_and(|u| u.local_id != uid)
+        {
+            return error(400, "PHONE_NUMBER_EXISTS");
+        }
+        store.consume_phone_code(session);
+        if let Err(e) = store.set_phone_number(&uid, Some(&verified.phone_number)) {
+            return auth_error(&e);
+        }
+        return match issue_tokens(store, &uid, None, at) {
+            Ok(mut tokens) => {
+                tokens["phoneNumber"] = json!(verified.phone_number);
+                tokens["isNewUser"] = json!(false);
+                JsonResponse {
+                    status: 200,
+                    body: tokens,
+                }
+            }
+            Err(r) => r,
+        };
+    }
+    store.consume_phone_code(session);
+    let (uid, is_new) = match store.sign_in_with_phone(&verified.phone_number, at) {
+        Ok(r) => r,
+        Err(e) => return auth_error(&e),
+    };
+    finish_sign_in(
+        store,
+        &uid,
+        at,
+        Some(ftd_core_auth::store::Provider::Phone),
+        &[
+            ("phoneNumber", json!(verified.phone_number)),
+            ("isNewUser", json!(is_new)),
+        ],
+    )
+}
+
+// ---- federated sign-in (fixture identity providers) --------------------------------------
+
+/// The identity carried by a provider token. The token is not verified against any
+/// provider: like the Emulator, a JWT's payload or a bare JSON object with `sub` is
+/// trusted as the provider's assertion.
+fn parse_idp_token(token: &str) -> Option<Value> {
+    let payload = if token.trim_start().starts_with('{') {
+        token.to_owned()
+    } else {
+        let middle = token.split('.').nth(1)?;
+        let bytes = ftd_core_auth::jwt::base64url_decode(middle).ok()?;
+        String::from_utf8(bytes).ok()?
+    };
+    serde_json::from_str(&payload).ok()
+}
+
+/// `accounts:signInWithIdp`: `postBody` carries `id_token=...&providerId=google.com`
+/// (an `access_token` alone is not an identity); with an `idToken` the identity is linked
+/// to that user.
+fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    let Some(post_body) = str_field(body, "postBody") else {
+        return error(400, "MISSING_POST_BODY");
+    };
+    let params = query_params(Some(post_body));
+    let Some(provider_id) = params.get("providerId").filter(|p| !p.is_empty()) else {
+        return error(400, "INVALID_IDP_RESPONSE : providerId is required");
+    };
+    let Some(token) = params.get("id_token") else {
+        return error(
+            400,
+            "INVALID_IDP_RESPONSE : id_token is required (access_token flows are not modelled)",
+        );
+    };
+    let Some(payload) = parse_idp_token(token) else {
+        return error(
+            400,
+            "INVALID_IDP_RESPONSE : id_token is neither a JWT nor JSON",
+        );
+    };
+    let Some(sub) = str_field(&payload, "sub").filter(|s| !s.is_empty()) else {
+        return error(400, "INVALID_IDP_RESPONSE : id_token has no sub");
+    };
+    let identity = FederatedIdentity {
+        provider_id: provider_id.clone(),
+        raw_id: sub.to_owned(),
+        email: str_field(&payload, "email").map(str::to_owned),
+        display_name: str_field(&payload, "name").map(str::to_owned),
+        photo_url: str_field(&payload, "picture").map(str::to_owned),
+    };
+    // Only an email the provider marks verified may match an existing account.
+    let email_verified = payload
+        .get("email_verified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let (uid, is_new) = if body.get("idToken").is_some_and(|t| !t.is_null()) {
+        let uid = match verify(store, body, at) {
+            Ok(uid) => uid,
+            Err(r) => return r,
+        };
+        if let Err(e) = store.link_federated(&uid, identity.clone()) {
+            return auth_error(&e);
+        }
+        (uid, false)
+    } else {
+        match store.sign_in_with_idp(identity.clone(), email_verified, at) {
+            Ok(r) => r,
+            Err(e) => return auth_error(&e),
+        }
+    };
+    let verified = store.user(&uid).is_some_and(|u| u.email_verified);
+    finish_sign_in(
+        store,
+        &uid,
+        at,
+        Some(ftd_core_auth::store::Provider::Federated(
+            provider_id.clone(),
+        )),
+        &[
+            ("kind", json!("identitytoolkit#VerifyAssertionResponse")),
+            ("providerId", json!(provider_id)),
+            ("federatedId", json!(sub)),
+            ("rawId", json!(sub)),
+            ("oauthIdToken", json!(token)),
+            ("isNewUser", json!(is_new)),
+            ("emailVerified", json!(verified)),
+            ("displayName", json!(identity.display_name)),
+            ("fullName", json!(identity.display_name)),
+            ("photoUrl", json!(identity.photo_url)),
+            ("rawUserInfo", json!(payload.to_string())),
+        ],
+    )
+}
+
+/// `accounts:createAuthUri` (`fetchSignInMethodsForEmail`): whether the email is
+/// registered and how it can sign in.
+fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
+    let Some(email) = str_field(body, "identifier") else {
+        return error(400, "MISSING_IDENTIFIER");
+    };
+    if !email.contains('@') {
+        return error(400, "INVALID_IDENTIFIER");
+    }
+    let mut methods: Vec<String> = Vec::new();
+    let registered = match store.user_by_email(email) {
+        Some(u) => {
+            if store.has_password(&u.local_id) {
+                methods.push("password".to_owned());
+            } else if u.provider == ftd_core_auth::store::Provider::EmailLink {
+                methods.push("emailLink".to_owned());
+            }
+            methods.extend(u.federated.iter().map(|f| f.provider_id.clone()));
+            true
+        }
+        None => false,
+    };
+    JsonResponse {
+        status: 200,
+        body: json!({
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "registered": registered,
+            "signinMethods": methods,
+            "allProviders": methods,
+            "sessionId": "ftd-session",
+        }),
+    }
+}
+
+// ---- phone second factor --------------------------------------------------------------------
+
+fn finalize_phone_enrollment(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    phone: &Value,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let (Some(session), Some(code)) = (str_field(phone, "sessionInfo"), str_field(phone, "code"))
+    else {
+        return error(400, "INVALID_CODE : missing sessionInfo or code");
+    };
+    let verified = match store.verify_phone_code(session, code, at) {
+        Ok(v) => v,
+        Err(e) => return auth_error(&e),
+    };
+    if verified.purpose != (VerificationPurpose::Enrollment { uid: uid.clone() }) {
+        return error(400, "INVALID_SESSION_INFO");
+    }
+    let display_name = str_field(body, "displayName").map(str::to_owned);
+    match store.enroll_phone_factor(uid, &verified.phone_number, display_name, at) {
+        Ok(factor) => {
+            let assertion = SecondFactorAssertion {
+                sign_in_second_factor: "phone".to_owned(),
+                second_factor_identifier: factor.mfa_enrollment_id.clone(),
+                verified_at: at,
+            };
+            match issue_tokens(store, uid, Some(&assertion), at) {
+                Ok(mut tokens) => {
+                    tokens["mfaEnrollmentId"] = json!(factor.mfa_enrollment_id);
+                    JsonResponse {
+                        status: 200,
+                        body: tokens,
+                    }
+                }
+                Err(r) => r,
+            }
+        }
+        Err(e) => mfa_error(&e),
+    }
+}
+
+/// `mfaEnrollment:withdraw`: removes a factor of any kind.
+fn mfa_enrollment_withdraw(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let uid = match verify(store, body, at) {
+        Ok(uid) => uid,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(body, "mfaEnrollmentId") else {
+        return error(400, "MISSING_MFA_ENROLLMENT_ID");
+    };
+    match store.unenroll_factor(&uid, id) {
+        Ok(true) => match issue_tokens(store, &uid, None, at) {
+            Ok(tokens) => JsonResponse {
+                status: 200,
+                body: tokens,
+            },
+            Err(r) => r,
+        },
+        Ok(false) => error(400, "MFA_ENROLLMENT_NOT_FOUND"),
+        Err(e) => mfa_error(&e),
+    }
+}
+
+/// `mfaSignIn:start`: sends the code of the chosen phone factor (TOTP has no start step).
+fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    let Some(pending) = str_field(body, "mfaPendingCredential") else {
+        return error(400, "MISSING_MFA_PENDING_CREDENTIAL");
+    };
+    let Some(pending_id) = PendingSignInId::parse(pending) else {
+        return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
+    };
+    let Some(uid) = store.pending_sign_in_user(&pending_id) else {
+        return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
+    };
+    if body.get("phoneSignInInfo").is_none() {
+        return error(
+            400,
+            "INVALID_ARGUMENT : TOTP sign-in has no start step; call mfaSignIn:finalize",
+        );
+    }
+    let Some(enrollment_id) = str_field(body, "mfaEnrollmentId") else {
+        return error(400, "MISSING_MFA_ENROLLMENT_ID");
+    };
+    let Some(phone) = store.user(&uid).and_then(|u| {
+        u.mfa
+            .phone_factors()
+            .iter()
+            .find(|f| f.mfa_enrollment_id == enrollment_id)
+            .map(|f| f.phone_number.clone())
+    }) else {
+        return error(400, "MFA_ENROLLMENT_NOT_FOUND");
+    };
+    match store.send_verification_code(
+        &phone,
+        VerificationPurpose::MfaSignIn {
+            uid,
+            pending: pending_id,
+            enrollment_id: enrollment_id.to_owned(),
+        },
+        at,
+    ) {
+        Ok(code) => JsonResponse {
+            status: 200,
+            body: json!({"phoneResponseInfo": {"sessionInfo": code.session_info}}),
+        },
+        Err(e) => auth_error(&e),
+    }
+}
+
+fn finalize_phone_sign_in(
+    store: &mut AuthStore,
+    pending: &str,
+    phone: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let (Some(session), Some(code)) = (str_field(phone, "sessionInfo"), str_field(phone, "code"))
+    else {
+        return error(400, "INVALID_CODE : missing sessionInfo or code");
+    };
+    let verified = match store.verify_phone_code(session, code, at) {
+        Ok(v) => v,
+        Err(e) => return auth_error(&e),
+    };
+    let VerificationPurpose::MfaSignIn {
+        uid,
+        pending: pending_id,
+        enrollment_id,
+    } = verified.purpose
+    else {
+        return error(400, "INVALID_SESSION_INFO");
+    };
+    if pending_id.as_str() != pending {
+        return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
+    }
+    match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
+        Ok(assertion) => match issue_tokens(store, &uid, Some(&assertion), at) {
+            Ok(body) => JsonResponse { status: 200, body },
+            Err(r) => r,
+        },
+        Err(e) => mfa_error(&e),
+    }
+}
+
+// ---- emulator inspection routes -----------------------------------------------------------
+
+/// `/emulator/v1/projects/{p}/{oobCodes | verificationCodes | accounts | config}`: what the
+/// Firebase Auth Emulator exposes so tests can read codes and wipe users.
+fn emulator_route(
+    store: &mut AuthStore,
+    method: &str,
+    resource: &str,
+    headers: &RequestHeaders,
+) -> JsonResponse {
+    match (method, resource) {
+        ("GET", "oobCodes") => {
+            let codes: Vec<Value> = store
+                .oob_codes()
+                .into_iter()
+                .map(|c| {
+                    json!({
+                        "email": c.email,
+                        "oobCode": c.code,
+                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null),
+                        "requestType": c.request_type.as_str(),
+                    })
+                })
+                .collect();
+            JsonResponse {
+                status: 200,
+                body: json!({"oobCodes": codes}),
+            }
+        }
+        ("GET", "verificationCodes") => {
+            let codes: Vec<Value> = store
+                .verification_codes()
+                .into_iter()
+                .map(|c| json!({"phoneNumber": c.phone_number, "sessionInfo": c.session_info, "code": c.code}))
+                .collect();
+            JsonResponse {
+                status: 200,
+                body: json!({"verificationCodes": codes}),
+            }
+        }
+        ("DELETE", "accounts") => {
+            store.clear();
+            JsonResponse {
+                status: 200,
+                body: json!({}),
+            }
+        }
+        ("GET", "config") => JsonResponse {
+            status: 200,
+            body: json!({"signIn": {"allowDuplicateEmails": false}, "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+        },
+        (_, "oobCodes" | "verificationCodes" | "accounts" | "config") => {
+            error(405, "METHOD_NOT_ALLOWED")
+        }
+        _ => error(404, "NOT_FOUND"),
     }
 }

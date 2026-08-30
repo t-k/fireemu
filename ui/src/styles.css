@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+  body {
+    @apply bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-sm font-medium text-zinc-800 shadow-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800;
+  }
+  .btn-primary {
+    @apply border-amber-600 bg-amber-500 text-white hover:bg-amber-600 dark:border-amber-500 dark:bg-amber-500 dark:hover:bg-amber-400 dark:text-zinc-950;
+  }
+  .btn-danger {
+    @apply border-red-600 bg-red-600 text-white hover:bg-red-700 dark:border-red-500 dark:bg-red-600;
+  }
+  .input {
+    @apply w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 focus:border-amber-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100;
+  }
+  .card {
+    @apply rounded-lg border border-zinc-200 bg-white p-4 shadow-xs dark:border-zinc-800 dark:bg-zinc-900;
+  }
+  .label {
+    @apply block text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400;
+  }
+  .table {
+    @apply w-full border-collapse text-sm;
+  }
+  .table th {
+    @apply border-b border-zinc-200 px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400;
+  }
+  .table td {
+    @apply border-b border-zinc-100 px-2 py-1 align-top dark:border-zinc-800;
+  }
+  .mono {
+    @apply font-mono text-xs;
+  }
+  .nav-link {
+    @apply block rounded-md px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-800;
+  }
+  .nav-link[aria-current="page"] {
+    @apply bg-amber-100 font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100;
+  }
+  .badge {
+    @apply inline-block rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+}

@@ -68,6 +68,7 @@ async fn respond(
         authorization: header("authorization"),
         origin: header("origin"),
         content_type: header("content-type"),
+        host: header("host"),
     };
     // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
     let collected = Limited::new(req.into_body(), MAX_BODY_BYTES)

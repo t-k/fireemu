@@ -95,6 +95,23 @@ pub struct TotpFactor {
     pub last_accepted_step: Option<u64>,
 }
 
+/// An enrolled phone (SMS) factor. Codes are delivered through the runtime's verification
+/// code list (no SMS is sent), like the Firebase Auth Emulator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhoneFactor {
+    /// Enrollment ID (`second_factor_identifier` in tokens).
+    pub mfa_enrollment_id: String,
+    /// Display name.
+    pub display_name: Option<String>,
+    /// Phone number (E.164).
+    pub phone_number: String,
+    /// Enrollment time.
+    pub enrolled_at: LogicalInstant,
+}
+
+/// Maximum second factors of every kind per user (Firebase: five).
+pub const MAX_FACTORS_PER_USER: usize = 5;
+
 /// Public view of an enrolled factor (no secret).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrolledFactor {
@@ -194,6 +211,8 @@ pub enum MfaError {
     PendingSignInUnknown,
     /// No enrolled factor.
     NoEnrolledFactor,
+    /// More than [`MAX_FACTORS_PER_USER`] factors.
+    TooManyFactors,
     /// A limit was violated.
     LimitExceeded(LimitViolation),
 }
@@ -209,6 +228,7 @@ impl fmt::Display for MfaError {
             Self::EnrollmentSessionUnknown => f.write_str("unknown enrollment session"),
             Self::PendingSignInUnknown => f.write_str("unknown pending sign-in"),
             Self::NoEnrolledFactor => f.write_str("no second factor enrolled"),
+            Self::TooManyFactors => f.write_str("too many second factors"),
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
         }
     }
@@ -220,6 +240,7 @@ impl std::error::Error for MfaError {}
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MfaState {
     totp: Vec<TotpFactor>,
+    phone: Vec<PhoneFactor>,
     pending_enrollments: BTreeMap<String, PendingEnrollment>,
     pending_sign_ins: BTreeMap<String, PendingSignIn>,
 }
@@ -277,6 +298,35 @@ impl MfaState {
 
     pub(crate) fn totp_factors_mut(&mut self) -> &mut Vec<TotpFactor> {
         &mut self.totp
+    }
+
+    /// Enrolled phone factors.
+    #[must_use]
+    pub fn phone_factors(&self) -> &[PhoneFactor] {
+        &self.phone
+    }
+
+    pub(crate) fn phone_factors_mut(&mut self) -> &mut Vec<PhoneFactor> {
+        &mut self.phone
+    }
+
+    /// Whether no second factor of any kind is enrolled.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.totp.is_empty() && self.phone.is_empty()
+    }
+
+    /// Number of enrolled factors of every kind.
+    #[must_use]
+    pub fn factor_count(&self) -> usize {
+        self.totp.len() + self.phone.len()
+    }
+
+    /// Whether `id` names an enrolled factor of any kind.
+    #[must_use]
+    pub fn has_factor(&self, id: &str) -> bool {
+        self.totp.iter().any(|f| f.mfa_enrollment_id == id)
+            || self.phone.iter().any(|f| f.mfa_enrollment_id == id)
     }
 
     pub(crate) fn pending_enrollments_mut(&mut self) -> &mut BTreeMap<String, PendingEnrollment> {

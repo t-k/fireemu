@@ -64,6 +64,7 @@ fn manifests_match_firestore_and_storage_triggers() {
                     event: DocumentEvent::Created,
                     database: "(default)".into(),
                     document: PathPattern::parse("todos/{id}").unwrap(),
+                    with_auth_context: false,
                 },
             ),
             function(
@@ -72,6 +73,7 @@ fn manifests_match_firestore_and_storage_triggers() {
                     event: DocumentEvent::Written,
                     database: "(default)".into(),
                     document: PathPattern::parse("{path=**}").unwrap(),
+                    with_auth_context: false,
                 },
             ),
             function(

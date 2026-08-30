@@ -1,0 +1,43 @@
+import { expect, test } from "@playwright/test";
+import { api, gotoApp, resetSession } from "./helpers";
+
+const DOCS = "firestore/v1/projects/demo-app/databases/(default)/documents";
+
+test.describe("Functions", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetSession(request);
+  });
+
+  test("lists the registered functions with their triggers", async ({ page }) => {
+    await gotoApp(page, "/functions");
+    const table = page.getByTestId("function-table");
+    await expect(table).toContainText("mirrorTodo");
+    await expect(table).toContainText("Firestore created on todos/{todoId}");
+    await expect(table).toContainText("Pub/Sub topic jobs");
+    await expect(table).toContainText("Schedule every 5 minutes (Asia/Tokyo)");
+    await expect(table).toContainText("HTTP request");
+    await expect(table).toContainText("HTTP callable");
+  });
+
+  test("runs a schedule now and publishes a Pub/Sub message, showing invocations and logs", async ({
+    page,
+    request,
+  }) => {
+    await gotoApp(page, "/functions");
+    await page.getByTestId("run-tick").click();
+    await page.getByTestId("await-idle").click();
+    await expect(page.getByTestId("invocation-table")).toContainText("tick");
+    await page.getByTestId("publish-onJob").click();
+    await page.getByTestId("publish-jobs-send").click();
+    await expect(page.getByRole("status").filter({ hasText: "Published 1 message" })).toBeVisible();
+    await page.getByTestId("await-idle").click();
+    await expect(page.getByTestId("invocation-table")).toContainText("onJob");
+    // mirrorTodo logs through firebase-functions/logger: the line reaches the log stream.
+    await api(request, "PATCH", `${DOCS}/todos/t1`, {
+      fields: { title: { stringValue: "Log me" } },
+    });
+    await page.getByTestId("await-idle").click();
+    await expect(page.getByTestId("invocation-table")).toContainText("mirrorTodo");
+    await expect(page.getByTestId("function-logs")).toContainText("mirrorTodo");
+  });
+});

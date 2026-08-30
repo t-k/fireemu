@@ -107,6 +107,10 @@ impl Gateway {
         let mut warnings = Vec::new();
         match &decision {
             IndexDecision::UseIndex { .. } => {}
+            IndexDecision::AssumedIndex { requirement } => {
+                warnings.push("FS_EMULATOR_INDEX_ASSUMED".to_owned());
+                note_assumed_index(&requirement.indexes_json_fragment());
+            }
             IndexDecision::FullScanAllowed { plan } => {
                 warnings.extend(plan.diagnostics.iter().map(|d| (*d).to_owned()));
             }
@@ -125,5 +129,22 @@ impl Gateway {
             decision,
             warnings,
         })
+    }
+}
+
+/// Says once per distinct index which composite index production would need for a query
+/// the emulator policy served without it (every surface: unary, REST, Listen, aggregations).
+fn note_assumed_index(fragment: &str) {
+    static NOTED: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    let noted = NOTED.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let first = noted
+        .lock()
+        .map(|mut set| set.insert(fragment.to_owned()))
+        .unwrap_or(false);
+    if first {
+        eprintln!(
+            "[firestore] served without a configured composite index (indexValidationPolicy = emulator); production needs: {fragment}"
+        );
     }
 }

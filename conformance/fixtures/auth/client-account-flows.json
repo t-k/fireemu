@@ -10,9 +10,9 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 13,
+    "parity": 14,
     "documented-divergence": 0,
-    "debt": 1,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
@@ -48,15 +48,10 @@
     },
     {
       "id": "change-the-password-and-keep-the-session",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "hasToken": true,
         "stillSignedIn": true
-      },
-      "testd": {
-        "thrown": true,
-        "code": "auth/invalid-refresh-token",
-        "message": "Firebase: Error (auth/invalid-refresh-token)."
       }
     },
     {

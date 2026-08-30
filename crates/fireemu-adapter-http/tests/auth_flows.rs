@@ -606,10 +606,14 @@ fn phone_second_factor_enrollment_and_sign_in() {
         &json!({"idToken": id_token, "displayName": "my phone", "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
     );
     assert_eq!(status, 200, "{done}");
-    let enrollment_id = done["mfaEnrollmentId"].as_str().unwrap().to_owned();
     let c = claims(done["idToken"].as_str().unwrap());
     assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
-    assert_eq!(c["firebase"]["second_factor_identifier"], enrollment_id);
+    // The finalize response carries only the tokens (measured against the pinned official
+    // emulator); the enrollment id is read from the second-factor claim.
+    let enrollment_id = c["firebase"]["second_factor_identifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     // Password sign-in now stops at the second factor.
     let (status, pending) = post(
         &s,

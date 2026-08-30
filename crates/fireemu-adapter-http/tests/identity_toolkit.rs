@@ -212,7 +212,6 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
         &json!({"idToken": id_token, "totpVerificationInfo": {"sessionInfo": session, "verificationCode": format!("{good:06}")}}),
     );
     assert_eq!(status, 200, "{done}");
-    let enrollment_id = done["mfaEnrollmentId"].as_str().unwrap().to_owned();
     let decoded =
         fireemu_core_auth::jwt::decode_unsigned(done["idToken"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -223,6 +222,15 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
             .and_then(|v| v.as_str()),
         Some("totp")
     );
+    // The finalize response carries only the tokens (measured against the pinned official
+    // emulator); the enrollment id is read from the second-factor claim.
+    let enrollment_id = decoded
+        .payload
+        .get("firebase")
+        .and_then(|f| f.get("second_factor_identifier"))
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_owned();
 
     // Password sign-in now returns a pending credential instead of a token.
     let later = advance(&s, 120);

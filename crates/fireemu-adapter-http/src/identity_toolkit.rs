@@ -2409,18 +2409,24 @@ fn mfa_enrollment_finalize(
                 verified_at: at,
             };
             match issue_tokens(store, &uid, Some(&assertion), at) {
-                Ok(mut tokens) => {
-                    tokens["mfaEnrollmentId"] = json!(factor.mfa_enrollment_id);
-                    JsonResponse {
-                        status: 200,
-                        body: tokens,
-                    }
-                }
+                Ok(tokens) => token_only_response(&tokens, false),
                 Err(r) => r,
             }
         }
         Err(e) => mfa_error(&e),
     }
+}
+
+/// The official multi-factor finalize responses carry only the tokens
+/// (`{idToken, refreshToken}`; the withdraw response also carries `expiresIn`), measured by
+/// `auth/mfa-enrollment-eligibility`. The enrollment id reaches the client through the
+/// second-factor claim of the ID token and through the account record.
+fn token_only_response(tokens: &Value, with_expires_in: bool) -> JsonResponse {
+    let mut body = json!({"idToken": tokens["idToken"], "refreshToken": tokens["refreshToken"]});
+    if with_expires_in {
+        body["expiresIn"] = tokens["expiresIn"].clone();
+    }
+    JsonResponse { status: 200, body }
 }
 
 fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
@@ -2445,7 +2451,7 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
         .unwrap_or_else(|| PendingSignInId::parse("").expect("empty id parses"));
     match store.finalize_mfa_sign_in(&uid, &pending_id, code, at) {
         Ok(assertion) => match issue_tokens(store, &uid, Some(&assertion), at) {
-            Ok(body) => JsonResponse { status: 200, body },
+            Ok(tokens) => token_only_response(&tokens, false),
             Err(r) => r,
         },
         Err(e) => mfa_error(&e),
@@ -3054,13 +3060,7 @@ fn finalize_phone_enrollment(
                 verified_at: at,
             };
             match issue_tokens(store, uid, Some(&assertion), at) {
-                Ok(mut tokens) => {
-                    tokens["mfaEnrollmentId"] = json!(factor.mfa_enrollment_id);
-                    JsonResponse {
-                        status: 200,
-                        body: tokens,
-                    }
-                }
+                Ok(tokens) => token_only_response(&tokens, false),
                 Err(r) => r,
             }
         }
@@ -3083,10 +3083,7 @@ fn mfa_enrollment_withdraw(
     };
     match store.unenroll_factor(&uid, id) {
         Ok(true) => match issue_tokens(store, &uid, None, at) {
-            Ok(tokens) => JsonResponse {
-                status: 200,
-                body: tokens,
-            },
+            Ok(tokens) => token_only_response(&tokens, true),
             Err(r) => r,
         },
         Ok(false) => error(400, "MFA_ENROLLMENT_NOT_FOUND"),
@@ -3174,7 +3171,7 @@ fn finalize_phone_sign_in(
     }
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
         Ok(assertion) => match issue_tokens(store, &uid, Some(&assertion), at) {
-            Ok(body) => JsonResponse { status: 200, body },
+            Ok(tokens) => token_only_response(&tokens, false),
             Err(r) => r,
         },
         Err(e) => mfa_error(&e),

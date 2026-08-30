@@ -12,7 +12,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - **documented divergence** -- a difference that is intended and written down. These are listed
   for completeness; `check` does gate them, against the recorded fireemu value.
 
-## Debt (23)
+## Debt (13)
 
 ### `firestore/rules-decisions#anonymous-read-of-a-closed-document`
 
@@ -49,75 +49,25 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: \nfalse for 'create' @ L20, false for 'update' @ L20"}`
 - fireemu: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: create on conf_rules_closed/lite denied by Security Rules: no allow statement evaluated to true"}`
 
-### `auth/mfa-error-shapes#finalize-enrolment-with-an-unknown-session`
-
-- oracle: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"INVALID_SESSION_INFO","reason":"invalid"}],"message":"INVALID_SESSION_INFO"}},"status":400}`
-- fireemu: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors.","reason":"invalid"}],"message":"UNVERIFIED_EMAIL : Need to verify email first before enr...`
-
 ### `auth/mfa-enrollment-eligibility#finalize-with-the-emulator-code`
 
 - oracle: `{"keys":["idToken","refreshToken"],"status":200}`
-- fireemu: `{"keys":["error"],"status":400}`
-
-### `auth/mfa-enrollment-eligibility#the-same-number-cannot-be-enrolled-twice`
-
-- oracle: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account.","reason":"invalid"}],"message":"SECOND_FACTOR_EXISTS : Phone number already enr...`
-- fireemu: `{"body":{"phoneSessionInfo":{"sessionInfo":"sms-643f9f9b14b0c2000014"}},"status":200}`
+- fireemu: `{"keys":["email","expiresIn","idToken","localId","mfaEnrollmentId","refreshToken"],"status":200}`
 
 ### `auth/mfa-enrollment-eligibility#the-account-record-carries-the-factor`
 
 - oracle: `[{"displayName":"work phone","factorId":"phone","hasEnrollmentTime":true,"phoneNumber":"+15555550123","uidLength":28}]`
-- fireemu: `[]`
-
-### `auth/mfa-enrollment-eligibility#password-sign-in-stops-at-the-second-factor`
-
-- oracle: `{"hints":[{"displayName":"work phone","keys":["displayName","enrolledAt","mfaEnrollmentId","phoneInfo"],"phoneInfo":"+*******0123"}],"keys":["email","kind","localId","mfaInfo","<auto-id>","registered"],"status":200}`
-- fireemu: `{"hints":[],"keys":["email","expiresIn","idToken","kind","localId","refreshToken","registered"],"status":200}`
-
-### `auth/mfa-enrollment-eligibility#second-factor-start-with-an-unknown-enrolment`
-
-- oracle: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"MFA_ENROLLMENT_NOT_FOUND","reason":"invalid"}],"message":"MFA_ENROLLMENT_NOT_FOUND"}},"status":400}`
-- fireemu: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"MISSING_MFA_PENDING_CREDENTIAL","reason":"invalid"}],"message":"MISSING_MFA_PENDING_CREDENTIAL"}},"status":400}`
+- fireemu: `[{"displayName":"work phone","factorId":"phone","hasEnrollmentTime":true,"phoneNumber":"+15555550123","uidLength":24}]`
 
 ### `auth/mfa-enrollment-eligibility#second-factor-sign-in-completes`
 
 - oracle: `{"keys":["idToken","refreshToken"],"secondFactor":"phone","status":200}`
-- fireemu: `{"thrown":true,"code":null,"message":"Cannot read properties of undefined (reading 'enrolledFactors')"}`
+- fireemu: `{"keys":["email","expiresIn","idToken","localId","refreshToken"],"secondFactor":"phone","status":200}`
 
 ### `auth/mfa-enrollment-eligibility#withdraw-the-factor`
 
 - oracle: `{"factorsLeft":0,"keys":["expiresIn","idToken","refreshToken"],"status":200}`
-- fireemu: `{"thrown":true,"code":null,"message":"Cannot read properties of undefined (reading 'enrolledFactors')"}`
-
-### `auth/admin-account-lifecycle#create-a-user-with-every-field`
-
-- oracle: `{"customClaims":null,"disabled":false,"displayName":"Alice","email":"conf-auth-admin-alice@example.com","emailVerified":true,"hasCreationTime":true,"phoneNumber":"+15555550001","photoURL":"https://example.com/alice.png","providerIds":["p...`
-- fireemu: `{"customClaims":{},"disabled":false,"displayName":"Alice","email":"conf-auth-admin-alice@example.com","emailVerified":true,"hasCreationTime":true,"phoneNumber":"+15555550001","photoURL":"https://example.com/alice.png","providerIds":["pas...`
-
-### `auth/admin-account-lifecycle#update-profile-and-disable`
-
-- oracle: `{"customClaims":null,"disabled":true,"displayName":"Alice Updated","email":"conf-auth-admin-alice@example.com","emailVerified":true,"hasCreationTime":true,"phoneNumber":"+15555550001","photoURL":null,"providerIds":["password","phone"],"u...`
-- fireemu: `{"customClaims":{},"disabled":true,"displayName":"Alice Updated","email":"conf-auth-admin-alice@example.com","emailVerified":true,"hasCreationTime":true,"phoneNumber":"+15555550001","photoURL":null,"providerIds":["password","phone"],"uid...`
-
-### `auth/admin-account-lifecycle#import-users`
-
-- oracle: `{"errors":[{"code":"auth/invalid-user-import","index":1}],"failureCount":1,"imported":{"customClaims":{"tier":"gold"},"disabled":false,"displayName":"Imported","email":"conf-auth-admin-import-1@example.com","emailVerified":true,"hasCreat...`
-- fireemu: `{"errors":[{"code":"auth/invalid-user-import","index":1}],"failureCount":1,"imported":{"customClaims":{"tier":"gold"},"disabled":false,"displayName":"Imported","email":"conf-auth-admin-import-1@example.com","emailVerified":true,"hasCreat...`
-
-### `auth/admin-account-lifecycle#session-cookie-round-trip`
-
-- oracle: `{"aud":"demo-conformance","iss":"https://session.firebase.google.com/demo-conformance","lifetime":3600,"signInProvider":"password","uid":"conf-admin-alice"}`
-- fireemu: `{"thrown":true,"code":"auth/session-cookie-expired","message":"Firebase session cookie has expired. Get a fresh session cookie from your client app and try again (auth/session-cookie-expired). See https://firebase.google.com/docs/auth/ad...`
-
-### `auth/admin-account-lifecycle#revoke-refresh-tokens`
-
-- oracle: `{"revoked":"auth/id-token-revoked"}`
-- fireemu: `{"revoked":"auth/id-token-expired"}`
-
-### `auth/client-account-flows#change-the-password-and-keep-the-session`
-
-- oracle: `{"hasToken":true,"stillSignedIn":true}`
-- fireemu: `{"thrown":true,"code":"auth/invalid-refresh-token","message":"Firebase: Error (auth/invalid-refresh-token)."}`
+- fireemu: `{"factorsLeft":0,"keys":["email","expiresIn","idToken","localId","refreshToken"],"status":200}`
 
 ### `storage/admin-upload-download-metadata#download-a-missing-object`
 

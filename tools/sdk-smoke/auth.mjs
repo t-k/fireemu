@@ -159,7 +159,7 @@ await check("phone second factor: enrol, then sign in through the resolver", asy
     displayName: "my phone",
     phoneVerificationInfo: { sessionInfo: start.phoneSessionInfo.sessionInfo, code: sms.code },
   });
-  assert(done.mfaEnrollmentId, "enrolled");
+  assert(done.idToken && done.refreshToken, "enrolled (the finalize response carries only the tokens)");
   await signOut(auth);
   let resolver;
   try {

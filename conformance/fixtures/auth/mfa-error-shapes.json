@@ -9,9 +9,9 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 4,
+    "parity": 5,
     "documented-divergence": 0,
-    "debt": 1,
+    "debt": 0,
     "pending": 1
   },
   "steps": [
@@ -65,8 +65,8 @@
     },
     {
       "id": "finalize-enrolment-with-an-unknown-session",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "body": {
           "error": {
             "code": 400,
@@ -78,22 +78,6 @@
               }
             ],
             "message": "INVALID_SESSION_INFO"
-          }
-        },
-        "status": 400
-      },
-      "testd": {
-        "body": {
-          "error": {
-            "code": 400,
-            "errors": [
-              {
-                "domain": "global",
-                "message": "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors.",
-                "reason": "invalid"
-              }
-            ],
-            "message": "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors."
           }
         },
         "status": 400

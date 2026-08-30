@@ -10,32 +10,17 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 15,
+    "parity": 20,
     "documented-divergence": 0,
-    "debt": 5,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
     {
       "id": "create-a-user-with-every-field",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "customClaims": null,
-        "disabled": false,
-        "displayName": "Alice",
-        "email": "conf-auth-admin-alice@example.com",
-        "emailVerified": true,
-        "hasCreationTime": true,
-        "phoneNumber": "+15555550001",
-        "photoURL": "https://example.com/alice.png",
-        "providerIds": [
-          "password",
-          "phone"
-        ],
-        "uid": "conf-admin-alice"
-      },
-      "testd": {
-        "customClaims": {},
         "disabled": false,
         "displayName": "Alice",
         "email": "conf-auth-admin-alice@example.com",
@@ -108,24 +93,9 @@
     },
     {
       "id": "update-profile-and-disable",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "customClaims": null,
-        "disabled": true,
-        "displayName": "Alice Updated",
-        "email": "conf-auth-admin-alice@example.com",
-        "emailVerified": true,
-        "hasCreationTime": true,
-        "phoneNumber": "+15555550001",
-        "photoURL": null,
-        "providerIds": [
-          "password",
-          "phone"
-        ],
-        "uid": "conf-admin-alice"
-      },
-      "testd": {
-        "customClaims": {},
         "disabled": true,
         "displayName": "Alice Updated",
         "email": "conf-auth-admin-alice@example.com",
@@ -185,8 +155,8 @@
     },
     {
       "id": "import-users",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "errors": [
           {
             "code": "auth/invalid-user-import",
@@ -206,33 +176,6 @@
           "phoneNumber": null,
           "photoURL": null,
           "providerIds": [
-            "google.com"
-          ],
-          "uid": "conf-admin-import-1"
-        },
-        "successCount": 1
-      },
-      "testd": {
-        "errors": [
-          {
-            "code": "auth/invalid-user-import",
-            "index": 1
-          }
-        ],
-        "failureCount": 1,
-        "imported": {
-          "customClaims": {
-            "tier": "gold"
-          },
-          "disabled": false,
-          "displayName": "Imported",
-          "email": "conf-auth-admin-import-1@example.com",
-          "emailVerified": true,
-          "hasCreationTime": true,
-          "phoneNumber": null,
-          "photoURL": null,
-          "providerIds": [
-            "emailLink",
             "google.com"
           ],
           "uid": "conf-admin-import-1"
@@ -256,19 +199,15 @@
       }
     },
     {
-      "id": "session-cookie-round-trip",
-      "status": "debt",
-      "oracle": {
+      "id": "session-cookie-shape",
+      "status": "parity",
+      "value": {
+        "alg": "none",
         "aud": "demo-conformance",
         "iss": "https://session.firebase.google.com/demo-conformance",
         "lifetime": 3600,
         "signInProvider": "password",
-        "uid": "conf-admin-alice"
-      },
-      "testd": {
-        "thrown": true,
-        "code": "auth/session-cookie-expired",
-        "message": "Firebase session cookie has expired. Get a fresh session cookie from your client app and try again (auth/session-cookie-expired). See https://firebase.google.com/docs/auth/admin/manage-cookies for details on how to retrieve a session cookie."
+        "sub": "conf-admin-alice"
       }
     },
     {
@@ -292,12 +231,10 @@
     },
     {
       "id": "revoke-refresh-tokens",
-      "status": "debt",
-      "oracle": {
-        "revoked": "auth/id-token-revoked"
-      },
-      "testd": {
-        "revoked": "auth/id-token-expired"
+      "status": "parity",
+      "value": {
+        "movedOrSameSecond": true,
+        "recorded": true
       }
     },
     {

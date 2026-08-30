@@ -10,9 +10,9 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 4,
+    "parity": 7,
     "documented-divergence": 0,
-    "debt": 7,
+    "debt": 4,
     "pending": 0
   },
   "steps": [
@@ -98,15 +98,20 @@
       },
       "testd": {
         "keys": [
-          "error"
+          "email",
+          "expiresIn",
+          "idToken",
+          "localId",
+          "mfaEnrollmentId",
+          "refreshToken"
         ],
-        "status": 400
+        "status": 200
       }
     },
     {
       "id": "the-same-number-cannot-be-enrolled-twice",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "body": {
           "error": {
             "code": 400,
@@ -121,14 +126,6 @@
           }
         },
         "status": 400
-      },
-      "testd": {
-        "body": {
-          "phoneSessionInfo": {
-            "sessionInfo": "sms-643f9f9b14b0c2000014"
-          }
-        },
-        "status": 200
       }
     },
     {
@@ -143,12 +140,20 @@
           "uidLength": 28
         }
       ],
-      "testd": []
+      "testd": [
+        {
+          "displayName": "work phone",
+          "factorId": "phone",
+          "hasEnrollmentTime": true,
+          "phoneNumber": "+15555550123",
+          "uidLength": 24
+        }
+      ]
     },
     {
       "id": "password-sign-in-stops-at-the-second-factor",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "hints": [
           {
             "displayName": "work phone",
@@ -170,25 +175,12 @@
           "registered"
         ],
         "status": 200
-      },
-      "testd": {
-        "hints": [],
-        "keys": [
-          "email",
-          "expiresIn",
-          "idToken",
-          "kind",
-          "localId",
-          "refreshToken",
-          "registered"
-        ],
-        "status": 200
       }
     },
     {
       "id": "second-factor-start-with-an-unknown-enrolment",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "body": {
           "error": {
             "code": 400,
@@ -200,22 +192,6 @@
               }
             ],
             "message": "MFA_ENROLLMENT_NOT_FOUND"
-          }
-        },
-        "status": 400
-      },
-      "testd": {
-        "body": {
-          "error": {
-            "code": 400,
-            "errors": [
-              {
-                "domain": "global",
-                "message": "MISSING_MFA_PENDING_CREDENTIAL",
-                "reason": "invalid"
-              }
-            ],
-            "message": "MISSING_MFA_PENDING_CREDENTIAL"
           }
         },
         "status": 400
@@ -233,9 +209,15 @@
         "status": 200
       },
       "testd": {
-        "thrown": true,
-        "code": null,
-        "message": "Cannot read properties of undefined (reading 'enrolledFactors')"
+        "keys": [
+          "email",
+          "expiresIn",
+          "idToken",
+          "localId",
+          "refreshToken"
+        ],
+        "secondFactor": "phone",
+        "status": 200
       }
     },
     {
@@ -251,9 +233,15 @@
         "status": 200
       },
       "testd": {
-        "thrown": true,
-        "code": null,
-        "message": "Cannot read properties of undefined (reading 'enrolledFactors')"
+        "factorsLeft": 0,
+        "keys": [
+          "email",
+          "expiresIn",
+          "idToken",
+          "localId",
+          "refreshToken"
+        ],
+        "status": 200
       }
     }
   ]

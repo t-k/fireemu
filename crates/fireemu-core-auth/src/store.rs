@@ -651,9 +651,10 @@ impl AuthStore {
         )
     }
 
-    /// A generated account identifier: 28 characters of `[A-Za-z0-9]`, the shape the
-    /// official emulator and production assign (the client SDKs surface its length).
-    fn random_local_id(&mut self) -> String {
+    /// A generated identifier of the official shape: 28 characters of `[A-Za-z0-9]`, what
+    /// the official emulator and production assign to accounts and MFA enrollments (the
+    /// client SDKs surface its length).
+    fn random_id28(&mut self) -> String {
         const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         let mut id = String::with_capacity(28);
         while id.len() < 28 {
@@ -978,7 +979,7 @@ impl AuthStore {
             Some(id) => LocalId(id),
             None => loop {
                 // Generated IDs share the namespace with caller-chosen ones: skip collisions.
-                let candidate = LocalId(self.random_local_id());
+                let candidate = LocalId(self.random_id28());
                 if !self.users.contains_key(&candidate) {
                     break candidate;
                 }
@@ -1317,7 +1318,7 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
         AuthStore::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
-        let enrollment_id = self.next_id("mfa-");
+        let enrollment_id = self.random_id28();
         let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
         if user.disabled {
             return Err(MfaError::UserDisabled);
@@ -1688,7 +1689,7 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
         let policy = self.policy;
-        let enrollment_id = self.next_id("mfa-");
+        let enrollment_id = self.random_id28();
         let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
         let pending = user
             .mfa

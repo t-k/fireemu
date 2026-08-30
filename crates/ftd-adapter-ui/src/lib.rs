@@ -278,7 +278,7 @@ pub fn guard(state: &UiState, req: &UiRequest) -> Option<UiResponse> {
         .header("authorization")
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    if presented != Some(state.control_token.as_str()) {
+    if !ftd_adapter_http::control::token_matches(presented, &state.control_token) {
         return Some(UiResponse::error(
             403,
             "CONTROL_TOKEN_REQUIRED : requests to the UI API need Authorization: Bearer <control token>",

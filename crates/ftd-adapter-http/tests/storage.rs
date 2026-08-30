@@ -43,6 +43,7 @@ fn state(rules: Option<&str>) -> StorageState {
         firestore: None,
         faults: None,
         clock_observer: None,
+        app_check_policy: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn owned_req(
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect::<BTreeMap<_, _>>(),
+        app_check: Vec::new(),
         body,
     }
 }

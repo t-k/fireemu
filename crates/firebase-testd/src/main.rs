@@ -447,6 +447,7 @@ fn storage_state(
     backend: &Arc<LocalBackend>,
     faults: &ftd_core_session::fault::SharedFaultRegistry,
     clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
+    app_check_policy: Option<Arc<ftd_core_app_check::ServiceAdmission>>,
 ) -> Result<Arc<ftd_adapter_http::storage::StorageState>, String> {
     let parent = ftd_adapter_grpc::decode::Parent {
         project: ftd_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
@@ -470,6 +471,7 @@ fn storage_state(
         })),
         faults: Some(faults.clone()),
         clock_observer,
+        app_check_policy,
     }))
 }
 
@@ -905,6 +907,7 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
             &backend,
             &faults,
             clock_observer,
+            storage_policy,
         )?;
         if let Some(runtime) = &functions_runtime {
             runtime.set_faults(faults.for_project(runtime.project()));

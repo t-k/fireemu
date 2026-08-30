@@ -12,6 +12,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+use ftd_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
+use ftd_core_app_check::header::classify_app_check_header;
 use ftd_core_auth::jwt::verify_id_token_decoded;
 use ftd_core_rules::eval::{
     evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
@@ -91,6 +93,9 @@ pub struct StorageState {
     pub faults: Option<ftd_core_session::fault::SharedFaultRegistry>,
     /// Told after a fault plan moved the virtual clock.
     pub clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// The App Check baseline policy of Cloud Storage (`appCheck.services.storage`). `None`
+    /// is the `off` mode: no header is collected and nothing is classified.
+    pub app_check_policy: Option<Arc<ServiceAdmission>>,
 }
 
 impl StorageState {
@@ -202,8 +207,11 @@ pub struct StorageRequest {
     pub query: String,
     /// `Host` header (upload session URLs are absolute).
     pub host: Option<String>,
-    /// Selected request headers (lowercase names).
+    /// Selected request headers (lowercase names). The App Check field is deliberately not
+    /// here: a map collapses duplicates, which the canonical contract must refuse.
     pub headers: BTreeMap<String, String>,
+    /// Every `X-Firebase-AppCheck` field instance, in wire order (specification section 7.3).
+    pub app_check: Vec<String>,
     /// Body.
     pub body: Vec<u8>,
 }
@@ -256,6 +264,25 @@ impl StorageResponse {
 enum Dialect {
     Firebase,
     Gcs,
+}
+
+/// Whether a presented download token is one of the object's, compared in constant time.
+///
+/// The token is an explicit bearer capability (section 12.2), so the comparison must not leak
+/// a prefix, and it binds to the metadata the caller actually resolved: the same bucket, the
+/// same decoded object name and the same generation the request selected.
+fn download_token_matches(meta: Option<&ObjectMetadata>, presented: Option<&str>) -> bool {
+    use subtle::ConstantTimeEq as _;
+    let (Some(meta), Some(presented)) = (meta, presented) else {
+        return false;
+    };
+    let mut matched = false;
+    for token in &meta.download_tokens {
+        let same = token.len() == presented.len()
+            && bool::from(token.as_bytes().ct_eq(presented.as_bytes()));
+        matched |= same;
+    }
+    matched
 }
 
 fn error_response(dialect: Dialect, status: u16, message: &str) -> StorageResponse {
@@ -1127,6 +1154,100 @@ fn base64_decode(text: &str) -> Result<Vec<u8>, ()> {
 
 /// Handles one request.
 ///
+/// Which privileged credential a Storage route already authenticated (section 12.2).
+///
+/// Two surfaces bypass. The JSON API dialect is the privileged server surface the Admin SDK
+/// and `gcloud` use, and it bypasses exactly when it would also bypass Security Rules, so the
+/// two classifications cannot drift apart. A Firebase download URL bypasses only when it
+/// carries a download token bound, in constant time, to the object the request resolved.
+fn storage_bypass(
+    state: &StorageState,
+    dialect: Dialect,
+    route: &Route,
+    method: &str,
+    params: &BTreeMap<String, String>,
+    json_api_privileged: bool,
+) -> PrivilegedBypass {
+    if json_api_privileged {
+        return PrivilegedBypass::StorageJsonApi;
+    }
+    let Route::Object {
+        dialect: Dialect::Firebase,
+        bucket,
+        name,
+    } = route
+    else {
+        return PrivilegedBypass::None;
+    };
+    if dialect != Dialect::Firebase || method != "GET" || !params.contains_key("token") {
+        return PrivilegedBypass::None;
+    }
+    let (Ok(b), Ok(n)) = (bucket_name(bucket), object_name(name)) else {
+        return PrivilegedBypass::None;
+    };
+    let Ok(store) = state.store() else {
+        return PrivilegedBypass::None;
+    };
+    let Ok(meta) = select_generation(store.get(&b, &n).cloned(), params, "generation") else {
+        return PrivilegedBypass::None;
+    };
+    if download_token_matches(meta.as_ref(), params.get("token").map(String::as_str)) {
+        PrivilegedBypass::StorageDownloadToken
+    } else {
+        PrivilegedBypass::None
+    }
+}
+
+/// The App Check denial of a Storage request, or `None` when it is admitted.
+///
+/// This runs after the route, the target project and the privileged classification and before
+/// the fault plan, the Auth credential, Security Rules and every mutation, so a denied request
+/// creates no object generation, no metadata change, no upload session, no upload offset and
+/// no Storage event (`INV-APPCHECK-003`).
+fn app_check_denial(
+    state: &StorageState,
+    app_check: &[String],
+    dialect: Dialect,
+    project_id: &str,
+    operation: &'static str,
+    bypass: PrivilegedBypass,
+) -> Option<StorageResponse> {
+    let policy = state.app_check_policy.as_ref()?;
+    let header = classify_app_check_header(app_check);
+    let decision = policy.admit(&AdmissionRequest {
+        project_id,
+        transport: "http",
+        operation,
+        bypass,
+        header: &header,
+        now: state.now(),
+    });
+    let reason = decision.reason?;
+    let message = if reason == ftd_core_app_check::verify::PUBLIC_REQUIRED_REASON {
+        "App Check token is required by this project's Cloud Storage enforcement."
+    } else {
+        "App Check token is invalid."
+    };
+    Some(error_with_reason(dialect, 403, message, reason))
+}
+
+/// The Storage error envelope with the stable App Check reason code (section 17). The public
+/// code is `APP_CHECK_REQUIRED` or `APP_CHECK_INVALID`; the detailed reason stays privileged.
+fn error_with_reason(
+    dialect: Dialect,
+    status: u16,
+    message: &str,
+    reason: &'static str,
+) -> StorageResponse {
+    let mut response = error_response(dialect, status, message);
+    let mut body: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
+    if let Some(error) = body.get_mut("error").and_then(Value::as_object_mut) {
+        error.insert("reason".to_owned(), json!(reason));
+    }
+    response.body = serde_json::to_vec(&body).unwrap_or_default();
+    response
+}
+
 /// The request is taken by value: upload routes move [`StorageRequest::body`] all the way
 /// into the object store, so a near-limit upload is never duplicated (`STG-MEM-01`).
 #[must_use]
@@ -1166,17 +1287,40 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     // session. Requests are synchronous, so the admission is short-lived.
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let bucket_project = state.project_of_bucket(&bucket_of_route);
+    let authorization = req.header("authorization");
+    // The privileged JSON API classification is spelled once and drives both the Security
+    // Rules bypass below and the App Check bypass, so the two cannot drift apart.
+    let json_api_privileged =
+        matches!(dialect, Dialect::Gcs) && authorization.is_none_or(|a| a.starts_with("Bearer "));
+    // App Check, before the fault plan, the Auth credential, the rules and every mutation.
+    let bypass = storage_bypass(
+        state,
+        dialect,
+        &route,
+        &req.method,
+        &params,
+        json_api_privileged,
+    );
+    if let Some(denial) = app_check_denial(
+        state,
+        &req.app_check,
+        dialect,
+        &bucket_project,
+        operation,
+        bypass,
+    ) {
+        return denial;
+    }
     if let Some(refused) = fault_response(state, dialect, &bucket_project, operation) {
         return refused;
     }
-    let authorization = req.header("authorization");
-    let principal = match (dialect, authorization) {
-        (Dialect::Gcs, None) => Principal::Owner,
-        (Dialect::Gcs, Some(a)) if a.starts_with("Bearer ") => Principal::Owner,
-        _ => match state.principal(authorization, &bucket_of_route) {
+    let principal = if json_api_privileged {
+        Principal::Owner
+    } else {
+        match state.principal(authorization, &bucket_of_route) {
             Ok(p) => p,
             Err(e) => return error_response(dialect, 401, &e),
-        },
+        }
     };
     // The method is copied out so that upload routes can take the request by value.
     let method = req.method.clone();
@@ -1822,10 +1966,8 @@ fn object(
             let media = params.get("alt").map(String::as_str) == Some("media")
                 || req.path.starts_with("/download/");
             // A valid download token grants the read without rules.
-            let token_ok = params.get("token").is_some_and(|t| {
-                meta.as_ref()
-                    .is_some_and(|m| m.download_tokens.iter().any(|x| x == t))
-            });
+            let token_ok =
+                download_token_matches(meta.as_ref(), params.get("token").map(String::as_str));
             if !token_ok {
                 state
                     .authorize(

@@ -195,9 +195,16 @@ async fn collect_body(
     Ok(buffer)
 }
 
+/// The request headers the Storage surface accepts.
+///
+/// `x-firebase-appcheck` is listed because a client may send it, but it is never copied into
+/// the single-valued header map below: a map collapses duplicates, and the canonical contract
+/// of specification section 7.3 has to refuse them. It travels in
+/// [`StorageRequest::app_check`] instead, with every instance in wire order.
 const FORWARDED_HEADERS: &[&str] = &[
     "authorization",
     "content-type",
+    ftd_core_app_check::header::APP_CHECK_HEADER,
     "content-range",
     "range",
     "x-goog-hash",
@@ -245,6 +252,7 @@ fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Byte
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
@@ -266,7 +274,7 @@ async fn respond(
             .headers()
             .get("access-control-request-headers")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("authorization, content-type, x-goog-upload-protocol, x-goog-upload-command, x-goog-upload-offset, x-goog-upload-header-content-type, x-goog-upload-header-content-length, x-firebase-storage-version, x-firebase-gmpid")
+            .unwrap_or("authorization, content-type, x-goog-upload-protocol, x-goog-upload-command, x-goog-upload-offset, x-goog-upload-header-content-type, x-goog-upload-header-content-length, x-firebase-storage-version, x-firebase-gmpid, x-firebase-appcheck")
             .to_owned();
         return Ok(cors(Response::builder().status(204), origin.as_deref())
             .header("access-control-allow-headers", requested)
@@ -284,10 +292,21 @@ async fn respond(
         .map(str::to_owned);
     let mut headers = std::collections::BTreeMap::new();
     for name in FORWARDED_HEADERS {
+        // The App Check field is the one multi-valued member: a collapsed single value would
+        // hide a duplicate, which must classify as malformed (spec 7.3).
+        if ftd_core_app_check::header::is_app_check_header(name) {
+            continue;
+        }
         if let Some(v) = req.headers().get(*name).and_then(|v| v.to_str().ok()) {
             headers.insert((*name).to_owned(), v.to_owned());
         }
     }
+    let app_check: Vec<String> = req
+        .headers()
+        .get_all(ftd_core_app_check::header::APP_CHECK_HEADER)
+        .iter()
+        .map(|v| v.to_str().unwrap_or_default().to_owned())
+        .collect();
     let declared = req
         .headers()
         .get(hyper::header::CONTENT_LENGTH)
@@ -311,6 +330,7 @@ async fn respond(
             query,
             host,
             headers,
+            app_check,
             body,
         },
     );

@@ -181,6 +181,9 @@ fn storage(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
             query: req.query.clone(),
             host: req.header("host").map(str::to_owned),
             headers,
+            // The UI front reaches the privileged JSON API dialect and takes the bypass of
+            // specification section 12.2; it never forwards an App Check field of its own.
+            app_check: Vec::new(),
             body: req.body.clone(),
         },
     );

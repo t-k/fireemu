@@ -58,6 +58,7 @@ fn state() -> Arc<UiState> {
         firestore: None,
         faults: None,
         clock_observer: None,
+        app_check_policy: None,
     });
     let control = Arc::new(ControlState {
         clock: clock.clone(),

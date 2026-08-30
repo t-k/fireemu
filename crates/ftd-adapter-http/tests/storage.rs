@@ -1404,12 +1404,18 @@ fn drop_connection_faults_mark_the_response_for_the_server_to_close() {
     });
     s.faults = Some(registry);
     let path = format!("/v0/b/{BUCKET}/o/f.txt?alt=media");
-    let r = handle(&s, &req("GET", &path, &[("authorization", "Bearer owner")], b""));
+    let r = handle(
+        &s,
+        &req("GET", &path, &[("authorization", "Bearer owner")], b""),
+    );
     assert!(r
         .headers
         .iter()
         .any(|(k, v)| k == ftd_adapter_http::storage::DROP_CONNECTION_HEADER && v == "1"));
-    let r = handle(&s, &req("GET", &path, &[("authorization", "Bearer owner")], b""));
+    let r = handle(
+        &s,
+        &req("GET", &path, &[("authorization", "Bearer owner")], b""),
+    );
     assert_eq!(r.status, 404);
     assert!(!r
         .headers

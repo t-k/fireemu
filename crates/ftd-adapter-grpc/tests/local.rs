@@ -1305,10 +1305,34 @@ async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn execute_pipeline_is_validated_strictly_and_never_executed() {
+    // Typed arguments: a collection path, a boolean function, an integer.
     let stage = |name: &str, args: usize| pb::pipeline::Stage {
         name: name.to_owned(),
-        args: (0..args).map(|_| s("x")).collect(),
+        args: (0..args)
+            .map(|_| match name {
+                "collection" => pb::Value {
+                    value_type: Some(pb::value::ValueType::ReferenceValue("/users".to_owned())),
+                },
+                "where" => pb::Value {
+                    value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                        name: "eq".to_owned(),
+                        args: vec![
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::FieldReferenceValue(
+                                    "age".to_owned(),
+                                )),
+                            },
+                            i(3),
+                        ],
+                        options: std::collections::HashMap::default(),
+                    })),
+                },
+                "limit" => i(5),
+                _ => s("x"),
+            })
+            .collect(),
         options: std::collections::HashMap::default(),
     };
     let request = |stages: Vec<pb::pipeline::Stage>| pb::ExecutePipelineRequest {
@@ -1382,6 +1406,80 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
         .await
         .unwrap_err();
     assert_eq!(empty.metadata().get("ftd-code").unwrap(), "FS_PIPE_DECODE");
+    // Strict: argument shapes, option keys, the database name and the consistency
+    // selector are checked, not only stage names and arities.
+    let typed = |name: &str, value: pb::Value| pb::pipeline::Stage {
+        name: name.to_owned(),
+        args: vec![value],
+        options: std::collections::HashMap::default(),
+    };
+    for (what, bad) in [
+        (
+            "limit(text)",
+            request(vec![stage("collection", 1), typed("limit", s("text"))]),
+        ),
+        (
+            "collection(null)",
+            request(vec![typed("collection", pb::Value { value_type: None })]),
+        ),
+        (
+            "collection(document path)",
+            request(vec![typed("collection", s("/users/u1"))]),
+        ),
+        (
+            "where(string)",
+            request(vec![stage("collection", 1), typed("where", s("x"))]),
+        ),
+        (
+            "unknown option",
+            request(vec![
+                stage("collection", 1),
+                pb::pipeline::Stage {
+                    name: "sample".to_owned(),
+                    args: vec![i(3)],
+                    options: [("speed".to_owned(), s("fast"))].into_iter().collect(),
+                },
+            ]),
+        ),
+        (
+            "garbage database",
+            pb::ExecutePipelineRequest {
+                database: "garbage".to_owned(),
+                ..request(vec![stage("collection", 1)])
+            },
+        ),
+        (
+            "pipeline option",
+            pb::ExecutePipelineRequest {
+                pipeline_type: Some(
+                    pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                        pb::StructuredPipeline {
+                            pipeline: Some(pb::Pipeline {
+                                stages: vec![stage("collection", 1)],
+                            }),
+                            options: [("turbo".to_owned(), s("on"))].into_iter().collect(),
+                        },
+                    ),
+                ),
+                ..request(vec![])
+            },
+        ),
+        (
+            "auto-commit without a new transaction",
+            pb::ExecutePipelineRequest {
+                auto_commit_transaction: true,
+                ..request(vec![stage("collection", 1)])
+            },
+        ),
+    ] {
+        let err = client.execute_pipeline(bad).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{what}: {err}");
+        assert_eq!(
+            err.metadata().get("ftd-code").unwrap(),
+            "FS_PIPE_INVALID",
+            "{what}"
+        );
+    }
     handle.abort();
 }
 

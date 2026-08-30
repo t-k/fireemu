@@ -1,12 +1,16 @@
-//! `ExecutePipeline` decoding for the strict validator (`FS-PIPE-RPC-1`): the wire stages
-//! become [`StageSpec`]s that the core canonicalizes; nothing is executed.
+//! `ExecutePipeline` decoding for the strict validator (`FS-PIPE-RPC-1`): the request's
+//! database, consistency selector and options are checked, the wire stages become
+//! [`StageSpec`]s with typed arguments that the core canonicalizes; nothing is executed.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
-use ftd_core_firestore::pipeline::{canonicalize, PipelineAst, PipelineError, StageSpec};
+use ftd_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
 use ftd_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
+
+/// Option keys a `StructuredPipeline` may carry.
+const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 
 /// Decodes and canonicalizes the request's pipeline. Errors carry the `FS_PIPE_*` code in
 /// the `ftd-code` metadata like the gateway's rejections.
@@ -17,6 +21,33 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
             "FS_PIPE_DECODE",
         ));
     }
+    if crate::decode::parse_parent(&format!("{}/documents", req.database)).is_err() {
+        return Err(with_code(
+            Status::invalid_argument(format!(
+                "database {:?} must be projects/{{project}}/databases/{{database}}",
+                req.database
+            )),
+            "FS_PIPE_INVALID",
+        ));
+    }
+    match &req.consistency_selector {
+        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(t)) if t.is_empty() => {
+            return Err(with_code(
+                Status::invalid_argument("transaction must not be empty"),
+                "FS_PIPE_INVALID",
+            ));
+        }
+        Some(pb::execute_pipeline_request::ConsistencySelector::NewTransaction(_)) => {}
+        _ if req.auto_commit_transaction => {
+            return Err(with_code(
+                Status::invalid_argument(
+                    "auto_commit_transaction requires new_transaction as the consistency selector",
+                ),
+                "FS_PIPE_INVALID",
+            ));
+        }
+        _ => {}
+    }
     let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         &req.pipeline_type
     else {
@@ -25,6 +56,19 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
             "FS_PIPE_DECODE",
         ));
     };
+    for (key, value) in &structured.options {
+        let valid = PIPELINE_OPTIONS.contains(&key.as_str())
+            && matches!(value.value_type, Some(pb::value::ValueType::StringValue(_)));
+        if !valid {
+            return Err(with_code(
+                Status::invalid_argument(format!(
+                    "pipeline option {key:?} is not one of {} (a string)",
+                    PIPELINE_OPTIONS.join(", ")
+                )),
+                "FS_PIPE_INVALID",
+            ));
+        }
+    }
     let Some(pipeline) = &structured.pipeline else {
         return Err(with_code(
             Status::invalid_argument("structured_pipeline requires a pipeline"),
@@ -33,22 +77,20 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
     };
     let mut specs = Vec::with_capacity(pipeline.stages.len());
     for stage in &pipeline.stages {
-        for arg in &stage.args {
-            if matches!(arg.value_type, Some(pb::value::ValueType::PipelineValue(_))) {
-                return Err(with_code(
-                    Status::unimplemented(format!(
-                        "stage {:?}: nested pipeline arguments are not modelled",
-                        stage.name
-                    )),
-                    "FS_PIPE_UNSUPPORTED",
-                ));
-            }
-        }
-        let mut options: Vec<String> = stage.options.keys().cloned().collect();
-        options.sort();
+        let args = stage
+            .args
+            .iter()
+            .map(|a| arg(&stage.name, a))
+            .collect::<Result<Vec<Arg>, Status>>()?;
+        let mut options = stage
+            .options
+            .iter()
+            .map(|(k, v)| arg(&stage.name, v).map(|a| (k.clone(), a)))
+            .collect::<Result<Vec<(String, Arg)>, Status>>()?;
+        options.sort_by(|a, b| a.0.cmp(&b.0));
         specs.push(StageSpec {
             name: stage.name.clone(),
-            args: stage.args.len(),
+            args,
             options,
         });
     }
@@ -63,11 +105,62 @@ pub fn validate_pipeline(req: &pb::ExecutePipelineRequest) -> Result<PipelineAst
             }
             PipelineError::Empty
             | PipelineError::InputPosition(_)
-            | PipelineError::Arity { .. } => {
+            | PipelineError::Arity { .. }
+            | PipelineError::Argument { .. }
+            | PipelineError::Option { .. } => {
                 (Status::invalid_argument(e.to_string()), "FS_PIPE_INVALID")
             }
         };
         with_code(status, code)
+    })
+}
+
+/// A wire value as a validation argument; nested pipelines are not modelled.
+fn arg(stage: &str, value: &pb::Value) -> Result<Arg, Status> {
+    use pb::value::ValueType as V;
+    Ok(match &value.value_type {
+        None | Some(V::NullValue(_)) => Arg::Null,
+        Some(V::BooleanValue(_)) => Arg::Bool,
+        Some(V::IntegerValue(n)) => Arg::Integer(*n),
+        Some(V::DoubleValue(d)) => Arg::Double(*d),
+        Some(V::TimestampValue(_)) => Arg::Timestamp,
+        Some(V::StringValue(s)) => Arg::String(s.clone()),
+        Some(V::BytesValue(_)) => Arg::Bytes,
+        Some(V::ReferenceValue(r)) => Arg::Reference(r.clone()),
+        Some(V::GeoPointValue(_)) => Arg::GeoPoint,
+        Some(V::ArrayValue(a)) => Arg::Array(
+            a.values
+                .iter()
+                .map(|v| arg(stage, v))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Some(V::MapValue(m)) => {
+            let mut entries = m
+                .fields
+                .iter()
+                .map(|(k, v)| arg(stage, v).map(|a| (k.clone(), a)))
+                .collect::<Result<Vec<_>, _>>()?;
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Arg::Map(entries)
+        }
+        Some(V::FieldReferenceValue(f)) => Arg::Field(f.clone()),
+        Some(V::VariableReferenceValue(v)) => Arg::Variable(v.clone()),
+        Some(V::FunctionValue(f)) => Arg::Function {
+            name: f.name.clone(),
+            args: f
+                .args
+                .iter()
+                .map(|v| arg(stage, v))
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        Some(V::PipelineValue(_)) => {
+            return Err(with_code(
+                Status::unimplemented(format!(
+                    "stage {stage:?}: nested pipeline arguments are not modelled"
+                )),
+                "FS_PIPE_UNSUPPORTED",
+            ))
+        }
     })
 }
 

@@ -2,17 +2,37 @@
 
 use ftd_core_firestore::field_path::FieldPath;
 use ftd_core_firestore::index::IndexQueryScope;
-use ftd_core_firestore::pipeline::{canonicalize, PipelineError, StageRole, StageSpec};
+use ftd_core_firestore::pipeline::{canonicalize, Arg, PipelineError, StageRole, StageSpec};
 use ftd_core_firestore::text_index::{
     is_language_tag, DefaultTextLanguage, LanguageOverridePolicy, TextIndexDefinition,
     TextIndexError, TextIndexSet, TextIndexState, TextIndexType, TextIndexedField, TextMatchType,
 };
 use ftd_core_types::ids::CollectionId;
 
+/// A stage with `args` well-typed arguments for its name.
 fn stage(name: &str, args: usize) -> StageSpec {
+    let arg = |index: usize| match name {
+        "collection" => Arg::Reference("/users".into()),
+        "collection_group" => Arg::String("users".into()),
+        "where" => Arg::Function {
+            name: "eq".into(),
+            args: vec![Arg::Field("age".into()), Arg::Integer(3)],
+        },
+        "sort" => Arg::Function {
+            name: "ascending".into(),
+            args: vec![Arg::Field(format!("f{index}"))],
+        },
+        "limit" | "offset" => Arg::Integer(5),
+        "find_nearest" => match index {
+            0 => Arg::Field("embedding".into()),
+            1 => Arg::Array(vec![Arg::Double(0.5)]),
+            _ => Arg::String("cosine".into()),
+        },
+        _ => Arg::String("x".into()),
+    };
     StageSpec {
         name: name.to_owned(),
-        args,
+        args: (0..args).map(arg).collect(),
         options: Vec::new(),
     }
 }

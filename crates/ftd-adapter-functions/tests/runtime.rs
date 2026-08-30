@@ -801,10 +801,7 @@ async fn scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome() {
             .is_err(),
         "held by the delay"
     );
-    assert!(runtime
-        .dead_letters()
-        .iter()
-        .all(|d| d.function != "tick"));
+    assert!(runtime.dead_letters().iter().all(|d| d.function != "tick"));
     clock
         .lock()
         .unwrap()

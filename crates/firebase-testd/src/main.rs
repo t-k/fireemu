@@ -616,6 +616,18 @@ fn app_check_state(
     }))
 }
 
+/// One product's App Check baseline policy, or `None` when its effective mode is `off`.
+///
+/// `off` is represented by the absence of a policy, so an adapter that holds `None` never
+/// collects a header and never classifies anything (specification section 12.1).
+fn service_admission(
+    gate: Option<&ftd_core_app_check::AppCheckGate>,
+    service: &'static str,
+    mode: ftd_core_app_check::verify::BaselineMode,
+) -> Option<Arc<ftd_core_app_check::ServiceAdmission>> {
+    ftd_core_app_check::ServiceAdmission::new(gate?.clone(), service, mode).map(Arc::new)
+}
+
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     match (cfg.rules_enforced, loaded) {
         (false, _) => println!("  rules: disabled by config (every request is allowed)"),
@@ -841,6 +853,24 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
             )?),
             None => None,
         };
+        // One gate for the whole daemon; one policy per product from appCheck.services.* and
+        // the --only selection (the activation table of specification section 8).
+        let app_check_gate = app_check.as_ref().map(|s| s.gate());
+        let auth_policy = service_admission(
+            app_check_gate.as_ref(),
+            "auth",
+            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
+        );
+        let firestore_policy = service_admission(
+            app_check_gate.as_ref(),
+            "firestore",
+            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
+        );
+        let storage_policy = service_admission(
+            app_check_gate.as_ref(),
+            "storage",
+            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
+        );
         // Auth user events reach the functions runtime after each Auth request.
         let auth = Arc::new(AuthState {
             store: auth_store.clone(),
@@ -851,6 +881,7 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
             registry: Some(registry.clone()),
             tenancy: Some(tenancy.clone()),
             app_check: app_check.clone(),
+            app_check_policy: auth_policy,
         });
         // A fault plan that moves the clock wakes the functions runtime like the clock
         // route does.

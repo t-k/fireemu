@@ -31,6 +31,7 @@ fn state() -> AuthState {
         control_token: None,
         registry: None,
         app_check: None,
+        app_check_policy: None,
         tenancy: None,
     }
 }
@@ -51,6 +52,7 @@ fn owner() -> RequestHeaders {
         origin: None,
         content_type: Some("application/json".to_owned()),
         host: Some("127.0.0.1:9099".to_owned()),
+        app_check: Vec::new(),
     }
 }
 

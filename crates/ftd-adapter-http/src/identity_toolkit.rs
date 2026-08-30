@@ -18,6 +18,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use ftd_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
+use ftd_core_app_check::header::classify_app_check_header;
 use ftd_core_auth::base32;
 use ftd_core_auth::claims::{ClaimValue, CustomClaims};
 use ftd_core_auth::jwt::{encode_with, verify_id_token, JwtError};
@@ -58,6 +60,9 @@ pub struct AuthState {
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
     pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
+    /// The App Check baseline policy of Firebase Authentication (`appCheck.services.auth`).
+    /// `None` is the `off` mode: no header is collected and nothing is classified.
+    pub app_check_policy: Option<Arc<ServiceAdmission>>,
 }
 
 /// Hands the user events a request produced to the sink once the handler released the
@@ -225,6 +230,11 @@ fn verify(store: &AuthStore, body: &Value, at: LogicalInstant) -> Result<LocalId
 }
 
 /// Request metadata the JSON handlers need beyond the body.
+///
+/// `app_check` is the one multi-valued member on purpose: the canonical contract of
+/// specification section 7.3 refuses duplicate and folded `X-Firebase-AppCheck` fields, which
+/// is impossible to see once a header map has collapsed them, so the wire order is carried
+/// through unchanged and classified by `ftd_core_app_check::header`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RequestHeaders {
     /// `Authorization` header.
@@ -235,6 +245,9 @@ pub struct RequestHeaders {
     pub content_type: Option<String>,
     /// `Host` header (action links name this daemon).
     pub host: Option<String>,
+    /// Every `X-Firebase-AppCheck` field instance, in wire order. A value the transport could
+    /// not render as text is carried as an empty string, which classifies as malformed.
+    pub app_check: Vec<String>,
 }
 
 /// Whether a browser `Origin` names this machine (loopback) — the only origins allowed to
@@ -252,6 +265,11 @@ pub fn origin_is_local(origin: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
+/// The exact credential the emulator's Admin SDK surface requires. It is the privileged
+/// credential the App Check bypass of section 12.2 is granted for, so the comparison is
+/// spelled once and both the guard and the bypass classification use it.
+pub const OWNER_CREDENTIAL: &str = "Bearer owner";
+
 /// Guards the Admin SDK (project-scoped) routes: owner credential, loopback origin, JSON
 /// body, matching project.
 fn admin_guard(
@@ -260,7 +278,7 @@ fn admin_guard(
     project: &str,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
-    if headers.authorization.as_deref() != Some("Bearer owner") {
+    if headers.authorization.as_deref() != Some(OWNER_CREDENTIAL) {
         return Err(error(
             401,
             "MISSING_OWNER_CREDENTIAL : project-scoped routes require 'Authorization: Bearer owner'",
@@ -299,6 +317,118 @@ pub fn handle(state: &AuthState, method: &str, path: &str, body: &Value) -> Json
     handle_with(state, method, path, &RequestHeaders::default(), body)
 }
 
+/// The stable operation label of an Identity Toolkit route, for observations.
+///
+/// The table is the published route classification of specification section 13.3: everything
+/// named here is an end-user operation App Check protects, and everything else collapses to
+/// `unknown`, so an unrecognised path can never become an unbounded metric label (section 15).
+#[must_use]
+pub fn end_user_operation(path: &str) -> &'static str {
+    match path {
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp" => "accounts:signUp",
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword" => {
+            "accounts:signInWithPassword"
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken" => {
+            "accounts:signInWithCustomToken"
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:lookup" => "accounts:lookup",
+        "/identitytoolkit.googleapis.com/v1/accounts:update" => "accounts:update",
+        "/identitytoolkit.googleapis.com/v1/accounts:sendOobCode" => "accounts:sendOobCode",
+        "/identitytoolkit.googleapis.com/v1/accounts:resetPassword" => "accounts:resetPassword",
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink" => {
+            "accounts:signInWithEmailLink"
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode" => {
+            "accounts:sendVerificationCode"
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber" => {
+            "accounts:signInWithPhoneNumber"
+        }
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithIdp" => "accounts:signInWithIdp",
+        "/identitytoolkit.googleapis.com/v1/accounts:createAuthUri" => "accounts:createAuthUri",
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:start" => "mfaEnrollment:start",
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:finalize" => {
+            "mfaEnrollment:finalize"
+        }
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:withdraw" => {
+            "mfaEnrollment:withdraw"
+        }
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:start" => "mfaSignIn:start",
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize" => "mfaSignIn:finalize",
+        "/securetoken.googleapis.com/v1/token" => "securetoken:token",
+        _ => ftd_core_app_check::observe::UNKNOWN_APP_LABEL,
+    }
+}
+
+/// Which privileged credential, if any, an Identity Toolkit route already authenticated
+/// (specification sections 12.2 and 13.3).
+///
+/// Only two surfaces bypass: the emulator inspection routes, which are privileged local
+/// administration with their own control-token guard, and the Admin SDK routes, and those
+/// only once the caller actually presented the owner credential. A request to an Admin path
+/// *without* the owner credential is an ordinary end-user request as far as App Check is
+/// concerned, so a missing token is refused before `admin_guard` reports anything.
+fn app_check_bypass(path: &str, headers: &RequestHeaders) -> PrivilegedBypass {
+    let is_admin = path
+        .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
+        .is_some_and(|rest| rest.contains('/'));
+    if JWKS_PATHS.contains(&path) || path.starts_with("/emulator/v1/projects/") {
+        return PrivilegedBypass::ControlApi;
+    }
+    if is_admin && headers.authorization.as_deref() == Some(OWNER_CREDENTIAL) {
+        return PrivilegedBypass::IdentityToolkitAdmin;
+    }
+    PrivilegedBypass::None
+}
+
+/// The App Check denial of an Auth request, or `None` when it is admitted.
+///
+/// This runs after the route and the target project are resolved and before Firebase Auth,
+/// Security Rules or any state transition, so a denied request creates no user, issues or
+/// rotates no credential, consumes no OOB or phone code, changes no MFA state and touches no
+/// modelled abuse counter (`INV-APPCHECK-003`).
+fn app_check_denial(
+    state: &AuthState,
+    path: &str,
+    headers: &RequestHeaders,
+    project_id: &str,
+    at: LogicalInstant,
+) -> Option<JsonResponse> {
+    let policy = state.app_check_policy.as_ref()?;
+    let header = classify_app_check_header(&headers.app_check);
+    let decision = policy.admit(&AdmissionRequest {
+        project_id,
+        transport: "http",
+        operation: end_user_operation(path),
+        bypass: app_check_bypass(path, headers),
+        header: &header,
+        now: at,
+    });
+    let reason = decision.reason?;
+    Some(app_check_denied(reason))
+}
+
+/// The wire shape of an Auth App Check denial: HTTP 403 Google JSON `PERMISSION_DENIED` with
+/// the public reason code (specification section 17). Detailed reasons stay in observations.
+fn app_check_denied(reason: &'static str) -> JsonResponse {
+    let message = if reason == ftd_core_app_check::verify::PUBLIC_REQUIRED_REASON {
+        "App Check token is required by this project's Firebase Authentication enforcement."
+    } else {
+        "App Check token is invalid."
+    };
+    JsonResponse {
+        status: 403,
+        body: json!({"error": {
+            "code": 403,
+            "message": message,
+            "status": "PERMISSION_DENIED",
+            "reason": reason,
+            "errors": [{"message": message, "domain": "global", "reason": "forbidden"}]
+        }}),
+    }
+}
+
 /// Where the session's JWKS is served (the Google path the SDKs know, and the well-known one).
 pub const JWKS_PATHS: &[&str] = &[
     "/.well-known/jwks.json",
@@ -332,6 +462,13 @@ pub fn handle_with(
     let Ok(mut store) = store_arc.lock() else {
         return error(500, "INTERNAL");
     };
+    // App Check, once the route and the target project are known and before any Auth work
+    // (spec 7.4 and 13.3). Locking the store is not a state transition, so a denial here
+    // still leaves no user, no issued or rotated credential, no consumed OOB or phone code,
+    // no MFA change and no abuse counter behind.
+    if let Some(denial) = app_check_denial(state, path, headers, store.project_id(), at) {
+        return denial;
+    }
     if method == "GET" && JWKS_PATHS.contains(&path) {
         // The public keys signed ID tokens verify against (empty for unsigned sessions).
         let keys: Vec<Value> = store

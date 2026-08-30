@@ -72,6 +72,15 @@ pub struct AppCheckState {
     pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
 }
 
+impl AppCheckState {
+    /// The shared handle the product adapters and the lifecycle hooks decide against
+    /// (specification section 7.4). It carries no control token and no secret source.
+    #[must_use]
+    pub fn gate(&self) -> ftd_core_app_check::admission::AppCheckGate {
+        ftd_core_app_check::admission::AppCheckGate::new(self.registry.clone(), self.signer.clone())
+    }
+}
+
 impl std::fmt::Debug for AppCheckState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppCheckState")

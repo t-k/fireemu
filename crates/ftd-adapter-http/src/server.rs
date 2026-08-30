@@ -44,7 +44,7 @@ async fn respond(
             .headers()
             .get("access-control-request-headers")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("authorization, content-type")
+            .unwrap_or("authorization, content-type, x-firebase-appcheck")
             .to_owned();
         return Ok(
             with_cors(Response::builder().status(204), origin.as_deref())
@@ -69,6 +69,15 @@ async fn respond(
         origin: header("origin"),
         content_type: header("content-type"),
         host: header("host"),
+        // Every instance, in wire order: duplicates and folded values must survive to the
+        // classifier, which refuses them (spec 7.3). An unrenderable value becomes an empty
+        // string, which is malformed too.
+        app_check: req
+            .headers()
+            .get_all(ftd_core_app_check::header::APP_CHECK_HEADER)
+            .iter()
+            .map(|v| v.to_str().unwrap_or_default().to_owned())
+            .collect(),
     };
     // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
     let collected = Limited::new(req.into_body(), MAX_BODY_BYTES)

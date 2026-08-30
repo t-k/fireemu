@@ -115,6 +115,7 @@ fn state() -> Arc<UiState> {
             control_token: Some(TOKEN.to_owned()),
             registry: None,
             app_check: None,
+            app_check_policy: None,
             tenancy: None,
         }),
         storage,

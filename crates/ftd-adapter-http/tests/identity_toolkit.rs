@@ -30,6 +30,7 @@ fn state() -> AuthState {
         control_token: None,
         registry: None,
         app_check: None,
+        app_check_policy: None,
         tenancy: None,
     }
 }
@@ -421,6 +422,7 @@ fn owner() -> RequestHeaders {
         origin: None,
         content_type: Some("application/json".to_owned()),
         host: None,
+        app_check: Vec::new(),
     }
 }
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {

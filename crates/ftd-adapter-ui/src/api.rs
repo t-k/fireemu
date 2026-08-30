@@ -101,6 +101,10 @@ fn auth(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         content_type: Some("application/json".to_owned()),
         // Action links point at the Auth listener, not at this one.
         host: Some(state.info.http_addr.clone()),
+        // The Emulator UI is privileged local administration: it presents the owner
+        // credential above and takes the Admin bypass of specification section 12.2, so it
+        // never forwards an App Check field of its own.
+        app_check: Vec::new(),
     };
     let response = ftd_adapter_http::identity_toolkit::handle_with(
         &state.auth,

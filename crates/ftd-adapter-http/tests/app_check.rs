@@ -110,6 +110,7 @@ fn auth_state(app_check: Option<Arc<AppCheckState>>) -> Arc<AuthState> {
         events: None,
         control_token: Some(CONTROL_TOKEN.to_owned()),
         registry: None,
+        app_check_policy: None,
         tenancy: None,
         app_check,
     })

@@ -4,6 +4,7 @@
 
 pub mod field_path;
 pub mod index;
+pub mod limits;
 pub mod path;
 pub mod pipeline;
 pub mod query;

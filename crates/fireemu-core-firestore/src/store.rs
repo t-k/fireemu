@@ -20,6 +20,7 @@ use fireemu_core_limits::plan::FirestorePlanProfile;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::field_path::FieldPath;
+use crate::limits;
 use crate::path::DocumentPath;
 use crate::query::{Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, UnaryOp};
 use crate::size::document_size;
@@ -338,11 +339,11 @@ fn seconds_limit(id: &str, fallback: i64) -> LogicalDuration {
 }
 
 fn transaction_ttl() -> LogicalDuration {
-    seconds_limit("FS-LIMIT-TRANSACTION-TOTAL-TIME", 270)
+    seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)
 }
 
 fn transaction_idle_ttl() -> LogicalDuration {
-    seconds_limit("FS-LIMIT-TRANSACTION-IDLE-TIME", 60)
+    seconds_limit(limits::TRANSACTION_IDLE_TIME, 60)
 }
 
 fn elapsed(now: LogicalInstant, earlier: LogicalInstant) -> LogicalDuration {
@@ -816,7 +817,7 @@ impl FirestoreState {
         for write in writes {
             let n = transforms_per_document.entry(write.op.path()).or_default();
             *n += write.transforms.len() as u64;
-            check_limit("FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT", *n)?;
+            check_limit(limits::FIELD_TRANSFORMS_PER_DOCUMENT, *n)?;
         }
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
@@ -1329,7 +1330,7 @@ fn apply_write(
                 }
             };
             check_limit(
-                "FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT",
+                limits::FIELD_TRANSFORMS_PER_DOCUMENT,
                 write.transforms.len() as u64,
             )?;
             let mut transform_results = Vec::with_capacity(write.transforms.len());
@@ -1360,13 +1361,13 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
         FieldPath::from_segments([name.as_str()])
             .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))?;
         check_limit(
-            "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH",
+            limits::NESTED_MAP_ARRAY_DEPTH,
             u64::from(value.nesting_depth()),
         )?;
     }
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
-    check_limit("FS-LIMIT-DOCUMENT-BYTES", size.total)
+    check_limit(limits::DOCUMENT_BYTES, size.total)
 }
 
 /// Navigates a field path.

@@ -172,18 +172,91 @@ fn text_of(entry: &Value) -> String {
 /// scenarios share a process, so starting one each would make the process census below see
 /// another scenario's daemon.
 fn manifest() -> &'static Value {
-    static MANIFEST: OnceLock<Value> = OnceLock::new();
-    MANIFEST.get_or_init(|| {
+    &published().0
+}
+
+/// What `GET /v1/limits` serves, from the same daemon as the manifest.
+fn limits() -> &'static Value {
+    &published().1
+}
+
+fn published() -> &'static (Value, Value) {
+    static PUBLISHED: OnceLock<(Value, Value)> = OnceLock::new();
+    PUBLISHED.get_or_init(|| {
         let daemon = Daemon::start();
-        let body = daemon.get("/v1/capabilities");
-        let parsed = serde_json::from_str(&body).expect("the manifest is JSON");
+        let manifest = daemon.get("/v1/capabilities");
+        let limits = daemon.get("/v1/limits");
+        let manifest = serde_json::from_str(&manifest).expect("the manifest is JSON");
+        let limits = serde_json::from_str(&limits).expect("the limits route serves JSON");
         drop(daemon);
         census::assert_no_owned_descendants(
             "the capability manifest daemon",
             Duration::from_secs(10),
         );
-        parsed
+        (manifest, limits)
     })
+}
+
+/// `LIMIT-META-03`: the `FS-LIM-1` capability entry, the Standard catalog and `/v1/limits`
+/// name the same set of enforced limits, and it is exactly the set the runtime enforces
+/// (`fireemu_core_firestore::limits::ENFORCED_LIMIT_IDS`). A limit the runtime can refuse a
+/// request over is therefore never published as unsupported anywhere.
+#[test]
+fn the_limit_metadata_agrees_with_the_enforcement() {
+    use fireemu_core_firestore::limits::ENFORCED_LIMIT_IDS;
+    use fireemu_core_limits::catalogs::FIRESTORE_STANDARD_2026_08_25;
+    use fireemu_core_limits::model::ImplementationStatus;
+    use std::collections::BTreeSet;
+
+    let enforced: BTreeSet<&str> = ENFORCED_LIMIT_IDS.iter().copied().collect();
+
+    let manifest = manifest();
+    let listed: BTreeSet<&str> = manifest["capabilities"]["FS-LIM-1"]["implemented"]
+        .as_array()
+        .expect("FS-LIM-1 lists its implemented limits")
+        .iter()
+        .map(|v| v.as_str().expect("a limit id"))
+        .collect();
+    assert_eq!(
+        listed, enforced,
+        "FS-LIM-1.implemented and the enforced set differ"
+    );
+
+    let catalog: BTreeSet<&str> = FIRESTORE_STANDARD_2026_08_25
+        .limits
+        .iter()
+        .filter(|l| l.implemented == ImplementationStatus::Implemented)
+        .map(|l| l.id)
+        .collect();
+    assert_eq!(
+        catalog, enforced,
+        "the catalog's implemented set and the enforced set differ"
+    );
+
+    let served = limits()["catalogs"]
+        .as_array()
+        .expect("catalogs are listed")
+        .iter()
+        .find(|c| c["id"] == FIRESTORE_STANDARD_2026_08_25.meta.id)
+        .expect("the Standard catalog is served");
+    let mut reported = BTreeSet::new();
+    for limit in served["limits"].as_array().expect("limits are listed") {
+        let id = limit["id"].as_str().expect("a limit id");
+        let status = limit["implemented"].as_str().expect("a status");
+        if enforced.contains(id) {
+            assert_eq!(status, "Implemented", "/v1/limits reports {id} as {status}");
+            reported.insert(id);
+        } else {
+            assert_ne!(
+                status, "Implemented",
+                "/v1/limits reports {id} implemented but nothing enforces it"
+            );
+        }
+    }
+    assert_eq!(
+        reported, enforced,
+        "/v1/limits does not name every enforced limit"
+    );
 }
 
 #[test]

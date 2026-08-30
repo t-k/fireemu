@@ -1,0 +1,26 @@
+[package]
+name = "fireemu-adapter-pubsub"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "gRPC surface for the Cloud Pub/Sub emulator (google.pubsub.v1 Publisher/Subscriber) over the core state machine"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+fireemu-core-session = { path = "../fireemu-core-session" }
+fireemu-core-pubsub = { path = "../fireemu-core-pubsub" }
+fireemu-proto-pubsub = { path = "../fireemu-proto-pubsub" }
+prost = "0.13"
+prost-types = "0.13"
+tonic = { version = "0.13", features = ["transport", "codegen", "prost"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+
+[lints]
+workspace = true

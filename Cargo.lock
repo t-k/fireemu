@@ -445,6 +445,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fireemu-adapter-pubsub"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-pubsub",
+ "fireemu-core-session",
+ "fireemu-core-types",
+ "fireemu-proto-pubsub",
+ "prost",
+ "prost-types",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+]
+
+[[package]]
 name = "fireemu-adapter-ui"
 version = "0.1.0"
 dependencies = [
@@ -528,6 +543,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fireemu-core-pubsub"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
 name = "fireemu-core-rules"
 version = "0.1.0"
 dependencies = [
@@ -562,6 +585,15 @@ dependencies = [
 
 [[package]]
 name = "fireemu-proto-firestore"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-types",
+ "tonic",
+]
+
+[[package]]
+name = "fireemu-proto-pubsub"
 version = "0.1.0"
 dependencies = [
  "prost",
@@ -1974,6 +2006,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

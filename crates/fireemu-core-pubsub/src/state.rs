@@ -208,7 +208,8 @@ impl PubSubState {
     /// Updates the ack deadline of a subscription.
     pub fn update_ack_deadline(&mut self, name: &SubscriptionName, seconds: u32) -> Result<()> {
         let s = self.sub_mut(name)?;
-        if !(crate::subscription::MIN_ACK_DEADLINE_SECONDS..=crate::subscription::MAX_ACK_DEADLINE_SECONDS)
+        if !(crate::subscription::MIN_ACK_DEADLINE_SECONDS
+            ..=crate::subscription::MAX_ACK_DEADLINE_SECONDS)
             .contains(&seconds)
         {
             return Err(PubSubError::invalid_argument(
@@ -423,14 +424,23 @@ mod tests {
         let now = LogicalInstant::from_unix_seconds(1000);
         s.create_topic(topic("demo-app", "orders"), BTreeMap::new())
             .unwrap();
-        s.create_subscription(sub_cfg("demo-app", "orders-sub", "orders", Filter::always()))
-            .unwrap();
+        s.create_subscription(sub_cfg(
+            "demo-app",
+            "orders-sub",
+            "orders",
+            Filter::always(),
+        ))
+        .unwrap();
         let ids = s
             .publish(&topic("demo-app", "orders"), vec![data(b"hello")], now)
             .unwrap();
         assert_eq!(ids.len(), 1);
         let msgs = s
-            .pull(&SubscriptionName::new("demo-app", "orders-sub").unwrap(), 10, now)
+            .pull(
+                &SubscriptionName::new("demo-app", "orders-sub").unwrap(),
+                10,
+                now,
+            )
             .unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].message.message.data, b"hello");
@@ -439,7 +449,8 @@ mod tests {
     #[test]
     fn duplicate_topic_is_already_exists() {
         let mut s = PubSubState::new(1);
-        s.create_topic(topic("p1", "top-a"), BTreeMap::new()).unwrap();
+        s.create_topic(topic("p1", "top-a"), BTreeMap::new())
+            .unwrap();
         assert_eq!(
             s.create_topic(topic("p1", "top-a"), BTreeMap::new())
                 .unwrap_err()
@@ -463,7 +474,8 @@ mod tests {
     fn filter_drops_non_matching_messages() {
         let mut s = PubSubState::new(7);
         let now = LogicalInstant::from_unix_seconds(1);
-        s.create_topic(topic("p", "events"), BTreeMap::new()).unwrap();
+        s.create_topic(topic("p", "events"), BTreeMap::new())
+            .unwrap();
         s.create_subscription(sub_cfg(
             "p",
             "orders-only",
@@ -472,7 +484,9 @@ mod tests {
         ))
         .unwrap();
         let mut order = data(b"o");
-        order.attributes.insert("type".to_owned(), "order".to_owned());
+        order
+            .attributes
+            .insert("type".to_owned(), "order".to_owned());
         let mut refund = data(b"r");
         refund
             .attributes
@@ -489,7 +503,8 @@ mod tests {
     #[test]
     fn deleting_topic_leaves_subscription_with_sentinel() {
         let mut s = PubSubState::new(1);
-        s.create_topic(topic("p", "top-a"), BTreeMap::new()).unwrap();
+        s.create_topic(topic("p", "top-a"), BTreeMap::new())
+            .unwrap();
         s.create_subscription(sub_cfg("p", "sub-a", "top-a", Filter::always()))
             .unwrap();
         s.delete_topic(&topic("p", "top-a")).unwrap();
@@ -539,7 +554,8 @@ mod tests {
         let run = || {
             let mut s = PubSubState::new(99);
             let now = LogicalInstant::from_unix_seconds(0);
-            s.create_topic(topic("p", "top-a"), BTreeMap::new()).unwrap();
+            s.create_topic(topic("p", "top-a"), BTreeMap::new())
+                .unwrap();
             s.create_subscription(sub_cfg("p", "sub-a", "top-a", Filter::always()))
                 .unwrap();
             s.publish(&topic("p", "top-a"), vec![data(b"a"), data(b"b")], now)

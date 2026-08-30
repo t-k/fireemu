@@ -332,9 +332,9 @@ impl SubscriptionState {
         if key.is_empty() {
             return false;
         }
-        self.entries[..i].iter().any(|e| {
-            e.stored.message.ordering_key == *key && !matches!(e.state, Delivery::Acked)
-        })
+        self.entries[..i]
+            .iter()
+            .any(|e| e.stored.message.ordering_key == *key && !matches!(e.state, Delivery::Acked))
     }
 
     /// Acknowledges the messages named by `ack_ids`. Unknown or already-expired ack ids are
@@ -358,7 +358,11 @@ impl SubscriptionState {
     pub fn modify_ack_deadline(&mut self, ack_id: &str, seconds: u32, now: LogicalInstant) {
         let backoff = self.config.redelivery_backoff();
         for e in &mut self.entries {
-            if let Delivery::Outstanding { ack_id: id, deadline } = &mut e.state {
+            if let Delivery::Outstanding {
+                ack_id: id,
+                deadline,
+            } = &mut e.state
+            {
                 if id == ack_id {
                     if seconds == 0 {
                         e.state = Delivery::Available {

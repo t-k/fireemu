@@ -48,7 +48,10 @@ impl Filter {
             return Ok(Self::always());
         }
         let tokens = lex(input)?;
-        let mut parser = Parser { tokens: &tokens, pos: 0 };
+        let mut parser = Parser {
+            tokens: &tokens,
+            pos: 0,
+        };
         let expr = parser.parse_or()?;
         if parser.pos != parser.tokens.len() {
             return Err(PubSubError::invalid_argument(
@@ -168,9 +171,9 @@ fn lex_string(input: &str, start: usize) -> Result<(String, usize)> {
         match bytes[i] {
             b'"' => return Ok((out, i + 1)),
             b'\\' => {
-                let next = bytes
-                    .get(i + 1)
-                    .ok_or_else(|| PubSubError::invalid_argument("dangling escape in filter string"))?;
+                let next = bytes.get(i + 1).ok_or_else(|| {
+                    PubSubError::invalid_argument("dangling escape in filter string")
+                })?;
                 match next {
                     b'"' => out.push('"'),
                     b'\\' => out.push('\\'),
@@ -194,7 +197,9 @@ fn lex_string(input: &str, start: usize) -> Result<(String, usize)> {
             }
         }
     }
-    Err(PubSubError::invalid_argument("unterminated string in filter"))
+    Err(PubSubError::invalid_argument(
+        "unterminated string in filter",
+    ))
 }
 
 const fn is_ident_start(b: u8) -> bool {
@@ -406,9 +411,10 @@ mod tests {
 
     #[test]
     fn parentheses_change_grouping() {
-        let f =
-            Filter::parse("attributes.a = \"1\" AND (attributes.b = \"2\" OR attributes.c = \"3\")")
-                .unwrap();
+        let f = Filter::parse(
+            "attributes.a = \"1\" AND (attributes.b = \"2\" OR attributes.c = \"3\")",
+        )
+        .unwrap();
         assert!(f.matches(&attrs(&[("a", "1"), ("c", "3")])));
         assert!(!f.matches(&attrs(&[("c", "3")])));
     }

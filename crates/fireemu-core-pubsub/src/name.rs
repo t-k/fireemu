@@ -69,8 +69,7 @@ pub fn validate_resource_id(id: &str, kind: &str) -> Result<()> {
 
 /// The Pub/Sub resource-name alphabet after the mandatory leading letter.
 const fn is_id_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || matches!(b, b'.' | b'_' | b'~' | b'%' | b'+' | b'-')
+    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'%' | b'+' | b'-')
 }
 
 /// A fully-qualified topic name.
@@ -106,8 +105,9 @@ impl TopicName {
                 topic: DELETED_TOPIC.to_owned(),
             });
         }
-        let (project, topic) = split_two(full, "topics")
-            .ok_or_else(|| PubSubError::invalid_argument("topic name must be projects/{p}/topics/{t}"))?;
+        let (project, topic) = split_two(full, "topics").ok_or_else(|| {
+            PubSubError::invalid_argument("topic name must be projects/{p}/topics/{t}")
+        })?;
         Self::new(project, topic)
     }
 
@@ -155,7 +155,9 @@ impl SubscriptionName {
     /// Parses `projects/{project}/subscriptions/{subscription}`.
     pub fn parse(full: &str) -> Result<Self> {
         let (project, subscription) = split_two(full, "subscriptions").ok_or_else(|| {
-            PubSubError::invalid_argument("subscription name must be projects/{p}/subscriptions/{s}")
+            PubSubError::invalid_argument(
+                "subscription name must be projects/{p}/subscriptions/{s}",
+            )
         })?;
         Self::new(project, subscription)
     }
@@ -175,7 +177,10 @@ impl SubscriptionName {
     /// The canonical `projects/{p}/subscriptions/{s}` string.
     #[must_use]
     pub fn to_full(&self) -> String {
-        format!("projects/{}/subscriptions/{}", self.project, self.subscription)
+        format!(
+            "projects/{}/subscriptions/{}",
+            self.project, self.subscription
+        )
     }
 }
 

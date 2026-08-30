@@ -62,9 +62,7 @@ impl PubsubMessage {
         let mut total = self.data.len();
         for (key, value) in &self.attributes {
             validate_attribute(key, value)?;
-            total = total
-                .saturating_add(key.len())
-                .saturating_add(value.len());
+            total = total.saturating_add(key.len()).saturating_add(value.len());
         }
         if total > MAX_TOTAL_BYTES {
             return Err(PubSubError::invalid_argument(format!(

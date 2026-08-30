@@ -18,6 +18,7 @@ members = [
     "crates/fireemu-adapter-grpc",
     "crates/fireemu-adapter-http",
     "crates/fireemu-adapter-functions",
+    "crates/fireemu-adapter-pubsub",
     "crates/fireemu-adapter-ui",
     "crates/fireemu",
     "tools/limit-catalog-gen",

@@ -22,6 +22,71 @@ Implemented: Milestone A (verification-ready core), Milestone B (strict Firestor
 
 The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Rules cover `get()` / `exists()` / `getAfter()`, the `timestamp` / `duration` / `latlng` / `math` / `hashing` namespaces, `map.diff()`, query proofs from equality / `in` / `!=` / `not-in` / array / range constraints and `request.query`, and `firestore.get()` in Storage rules. `Listen` resumes from a token or read time by replaying only the changes since (MVCC history), and `PartitionQuery` splits collection groups for parallel readers. A target whose own query is refused (a missing composite index, a malformed query) is removed with its cause -- `TargetChange REMOVE` carrying `FAILED_PRECONDITION` and the actionable index diagnostic -- on both gRPC and WebChannel, and the stream stays open for its other targets; a stream-level error is reserved for session-wide or database-wide failures. Not implemented yet: `ExecutePipeline`, Storage object versioning / signed URLs / compose.
 
+## Install
+
+```sh
+npm install -D fireemu
+npx fireemu doctor
+```
+
+```sh
+pnpm add -D fireemu          # or, without adding a dependency: pnpm dlx fireemu doctor
+yarn add -D fireemu
+```
+
+`fireemu` on npm is a small Node launcher; the daemon for your platform arrives as an optional
+dependency (`@fireemu/darwin-arm64` and its siblings), each declaring the `os` and `cpu` it is for,
+so exactly one binary is installed and the rest are skipped. There is no install script and nothing
+is downloaded at install time, so an install that resolved from a cache or a private registry is a
+complete, offline installation. The Emulator UI is compiled into the binary; the Node runner that
+hosts a Functions codebase ships beside it.
+
+### Supported platforms and prerequisites
+
+| Package | OS | Arch | Rust target |
+| --- | --- | --- | --- |
+| `@fireemu/darwin-arm64` | macOS 13+ | Apple silicon | `aarch64-apple-darwin` |
+| `@fireemu/darwin-x64` | macOS 13+ | Intel | `x86_64-apple-darwin` |
+| `@fireemu/linux-x64` | Linux, any libc | x86-64 | `x86_64-unknown-linux-musl` (static) |
+| `@fireemu/linux-arm64` | Linux, any libc | arm64 | `aarch64-unknown-linux-musl` (static) |
+| `@fireemu/win32-x64` | Windows 10+ | x86-64 | `x86_64-pc-windows-msvc` |
+
+The Linux builds are statically linked against musl, so they run on any distribution and inside
+distroless and Alpine containers; the cost is musl's slower allocator, which a loopback daemon
+driven by test suites can afford.
+
+| Runtime | Needed for | Version |
+| --- | --- | --- |
+| Node | the npm launcher, and `--functions <dir>` | 20 or newer |
+| `firebase-functions` (in your codebase) | `--functions <dir>` | v6 or v7 |
+| Java | nothing | **not required** -- `fireemu` runs no JVM emulator |
+
+Firestore, Auth, Storage, Security Rules and the Emulator UI are served by the binary itself and
+need no runtime at all. `npx fireemu doctor` reports the installed version and platform, whether
+the UI is compiled in, where the Node runner was found and which `firebase-functions` majors it
+instruments, the Node version, and that no JVM is needed; anything missing comes with a remediation
+line, and a broken installation exits non-zero so a setup script can gate on it. The report carries
+versions and paths only -- never tokens, keys or configuration contents.
+
+### Upgrade, uninstall, offline
+
+- **Upgrade**: `npm install -D fireemu@<version>`. The launcher pins its platform packages to its
+  own exact version, so `fireemu@1.2.3` can only resolve `@fireemu/linux-x64@1.2.3`; the launcher
+  and the binary always move together.
+- **Uninstall**: `npm uninstall fireemu`. Nothing is installed outside `node_modules`: no cache
+  directory, no global binary, no downloaded component.
+- **Offline**: `npm install --offline` works once the tarballs are in the npm cache, as does a
+  private registry mirroring `fireemu` and the `@fireemu` scope. Vendor them with `npm pack`.
+- **A vendored or self-built binary**: point `FIREEMU_BINARY_PATH` at it and the launcher runs that
+  instead of resolving a platform package.
+- **No binary for your platform**: the launcher prints what the host is, which platforms were
+  published, and the three install flags that usually cause an optional dependency to be skipped
+  (`--omit=optional`, `--no-optional`, a lockfile built on another platform).
+
+Release archives with SHA-256 sums are attached to each GitHub Release for users who do not want
+npm; they are the same trees as the npm packages. `npm/` holds the launcher, the platform-package
+generator and the release scripts.
+
 ## Run
 
 ```sh
@@ -271,8 +336,11 @@ Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, 
 
 ```text
 crates/            core crates (std-only) and, later, protocol / runtime shells
+npm/               the published `fireemu` launcher, the `@fireemu/*` platform-package
+                   generator, and the release scripts (version stamping, local pack proof)
 spec/limits/       versioned limit catalogs (single source of truth for limit values)
 tools/             development tools; never linked into the release binary
+                   (`tools/runner-node` is the exception: it ships in every platform package)
 verification/      TLA+ models, Loom scenarios, Kani harnesses, property tests, mutant and
                    requirement catalogs
 docs/adr/          architecture decision records
@@ -290,6 +358,7 @@ cargo run -p limit-catalog-gen -- check
 cargo run -p traceability-check
 cargo run -p config-schema-check
 cargo run -p proto-gen -- check            # needs protoc
+node npm/scripts/pack-local.mjs            # pack this host's npm packages from target/release
 RUSTFLAGS="--cfg loom" cargo test -p fireemu-verification-loom --release
 TLA2TOOLS_JAR=/path/to/tla2tools.jar verification/tla/run-tlc.sh
 ```

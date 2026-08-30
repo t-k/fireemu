@@ -1,0 +1,282 @@
+name: release
+
+# A release is cut by pushing a `v*` tag. Everything the tag produces -- the binaries, the
+# platform packages, the archives, the checksums and the npm publish -- comes from that one
+# commit, and the version is stamped from the tag rather than read from a file, so nothing in
+# the tree can disagree with what was published.
+#
+# `workflow_dispatch` runs the same jobs end to end without publishing anything: it builds
+# every platform, assembles and packs every package, and uploads the artifacts, so the
+# packaging can be exercised on a branch before a tag exists.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp for the dry run (no tag is created, nothing is published)"
+        required: false
+        default: "0.0.0-dev"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The single source of truth for what gets built is npm/platforms/platforms.mjs; the matrix
+  # is read out of it rather than repeated here.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.matrix.outputs.platforms }}
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - id: matrix
+        run: echo "platforms=$(node npm/scripts/matrix.mjs)" >> "$GITHUB_OUTPUT"
+      - id: version
+        # A tag publishes; a manual run never does, whatever version it was given. The version
+        # is only stripped of its `v` here -- `stamp-version.mjs` is what rejects a tag that is
+        # not a release version, and it does that in the job that writes the manifests.
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish=true
+          else
+            version="${INPUT_VERSION:-0.0.0-dev}"
+            publish=false
+          fi
+          node npm/scripts/stamp-version.mjs "$version" --print
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          echo "releasing ${version} (publish: ${publish})"
+
+  # The Emulator UI is built once and reused by every platform, so every binary in a release
+  # embeds byte-identical assets.
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - run: pnpm -C ui install --frozen-lockfile
+      - run: pnpm -C ui build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    needs: [plan, ui]
+    strategy:
+      fail-fast: true
+      matrix:
+        platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
+    runs-on: ${{ matrix.platform.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+      - name: the UI bundle arrived
+        shell: bash
+        run: test -f ui/dist/index.html
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform.target }}
+
+      # musl needs its own C toolchain for the linkers Rust invokes.
+      - name: musl toolchain
+        if: contains(matrix.platform.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # Tests run for the host, not for the release target: a musl or cross-compiled artifact
+      # cannot execute on the runner that produced it, and the source under test is the same.
+      # The process-census integration suites shell out to `ps` and `kill`, so on Windows only
+      # the in-crate unit tests run.
+      - name: tests
+        if: ${{ !matrix.platform.cross }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform.os }}" = "win32" ]; then
+            cargo nextest run --workspace --lib --profile pr
+          else
+            cargo nextest run --workspace --profile pr
+          fi
+
+      - name: build the daemon
+        run: cargo build --release --locked -p fireemu --target ${{ matrix.platform.target }}
+
+      - name: the UI is embedded in the artifact
+        shell: bash
+        # `doctor` reports what the binary actually carries. A cross-compiled artifact cannot
+        # be run here, so it is checked on the host that can.
+        run: |
+          if [ "${{ matrix.platform.cross }}" = "true" ]; then
+            echo "cross-compiled: checked on the host build of the same commit"
+          else
+            ./target/${{ matrix.platform.target }}/release/fireemu${{ matrix.platform.exe }} doctor
+          fi
+
+      - name: assemble the platform package
+        shell: bash
+        run: |
+          node npm/platforms/build-platform.mjs \
+            --platform ${{ matrix.platform.name }} \
+            --binary target/${{ matrix.platform.target }}/release/fireemu${{ matrix.platform.exe }} \
+            --out npm/platforms/build/${{ matrix.platform.name }} \
+            --version ${{ needs.plan.outputs.version }}
+
+      # The archive attached to the GitHub Release is the same tree as the npm package, so a
+      # user who does not want npm gets exactly what npm would have installed.
+      - name: archive
+        shell: bash
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          NAME: ${{ matrix.platform.name }}
+        run: |
+          mkdir -p dist
+          base="fireemu-${VERSION}-${NAME}"
+          if [ "${{ matrix.platform.os }}" = "win32" ]; then
+            (cd npm/platforms/build && 7z a -tzip "../../../dist/${base}.zip" "${NAME}") >/dev/null
+          else
+            tar -czf "dist/${base}.tar.gz" -C npm/platforms/build "${NAME}"
+          fi
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.platform.name }}
+          path: npm/platforms/build/${{ matrix.platform.name }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.platform.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and attach its assets
+      id-token: write # npm publish --provenance, and build attestations
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: collect the platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: npm/platforms/build
+      - name: collect the archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+
+      - name: the download layout is what the scripts expect
+        run: |
+          # download-artifact writes `<path>/package-<name>/...`; the scripts want `<name>/`.
+          cd npm/platforms/build
+          for dir in package-*; do mv "$dir" "${dir#package-}"; done
+          ls -R . | head -50
+
+      - name: stamp the version
+        run: node npm/scripts/stamp-version.mjs ${{ needs.plan.outputs.version }}
+      - name: prepare the launcher package
+        run: node npm/scripts/prepare-launcher.mjs
+
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum fireemu-* > SHA256SUMS
+          cat SHA256SUMS
+
+      # Provenance for the archives. Not every repository is entitled to attestations, and a
+      # release should not fail for want of one, so this is best effort and reported either way.
+      - name: build provenance
+        id: attest
+        if: needs.plan.outputs.publish == 'true'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/fireemu-*"
+      - name: provenance outcome
+        if: needs.plan.outputs.publish == 'true'
+        run: echo "build provenance attestation - ${{ steps.attest.outcome }}"
+
+      # Platform packages first: `fireemu` pins them exactly, so publishing the launcher before
+      # them would leave a version on the registry that cannot be installed.
+      - name: publish the platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH: ${{ needs.plan.outputs.publish }}
+        run: |
+          for dir in npm/platforms/build/*/; do
+            if [ "$PUBLISH" = "true" ]; then
+              npm publish "$dir" --provenance --access public
+            else
+              npm publish "$dir" --dry-run --access public
+            fi
+          done
+      - name: publish the launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH: ${{ needs.plan.outputs.publish }}
+        run: |
+          if [ "$PUBLISH" = "true" ]; then
+            npm publish npm/fireemu --provenance --access public
+          else
+            npm publish npm/fireemu --dry-run --access public
+          fi
+
+      - name: the GitHub Release
+        if: needs.plan.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*
+
+      - name: the dry run's artifacts
+        if: needs.plan.outputs.publish != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-archives
+          path: dist/*
+          if-no-files-found: error

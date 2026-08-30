@@ -19,3 +19,8 @@ ui/node_modules/
 ui/test-results/
 ui/playwright-report/
 .claude/worktrees/
+# npm distribution build outputs (npm/scripts/pack-local.mjs, .github/workflows/release.yml)
+npm/dist/
+npm/platforms/build/
+npm/fireemu/README.md
+npm/fireemu/LICENSE

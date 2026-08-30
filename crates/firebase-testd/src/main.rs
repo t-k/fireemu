@@ -421,6 +421,7 @@ fn storage_state(
     storage_rules: &Arc<RwLock<LoadedRules>>,
     events: Option<ftd_adapter_http::storage::StorageEventSink>,
     backend: &Arc<LocalBackend>,
+    faults: &ftd_core_session::fault::SharedFaults,
 ) -> Result<Arc<ftd_adapter_http::storage::StorageState>, String> {
     let parent = ftd_adapter_grpc::decode::Parent {
         project: ftd_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
@@ -441,6 +442,7 @@ fn storage_state(
             backend: backend.clone(),
             parent,
         })),
+        faults: Some(faults.clone()),
     }))
 }
 
@@ -566,6 +568,7 @@ fn control_state(
     storage: &Arc<ftd_adapter_http::storage::StorageState>,
     functions: Option<&Arc<ftd_adapter_functions::runtime::FunctionsRuntime>>,
     control_token: String,
+    faults: ftd_core_session::fault::SharedFaults,
 ) -> ftd_adapter_http::control::ControlState {
     let storage_reset = {
         let storage = storage.clone();
@@ -615,6 +618,7 @@ fn control_state(
         reset_hooks,
         snapshot_hooks,
         snapshots: Mutex::new(std::collections::BTreeMap::new()),
+        faults: Some(faults),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))
                 as Arc<dyn ftd_adapter_http::control::FunctionsHook>
@@ -659,6 +663,10 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             },
         };
         let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed));
+        // The session's fault plan (spec 18), shared by every adapter; empty until PUT.
+        let faults: ftd_core_session::fault::SharedFaults =
+            Arc::new(Mutex::new(ftd_core_session::fault::FaultState::default()));
+        backend.set_faults(faults.clone());
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),
@@ -724,7 +732,11 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             &storage_rules,
             functions_runtime.as_ref().map(functions::storage_sink),
             &backend,
+            &faults,
         )?;
+        if let Some(runtime) = &functions_runtime {
+            runtime.set_faults(faults.clone());
+        }
         let control = Arc::new(control_state(
             &cfg,
             &clock,
@@ -735,6 +747,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             &storage,
             functions_runtime.as_ref(),
             control_token.clone(),
+            faults.clone(),
         ));
         print_banner(
             &cfg,

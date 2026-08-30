@@ -1,0 +1,207 @@
+//! Fault injection plans (spec 18): reproducible, rule-driven faults instead of random
+//! instability. A plan lists rules; each rule names an operation (`firestore.commit`,
+//! `firestore.read`, `storage.upload`, `functions.invoke`, `functions.deliver`, ...),
+//! optionally the nth occurrence and a function / event type, and the action to take. The
+//! adapters ask [`FaultState::decide`] at their enforcement points and apply the actions.
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+/// What a matched rule does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FaultAction {
+    /// Fail the operation with a status code (gRPC name or HTTP number).
+    ReturnError {
+        /// `ABORTED`, `UNAVAILABLE`, `503`, ...
+        code: String,
+    },
+    /// Move the virtual clock (or hold an event) by a logical duration.
+    Delay {
+        /// Seconds.
+        seconds: i64,
+    },
+    /// Deliver an event `count` extra times.
+    Duplicate {
+        /// Extra deliveries.
+        count: u32,
+    },
+    /// Kill the functions runner process (it is restarted; the event is redelivered).
+    CrashRunner,
+    /// The operation times out.
+    Timeout,
+    /// The event goes straight to the dead letters.
+    DeadLetter,
+    /// The commit aborts as a transaction conflict.
+    TransactionConflict,
+    /// The connection drops before a response.
+    DropConnection,
+}
+
+impl fmt::Display for FaultAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReturnError { code } => write!(f, "returnError {code}"),
+            Self::Delay { seconds } => write!(f, "delay {seconds}s"),
+            Self::Duplicate { count } => write!(f, "duplicate x{count}"),
+            Self::CrashRunner => f.write_str("crashRunner"),
+            Self::Timeout => f.write_str("timeout"),
+            Self::DeadLetter => f.write_str("deadLetter"),
+            Self::TransactionConflict => f.write_str("transactionConflict"),
+            Self::DropConnection => f.write_str("dropConnection"),
+        }
+    }
+}
+
+/// What a rule matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultMatch {
+    /// Operation name.
+    pub operation: String,
+    /// Only the nth occurrence (1-based); every occurrence when `None`. Counted per
+    /// operation, or per operation and function when `function` is set.
+    pub nth: Option<u64>,
+    /// Only this function (functions operations).
+    pub function: Option<String>,
+    /// Only this event type (functions operations).
+    pub event_type: Option<String>,
+}
+
+/// One rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultRule {
+    /// Match.
+    pub matches: FaultMatch,
+    /// Action.
+    pub action: FaultAction,
+}
+
+/// A plan.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FaultPlan {
+    /// Seed (echoed; the rules themselves are deterministic).
+    pub seed: u64,
+    /// Rules, applied in order.
+    pub rules: Vec<FaultRule>,
+}
+
+/// A fault that fired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultRecord {
+    /// Operation.
+    pub operation: String,
+    /// Occurrence number of the operation.
+    pub occurrence: u64,
+    /// Function, if any.
+    pub function: Option<String>,
+    /// Action taken.
+    pub action: FaultAction,
+}
+
+/// The installed plan plus its occurrence counters and history.
+#[derive(Debug, Default)]
+pub struct FaultState {
+    plan: Option<FaultPlan>,
+    counters: BTreeMap<String, u64>,
+    fired: Vec<FaultRecord>,
+}
+
+impl FaultState {
+    /// Installs a plan; counters and history start over.
+    pub fn install(&mut self, plan: FaultPlan) {
+        self.plan = Some(plan);
+        self.counters.clear();
+        self.fired.clear();
+    }
+
+    /// Removes the plan.
+    pub fn clear(&mut self) {
+        self.plan = None;
+        self.counters.clear();
+        self.fired.clear();
+    }
+
+    /// The installed plan.
+    #[must_use]
+    pub fn plan(&self) -> Option<&FaultPlan> {
+        self.plan.as_ref()
+    }
+
+    /// Faults that fired so far.
+    #[must_use]
+    pub fn fired(&self) -> &[FaultRecord] {
+        &self.fired
+    }
+
+    /// Occurrences counted per operation.
+    #[must_use]
+    pub fn counters(&self) -> &BTreeMap<String, u64> {
+        &self.counters
+    }
+
+    /// Counts one occurrence of `operation` (and of `operation` for `function`) and
+    /// returns the actions of every rule that matches it (in rule order). Without a plan
+    /// nothing is counted.
+    pub fn decide(
+        &mut self,
+        operation: &str,
+        function: Option<&str>,
+        event_type: Option<&str>,
+    ) -> Vec<FaultAction> {
+        let Some(plan) = &self.plan else {
+            return Vec::new();
+        };
+        let count = self.counters.entry(operation.to_owned()).or_insert(0);
+        *count += 1;
+        let occurrence = *count;
+        let per_function = function.map(|f| {
+            let count = self.counters.entry(format!("{operation}|{f}")).or_insert(0);
+            *count += 1;
+            *count
+        });
+        let mut actions = Vec::new();
+        for rule in &plan.rules {
+            let m = &rule.matches;
+            if m.operation != operation
+                || m.function.as_deref().is_some_and(|f| Some(f) != function)
+                || m.event_type
+                    .as_deref()
+                    .is_some_and(|t| Some(t) != event_type)
+            {
+                continue;
+            }
+            let counted = if m.function.is_some() {
+                per_function.unwrap_or(occurrence)
+            } else {
+                occurrence
+            };
+            if m.nth.is_some_and(|n| n != counted) {
+                continue;
+            }
+            actions.push(rule.action.clone());
+            self.fired.push(FaultRecord {
+                operation: operation.to_owned(),
+                occurrence,
+                function: function.map(str::to_owned),
+                action: rule.action.clone(),
+            });
+        }
+        actions
+    }
+}
+
+/// The fault state shared by every adapter of a session.
+pub type SharedFaults = std::sync::Arc<std::sync::Mutex<FaultState>>;
+
+/// Decides for `operation` on a shared state (an absent or poisoned state means no faults).
+#[must_use]
+pub fn decide_shared(
+    faults: Option<&SharedFaults>,
+    operation: &str,
+    function: Option<&str>,
+    event_type: Option<&str>,
+) -> Vec<FaultAction> {
+    faults
+        .and_then(|f| f.lock().ok())
+        .map(|mut f| f.decide(operation, function, event_type))
+        .unwrap_or_default()
+}

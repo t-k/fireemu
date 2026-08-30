@@ -1182,3 +1182,86 @@ async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
         .get_document(&get("snap/c"), &ftd_adapter_grpc::rules::allow_all_reads)
         .is_ok());
 }
+
+#[tokio::test]
+async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = LocalBackend::new(gateway, clock.clone(), 7);
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![
+            FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.commit".into(),
+                    nth: Some(2),
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::ReturnError {
+                    code: "ABORTED".into(),
+                },
+            },
+            FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: Some(1),
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::Timeout,
+            },
+            FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.commit".into(),
+                    nth: Some(3),
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::Delay { seconds: 90 },
+            },
+        ],
+    });
+    backend.set_faults(faults.clone());
+    let write = |name: &str, v: i64| pb::CommitRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        writes: vec![update_write(name, &[("v", i(v))])],
+        ..Default::default()
+    };
+    assert!(backend.commit(&write("f/a", 1)).is_ok());
+    let err = backend.commit(&write("f/b", 1)).unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Aborted);
+    assert!(err.message().contains("fault plan"));
+    // The third commit is delayed: the clock moved 90 s before it ran.
+    let before = clock.lock().unwrap().now_for_test();
+    assert!(backend.commit(&write("f/c", 1)).is_ok());
+    let after = clock.lock().unwrap().now_for_test();
+    assert_eq!(after.as_nanos() - before.as_nanos(), 90 * 1_000_000_000);
+    let get = |name: &str| pb::GetDocumentRequest {
+        name: format!("projects/demo-app/databases/(default)/documents/{name}"),
+        ..Default::default()
+    };
+    assert_eq!(
+        backend
+            .get_document(&get("f/a"), &ftd_adapter_grpc::rules::allow_all_reads)
+            .unwrap_err()
+            .code(),
+        tonic::Code::DeadlineExceeded
+    );
+    assert!(backend
+        .get_document(&get("f/a"), &ftd_adapter_grpc::rules::allow_all_reads)
+        .is_ok());
+    let fired = faults.lock().unwrap().fired().len();
+    assert_eq!(fired, 3);
+}

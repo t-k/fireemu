@@ -28,7 +28,7 @@ use ftd_core_storage::store::{
     StorageState as ObjectStore, UploadId, UploadOptions,
 };
 use ftd_core_types::determinism::Clock;
-use ftd_core_types::time::LogicalInstant;
+use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
 /// Observer of Storage object events (see [`StorageState::events`]).
@@ -85,6 +85,79 @@ pub struct StorageState {
     /// `firestore.get()` / `firestore.exists()` in Storage rules: the latest Firestore
     /// state of the project; `None` makes those calls fail closed.
     pub firestore: Option<Arc<dyn DocumentAccess + Send + Sync>>,
+    /// The session's fault plan, when one is shared.
+    pub faults: Option<ftd_core_session::fault::SharedFaults>,
+}
+
+/// The fault plan's answer for `operation`: an error response, or nothing (a delay moved
+/// the clock).
+fn fault_response(
+    state: &StorageState,
+    dialect: Dialect,
+    operation: &str,
+) -> Option<StorageResponse> {
+    use ftd_core_session::fault::FaultAction;
+    for action in
+        ftd_core_session::fault::decide_shared(state.faults.as_ref(), operation, None, None)
+    {
+        match action {
+            FaultAction::ReturnError { code } => {
+                return Some(error_response(
+                    dialect,
+                    http_code(&code),
+                    &format!("fault plan: {operation} returns {code}"),
+                ))
+            }
+            FaultAction::Timeout => {
+                return Some(error_response(
+                    dialect,
+                    504,
+                    &format!("fault plan: {operation} timed out"),
+                ))
+            }
+            FaultAction::DropConnection => {
+                return Some(error_response(
+                    dialect,
+                    503,
+                    &format!("fault plan: connection dropped during {operation}"),
+                ))
+            }
+            FaultAction::TransactionConflict => {
+                return Some(error_response(
+                    dialect,
+                    412,
+                    &format!("fault plan: {operation} conflicts"),
+                ))
+            }
+            FaultAction::Delay { seconds } => {
+                if let Ok(mut clock) = state.clock.lock() {
+                    let _ = clock.advance(LogicalDuration::from_seconds(seconds.max(0)));
+                }
+            }
+            FaultAction::Duplicate { .. } | FaultAction::CrashRunner | FaultAction::DeadLetter => {}
+        }
+    }
+    None
+}
+
+/// An HTTP status from a number or a gRPC code name.
+fn http_code(code: &str) -> u16 {
+    if let Ok(n) = code.parse::<u16>() {
+        return n;
+    }
+    match code.to_ascii_uppercase().as_str() {
+        "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => 400,
+        "UNAUTHENTICATED" => 401,
+        "PERMISSION_DENIED" => 403,
+        "NOT_FOUND" => 404,
+        "ALREADY_EXISTS" | "ABORTED" => 409,
+        "RESOURCE_EXHAUSTED" => 429,
+        "CANCELLED" => 499,
+        "UNIMPLEMENTED" => 501,
+        "UNAVAILABLE" => 503,
+        "DEADLINE_EXCEEDED" => 504,
+        _ => 500,
+    }
 }
 
 /// One HTTP request of the Storage surface.
@@ -993,6 +1066,16 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
         Route::Bucket { dialect, .. } | Route::Object { dialect, .. } => *dialect,
         _ => Dialect::Gcs,
     };
+    let operation = match (&route, req.method.as_str()) {
+        (Route::Object { .. }, "GET") => "storage.read",
+        (Route::Object { .. }, "DELETE") => "storage.delete",
+        (Route::Object { .. }, _) | (Route::Bucket { .. }, "POST" | "PUT") => "storage.upload",
+        (Route::Bucket { .. }, _) => "storage.list",
+        _ => "storage.request",
+    };
+    if let Some(refused) = fault_response(state, dialect, operation) {
+        return refused;
+    }
     // The JSON API surface is what the Admin SDK / gcloud use: like the official Emulator
     // it is a privileged surface (rules bypassed) unless the caller presents an end-user
     // `Firebase <token>`; the Firebase protocol always goes through the rules.

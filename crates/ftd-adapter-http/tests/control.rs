@@ -29,6 +29,9 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(std::collections::BTreeMap::new()),
+        faults: Some(Arc::new(Mutex::new(
+            ftd_core_session::fault::FaultState::default(),
+        ))),
     }
 }
 
@@ -235,4 +238,45 @@ fn snapshots_capture_every_part_and_restore_them_atomically() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn fault_plans_are_validated_installed_reported_and_removed() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    for bad in [
+        json!({}),
+        json!({"rules": [{"match": {"operation": "firestore.nothing"}, "action": {"type": "timeout"}}]}),
+        json!({"rules": [{"match": {"operation": "firestore.commit", "nth": 0}, "action": {"type": "timeout"}}]}),
+        json!({"rules": [{"match": {"operation": "firestore.commit"}, "action": {"type": "returnError"}}]}),
+        json!({"rules": [{"match": {"operation": "functions.invoke"}, "action": {"type": "explode"}}]}),
+        json!({"rules": [{"match": {"operation": "functions.deliver"}, "action": {"type": "duplicate", "count": 1000}}]}),
+    ] {
+        let r = handle(&s, "PUT", "/v1/sessions/default/faultPlan", &bad);
+        assert_eq!(r.status, 400, "{bad}");
+    }
+    let plan = json!({"seed": 7, "rules": [
+        {"match": {"operation": "firestore.commit", "nth": 3}, "action": {"type": "returnError", "code": "ABORTED"}},
+        {"match": {"operation": "functions.invoke", "function": "flaky"}, "action": {"type": "crashRunner"}},
+        {"match": {"operation": "functions.deliver", "eventType": "google.cloud.storage.object.v1.finalized"}, "action": {"type": "duplicate", "count": 2}}
+    ]});
+    let r = handle(&s, "PUT", "/v1/sessions/default/faultPlan", &plan);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["rules"], 3);
+    // Something fires: the adapters would call decide; here through the shared state.
+    s.faults
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .decide("firestore.commit", None, None);
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.body["plan"]["seed"], 7);
+    assert_eq!(r.body["plan"]["rules"][0]["match"]["nth"], 3);
+    assert_eq!(r.body["plan"]["rules"][2]["action"]["count"], 2);
+    assert_eq!(r.body["counters"]["firestore.commit"], 1);
+    assert!(r.body["fired"].as_array().unwrap().is_empty());
+    let r = handle(&s, "DELETE", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.status, 200);
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert!(r.body["plan"].is_null());
 }

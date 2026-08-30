@@ -88,6 +88,8 @@ pub struct ControlState {
     pub snapshot_hooks: Vec<Arc<dyn SnapshotHook>>,
     /// Snapshots kept in memory by name.
     pub snapshots: Mutex<std::collections::BTreeMap<String, Snapshot>>,
+    /// The session's fault plan (spec 18), shared with every adapter.
+    pub faults: Option<ftd_core_session::fault::SharedFaults>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<dyn FunctionsHook>>,
     /// Session admission barrier: a reset holds it exclusively across every hook, so no
@@ -266,6 +268,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if let Some(rest) = action.strip_prefix("snapshots") {
         return snapshot_route(state, session, method, rest, body);
     }
+    if action == "faultPlan" {
+        return fault_plan_route(state, session, method, body);
+    }
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if let Some(rest) = action.strip_prefix("functions") {
         return functions_route(state, method, rest);
@@ -285,6 +290,149 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         }
     }
     response
+}
+
+/// `PUT /v1/sessions/{s}/faultPlan` installs a plan (spec 18.2 shape), `GET` returns it with
+/// the faults that fired, `DELETE` removes it.
+#[allow(clippy::too_many_lines)]
+fn fault_plan_route(
+    state: &ControlState,
+    session: &str,
+    method: &str,
+    body: &Value,
+) -> JsonResponse {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
+    let Some(faults) = &state.faults else {
+        return error(404, "NOT_FOUND : fault plans are not available");
+    };
+    match method {
+        "GET" => {
+            let Ok(f) = faults.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let plan = f.plan().map(|p| json!({"seed": p.seed, "rules": p.rules.iter().map(rule_json).collect::<Vec<_>>()}));
+            let fired: Vec<Value> = f
+                .fired()
+                .iter()
+                .map(|r| json!({"operation": r.operation, "occurrence": r.occurrence, "function": r.function, "action": r.action.to_string()}))
+                .collect();
+            ok(json!({"session": session, "plan": plan, "fired": fired, "counters": f.counters()}))
+        }
+        "PUT" => {
+            let seed = body.get("seed").and_then(Value::as_u64).unwrap_or(0);
+            let Some(rules) = body.get("rules").and_then(Value::as_array) else {
+                return error(400, "INVALID_ARGUMENT : rules must be an array");
+            };
+            let mut parsed = Vec::with_capacity(rules.len());
+            for (i, r) in rules.iter().enumerate() {
+                let Some(m) = r.get("match") else {
+                    return error(
+                        400,
+                        &format!("INVALID_ARGUMENT : rules[{i}].match is required"),
+                    );
+                };
+                let Some(operation) = m
+                    .get("operation")
+                    .and_then(Value::as_str)
+                    .filter(|o| KNOWN_OPERATIONS.contains(o))
+                else {
+                    return error(
+                        400,
+                        &format!(
+                            "INVALID_ARGUMENT : rules[{i}].match.operation must be one of {}",
+                            KNOWN_OPERATIONS.join(", ")
+                        ),
+                    );
+                };
+                let nth = match m.get("nth") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => match v.as_u64().filter(|n| *n >= 1) {
+                        Some(n) => Some(n),
+                        None => return error(400, &format!("INVALID_ARGUMENT : rules[{i}].match.nth must be a positive integer")),
+                    },
+                };
+                let a = r.get("action").cloned().unwrap_or(Value::Null);
+                let action = match a.get("type").and_then(Value::as_str) {
+                    Some("returnError") => match a.get("code").and_then(Value::as_str) {
+                        Some(code) if !code.is_empty() => FaultAction::ReturnError { code: code.to_owned() },
+                        _ => return error(400, &format!("INVALID_ARGUMENT : rules[{i}].action.code is required")),
+                    },
+                    Some("delay") => match a.get("seconds").and_then(Value::as_i64) {
+                        Some(seconds) if (0..=86_400 * 366).contains(&seconds) => FaultAction::Delay { seconds },
+                        _ => return error(400, &format!("INVALID_ARGUMENT : rules[{i}].action.seconds must be 0..=31622400")),
+                    },
+                    Some("duplicate") => match a.get("count").and_then(Value::as_u64) {
+                        Some(count) if (1..=100).contains(&count) => FaultAction::Duplicate { count: u32::try_from(count).unwrap_or(1) },
+                        _ => return error(400, &format!("INVALID_ARGUMENT : rules[{i}].action.count must be 1..=100")),
+                    },
+                    Some("crashRunner") => FaultAction::CrashRunner,
+                    Some("timeout") => FaultAction::Timeout,
+                    Some("deadLetter") => FaultAction::DeadLetter,
+                    Some("transactionConflict") => FaultAction::TransactionConflict,
+                    Some("dropConnection") => FaultAction::DropConnection,
+                    _ => return error(400, &format!("INVALID_ARGUMENT : rules[{i}].action.type must be one of returnError, delay, duplicate, crashRunner, timeout, deadLetter, transactionConflict, dropConnection")),
+                };
+                parsed.push(FaultRule {
+                    matches: FaultMatch {
+                        operation: operation.to_owned(),
+                        nth,
+                        function: m.get("function").and_then(Value::as_str).map(str::to_owned),
+                        event_type: m
+                            .get("eventType")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    },
+                    action,
+                });
+            }
+            let Ok(mut f) = faults.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let count = parsed.len();
+            f.install(FaultPlan {
+                seed,
+                rules: parsed,
+            });
+            ok(json!({"session": session, "installed": true, "rules": count}))
+        }
+        "DELETE" => {
+            let Ok(mut f) = faults.lock() else {
+                return error(500, "INTERNAL");
+            };
+            f.clear();
+            ok(json!({"session": session, "installed": false}))
+        }
+        _ => error(405, "METHOD_NOT_ALLOWED"),
+    }
+}
+
+/// Operations a fault rule can name.
+const KNOWN_OPERATIONS: &[&str] = &[
+    "firestore.commit",
+    "firestore.read",
+    "firestore.beginTransaction",
+    "storage.upload",
+    "storage.read",
+    "storage.delete",
+    "storage.list",
+    "storage.request",
+    "functions.invoke",
+    "functions.deliver",
+];
+
+fn rule_json(r: &ftd_core_session::fault::FaultRule) -> Value {
+    use ftd_core_session::fault::FaultAction;
+    let action = match &r.action {
+        FaultAction::ReturnError { code } => json!({"type": "returnError", "code": code}),
+        FaultAction::Delay { seconds } => json!({"type": "delay", "seconds": seconds}),
+        FaultAction::Duplicate { count } => json!({"type": "duplicate", "count": count}),
+        FaultAction::CrashRunner => json!({"type": "crashRunner"}),
+        FaultAction::Timeout => json!({"type": "timeout"}),
+        FaultAction::DeadLetter => json!({"type": "deadLetter"}),
+        FaultAction::TransactionConflict => json!({"type": "transactionConflict"}),
+        FaultAction::DropConnection => json!({"type": "dropConnection"}),
+    };
+    json!({"match": {"operation": r.matches.operation, "nth": r.matches.nth, "function": r.matches.function, "eventType": r.matches.event_type}, "action": action})
 }
 
 /// `snapshots` (POST `{"name"}` captures, GET lists), `snapshots/{name}:restore`,

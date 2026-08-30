@@ -589,3 +589,129 @@ async fn catch_up_policies_keep_all_the_latest_or_no_due_runs() {
         assert_eq!((runs, skips), (expected_runs, expected_skips), "{policy:?}");
     }
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
+    use ftd_core_auth::mfa::TotpPolicy;
+    use ftd_core_auth::store::{AuthStore, NewUser};
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use ftd_core_types::determinism::SplitMix64;
+    let (runtime, clock) = start().await;
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    let rule = |operation: &str, function: &str, nth: Option<u64>, action| FaultRule {
+        matches: FaultMatch {
+            operation: operation.into(),
+            nth,
+            function: Some(function.into()),
+            event_type: None,
+        },
+        action,
+    };
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![
+            // Deliveries to `onJob` are duplicated twice: three invocations per message.
+            rule(
+                "functions.deliver",
+                "onJob",
+                None,
+                FaultAction::Duplicate { count: 2 },
+            ),
+            // `withAuth` invocations are dead-lettered without calling the runner.
+            rule(
+                "functions.invoke",
+                "withAuth",
+                None,
+                FaultAction::DeadLetter,
+            ),
+            // `onUser` invocations are held for an hour of virtual time.
+            rule(
+                "functions.invoke",
+                "onUser",
+                None,
+                FaultAction::Delay { seconds: 3600 },
+            ),
+            // `onGone` crashes the runner (restarted, the event redelivered).
+            rule(
+                "functions.invoke",
+                "onGone",
+                Some(1),
+                FaultAction::CrashRunner,
+            ),
+        ],
+    });
+    runtime.set_faults(faults);
+    runtime.publish("jobs", &[serde_json::json!({"data": ""})]);
+    assert!(
+        runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    let on_job = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "onJob" && r.outcome == "ok")
+        .count();
+    assert_eq!(on_job, 3, "duplicate x2");
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("audited/c", 1).path,
+        before: None,
+        after: Some(doc("audited/c", 1)),
+    }]));
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|d| d.function == "withAuth" && d.outcome.contains("dead letter")));
+    assert!(!runtime
+        .runner()
+        .logs()
+        .iter()
+        .any(|l| l.contains("invoked withAuth")));
+    // Delayed: not idle until the clock passes the hold.
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("d@example.com"), START)
+        .unwrap();
+    for e in store.take_user_events() {
+        runtime.on_user_event(&e);
+    }
+    assert!(
+        runtime
+            .await_idle(Duration::from_millis(500))
+            .await
+            .is_err(),
+        "held by the delay"
+    );
+    assert!(!runtime.history().iter().any(|r| r.function == "onUser"));
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(3600))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "onUser" && r.outcome == "ok"));
+    // Crash: the runner dies on the attempt, a fresh one takes over and the event succeeds.
+    store.delete_user_by_id(uid.as_str()).unwrap();
+    for e in store.take_user_events() {
+        runtime.on_user_event(&e);
+    }
+    assert!(runtime.await_idle(Duration::from_secs(20)).await.is_ok());
+    let on_gone: Vec<String> = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "onGone")
+        .map(|r| r.outcome.clone())
+        .collect();
+    assert!(
+        on_gone.iter().any(|o| o.starts_with("runner gone")),
+        "{on_gone:?}"
+    );
+    assert!(on_gone.iter().any(|o| o == "ok"), "{on_gone:?}");
+    assert!(runtime.runner_alive());
+}

@@ -33,6 +33,7 @@ fn state(rules: Option<&str>) -> StorageState {
         events: None,
         barrier: None,
         firestore: None,
+        faults: None,
     }
 }
 
@@ -1278,4 +1279,48 @@ service firebase.storage {
         "databases/(default)/documents/flags/open".to_owned(),
     ])));
     assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 200);
+}
+
+#[test]
+fn fault_plans_fail_storage_operations() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    let mut s = state(None);
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "storage.upload".into(),
+                nth: Some(1),
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::ReturnError {
+                code: "UNAVAILABLE".into(),
+            },
+        }],
+    });
+    s.faults = Some(faults);
+    let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
+    let upload = format!("/v0/b/{BUCKET}/o?name=f.txt&uploadType=multipart");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &upload,
+            &[("authorization", "Bearer owner"), ("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 503, "{}", String::from_utf8_lossy(&r.body));
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &upload,
+            &[("authorization", "Bearer owner"), ("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
 }

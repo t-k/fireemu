@@ -43,6 +43,8 @@ pub struct LocalBackend {
     /// The actor of the commit in progress, staged by the write guard inside the critical
     /// section and consumed by `publish` (same critical section, so never another's).
     pending_actor: Mutex<Option<Actor>>,
+    /// The session's fault plan, when one is shared.
+    faults: Mutex<Option<ftd_core_session::fault::SharedFaults>>,
     ids: Mutex<SplitMix64>,
     commits: tokio::sync::broadcast::Sender<CommitEvent>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
@@ -208,6 +210,7 @@ impl LocalBackend {
             clock,
             databases: Mutex::new(BTreeMap::new()),
             pending_actor: Mutex::new(None),
+            faults: Mutex::new(None),
             ids: Mutex::new(SplitMix64::new(seed)),
             commits: tokio::sync::broadcast::channel(1024).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
@@ -302,6 +305,57 @@ impl LocalBackend {
 
     /// Publishes a commit: the change sink first (synchronously, inside the database
     /// critical section the caller holds), then the `Listen` broadcast.
+    /// Shares the session's fault plan with this backend.
+    pub fn set_faults(&self, faults: ftd_core_session::fault::SharedFaults) {
+        if let Ok(mut slot) = self.faults.lock() {
+            *slot = Some(faults);
+        }
+    }
+
+    /// Applies the fault plan to `operation` (spec 18): an error action fails the request
+    /// here, a delay moves the virtual clock before it runs.
+    fn fault(&self, operation: &str) -> Result<(), Status> {
+        use ftd_core_session::fault::FaultAction;
+        let faults = self.faults.lock().ok().and_then(|f| f.clone());
+        for action in ftd_core_session::fault::decide_shared(faults.as_ref(), operation, None, None)
+        {
+            match action {
+                FaultAction::ReturnError { code } => {
+                    return Err(Status::new(
+                        grpc_code(&code),
+                        format!("fault plan: {operation} returns {code}"),
+                    ))
+                }
+                FaultAction::TransactionConflict => {
+                    return Err(Status::aborted(format!(
+                        "fault plan: {operation} conflicts (ABORTED)"
+                    )))
+                }
+                FaultAction::Timeout => {
+                    return Err(Status::deadline_exceeded(format!(
+                        "fault plan: {operation} timed out"
+                    )))
+                }
+                FaultAction::DropConnection => {
+                    return Err(Status::unavailable(format!(
+                        "fault plan: connection dropped during {operation}"
+                    )))
+                }
+                FaultAction::Delay { seconds } => {
+                    if let Ok(mut clock) = self.clock.lock() {
+                        let _ = clock.advance(ftd_core_types::time::LogicalDuration::from_seconds(
+                            seconds.max(0),
+                        ));
+                    }
+                }
+                FaultAction::Duplicate { .. }
+                | FaultAction::CrashRunner
+                | FaultAction::DeadLetter => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Stages the actor of the commit about to be published (called by write guards inside
     /// the database critical section).
     pub fn set_actor(&self, actor: Actor) {
@@ -338,6 +392,7 @@ impl LocalBackend {
         writes: &[Write],
         guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
+        self.fault("firestore.commit")?;
         let now = self.now();
         let result = self.with_db(parent, |db| {
             guard(db, writes, now)?;
@@ -683,6 +738,7 @@ impl LocalBackend {
         req: &pb::GetDocumentRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::Document, Status> {
+        self.fault("firestore.read")?;
         self.get_document_snapshot(req, guard)?.into_response()
     }
 
@@ -693,6 +749,7 @@ impl LocalBackend {
         req: &pb::BatchGetDocumentsRequest,
         guard: ReadGuard<'_>,
     ) -> Result<BatchGetOutcome, Status> {
+        self.fault("firestore.read")?;
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
@@ -873,6 +930,7 @@ impl LocalBackend {
         mask: Option<&pb::DocumentMask>,
         guard: WriteGuard<'_>,
     ) -> Result<pb::Document, Status> {
+        self.fault("firestore.commit")?;
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.now();
@@ -940,6 +998,7 @@ impl LocalBackend {
         req: &pb::DeleteDocumentRequest,
         guard: WriteGuard<'_>,
     ) -> Result<(), Status> {
+        self.fault("firestore.commit")?;
         let (parent, write) = Self::plan_delete(req)?;
         let now = self.now();
         self.with_db(&parent, |db| {
@@ -982,6 +1041,7 @@ impl LocalBackend {
 
     /// `BeginTransaction`.
     pub fn begin_transaction(&self, req: &pb::BeginTransactionRequest) -> Result<Vec<u8>, Status> {
+        self.fault("firestore.beginTransaction")?;
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         // BeginTransaction without options is read-write (unlike `new_transaction`).
         let now = self.now();
@@ -1016,6 +1076,7 @@ impl LocalBackend {
         req: &pb::CommitRequest,
         guard: WriteGuard<'_>,
     ) -> Result<pb::CommitResponse, Status> {
+        self.fault("firestore.commit")?;
         let (parent, writes) = Self::plan_commit(req)?;
         let txn = Self::txn(&parent, &req.transaction)?;
         let now = self.now();
@@ -1045,6 +1106,7 @@ impl LocalBackend {
         req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
+        self.fault("firestore.read")?;
         let parent = parse_parent(&req.parent).map_err(status)?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
@@ -1134,6 +1196,7 @@ impl LocalBackend {
         req: &pb::RunAggregationQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::RunAggregationQueryResponse, Status> {
+        self.fault("firestore.read")?;
         let parent = parse_parent(&req.parent).map_err(status)?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
             &req.query_type
@@ -1241,6 +1304,7 @@ impl LocalBackend {
         req: &pb::ListDocumentsRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
+        self.fault("firestore.read")?;
         let parent = parse_parent(&req.parent).map_err(status)?;
         let now = self.now();
         let (txn, read_at) = match &req.consistency_selector {
@@ -1405,6 +1469,7 @@ impl LocalBackend {
         req: &pb::BatchWriteRequest,
         guard: WriteGuard<'_>,
     ) -> Result<pb::BatchWriteResponse, Status> {
+        self.fault("firestore.commit")?;
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let now = self.now();
         let decoded: Vec<Result<Write, Status>> = req
@@ -1652,4 +1717,26 @@ fn query_responses(
         );
     }
     responses
+}
+
+/// A gRPC status code from its name (or `UNKNOWN`).
+fn grpc_code(name: &str) -> tonic::Code {
+    match name.to_ascii_uppercase().as_str() {
+        "CANCELLED" => tonic::Code::Cancelled,
+        "INVALID_ARGUMENT" => tonic::Code::InvalidArgument,
+        "DEADLINE_EXCEEDED" => tonic::Code::DeadlineExceeded,
+        "NOT_FOUND" => tonic::Code::NotFound,
+        "ALREADY_EXISTS" => tonic::Code::AlreadyExists,
+        "PERMISSION_DENIED" => tonic::Code::PermissionDenied,
+        "RESOURCE_EXHAUSTED" => tonic::Code::ResourceExhausted,
+        "FAILED_PRECONDITION" => tonic::Code::FailedPrecondition,
+        "ABORTED" => tonic::Code::Aborted,
+        "OUT_OF_RANGE" => tonic::Code::OutOfRange,
+        "UNIMPLEMENTED" => tonic::Code::Unimplemented,
+        "INTERNAL" => tonic::Code::Internal,
+        "UNAVAILABLE" => tonic::Code::Unavailable,
+        "DATA_LOSS" => tonic::Code::DataLoss,
+        "UNAUTHENTICATED" => tonic::Code::Unauthenticated,
+        _ => tonic::Code::Unknown,
+    }
 }

@@ -171,6 +171,8 @@ struct Inner {
     catch_up_pending: bool,
     /// Schedule runs refused by the `reject` overlap policy.
     overlap_rejected: u64,
+    /// Events held back by a `delay` fault until the virtual clock reaches the instant.
+    delayed: BTreeMap<EventId, LogicalInstant>,
 }
 
 /// The runtime.
@@ -185,6 +187,8 @@ pub struct FunctionsRuntime {
     wake: Notify,
     idle: Arc<Notify>,
     retry: RetryPolicy,
+    /// The session's fault plan, when one is shared.
+    faults: Mutex<Option<ftd_core_session::fault::SharedFaults>>,
 }
 
 impl FunctionsRuntime {
@@ -243,10 +247,12 @@ impl FunctionsRuntime {
                 dead_letters: Vec::new(),
                 catch_up_pending: false,
                 overlap_rejected: 0,
+                delayed: BTreeMap::new(),
             }),
             wake: Notify::new(),
             idle: Arc::new(Notify::new()),
             retry,
+            faults: Mutex::new(None),
         })
     }
 
@@ -270,6 +276,55 @@ impl FunctionsRuntime {
             .lock()
             .map(|c| c.now())
             .unwrap_or(LogicalInstant::UNIX_EPOCH)
+    }
+
+    /// Shares the session's fault plan with this runtime.
+    pub fn set_faults(&self, faults: ftd_core_session::fault::SharedFaults) {
+        if let Ok(mut slot) = self.faults.lock() {
+            *slot = Some(faults);
+        }
+    }
+
+    fn faults(&self) -> Option<ftd_core_session::fault::SharedFaults> {
+        self.faults.lock().ok().and_then(|f| f.clone())
+    }
+
+    /// Enqueues an event for `function`, plus the extra deliveries a `duplicate` fault
+    /// asks for.
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_delivery(
+        &self,
+        inner: &mut Inner,
+        source: EventSource,
+        function: &str,
+        event_type: &str,
+        subject: &str,
+        time: LogicalInstant,
+        payload: &Value,
+    ) {
+        let mut copies = 1u32;
+        for action in ftd_core_session::fault::decide_shared(
+            self.faults().as_ref(),
+            "functions.deliver",
+            Some(function),
+            Some(event_type),
+        ) {
+            if let ftd_core_session::fault::FaultAction::Duplicate { count } = action {
+                copies = copies.saturating_add(count);
+            }
+        }
+        for _ in 0..copies {
+            Self::enqueue(
+                inner,
+                self.config.session,
+                source,
+                function,
+                event_type,
+                subject.to_owned(),
+                time,
+                payload.clone(),
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -370,15 +425,14 @@ impl FunctionsRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or(reported.event_type())
                     .to_owned();
-                Self::enqueue(
+                self.enqueue_delivery(
                     &mut inner,
-                    self.config.session,
                     EventSource::Firestore,
                     &m.function.name,
                     &event_type,
-                    format!("documents/{relative}"),
+                    &format!("documents/{relative}"),
                     time,
-                    payload,
+                    &payload,
                 );
                 enqueued = true;
             }
@@ -407,15 +461,14 @@ impl FunctionsRuntime {
         {
             let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
             let payload = storage_event(&id, kind, object, time);
-            Self::enqueue(
+            self.enqueue_delivery(
                 &mut inner,
-                self.config.session,
                 EventSource::Storage,
                 &f.name,
                 kind.event_type(),
-                format!("objects/{}", object.name.as_str()),
+                &format!("objects/{}", object.name.as_str()),
                 time,
-                payload,
+                &payload,
             );
             enqueued = true;
         }
@@ -440,15 +493,14 @@ impl FunctionsRuntime {
             ids.push(message_id.clone());
             for f in self.manifest.pubsub_matches(topic) {
                 let payload = pubsub_event(&message_id, &self.config.project, topic, message, time);
-                Self::enqueue(
+                self.enqueue_delivery(
                     &mut inner,
-                    self.config.session,
                     EventSource::PubSub,
                     &f.name,
                     "google.cloud.pubsub.topic.v1.messagePublished",
-                    format!("topics/{topic}"),
+                    &format!("topics/{topic}"),
                     time,
-                    payload,
+                    &payload,
                 );
                 enqueued = true;
             }
@@ -474,15 +526,14 @@ impl FunctionsRuntime {
         for f in self.manifest.auth_matches(kind) {
             let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
             let payload = auth_event(&id, &self.config.project, kind, &event.user, time);
-            Self::enqueue(
+            self.enqueue_delivery(
                 &mut inner,
-                self.config.session,
                 EventSource::Auth,
                 &f.name,
                 kind.event_type(),
-                format!("users/{}", event.user.local_id.as_str()),
+                &format!("users/{}", event.user.local_id.as_str()),
                 time,
-                payload,
+                &payload,
             );
             enqueued = true;
         }
@@ -569,6 +620,58 @@ impl FunctionsRuntime {
         if enqueued {
             self.wake.notify_one();
         }
+    }
+
+    /// The `functions.invoke` faults for one dispatch of `id`: an outcome to report instead
+    /// of invoking (with the retry flag to apply), and whether to crash the runner. A
+    /// `delay` records the instant the event may go.
+    fn invoke_faults(
+        inner: &mut Inner,
+        id: EventId,
+        spec: &FunctionSpec,
+        faults: Option<&ftd_core_session::fault::SharedFaults>,
+        now: LogicalInstant,
+    ) -> (Option<(InvokeOutcome, bool)>, bool) {
+        use ftd_core_session::fault::FaultAction;
+        let mut outcome: Option<(InvokeOutcome, bool)> = None;
+        let mut crash = false;
+        for action in ftd_core_session::fault::decide_shared(
+            faults,
+            "functions.invoke",
+            Some(&spec.name),
+            None,
+        ) {
+            match action {
+                FaultAction::Delay { seconds } => {
+                    let until = now
+                        .checked_add(LogicalDuration::from_seconds(seconds.max(0)))
+                        .unwrap_or(now);
+                    inner.delayed.insert(id, until);
+                }
+                FaultAction::ReturnError { code } => {
+                    outcome = Some((
+                        InvokeOutcome::Failed(format!("fault plan: {code}")),
+                        spec.retry,
+                    ));
+                }
+                FaultAction::Timeout => outcome = Some((InvokeOutcome::TimedOut, spec.retry)),
+                FaultAction::DeadLetter => {
+                    outcome = Some((
+                        InvokeOutcome::Failed("fault plan: dead letter".to_owned()),
+                        false,
+                    ));
+                }
+                FaultAction::TransactionConflict | FaultAction::DropConnection => {
+                    outcome = Some((
+                        InvokeOutcome::Failed(format!("fault plan: {action}")),
+                        spec.retry,
+                    ));
+                }
+                FaultAction::CrashRunner => crash = true,
+                FaultAction::Duplicate { .. } => {}
+            }
+        }
+        (outcome, crash)
     }
 
     /// Applies the catch-up policy to the runs that became due: `latest` keeps the last run
@@ -692,11 +795,19 @@ impl FunctionsRuntime {
             inner.outbox.discard_stale(epoch);
             inner.payloads.clear();
             inner.running.clear();
+            inner.delayed.clear();
             inner.catch_up_pending = false;
             for job in &mut inner.jobs {
                 job.cursor = now;
             }
         }
+        self.respawn_runner(generation);
+        self.idle.notify_waiters();
+        self.wake.notify_one();
+    }
+
+    /// Restarts the runner from its spec for `generation` (a later reset supersedes it).
+    fn respawn_runner(self: &Arc<Self>, generation: Option<Epoch>) {
         if let Some(spec) = self.spawn.clone() {
             let runtime = self.clone();
             tokio::spawn(async move {
@@ -726,8 +837,6 @@ impl FunctionsRuntime {
                 }
             });
         }
-        self.idle.notify_waiters();
-        self.wake.notify_one();
     }
 
     /// Notified whenever an invocation completes or the runtime resets.
@@ -939,6 +1048,8 @@ impl FunctionsRuntime {
             // against a dead process.
             return;
         }
+        let now = self.now();
+        let faults = self.faults();
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
@@ -969,6 +1080,23 @@ impl FunctionsRuntime {
             if running_here >= limit {
                 continue;
             }
+            // A `delay` fault holds the event until the virtual clock reaches the instant;
+            // the plan is consulted once per dispatch attempt, not on every pass over a
+            // held event.
+            let (fault_outcome, crash) = match inner.delayed.get(&id) {
+                Some(until) if now < *until => continue,
+                Some(_) => {
+                    inner.delayed.remove(&id);
+                    (None, false)
+                }
+                None => {
+                    let decided = Self::invoke_faults(&mut inner, id, spec, faults.as_ref(), now);
+                    if inner.delayed.get(&id).is_some_and(|until| now < *until) {
+                        continue;
+                    }
+                    decided
+                }
+            };
             let Ok(record) = inner.outbox.record_mut(id) else {
                 continue;
             };
@@ -987,8 +1115,30 @@ impl FunctionsRuntime {
             let runner = runner.clone();
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
             let retry = spec.retry;
+            if crash {
+                // The runner dies mid-invocation: the attempt is given back (RunnerGone) and
+                // a fresh runner takes over, as after a crashed instance.
+                runner.kill_now();
+                let generation = Some(inner.epoch);
+                self.respawn_runner(generation);
+            }
             tokio::spawn(async move {
-                let Invocation { outcome, late } = runner.invoke(request, timeout).await;
+                let Invocation { outcome, late } = match fault_outcome {
+                    Some((outcome, retry_override)) => {
+                        runtime.complete(
+                            id,
+                            &key,
+                            &function_name,
+                            attempt,
+                            epoch,
+                            retry_override,
+                            &outcome,
+                        );
+                        runtime.release(&key);
+                        return;
+                    }
+                    None => runner.invoke(request, timeout).await,
+                };
                 runtime.complete(id, &key, &function_name, attempt, epoch, retry, &outcome);
                 match late {
                     // The handler is still running: its slot stays taken until it finishes

@@ -10,3 +10,6 @@ verification/tla/states/
 verification/tla/**/states/
 *.tlaps
 .tools/
+# cargo-mutants default output (use --output docs.local/mutants/... for kept runs)
+mutants.out/
+mutants.out.old/

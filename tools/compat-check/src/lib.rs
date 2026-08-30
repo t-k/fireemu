@@ -7,7 +7,7 @@
 //! | Rule | What it refuses |
 //! | --- | --- |
 //! | `CC-01` | a malformed contract: a bad schema version, a duplicate surface or claim ID, an unknown scope or state |
-//! | `CC-02` | an official emulator of the pinned baseline that no surface enumerates, or a surface that names an emulator the baseline does not ship |
+//! | `CC-02` | a contract whose pinned version is not the one the differential suite installs, a claim sentence that does not name it, an official emulator of the pinned baseline that no surface enumerates, or a surface that names an emulator the baseline does not ship |
 //! | `CC-03` | a manifest capability that is `implemented` or `partial` and is not bound to at least one existing executed test or conformance fixture |
 //! | `CC-04` | a manifest entry and the contract that disagree on status, an unknown capability ID, or a manifest entry no claim covers |
 //! | `CC-05` | a README that does not carry the version-qualified claim sentence verbatim |
@@ -87,7 +87,7 @@ pub fn check(root: &Path) -> Report {
     let index = RepoIndex::build(root);
 
     check_shape(&contract, surfaces, &mut report.problems);
-    check_inventory(&contract, surfaces, &mut report.problems);
+    check_inventory(root, &contract, surfaces, &mut report.problems);
     check_claims(root, surfaces, &statuses, &index, &mut report);
     check_readme_claim(root, &contract, &mut report.problems);
     check_scope_leakage(root, &contract, surfaces, entries, &mut report.problems);
@@ -164,8 +164,9 @@ fn check_shape(contract: &Value, surfaces: &[Value], problems: &mut Vec<String>)
 // ---------------------------------------------------------------------------------------------
 // CC-02: the pinned inventory
 
-fn check_inventory(contract: &Value, surfaces: &[Value], problems: &mut Vec<String>) {
+fn check_inventory(root: &Path, contract: &Value, surfaces: &[Value], problems: &mut Vec<String>) {
     let baseline = contract.get("baseline");
+    check_pin(root, contract, baseline, problems);
     let official: BTreeSet<&str> = baseline
         .and_then(|b| b.get("officialEmulators"))
         .and_then(Value::as_array)
@@ -203,6 +204,48 @@ fn check_inventory(contract: &Value, surfaces: &[Value], problems: &mut Vec<Stri
     for name in official.difference(&enumerated) {
         problems.push(format!(
             "CC-02: official emulator {name:?} of the pinned baseline is not enumerated by any surface"
+        ));
+    }
+}
+
+/// The baseline the contract names has to be the one the differential suite actually installs,
+/// and the claim sentence has to name that version. This is what makes an upstream upgrade
+/// fail closed: bumping the pin in `conformance/package.json` breaks the gate until the
+/// contract, the claim and the surface enumeration are reconciled with the new release.
+fn check_pin(root: &Path, contract: &Value, baseline: Option<&Value>, problems: &mut Vec<String>) {
+    let declared = baseline.and_then(|b| str_field(b, "version")).unwrap_or("");
+    if declared.is_empty() {
+        problems.push(format!("CC-02: {CONTRACT_PATH} baseline names no version"));
+        return;
+    }
+    let pinned_by = baseline
+        .and_then(|b| str_field(b, "pinnedBy"))
+        .unwrap_or("conformance/package.json");
+    let package = baseline
+        .and_then(|b| str_field(b, "package"))
+        .unwrap_or("firebase-tools");
+    match read_json(root, pinned_by, problems) {
+        None => {}
+        Some(manifest) => {
+            let pinned = manifest
+                .get("dependencies")
+                .and_then(|d| d.get(package))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if pinned != declared {
+                problems.push(format!(
+                    "CC-02: {CONTRACT_PATH} pins {package} {declared:?} while {pinned_by} installs {pinned:?}; reconcile the delta before the claim can stand"
+                ));
+            }
+        }
+    }
+    let sentence = contract
+        .get("claim")
+        .and_then(|c| str_field(c, "sentence"))
+        .unwrap_or("");
+    if !sentence.contains(declared) {
+        problems.push(format!(
+            "CC-02: the claim sentence does not name the pinned {package} version {declared:?}, so it is not version-qualified"
         ));
     }
 }

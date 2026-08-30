@@ -36,6 +36,10 @@ impl Fixture {
         fixture.write("crates/fixture/tests/it.rs", TEST_SOURCE);
         fixture.write("conformance/fixtures/firestore/a-scenario.json", "{}");
         fixture.write(
+            "conformance/package.json",
+            &json!({"dependencies": {"firebase-tools": "15.28.2"}}).to_string(),
+        );
+        fixture.write(
             "spec/config/fireemu.schema.json",
             &json!({
                 "type": "object",
@@ -106,6 +110,7 @@ fn contract() -> Value {
         "baseline": {
             "package": "firebase-tools",
             "version": "15.28.2",
+            "pinnedBy": "conformance/package.json",
             "officialEmulators": ["firestore", "database"],
         },
         "claim": {"sentence": CLAIM, "documents": ["README.md"]},
@@ -220,6 +225,29 @@ fn cases() -> Vec<Case> {
             name: "unknown-scope",
             mutate: |contract, _, _| set(contract, "surfaces/1/scope", json!("maybe")),
             expect: Some("has scope \"maybe\""),
+        },
+        // CC-02: an upstream upgrade fails closed until the contract is reconciled with it.
+        Case {
+            name: "upstream-upgrade-opens-debt",
+            mutate: |_, _, fixture| {
+                fixture.write(
+                    "conformance/package.json",
+                    &json!({"dependencies": {"firebase-tools": "15.29.0"}}).to_string(),
+                );
+            },
+            expect: Some(
+                "pins firebase-tools \"15.28.2\" while conformance/package.json installs \"15.29.0\"",
+            ),
+        },
+        // CC-02: a claim sentence that does not name the pinned version is not version-qualified.
+        Case {
+            name: "claim-without-version",
+            mutate: |contract, _, fixture| {
+                let vague = "fireemu is compatible with Cloud Firestore. Realtime Database is deferred.";
+                set(contract, "claim/sentence", json!(vague));
+                fixture.write("README.md", &format!("# fixture\n\n{vague}\n"));
+            },
+            expect: Some("does not name the pinned firebase-tools version \"15.28.2\""),
         },
         // CC-02: an official emulator of the pinned baseline that no surface enumerates.
         Case {

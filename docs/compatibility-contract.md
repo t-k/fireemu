@@ -37,12 +37,18 @@ against.
 
 ### What an upstream upgrade does
 
-Bumping the pin in `conformance/package.json` and re-recording turns every newly detected
-difference into a `debt` row in `conformance/DEBT.md`, because a row can only become a
-documented divergence once a human writes it into `conformance/divergences.json`. Any surface
-the new baseline adds is absent from this contract, so `compat-check` fails until it is
-enumerated with a scope. Until the delta is reconciled, the claim sentence names the old version
-and is therefore false -- which is the intended fail-closed behaviour, not a gap.
+The upgrade is fail-closed by construction, in three places:
+
+- `CC-02` compares `baseline.version` with the version `conformance/package.json` actually
+  installs. Bumping the pin fails the gate immediately, before anything is re-recorded.
+- `CC-02` also requires the claim sentence to name that version, so the public claim can never
+  be qualified by a release the repository does not run against.
+- Any surface the new baseline adds is absent from this contract, so `CC-02` keeps failing until
+  it is enumerated with a scope and a decision.
+
+Re-recording then turns every newly detected difference into a `debt` row in
+`conformance/DEBT.md`, because a row can only become a documented divergence once a human writes
+it into `conformance/divergences.json`.
 
 ## The taxonomy
 

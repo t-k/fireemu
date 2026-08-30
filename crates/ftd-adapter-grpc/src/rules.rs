@@ -188,6 +188,23 @@ fn limit_value(id: &str, fallback: u64) -> u64 {
         .unwrap_or(fallback)
 }
 
+/// The emulator's owner credential: `Authorization: Bearer owner`.
+pub const OWNER_TOKEN: &str = "owner";
+
+/// Whether the caller presented the emulator's exact owner credential.
+///
+/// [`RulesEnforcer::principal_from_authorization`] maps exactly this value to
+/// [`Principal::Owner`], but it is only consulted while Security Rules are enforced: with
+/// rules disabled every caller becomes the owner without presenting anything. That is not an
+/// App Check bypass (specification section 12.2), so the App Check path verifies the
+/// credential itself, through this function, whatever the rules configuration is.
+#[must_use]
+pub fn is_owner_credential(authorization: Option<&str>) -> bool {
+    authorization
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == OWNER_TOKEN)
+}
+
 /// Who is making the request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Principal {
@@ -384,7 +401,7 @@ impl RulesEnforcer {
         let token = value
             .strip_prefix("Bearer ")
             .ok_or_else(|| Status::unauthenticated("authorization must be a Bearer token"))?;
-        if token == "owner" {
+        if token == OWNER_TOKEN {
             return Ok(Principal::Owner);
         }
         let now = self.now()?;

@@ -35,6 +35,9 @@ pub struct RestState {
     pub gateway: Arc<Gateway>,
     /// Rules enforcement, if configured.
     pub rules: Option<Arc<RulesEnforcer>>,
+    /// The App Check baseline policy of Cloud Firestore (`appCheck.services.firestore`).
+    /// `None` is the `off` mode: no header is collected and nothing is classified.
+    pub app_check: Option<Arc<ftd_core_app_check::admission::ServiceAdmission>>,
 }
 
 /// One REST request.
@@ -48,6 +51,8 @@ pub struct RestRequest {
     pub query: String,
     /// `Authorization` header.
     pub authorization: Option<String>,
+    /// Every `X-Firebase-AppCheck` field instance, in wire order (specification section 7.3).
+    pub app_check: Vec<String>,
     /// Parsed JSON body (`{}` when empty).
     pub body: Value,
 }
@@ -266,6 +271,46 @@ impl RestState {
         })
     }
 
+    /// The App Check decision of one REST request (specification sections 12 and 13.1).
+    ///
+    /// The owner bypass is the emulator's exact owner credential, verified here rather than
+    /// taken from the principal, because the principal is `Owner` for everyone while
+    /// Security Rules are disabled.
+    fn admit_app_check(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        action: Option<&str>,
+    ) -> Result<(), Status> {
+        use ftd_core_app_check::admission::{AdmissionRequest, PrivilegedBypass};
+        let Some(policy) = &self.app_check else {
+            return Ok(());
+        };
+        let header = ftd_core_app_check::header::classify_app_check_header(&req.app_check);
+        let decision = policy.admit(&AdmissionRequest {
+            project_id: crate::service::project_of_resource(path),
+            transport: "http",
+            operation: action.unwrap_or(match req.method.as_str() {
+                "GET" => "get",
+                "POST" => "create",
+                "PATCH" => "patch",
+                "DELETE" => "delete",
+                _ => "request",
+            }),
+            bypass: if rules::is_owner_credential(req.authorization.as_deref()) {
+                PrivilegedBypass::FirestoreOwner
+            } else {
+                PrivilegedBypass::None
+            },
+            header: &header,
+            now: self.local.now(),
+        });
+        match decision.reason {
+            None => Ok(()),
+            Some(reason) => Err(crate::service::app_check_denied(reason)),
+        }
+    }
+
     /// Handles one request.
     pub fn handle(&self, req: &RestRequest) -> RestResponse {
         match self.dispatch(req) {
@@ -286,6 +331,9 @@ impl RestState {
             return Err(Status::not_found(format!("unknown path {}", req.path)));
         };
         let params = query_params(&req.query);
+        // App Check, once the route and the target project are resolved and before the
+        // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
+        self.admit_app_check(req, path, action)?;
         let principal = self.principal(req.authorization.as_deref())?;
         if let Some(action) = action {
             if req.method != "POST" {

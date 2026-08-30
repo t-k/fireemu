@@ -15,6 +15,7 @@ ftd-core-firestore = { path = "../ftd-core-firestore" }
 ftd-core-session = { path = "../ftd-core-session" }
 ftd-core-rules = { path = "../ftd-core-rules" }
 ftd-core-auth = { path = "../ftd-core-auth" }
+ftd-core-app-check = { path = "../ftd-core-app-check" }
 ftd-proto-firestore = { path = "../ftd-proto-firestore" }
 prost-types = "0.13"
 tonic = { version = "0.13", features = ["transport", "codegen", "prost"] }

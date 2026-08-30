@@ -976,10 +976,14 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
         if let Some(e) = &enforcer {
             service = service.with_rules(e.clone());
         }
+        if let Some(policy) = &firestore_policy {
+            service = service.with_app_check(policy.clone());
+        }
         let rest = Arc::new(RestState {
             local: backend.clone(),
             gateway: Arc::new(gateway),
             rules: enforcer,
+            app_check: firestore_policy,
         });
         let grpc = tokio::spawn(serve_multiplexed(
             grpc_listener,

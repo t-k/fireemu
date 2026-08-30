@@ -64,6 +64,9 @@ fn firestore(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         path: format!("/{path}"),
         query: req.query.clone(),
         authorization: Some("Bearer owner".to_owned()),
+        // The UI front is privileged local administration: it presents the owner credential
+        // above and takes the bypass of specification section 12.2.
+        app_check: Vec::new(),
         body,
     });
     let mut out = UiResponse::json(response.status, &response.body);

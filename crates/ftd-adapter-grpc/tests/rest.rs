@@ -45,6 +45,7 @@ fn state(rules: Option<&str>) -> RestState {
         local,
         gateway: Arc::new(gateway),
         rules,
+        app_check: None,
     }
 }
 
@@ -67,6 +68,7 @@ fn call_as(
         path: path.to_owned(),
         query: query.to_owned(),
         authorization: authorization.map(str::to_owned),
+        app_check: Vec::new(),
         body,
     });
     (r.status, r.body)

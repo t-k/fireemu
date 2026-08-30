@@ -51,6 +51,7 @@ fn hub(rules: Option<&str>) -> Hub {
         local,
         gateway: Arc::new(gateway),
         rules,
+        app_check: None,
     }))
 }
 

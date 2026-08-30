@@ -19,7 +19,9 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::decode::{decode_structured_query, parse_parent};
 use crate::gateway::{Gateway, Rejection};
 use crate::local::LocalBackend;
-use crate::rules::{same_epoch, Principal, RulesEnforcer};
+use crate::rules::{is_owner_credential, same_epoch, Principal, RulesEnforcer};
+use ftd_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
+use ftd_core_app_check::header::{classify_app_check_header, is_app_check_header};
 
 /// Boxed response stream.
 pub type BoxStream<T> = tonic::codegen::BoxStream<T>;
@@ -39,6 +41,7 @@ pub struct GatewayService {
     gateway: Arc<Gateway>,
     backend: Backend,
     rules: Option<Arc<RulesEnforcer>>,
+    app_check: Option<Arc<ServiceAdmission>>,
 }
 
 impl GatewayService {
@@ -50,6 +53,7 @@ impl GatewayService {
             gateway: Arc::new(gateway),
             backend,
             rules: None,
+            app_check: None,
         }
     }
 
@@ -60,6 +64,7 @@ impl GatewayService {
             gateway: Arc::new(gateway),
             backend: Backend::Local(backend),
             rules: None,
+            app_check: None,
         }
     }
 
@@ -67,6 +72,17 @@ impl GatewayService {
     #[must_use]
     pub fn with_rules(mut self, rules: Arc<RulesEnforcer>) -> Self {
         self.rules = Some(rules);
+        self
+    }
+
+    /// Enforces the Firestore App Check baseline (`appCheck.services.firestore`).
+    ///
+    /// The policy is deliberately independent of [`Self::with_rules`]: disabling Security
+    /// Rules makes every caller the owner without a credential, and that is not an App Check
+    /// bypass (specification section 12.2).
+    #[must_use]
+    pub fn with_app_check(mut self, policy: Arc<ServiceAdmission>) -> Self {
+        self.app_check = Some(policy);
         self
     }
 
@@ -80,12 +96,75 @@ impl GatewayService {
     /// The caller of a unary request: its principal plus the reset epoch it started in.
     /// The epoch is read before the token is verified, so a reset that clears the Auth
     /// store between verification and admission is detected by the guards.
-    fn caller(&self, metadata: &tonic::metadata::MetadataMap) -> Result<Caller, Status> {
+    ///
+    /// App Check is decided here, between the resolved route and the Firebase Auth
+    /// credential, which is the order specification section 7.4 requires. Taking the
+    /// resource and the method name is what makes that unmissable: every unary handler has
+    /// to name its target, so no method can silently skip admission.
+    fn caller(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+        resource: &str,
+        operation: &'static str,
+    ) -> Result<Caller, Status> {
         let epoch = self.local_backend().map_or(0, |l| l.barrier().epoch());
+        self.admit_app_check(metadata, resource, operation)?;
         Ok(Caller {
             principal: self.principal(metadata)?,
             epoch,
         })
+    }
+
+    /// The App Check decision of one unary request (specification sections 12 and 13.1).
+    ///
+    /// The owner bypass is the emulator's exact owner credential, verified here rather than
+    /// taken from the principal, because the principal is `Owner` for everyone while
+    /// Security Rules are disabled.
+    fn admit_app_check(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+        resource: &str,
+        operation: &'static str,
+    ) -> Result<(), Status> {
+        let Some(policy) = &self.app_check else {
+            return Ok(());
+        };
+        let values: Vec<&str> = metadata
+            .iter()
+            .filter_map(|entry| match entry {
+                tonic::metadata::KeyAndValueRef::Ascii(name, value) => {
+                    is_app_check_header(name.as_str()).then(|| value.to_str().unwrap_or_default())
+                }
+                // A binary metadata entry can never be a compact JWT, but it is still an
+                // instance of the field: it must make the classification ambiguous.
+                tonic::metadata::KeyAndValueRef::Binary(name, _) => {
+                    is_app_check_header(name.as_str()).then_some("")
+                }
+            })
+            .collect();
+        let header = classify_app_check_header(&values);
+        let authorization = metadata.get("authorization").and_then(|v| v.to_str().ok());
+        let now = self
+            .local_backend()
+            .map_or(ftd_core_types::time::LogicalInstant::UNIX_EPOCH, |l| {
+                l.now()
+            });
+        let decision = policy.admit(&AdmissionRequest {
+            project_id: project_of_resource(resource),
+            transport: "grpc",
+            operation,
+            bypass: if is_owner_credential(authorization) {
+                PrivilegedBypass::FirestoreOwner
+            } else {
+                PrivilegedBypass::None
+            },
+            header: &header,
+            now,
+        });
+        match decision.reason {
+            None => Ok(()),
+            Some(reason) => Err(app_check_denied(reason)),
+        }
     }
 
     /// A user token must be minted for the project of `database` (transaction requests
@@ -236,7 +315,7 @@ impl Firestore for GatewayService {
         request: Request<pb::GetDocumentRequest>,
     ) -> Result<Response<pb::Document>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(request.metadata(), &request.get_ref().name, "GetDocument")?;
             let guard = self.read_guard(&caller);
             let snapshot = local.get_document_snapshot(request.get_ref(), &*guard)?;
             return snapshot.into_response().map(Response::new);
@@ -249,7 +328,11 @@ impl Firestore for GatewayService {
         request: Request<pb::ListDocumentsRequest>,
     ) -> Result<Response<pb::ListDocumentsResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().parent,
+                "ListDocuments",
+            )?;
             let guard = self.read_guard(&caller);
             return local
                 .list_documents(request.get_ref(), &*guard)
@@ -263,7 +346,15 @@ impl Firestore for GatewayService {
         request: Request<pb::UpdateDocumentRequest>,
     ) -> Result<Response<pb::Document>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                request
+                    .get_ref()
+                    .document
+                    .as_ref()
+                    .map_or("", |d| d.name.as_str()),
+                "UpdateDocument",
+            )?;
             let (parent, write) = LocalBackend::plan_update(request.get_ref())?;
             let guard = self.write_guard(&caller);
             return local
@@ -278,7 +369,11 @@ impl Firestore for GatewayService {
         request: Request<pb::DeleteDocumentRequest>,
     ) -> Result<Response<()>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().name,
+                "DeleteDocument",
+            )?;
             let guard = self.write_guard(&caller);
             return local
                 .delete_document_with(request.get_ref(), &*guard)
@@ -293,7 +388,11 @@ impl Firestore for GatewayService {
         request: Request<pb::BatchGetDocumentsRequest>,
     ) -> Result<Response<Self::BatchGetDocumentsStream>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().database,
+                "BatchGetDocuments",
+            )?;
             // An empty batch never reaches the guard: the audience is checked here so a
             // token of another project cannot open a transaction in this one.
             self.check_database_audience(&caller, &request.get_ref().database)?;
@@ -341,7 +440,11 @@ impl Firestore for GatewayService {
         request: Request<pb::BeginTransactionRequest>,
     ) -> Result<Response<pb::BeginTransactionResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().database,
+                "BeginTransaction",
+            )?;
             self.check_database_audience(&caller, &request.get_ref().database)?;
             let transaction = local.begin_transaction(request.get_ref())?;
             return Ok(Response::new(pb::BeginTransactionResponse { transaction }));
@@ -354,7 +457,7 @@ impl Firestore for GatewayService {
         request: Request<pb::CommitRequest>,
     ) -> Result<Response<pb::CommitResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(request.metadata(), &request.get_ref().database, "Commit")?;
             let guard = self.write_guard(&caller);
             return local
                 .commit_with(request.get_ref(), &*guard)
@@ -368,7 +471,8 @@ impl Firestore for GatewayService {
         request: Request<pb::RollbackRequest>,
     ) -> Result<Response<()>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller =
+                self.caller(request.metadata(), &request.get_ref().database, "Rollback")?;
             self.check_database_audience(&caller, &request.get_ref().database)?;
             return local.rollback(request.get_ref()).map(Response::new);
         }
@@ -380,7 +484,7 @@ impl Firestore for GatewayService {
         &self,
         request: Request<pb::RunQueryRequest>,
     ) -> Result<Response<Self::RunQueryStream>, Status> {
-        let caller = self.caller(request.metadata())?;
+        let caller = self.caller(request.metadata(), &request.get_ref().parent, "RunQuery")?;
         let req = request.into_inner();
         if let Some(local) = self.local_backend() {
             let guard = self.read_guard(&caller);
@@ -405,7 +509,11 @@ impl Firestore for GatewayService {
         // Strict validation only (FS-PIPE-RPC-1): the pipeline is decoded and canonicalized,
         // unsupported stages are refused explicitly, and a valid pipeline is answered with
         // UNIMPLEMENTED carrying its canonical form (execution is 1.x).
-        let caller = self.caller(request.metadata())?;
+        let caller = self.caller(
+            request.metadata(),
+            &request.get_ref().database,
+            "ExecutePipeline",
+        )?;
         if let Some(rules) = &self.rules {
             rules.require_owner(&caller.principal, "ExecutePipeline")?;
         }
@@ -438,7 +546,11 @@ impl Firestore for GatewayService {
         request: Request<pb::RunAggregationQueryRequest>,
     ) -> Result<Response<Self::RunAggregationQueryStream>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().parent,
+                "RunAggregationQuery",
+            )?;
             let guard = self.read_guard(&caller);
             let response = local.run_aggregation_query(request.get_ref(), &*guard)?;
             let stream: Vec<Result<pb::RunAggregationQueryResponse, Status>> = vec![Ok(response)];
@@ -457,7 +569,11 @@ impl Firestore for GatewayService {
     ) -> Result<Response<pb::PartitionQueryResponse>, Status> {
         if let Some(local) = self.local_backend() {
             // An Admin / data-pipeline surface: owner-only while rules are enforced.
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().parent,
+                "PartitionQuery",
+            )?;
             if let Some(rules) = &self.rules {
                 rules.require_owner(&caller.principal, "PartitionQuery")?;
             }
@@ -499,7 +615,11 @@ impl Firestore for GatewayService {
         request: Request<pb::ListCollectionIdsRequest>,
     ) -> Result<Response<pb::ListCollectionIdsResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().parent,
+                "ListCollectionIds",
+            )?;
             if let Some(rules) = &self.rules {
                 // Collection enumeration has no rules equivalent: admin-only under rules.
                 rules.require_owner(&caller.principal, "ListCollectionIds")?;
@@ -518,7 +638,11 @@ impl Firestore for GatewayService {
         request: Request<pb::BatchWriteRequest>,
     ) -> Result<Response<pb::BatchWriteResponse>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().database,
+                "BatchWrite",
+            )?;
             let guard = self.write_guard(&caller);
             return local
                 .batch_write_with(request.get_ref(), &*guard)
@@ -532,7 +656,11 @@ impl Firestore for GatewayService {
         request: Request<pb::CreateDocumentRequest>,
     ) -> Result<Response<pb::Document>, Status> {
         if let Some(local) = self.local_backend() {
-            let caller = self.caller(request.metadata())?;
+            let caller = self.caller(
+                request.metadata(),
+                &request.get_ref().parent,
+                "CreateDocument",
+            )?;
             let (parent, write) = local.plan_create(request.get_ref())?;
             let guard = self.write_guard(&caller);
             return local
@@ -541,6 +669,35 @@ impl Firestore for GatewayService {
         }
         self.client()?.create_document(request.into_inner()).await
     }
+}
+
+/// The target project of a Firestore resource name (`projects/{p}/databases/...`).
+///
+/// An unparsable name resolves to the empty project, which fails closed: the App Check
+/// registry knows no such project, so no presented token can verify against it and an
+/// enforced request is denied before the decoder reports what was wrong with the name.
+#[must_use]
+pub fn project_of_resource(resource: &str) -> &str {
+    resource
+        .strip_prefix("projects/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+}
+
+/// The gRPC shape of an App Check denial (specification section 17): `PERMISSION_DENIED`
+/// with the public reason code in `ftd-code`. The detailed reason stays in the observation.
+#[must_use]
+pub fn app_check_denied(reason: &'static str) -> Status {
+    let message = if reason == ftd_core_app_check::verify::PUBLIC_REQUIRED_REASON {
+        "App Check token is required by this project's Cloud Firestore enforcement."
+    } else {
+        "App Check token is invalid."
+    };
+    let mut status = Status::permission_denied(message);
+    if let Ok(value) = reason.parse() {
+        status.metadata_mut().insert("ftd-code", value);
+    }
+    status
 }
 
 /// A unary caller: principal and the reset epoch the request started in.

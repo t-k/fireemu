@@ -90,6 +90,14 @@ async fn rest_call(
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
     let authorization = header(&req, "authorization").map(str::to_owned);
+    // Every instance, in wire order: duplicates and folded values must survive to the
+    // classifier, which refuses them (spec 7.3).
+    let app_check: Vec<String> = req
+        .headers()
+        .get_all(ftd_core_app_check::header::APP_CHECK_HEADER)
+        .iter()
+        .map(|v| v.to_str().unwrap_or_default().to_owned())
+        .collect();
     let Ok(bytes) = read_body(req, MAX_REST_BODY_BYTES).await else {
         return Ok(json_response(
             &RestResponse {
@@ -119,6 +127,7 @@ async fn rest_call(
         path,
         query,
         authorization,
+        app_check,
         body,
     });
     if crate::rest::drops_connection(&response) {
@@ -183,8 +192,8 @@ async fn channel_call(
 
 fn preflight(req: &Request<Incoming>) -> Response<OutBody> {
     let origin = header(req, "origin");
-    let requested =
-        header(req, "access-control-request-headers").unwrap_or("authorization, content-type");
+    let requested = header(req, "access-control-request-headers")
+        .unwrap_or("authorization, content-type, x-firebase-appcheck");
     cors_headers(Response::builder().status(204), origin)
         .header("access-control-allow-headers", requested)
         .header("access-control-max-age", "3600")

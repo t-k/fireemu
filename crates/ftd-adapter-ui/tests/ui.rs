@@ -106,6 +106,7 @@ fn state() -> Arc<UiState> {
             local: backend.clone(),
             gateway: Arc::new(gateway),
             rules: None,
+            app_check: None,
         }),
         backend,
         auth: Arc::new(AuthState {

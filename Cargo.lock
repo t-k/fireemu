@@ -420,6 +420,7 @@ name = "ftd-adapter-grpc"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ftd-core-app-check",
  "ftd-core-auth",
  "ftd-core-firestore",
  "ftd-core-limits",

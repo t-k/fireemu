@@ -1,0 +1,8 @@
+{
+  "emulators": {
+    "auth": {
+      "host": "::",
+      "port": 9099
+    }
+  }
+}

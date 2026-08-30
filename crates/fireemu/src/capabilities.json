@@ -552,7 +552,7 @@
     "implemented": [
       "firebase.json for every served product: firestore in object or array (named-database) form with rules and indexes (also the legacy index spelling), storage in object or array form with target / bucket / rules, functions in object or array (multi-codebase) form with source, codebase, runtime and ignore",
       "emulators.<name>.host and .port for firestore, auth, storage, functions, hub and ui, emulators.ui.enabled, and emulators.singleProjectMode",
-      "loopback-only hosts: a routable emulators.<name>.host is refused rather than exposing a product to the network",
+      "loopback-only hosts, as a published divergence from firebase-tools (which binds any host as given): emulators.<name>.host and the canonical bind key accept 127.0.0.1, localhost and ::1; 0.0.0.0, :: or a LAN address exits 1 naming the key, because the daemon serves without a credential on loopback and has no routable mode",
       ".firebaserc project aliases: --project resolves an alias, falls back to the default alias, and takes an unknown value as a project ID exactly as firebase --project does",
       "--config reads either file: one carrying schemaVersion is the fireemu canonical configuration, anything else is a firebase.json, so `firebase emulators:exec --config firebase.json` works verbatim",
       "unknown keys fail closed at every level of the sections fireemu reads",

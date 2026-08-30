@@ -419,17 +419,21 @@ fn a_named_firestore_database_is_reported_rather_than_folded_into_the_default_on
 
 #[test]
 fn a_routable_emulator_host_is_refused() {
-    let dir = scratch("host");
-    let firebase = write(
-        &dir,
-        "firebase.json",
-        r#"{"emulators": {"firestore": {"host": "0.0.0.0", "port": 8080}}}"#,
-    );
-    let out = exec_with(&["--firebase-json", firebase.to_str().unwrap()], &["true"]);
-    assert_eq!(out.status.code(), Some(1));
-    let text = stderr(&out);
-    assert!(text.contains("emulators.firestore.host"), "{text}");
-    assert!(text.contains("loopback"), "{text}");
+    // firebase-tools 15.28.2 binds each of these as given; fireemu publishes the refusal as a
+    // divergence of the CLI lifecycle claim, so the exit code and the message are contract.
+    for host in ["0.0.0.0", "::", "192.168.1.10"] {
+        let dir = scratch("host");
+        let firebase = write(
+            &dir,
+            "firebase.json",
+            &format!(r#"{{"emulators": {{"firestore": {{"host": "{host}", "port": 8080}}}}}}"#),
+        );
+        let out = exec_with(&["--firebase-json", firebase.to_str().unwrap()], &["true"]);
+        assert_eq!(out.status.code(), Some(1), "host {host:?}");
+        let text = stderr(&out);
+        assert!(text.contains("emulators.firestore.host"), "{text}");
+        assert!(text.contains("only loopback hosts are accepted"), "{text}");
+    }
 }
 
 #[test]

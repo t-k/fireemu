@@ -602,15 +602,19 @@ const FUNCTIONS_ENTRY_KEYS: [&str; 6] = [
     "postdeploy",
 ];
 
-/// The only host values a listener may take: the daemon serves loopback without a control
-/// token, so a `firebase.json` that asks for a routable address is refused rather than
-/// exposing Firestore, Auth and Storage to the network.
-fn loopback_host(host: &str, path: &str) -> Result<String, ConfigError> {
+/// The only host values a listener may take, whichever file names them (`emulators.<name>.host`
+/// of a `firebase.json`, `bind` of the canonical configuration): the daemon serves loopback
+/// without a credential on the products and its privileged control routes trust a loopback
+/// origin, so a routable address -- `0.0.0.0`, `::` or a LAN address, which `firebase-tools`
+/// binds as given -- is refused rather than exposing the suite to the network. The
+/// restriction is published as a fireemu divergence of the CLI lifecycle claim in
+/// `spec/compatibility/contract.json`; `tools/config-schema-check` rejects the same spellings.
+fn loopback_host(host: &str, key: &str) -> Result<String, ConfigError> {
     match host {
         "127.0.0.1" | "localhost" => Ok(host.to_owned()),
         "::1" | "[::1]" => Ok("[::1]".to_owned()),
         other => Err(ConfigError(format!(
-            "firebase.json: {path} {other:?}: only loopback binds are supported (127.0.0.1, localhost, ::1) without a control token"
+            "{key} {other:?}: only loopback hosts are accepted (127.0.0.1, localhost, ::1); fireemu serves without a credential on loopback, so a routable host such as 0.0.0.0 or :: is refused rather than exposing the suite to the network"
         ))),
     }
 }
@@ -631,7 +635,7 @@ fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, Con
                     "firebase.json: emulators.{name}.host must be a string"
                 ))
             })?;
-            loopback_host(text, &format!("emulators.{name}.host"))?
+            loopback_host(text, &format!("firebase.json: emulators.{name}.host"))?
         }
     };
     let port = match obj.get("port") {
@@ -1557,11 +1561,7 @@ impl RuntimeConfig {
             );
         }
         if let Some(bind) = obj.get("bind").and_then(Value::as_str) {
-            if bind != "127.0.0.1" && bind != "localhost" && bind != "::1" {
-                return Err(ConfigError(format!(
-                    "bind {bind:?}: only loopback binds are supported without a control token"
-                )));
-            }
+            loopback_host(bind, "bind")?;
         }
         if let Some(fs) = obj.get("firestore").and_then(Value::as_object) {
             if let Some(e) = fs.get("edition").and_then(Value::as_str) {
@@ -1751,6 +1751,21 @@ mod tests {
         // The token semantics have no key of their own: the profile is the only way to ask
         // for them, so an explicit index policy never quietly loosens them.
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
+    }
+
+    #[test]
+    fn bind_follows_the_same_loopback_policy_as_a_firebase_json_host() {
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "bind": host}))
+                .unwrap_or_else(|e| panic!("bind {host:?} is loopback and must load: {e}"));
+        }
+        for host in ["0.0.0.0", "::", "192.168.1.10", "example.com"] {
+            let err = RuntimeConfig::from_json(&json!({"schemaVersion": 1, "bind": host}))
+                .expect_err("a routable bind is refused");
+            let text = err.to_string();
+            assert!(text.starts_with("bind "), "{text}");
+            assert!(text.contains("only loopback hosts are accepted"), "{text}");
+        }
     }
 
     #[test]

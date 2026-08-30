@@ -239,7 +239,7 @@ The Logging emulator stream (the official port 4500) is **out of scope for this 
 - **`firestore`** in object or array (named-database) form: `rules` and `indexes` (the legacy `index` spelling too) of the `(default)` database;
 - **`storage`** in object or array form: the `rules` of the entry without a `target`;
 - **`functions`** in object or array (multi-codebase) form: `source`, `codebase`, `runtime`, `ignore`;
-- **`emulators.<name>.host` / `.port`** for `firestore`, `auth`, `storage`, `functions`, `hub` and `ui`, plus `emulators.ui.enabled` and `emulators.singleProjectMode`. Only loopback hosts are accepted: the daemon serves without a control token, so a routable host is refused rather than exposing a product to the network.
+- **`emulators.<name>.host` / `.port`** for `firestore`, `auth`, `storage`, `functions`, `hub` and `ui`, plus `emulators.ui.enabled` and `emulators.singleProjectMode`. Only loopback hosts are accepted (`127.0.0.1`, `localhost`, `::1`), and this is a documented divergence from the official CLI, which binds `0.0.0.0`, `::` or a LAN address as given: the daemon serves without a credential on loopback and has no routable mode, so such a host exits 1 naming the key. A suite that must be reached from another machine belongs behind a reverse proxy that adds the credential.
 
 `--project` resolves through `.firebaserc`: a defined alias becomes its project ID, no `--project` uses the `default` alias, and a value that is not an alias is taken as a project ID — exactly what `firebase --project` does. Ports given on the command line override `firebase.json`, which overrides the canonical configuration.
 

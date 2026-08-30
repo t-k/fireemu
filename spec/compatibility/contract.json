@@ -1486,7 +1486,8 @@
             "integration": [
               "crates/fireemu/tests/cli.rs",
               "crates/fireemu/tests/exec.rs",
-              "crates/fireemu/src/config.rs"
+              "crates/fireemu/src/config.rs",
+              "tools/config-schema-check/src/main.rs"
             ],
             "conformance": []
           },
@@ -1497,6 +1498,10 @@
             {
               "behaviour": "variables of unselected services are cleared in the child environment, and GOOGLE_CLOUD_PROJECT is set next to GCLOUD_PROJECT",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "emulators.<name>.host in firebase.json and bind in the canonical configuration accept only loopback (127.0.0.1, localhost, ::1); a routable host such as 0.0.0.0, :: or a LAN address, which firebase-tools 15.28.2 binds as given, exits 1 naming the key. The daemon serves without a credential on the products and its privileged control routes trust a loopback origin, so there is no routable mode; a suite that must be reached from another machine sits behind a reverse proxy that adds the credential. Runtime (crates/fireemu/src/config.rs loopback_host), corpus (spec/config/*invalid-examples) and tools/config-schema-check enforce one spelling set",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [],

@@ -56,8 +56,21 @@ fn is_null_at(v: &Value, path: &[&str]) -> bool {
 }
 
 /// Cross-field rules. Returns every violated rule.
+/// The host spellings a listener may bind: the same set `crates/fireemu/src/config.rs`
+/// accepts for `bind` and for `emulators.<name>.host`.
+const LOOPBACK_HOSTS: [&str; 4] = ["127.0.0.1", "localhost", "::1", "[::1]"];
+
 fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
     let mut problems = Vec::new();
+    // A listener binds loopback only, whichever file names the host; the loader's
+    // `loopback_host` accepts exactly these spellings for `bind` and for a firebase.json host.
+    if let Some(bind) = cfg.get("bind").and_then(Value::as_str) {
+        if !LOOPBACK_HOSTS.contains(&bind) {
+            problems.push(format!(
+                "bind {bind}: only loopback hosts are accepted (127.0.0.1, localhost, ::1)"
+            ));
+        }
+    }
     let edition = str_at(cfg, &["firestore", "edition"]).unwrap_or_default();
     let api_mode = str_at(cfg, &["firestore", "apiMode"]).unwrap_or_default();
 
@@ -316,7 +329,7 @@ fn firebase_json_problems(cfg: &Value) -> Vec<String> {
                 continue;
             };
             if let Some(host) = obj.get("host").and_then(Value::as_str) {
-                if !["127.0.0.1", "localhost", "::1", "[::1]"].contains(&host) {
+                if !LOOPBACK_HOSTS.contains(&host) {
                     problems.push(format!(
                         "emulators.{name}.host {host}: only loopback binds are supported"
                     ));

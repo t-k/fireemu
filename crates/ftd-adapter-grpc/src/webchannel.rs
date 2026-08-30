@@ -74,9 +74,35 @@ fn trace(what: &str, detail: &str) {
     }
 }
 
-/// 128 random bits (system-keyed hashing of a counter; not derived from the deterministic
-/// runtime seed, so session ids are not guessable across runs).
+/// 128 bits from the operating system CSPRNG.
+///
+/// A channel id was always unguessable-by-construction, but since App Check admits a channel
+/// once and later envelopes ride on that admission (specification section 13.1), knowing one
+/// *is* the capability to use an admitted channel. It is drawn from the same source as the
+/// control token, the runner secret and the project epochs rather than from keyed hashing of a
+/// counter. A failed draw falls back to that keyed hashing rather than to anything predictable:
+/// refusing to open channels because `/dev/urandom` is unreadable would be worse, and the
+/// fallback is exactly the previous behaviour.
 fn random_sid() -> String {
+    use std::fmt::Write as _;
+    use std::io::Read as _;
+    let mut bytes = [0u8; 16];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .is_ok()
+    {
+        let mut out = String::with_capacity(32);
+        for byte in bytes {
+            let _ = write!(out, "{byte:02x}");
+        }
+        return out;
+    }
+    keyed_sid()
+}
+
+/// The fallback of [`random_sid`]: system-keyed hashing of a counter, not derived from the
+/// deterministic runtime seed.
+fn keyed_sid() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let state = std::collections::hash_map::RandomState::new();
@@ -151,8 +177,26 @@ struct Session {
     last_seen: Mutex<Instant>,
     /// Forward-channel maps: next expected id and out-of-order buffer.
     maps: Mutex<(u64, BTreeMap<u64, String>)>,
+    /// Target project named by the opening request, for classifying a replacement token.
+    project: String,
+    /// The app this channel was admitted for (specification section 13.1). `None` when
+    /// nothing binds it: the service is `off` or `unenforced`, or the opening request
+    /// presented a privileged credential instead of an App Check token.
+    app_check: Option<ChannelApp>,
     /// The stream ended (error already queued) or the session was closed.
     closed: AtomicBool,
+}
+
+/// What a `WebChannel` is bound to once it has been admitted.
+///
+/// The channel outlives its opening request, and later envelopes may present a replacement
+/// token, so the admitted app and the session epoch of that admission are kept for the
+/// channel's life. A replacement for another app — or one minted under another epoch —
+/// closes the channel instead of taking it over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelApp {
+    app_id: String,
+    epoch: ftd_core_app_check::registry::ProjectEpoch,
 }
 
 impl Session {
@@ -244,6 +288,10 @@ pub struct ChannelRequest {
     /// `Authorization` header (a browser cannot always set it; the handshake body may carry
     /// it instead).
     pub authorization: Option<String>,
+    /// Every real `X-Firebase-AppCheck` HTTP field instance, in wire order. A browser sends
+    /// the token in the init header block instead; both sources are collected so that
+    /// presenting it twice stays ambiguous rather than becoming a value someone chooses.
+    pub app_check: Vec<String>,
     /// `Origin` header.
     pub origin: Option<String>,
     /// Raw form body.
@@ -291,13 +339,60 @@ pub fn parse_form(text: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Header block `Name:Value\r\n...` (the `headers=` / `$httpHeaders` encoding).
-fn parse_header_block(block: &str) -> BTreeMap<String, String> {
+/// Header block `Name:Value\r\n...` (the `headers=` / `$httpHeaders` encoding), in wire
+/// order with duplicates kept: the App Check contract of section 7.3 must be able to refuse
+/// two instances, which a map would silently collapse into one.
+fn parse_header_block(block: &str) -> Vec<(String, String)> {
     block
         .split("\r\n")
         .filter_map(|line| line.split_once(':'))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_owned()))
         .collect()
+}
+
+/// The init header block of one channel request: the handshake carries it in the `headers=`
+/// form field, later requests in the `$httpHeaders` query parameter.
+fn init_headers(req: &ChannelRequest, form: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    let mut fields = Vec::new();
+    if let Some(block) = form.get("headers") {
+        fields.extend(parse_header_block(block));
+    }
+    if let Some(block) = req.params.get("$httpHeaders") {
+        fields.extend(parse_header_block(block));
+    }
+    fields
+}
+
+/// The last value of a field of the init block (the browser sends each at most once).
+fn init_header<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .rev()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
+}
+
+/// Every App Check field value a channel request presented, from both sources, in wire order.
+fn app_check_values(req: &ChannelRequest, fields: &[(String, String)]) -> Vec<String> {
+    let mut values: Vec<String> = fields
+        .iter()
+        .filter(|(k, _)| ftd_core_app_check::header::is_app_check_header(k))
+        .map(|(_, v)| v.clone())
+        .collect();
+    values.extend(req.app_check.iter().cloned());
+    values
+}
+
+/// The privileged credential a channel request presented, if any (specification section 12.2).
+///
+/// As on unary Firestore, the owner credential is verified here rather than read off the
+/// principal, because the principal is `Owner` for everyone while Security Rules are disabled.
+fn channel_bypass(authorization: Option<&str>) -> ftd_core_app_check::admission::PrivilegedBypass {
+    if crate::rules::is_owner_credential(authorization) {
+        ftd_core_app_check::admission::PrivilegedBypass::FirestoreOwner
+    } else {
+        ftd_core_app_check::admission::PrivilegedBypass::None
+    }
 }
 
 fn text_response(status: u16, body: String) -> ChannelResponse {
@@ -405,20 +500,117 @@ impl Hub {
         }
     }
 
+    /// Admits an opening channel request and returns what the channel is bound to.
+    ///
+    /// A denial answers with the channel's error chunk, which is how the browser SDK learns
+    /// that the channel will not open (specification section 17: HTTP 403 with the Google JSON
+    /// `PERMISSION_DENIED` envelope). Only an `enforced` policy binds: under `unenforced` no
+    /// request is ever denied, so binding would enforce by the back door.
+    fn admit_channel(
+        &self,
+        project: &str,
+        values: &[String],
+        authorization: Option<&str>,
+    ) -> Result<Option<ChannelApp>, ChannelResponse> {
+        let Some(policy) = &self.state.app_check else {
+            return Ok(None);
+        };
+        let header = ftd_core_app_check::header::classify_app_check_header(values);
+        let (decision, epoch) =
+            policy.admit_bound(&ftd_core_app_check::admission::AdmissionRequest {
+                project_id: project,
+                transport: "webchannel",
+                operation: "channel.open",
+                bypass: channel_bypass(authorization),
+                header: &header,
+                now: self.state.local.now(),
+            });
+        if let Some(reason) = decision.reason {
+            return Err(error_chunk(&crate::service::app_check_denied(reason)));
+        }
+        Ok(match (decision.mode, decision.identity(), epoch) {
+            (ftd_core_app_check::verify::BaselineMode::Enforced, Some(identity), Some(epoch)) => {
+                Some(ChannelApp {
+                    app_id: identity.app_id.clone(),
+                    epoch,
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// Checks a replacement token presented on a later envelope of a bound channel.
+    ///
+    /// Later envelopes may omit the field entirely and keep the channel's admission — the
+    /// token's expiry does not end an admitted channel. A presented replacement, though, must
+    /// be valid for the same app and the current session epoch; a different app or an invalid
+    /// replacement closes the channel rather than taking it over (section 13.1).
+    fn check_replacement(
+        &self,
+        req: &ChannelRequest,
+        session: &Arc<Session>,
+        form: &BTreeMap<String, String>,
+    ) -> Result<(), ChannelResponse> {
+        let (Some(policy), Some(bound)) = (&self.state.app_check, session.app_check.as_ref())
+        else {
+            return Ok(());
+        };
+        let values = app_check_values(req, &init_headers(req, form));
+        if values.is_empty() {
+            return Ok(());
+        }
+        let header = ftd_core_app_check::header::classify_app_check_header(&values);
+        let (decision, epoch) =
+            policy.admit_bound(&ftd_core_app_check::admission::AdmissionRequest {
+                project_id: &session.project,
+                transport: "webchannel",
+                operation: "channel.replacement",
+                bypass: ftd_core_app_check::admission::PrivilegedBypass::None,
+                header: &header,
+                now: self.state.local.now(),
+            });
+        // A verified identity always comes with a known epoch — verification checks the token
+        // against it — but the pair is required explicitly rather than defaulted, so a future
+        // change that separates them fails closed instead of comparing against the channel's
+        // own epoch and matching itself.
+        let replacement = match (decision.identity(), epoch) {
+            (Some(identity), Some(epoch)) => Some(ChannelApp {
+                app_id: identity.app_id.clone(),
+                epoch,
+            }),
+            _ => None,
+        };
+        if replacement.as_ref() == Some(bound) {
+            return Ok(());
+        }
+        let reason = decision
+            .reason
+            .unwrap_or(ftd_core_app_check::verify::PUBLIC_DENIAL_REASON);
+        self.remove(&session.sid);
+        Err(error_chunk(&crate::service::app_check_denied(reason)))
+    }
+
     fn handshake(&self, req: &ChannelRequest) -> ChannelResponse {
         let form = parse_form(&req.body);
         // Init headers travel in the body (`headers=`) or the query (`$httpHeaders`).
-        let mut headers = BTreeMap::new();
-        if let Some(block) = form.get("headers") {
-            headers.extend(parse_header_block(block));
-        }
-        if let Some(block) = req.params.get("$httpHeaders") {
-            headers.extend(parse_header_block(block));
-        }
-        let authorization = headers
-            .get("authorization")
-            .cloned()
+        let headers = init_headers(req, &form);
+        let authorization = init_header(&headers, "authorization")
+            .map(str::to_owned)
             .or_else(|| req.authorization.clone());
+        // App Check classifies the opening request once, before the Firebase Auth credential
+        // and before any stream task exists (specification sections 7.4 and 13.1). The
+        // project comes from the `database` parameter of the opening request; the stream
+        // itself is admitted again against the database its first message names, so a channel
+        // opened under one project cannot drive another.
+        let values = app_check_values(req, &headers);
+        let project = crate::service::project_of_resource(
+            req.params.get("database").map_or("", String::as_str),
+        )
+        .to_owned();
+        let bound = match self.admit_channel(&project, &values, authorization.as_deref()) {
+            Ok(bound) => bound,
+            Err(response) => return response,
+        };
         let principal = match &self.state.rules {
             Some(r) => match r.principal_from_authorization(authorization.as_deref()) {
                 Ok(p) => p,
@@ -440,6 +632,8 @@ impl Hub {
             notify: Notify::new(),
             last_seen: Mutex::new(Instant::now()),
             maps: Mutex::new((0, BTreeMap::new())),
+            project: project.clone(),
+            app_check: bound,
             closed: AtomicBool::new(false),
         });
         {
@@ -456,8 +650,16 @@ impl Hub {
             gateway: self.state.gateway.clone(),
             rules: self.state.rules.clone(),
             principal,
-            authorization,
+            authorization: authorization.clone(),
             epoch: self.state.local.epoch(),
+            app_check: self.state.app_check.as_ref().map(|policy| {
+                crate::streams::StreamAdmission::new(
+                    policy.clone(),
+                    &values,
+                    channel_bypass(authorization.as_deref()),
+                    "webchannel",
+                )
+            }),
         };
         spawn_stream(&session, ctx, inbound_rx);
         // The first message rides along with the handshake.
@@ -481,12 +683,15 @@ impl Hub {
             Ok(s) => s,
             Err(r) => return r,
         };
+        let form = parse_form(&req.body);
+        if let Err(response) = self.check_replacement(req, &session, &form) {
+            return response;
+        }
         if let Some(aid) = req.params.get("AID").and_then(|a| a.parse::<u64>().ok()) {
             if let Err(e) = session.acknowledge(aid) {
                 return error_chunk(&e);
             }
         }
-        let form = parse_form(&req.body);
         if let Err(e) = session_deliver(&session, &form) {
             return error_chunk(&e);
         }
@@ -500,6 +705,11 @@ impl Hub {
             Ok(s) => s,
             Err(r) => return r,
         };
+        // The back channel is a GET: its init headers ride in `$httpHeaders`, so a
+        // replacement token can arrive here too.
+        if let Err(response) = self.check_replacement(req, &session, &BTreeMap::new()) {
+            return response;
+        }
         let acked = req
             .params
             .get("AID")

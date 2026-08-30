@@ -1,10 +1,12 @@
 //! App Check enforcement for Cloud Firestore (specification sections 12, 13.1, 17 and 19;
 //! obligations `AC-FS-001`, `AC-BOUNDARY-001` and `AC-HEADER-001`).
 //!
-//! Milestone AC1 covers the unary gRPC surface and Firestore REST; the `Write` / `Listen`
-//! stream and `WebChannel` lifetime contracts are AC2. The Firestore scenarios checked here are
-//! 1 (an enforced unary request rejects a valid Auth user before Rules evaluation), 2 (an
-//! unenforced request admits an invalid token without creating an app identity) and 5 (owner
+//! Milestone AC1 covered the unary gRPC surface and Firestore REST; milestone AC2 added the
+//! `Write` / `Listen` stream and `WebChannel` lifetime contracts. The Firestore scenarios
+//! checked here are 1 (an enforced unary request rejects a valid Auth user before Rules
+//! evaluation), 2 (an unenforced request admits an invalid token without creating an app
+//! identity), 3 (an admitted stream stays admitted after its token expires, until it
+//! reconnects), 4 (a `WebChannel` rejects a replacement token from another app) and 5 (owner
 //! traffic follows the explicit bypass).
 //!
 //! The signer is a deterministic stand-in rather than RS256: the shell's real `rsa` / `sha2`
@@ -18,6 +20,7 @@ use ftd_adapter_grpc::local::LocalBackend;
 use ftd_adapter_grpc::rest::{RestRequest, RestState};
 use ftd_adapter_grpc::rules::RulesEnforcer;
 use ftd_adapter_grpc::service::GatewayService;
+use ftd_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 use ftd_core_app_check::admission::{AppCheckGate, ServiceAdmission};
 use ftd_core_app_check::claims::{audiences_for, issuer_for, AppCheckClaims};
 use ftd_core_app_check::crypto::AppCheckSigner;
@@ -39,10 +42,13 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::metadata::MetadataValue;
 use tonic::{Code, Request};
 
+const DATABASE: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 const START_SECONDS: i64 = 1_788_004_860;
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(START_SECONDS);
 const APP_ID: &str = "1:1234567890:web:local-test-app";
+/// A second app of the *same* project: what tells "another app" apart from "another project".
+const SECOND_APP_ID: &str = "1:1234567890:web:second-test-app";
 const OTHER_APP_ID: &str = "1:9876543210:web:other-test-app";
 const UNREGISTERED_APP_ID: &str = "1:1234567890:web:not-registered";
 
@@ -118,6 +124,15 @@ fn registry() -> AppCheckRegistry {
             debug_token_digests: Vec::new(),
         })
         .expect("the demo app registers");
+    registry
+        .register_app(AppRegistration {
+            project_id: "demo-app".to_owned(),
+            project_number: "1234567890".to_owned(),
+            app_id: SECOND_APP_ID.to_owned(),
+            enabled: true,
+            debug_token_digests: Vec::new(),
+        })
+        .expect("the second app of the demo project registers");
     registry
         .register_app(AppRegistration {
             project_id: "demo-other".to_owned(),
@@ -197,10 +212,12 @@ fn credential_states(gate: &AppCheckGate) -> Vec<(&'static str, Option<String>)>
 
 struct Harness {
     client: FirestoreClient<tonic::transport::Channel>,
-    rest: RestState,
+    rest: Arc<RestState>,
+    hub: Hub,
     auth: Arc<Mutex<AuthStore>>,
     gate: AppCheckGate,
     backend: Arc<LocalBackend>,
+    clock: Arc<Mutex<VirtualClock>>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -219,6 +236,7 @@ async fn start(mode: BaselineMode) -> Harness {
     };
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let enforcer_clock = clock.clone();
     let auth = Arc::new(Mutex::new(AuthStore::new(
         "demo-app",
         SplitMix64::new(3),
@@ -227,7 +245,7 @@ async fn start(mode: BaselineMode) -> Harness {
     let rules = Arc::new(RwLock::new(
         LoadedRules::from_source(RULES).expect("the fixture ruleset compiles"),
     ));
-    let enforcer = Arc::new(RulesEnforcer::new(rules, auth.clone(), clock));
+    let enforcer = Arc::new(RulesEnforcer::new(rules, auth.clone(), enforcer_clock));
     let gate = gate();
     let policy = ServiceAdmission::new(gate.clone(), "firestore", mode).map(Arc::new);
 
@@ -249,18 +267,20 @@ async fn start(mode: BaselineMode) -> Harness {
         .connect()
         .await
         .expect("connect");
-    let rest = RestState {
+    let rest = Arc::new(RestState {
         local: backend.clone(),
         gateway: Arc::new(gateway),
         rules: Some(enforcer),
         app_check: policy,
-    };
+    });
     Harness {
         client: FirestoreClient::new(channel),
+        hub: Hub::new(rest.clone()),
         rest,
         auth,
         gate,
         backend,
+        clock,
         handle,
     }
 }
@@ -277,8 +297,35 @@ impl Harness {
         (uid.as_str().to_owned(), encode_unsigned(&claims))
     }
 
+    /// A signed-in user whose ID token is minted at `at`, so a test that moves the clock can
+    /// keep a valid Auth credential while the App Check token ages out.
+    fn user_at(&self, email: &str, at: LogicalInstant) -> (String, String) {
+        let mut store = self.auth.lock().expect("the store is not poisoned");
+        let uid = store
+            .create_user(NewUser::email(email), START)
+            .expect("the user is created");
+        let claims = store
+            .id_token_claims(&uid, None, at)
+            .expect("claims for the new user");
+        (uid.as_str().to_owned(), encode_unsigned(&claims))
+    }
+
     fn token(&self) -> String {
         token_at(&self.gate, "demo-app", APP_ID, START)
+    }
+
+    /// A valid token for the other app of the same project.
+    fn other_app_token(&self) -> String {
+        token_at(&self.gate, "demo-app", SECOND_APP_ID, START)
+    }
+
+    /// Moves the virtual clock forward, as the control API clock route does.
+    fn advance(&self, seconds: i64) {
+        self.clock
+            .lock()
+            .expect("the clock is not poisoned")
+            .advance(ftd_core_types::time::LogicalDuration::from_seconds(seconds))
+            .expect("the fixture clock moves forward");
     }
 
     fn observations(&self) -> Vec<ftd_core_app_check::observe::Observation> {
@@ -756,5 +803,510 @@ async fn a_firestore_observation_never_carries_the_raw_token() {
         .await;
     let rendered = format!("{:?}", h.observations());
     assert!(!rendered.contains(&token), "{rendered}");
+    h.handle.abort();
+}
+
+// ------------------------------------------------------------------------------------------
+// Streams (specification section 13.1; Firestore scenario 3)
+// ------------------------------------------------------------------------------------------
+
+/// The stream helpers below drive a real `Write` / `Listen` stream over the tonic client and
+/// return the first response, which is where a denial arrives: the opening metadata is
+/// classified when the stream is created and the decision is taken as soon as the first
+/// message names the database.
+async fn write_stream_first(
+    h: &mut Harness,
+    authorization: Option<&str>,
+    app_check: &[&str],
+) -> Result<pb::WriteResponse, tonic::Status> {
+    let (tx, rx) = tokio::sync::mpsc::channel(8);
+    let mut responses = h
+        .client
+        .write(request(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+            authorization,
+            app_check,
+        ))
+        .await
+        .expect("the stream opens")
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: DATABASE.to_owned(),
+        ..pb::WriteRequest::default()
+    })
+    .await
+    .expect("the handshake is sent");
+    let first = tokio_stream::StreamExt::next(&mut responses)
+        .await
+        .expect("a first response");
+    drop(tx);
+    first
+}
+
+async fn listen_stream_first(
+    h: &mut Harness,
+    authorization: Option<&str>,
+    app_check: &[&str],
+) -> Result<pb::ListenResponse, tonic::Status> {
+    let (tx, rx) = tokio::sync::mpsc::channel(8);
+    let mut responses = h
+        .client
+        .listen(request(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+            authorization,
+            app_check,
+        ))
+        .await
+        .expect("the stream opens")
+        .into_inner();
+    tx.send(pb::ListenRequest {
+        database: DATABASE.to_owned(),
+        target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+            target_id: 2,
+            target_type: Some(pb::target::TargetType::Query(pb::target::QueryTarget {
+                parent: DOCS.to_owned(),
+                query_type: Some(pb::target::query_target::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![pb::structured_query::CollectionSelector {
+                            collection_id: "profiles".to_owned(),
+                            all_descendants: false,
+                        }],
+                        ..pb::StructuredQuery::default()
+                    },
+                )),
+            })),
+            ..pb::Target::default()
+        })),
+        ..pb::ListenRequest::default()
+    })
+    .await
+    .expect("the first target is sent");
+    let first = tokio_stream::StreamExt::next(&mut responses)
+        .await
+        .expect("a first response");
+    drop(tx);
+    first
+}
+
+#[tokio::test]
+async fn an_enforced_write_stream_without_app_check_is_denied_before_the_handshake() {
+    let mut h = start(BaselineMode::Enforced).await;
+    let err = write_stream_first(&mut h, None, &[])
+        .await
+        .expect_err("an enforced Write stream needs a token");
+    assert_eq!(err.code(), Code::PermissionDenied);
+    assert_eq!(
+        err.metadata().get("ftd-code").map(|v| v.to_str().unwrap()),
+        Some("APP_CHECK_REQUIRED")
+    );
+    let token = h.token();
+    let ok = write_stream_first(&mut h, None, &[&token])
+        .await
+        .expect("a valid token opens the stream");
+    assert!(!ok.stream_id.is_empty(), "the handshake answered");
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn an_enforced_listen_stream_without_app_check_is_denied() {
+    let mut h = start(BaselineMode::Enforced).await;
+    let err = listen_stream_first(&mut h, None, &["not-a-jwt"])
+        .await
+        .expect_err("an invalid token is refused");
+    assert_eq!(err.code(), Code::PermissionDenied);
+    assert_eq!(
+        err.metadata().get("ftd-code").map(|v| v.to_str().unwrap()),
+        Some("APP_CHECK_INVALID")
+    );
+    let token = h.token();
+    listen_stream_first(&mut h, None, &[&token])
+        .await
+        .expect("a valid token opens the stream");
+    h.handle.abort();
+}
+
+/// Firestore scenario 3. The stream is admitted once, on the credential it opened with. Two
+/// hours later that token is long expired, but the writes it is still carrying go through:
+/// killing a live stream mid-flight because a token aged is not what the transport does. A
+/// reconnect with the same expired token is refused, which is where the client learns it needs
+/// a fresh one.
+#[tokio::test]
+async fn an_admitted_grpc_stream_remains_admitted_after_token_expiry_until_it_reconnects() {
+    let mut h = start(BaselineMode::Enforced).await;
+    let token = h.token();
+    // A signed-in user, so that Security Rules admit the write the stream carries; the App
+    // Check credential and the Auth credential are independent layers.
+    let (uid, id_token) = h.user_at(
+        "streamer@example.com",
+        LogicalInstant::from_unix_seconds(START_SECONDS + 7200),
+    );
+    let bearer = format!("Bearer {id_token}");
+    let (tx, rx) = tokio::sync::mpsc::channel(8);
+    let mut responses = h
+        .client
+        .write(request(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+            Some(&bearer),
+            &[&token],
+        ))
+        .await
+        .expect("the stream opens")
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: DATABASE.to_owned(),
+        ..pb::WriteRequest::default()
+    })
+    .await
+    .expect("the handshake is sent");
+    let handshake = tokio_stream::StreamExt::next(&mut responses)
+        .await
+        .expect("a handshake response")
+        .expect("the stream was admitted");
+    assert!(!handshake.stream_id.is_empty());
+
+    h.advance(7200);
+
+    tx.send(pb::WriteRequest {
+        stream_token: handshake.stream_token.clone(),
+        writes: vec![pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("{DOCS}/profiles/{uid}"),
+                fields: [("name".to_owned(), s("Ada"))].into_iter().collect(),
+                ..pb::Document::default()
+            })),
+            ..pb::Write::default()
+        }],
+        ..pb::WriteRequest::default()
+    })
+    .await
+    .expect("a later write is sent");
+    let committed = tokio_stream::StreamExt::next(&mut responses)
+        .await
+        .expect("a commit response")
+        .expect("the admitted stream keeps serving after its token expired");
+    assert_eq!(committed.write_results.len(), 1);
+    drop(tx);
+
+    // Reconnecting re-admits, and the same token no longer verifies.
+    let err = write_stream_first(&mut h, None, &[&token])
+        .await
+        .expect_err("the reconnect is a new admission");
+    assert_eq!(err.code(), Code::PermissionDenied);
+    assert_eq!(
+        err.metadata().get("ftd-code").map(|v| v.to_str().unwrap()),
+        Some("APP_CHECK_INVALID")
+    );
+    h.handle.abort();
+}
+
+/// The owner bypass reaches the streams too, and only for the exact owner credential: a
+/// stream is a Firestore request like any other (specification section 12.2).
+#[tokio::test]
+async fn owner_stream_traffic_follows_the_explicit_app_check_bypass() {
+    let mut h = start(BaselineMode::Enforced).await;
+    let ok = write_stream_first(&mut h, Some("Bearer owner"), &[])
+        .await
+        .expect("the owner credential bypasses App Check");
+    assert!(!ok.stream_id.is_empty());
+    let err = write_stream_first(&mut h, Some("Bearer ownerx"), &[])
+        .await
+        .expect_err("an owner-shaped credential is not the owner credential");
+    assert_eq!(err.code(), Code::PermissionDenied);
+    h.handle.abort();
+}
+
+// ------------------------------------------------------------------------------------------
+// WebChannel (specification section 13.1; Firestore scenario 4)
+// ------------------------------------------------------------------------------------------
+
+fn channel_params(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()
+}
+
+fn channel_form(pairs: &[(&str, &str)]) -> String {
+    pairs
+        .iter()
+        .map(|(k, v)| format!("{k}={}", channel_urlencode(v)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn channel_urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+fn channel_full(r: ChannelResponse) -> (u16, Vec<(&'static str, String)>, String) {
+    match r {
+        ChannelResponse::Full {
+            status,
+            headers,
+            body,
+        } => (status, headers, body),
+        ChannelResponse::Stream { .. } => panic!("expected a full response"),
+    }
+}
+
+fn listen_target_json() -> String {
+    serde_json::json!({
+        "database": DATABASE,
+        "addTarget": {
+            "targetId": 2,
+            "query": {
+                "parent": DOCS,
+                "structuredQuery": {"from": [{"collectionId": "profiles"}]}
+            }
+        }
+    })
+    .to_string()
+}
+
+/// Opens a channel, presenting `app_check` in the init header block the browser SDK uses.
+fn channel_handshake(h: &Harness, app_check: Option<&str>) -> (u16, String, String) {
+    let block = match app_check {
+        Some(token) => format!("X-Goog-Api-Client:test\r\nX-Firebase-AppCheck:{token}\r\n"),
+        None => "X-Goog-Api-Client:test\r\n".to_owned(),
+    };
+    let first = listen_target_json();
+    let (status, headers, body) = channel_full(h.hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: channel_params(&[
+            ("database", DATABASE),
+            ("VER", "8"),
+            ("RID", "1"),
+            ("CVER", "22"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: channel_form(&[
+            ("headers", &block),
+            ("count", "1"),
+            ("ofs", "0"),
+            ("req0___data__", &first),
+        ]),
+    }));
+    let sid = headers
+        .iter()
+        .find(|(k, _)| *k == "x-http-session-id")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    (status, sid, body)
+}
+
+/// A later forward-channel envelope, optionally presenting a replacement token.
+fn channel_envelope(
+    h: &Harness,
+    sid: &str,
+    rid: &str,
+    ofs: &str,
+    app_check: Option<&str>,
+) -> (u16, String) {
+    let mut fields: Vec<(&str, &str)> = Vec::new();
+    let block;
+    if let Some(token) = app_check {
+        block = format!("X-Firebase-AppCheck:{token}\r\n");
+        fields.push(("headers", &block));
+    }
+    let payload = listen_target_json();
+    fields.push(("count", "1"));
+    fields.push(("ofs", ofs));
+    fields.push(("req0___data__", &payload));
+    let (status, _, body) = channel_full(h.hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: channel_params(&[("SID", sid), ("RID", rid), ("AID", "0")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: channel_form(&fields),
+    }));
+    (status, body)
+}
+
+#[tokio::test]
+async fn an_enforced_webchannel_handshake_without_app_check_never_opens_a_channel() {
+    let h = start(BaselineMode::Enforced).await;
+    let (status, sid, body) = channel_handshake(&h, None);
+    assert_eq!(status, 403, "{body}");
+    assert!(sid.is_empty(), "no channel was opened");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("a JSON error envelope");
+    assert_eq!(parsed["error"]["status"], "PERMISSION_DENIED");
+    assert!(
+        !parsed["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Security Rules"),
+        "an App Check denial is not a rules denial: {body}"
+    );
+
+    let token = h.token();
+    let (status, sid, _) = channel_handshake(&h, Some(&token));
+    assert_eq!(status, 200);
+    assert!(!sid.is_empty(), "a valid token opens the channel");
+    h.handle.abort();
+}
+
+/// Firestore scenario 4: a replacement token for another app closes the channel. The token is
+/// perfectly valid — same project, current epoch, correct signature — so this is exactly the
+/// case that re-admitting each envelope on its own merits would wave through.
+#[tokio::test]
+async fn a_webchannel_rejects_a_replacement_token_from_another_app() {
+    let h = start(BaselineMode::Enforced).await;
+    let token = h.token();
+    let (status, sid, _) = channel_handshake(&h, Some(&token));
+    assert_eq!(status, 200);
+
+    // The same app may refresh its token.
+    let refreshed = token_at(&h.gate, "demo-app", APP_ID, START);
+    let (status, _) = channel_envelope(&h, &sid, "2", "1", Some(&refreshed));
+    assert_eq!(status, 200, "the same app may present a replacement");
+
+    let intruder = h.other_app_token();
+    let (status, body) = channel_envelope(&h, &sid, "3", "2", Some(&intruder));
+    assert_eq!(status, 403, "{body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("a JSON error envelope");
+    assert_eq!(parsed["error"]["status"], "PERMISSION_DENIED");
+
+    // The channel is gone: the session no longer answers.
+    let (status, body) = channel_envelope(&h, &sid, "4", "3", Some(&token));
+    assert_eq!(status, 400, "the channel was closed: {body}");
+    h.handle.abort();
+}
+
+/// An admitted channel keeps its admission: a later envelope that presents nothing rides on
+/// the handshake's decision, even after the token that opened it expired.
+#[tokio::test]
+async fn an_admitted_webchannel_keeps_serving_envelopes_without_a_token() {
+    let h = start(BaselineMode::Enforced).await;
+    let token = h.token();
+    let (status, sid, _) = channel_handshake(&h, Some(&token));
+    assert_eq!(status, 200);
+    h.advance(7200);
+    let (status, body) = channel_envelope(&h, &sid, "2", "1", None);
+    assert_eq!(status, 200, "{body}");
+
+    // Presenting the now-expired token, though, is an invalid replacement.
+    let (status, _) = channel_envelope(&h, &sid, "3", "2", Some(&token));
+    assert_eq!(status, 403);
+    h.handle.abort();
+}
+
+/// `off` and `unenforced` never close a channel, and `unenforced` binds nothing: a client that
+/// stops presenting a token must not be locked out of its own channel.
+#[tokio::test]
+async fn an_unenforced_webchannel_never_closes_on_a_foreign_token() {
+    let h = start(BaselineMode::Unenforced).await;
+    let (status, sid, _) = channel_handshake(&h, Some(&h.token()));
+    assert_eq!(status, 200);
+    let (status, body) = channel_envelope(&h, &sid, "2", "1", Some(&h.other_app_token()));
+    assert_eq!(status, 200, "unenforced denies nothing: {body}");
+    h.handle.abort();
+}
+
+/// The `WebChannel` shares the canonical header contract: two instances of the field are
+/// ambiguous, whichever source they arrive from, and never a value the caller gets to pick.
+#[tokio::test]
+async fn the_webchannel_transport_refuses_duplicate_app_check_fields() {
+    let h = start(BaselineMode::Enforced).await;
+    let token = h.token();
+    let block = format!("X-Firebase-AppCheck:{token}\r\nx-firebase-appcheck:{token}\r\n");
+    let first = listen_target_json();
+    let (status, _, _) = channel_full(h.hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: channel_params(&[("database", DATABASE), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: channel_form(&[
+            ("headers", &block),
+            ("count", "1"),
+            ("ofs", "0"),
+            ("req0___data__", &first),
+        ]),
+    }));
+    assert_eq!(status, 403, "two instances in the init block are ambiguous");
+
+    // One in the init block and one as a real HTTP field is the same ambiguity.
+    let block = format!("X-Firebase-AppCheck:{token}\r\n");
+    let (status, _, _) = channel_full(h.hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: channel_params(&[("database", DATABASE), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        app_check: vec![token.clone()],
+        origin: None,
+        body: channel_form(&[
+            ("headers", &block),
+            ("count", "1"),
+            ("ofs", "0"),
+            ("req0___data__", &first),
+        ]),
+    }));
+    assert_eq!(status, 403, "two sources are two instances");
+    h.handle.abort();
+}
+
+/// A channel opened against another project's database cannot drive this one: the handshake
+/// admits against the `database` parameter, and the stream admits again against the database
+/// its first message names.
+#[tokio::test]
+async fn a_webchannel_opened_for_another_project_is_denied() {
+    let h = start(BaselineMode::Enforced).await;
+    let token = h.token();
+    let first = listen_target_json();
+    let block = format!("X-Firebase-AppCheck:{token}\r\n");
+    let (status, _, _) = channel_full(h.hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: channel_params(&[
+            ("database", "projects/demo-other/databases/(default)"),
+            ("VER", "8"),
+            ("RID", "1"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: channel_form(&[
+            ("headers", &block),
+            ("count", "1"),
+            ("ofs", "0"),
+            ("req0___data__", &first),
+        ]),
+    }));
+    assert_eq!(
+        status, 403,
+        "a demo-app token does not authorize a demo-other channel"
+    );
+    h.handle.abort();
+}
+
+/// The stream observations name the `webchannel` transport, so the control API can tell a
+/// browser channel apart from a gRPC stream.
+#[tokio::test]
+async fn webchannel_observations_name_the_transport() {
+    let h = start(BaselineMode::Unenforced).await;
+    let (status, _, _) = channel_handshake(&h, Some(&h.token()));
+    assert_eq!(status, 200);
+    let observations = h.observations();
+    assert!(
+        observations
+            .iter()
+            .any(|o| o.transport == "webchannel" && o.operation == "channel.open"),
+        "{observations:?}"
+    );
     h.handle.abort();
 }

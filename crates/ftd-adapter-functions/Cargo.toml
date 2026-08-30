@@ -9,6 +9,7 @@ publish.workspace = true
 description = "Functions shell: runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy"
 
 [dependencies]
+ftd-core-app-check = { path = "../ftd-core-app-check" }
 ftd-core-auth = { path = "../ftd-core-auth" }
 ftd-core-types = { path = "../ftd-core-types" }
 ftd-core-events = { path = "../ftd-core-events" }
@@ -28,3 +29,6 @@ chrono = "0.4"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+ftd-core-rules = { path = "../ftd-core-rules" }

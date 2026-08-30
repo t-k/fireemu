@@ -139,8 +139,8 @@ fn manifests_match_firestore_and_storage_triggers() {
     );
     let dup = FunctionManifest {
         functions: vec![
-            function("a", Trigger::Http { callable: false }),
-            function("a", Trigger::Http { callable: true }),
+            function("a", Trigger::http(false)),
+            function("a", Trigger::http(true)),
         ],
     };
     assert!(dup.validate().is_err());

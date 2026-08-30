@@ -39,6 +39,39 @@ use crate::gateway::Gateway;
 use crate::local::{CommitEvent, LocalBackend};
 use crate::rules::{write_guard, Principal, RulesEnforcer};
 
+/// The App Check credential a stream opened with (specification section 13.1).
+///
+/// The opening metadata — the gRPC headers, or the `WebChannel` init header block — is
+/// classified exactly once, here. The decision it produces is taken once more, when the first
+/// request finally names the database, because that is the earliest moment the target project
+/// is known; from then on the stream is admitted for its whole life. Neither the token's
+/// expiry nor a later policy change ends an admitted stream: a client that needs a fresh
+/// decision reconnects, and the new stream is admitted on its own opening credential.
+pub struct StreamAdmission {
+    policy: Arc<ftd_core_app_check::admission::ServiceAdmission>,
+    header: ftd_core_app_check::header::HeaderClassification,
+    bypass: ftd_core_app_check::admission::PrivilegedBypass,
+    transport: &'static str,
+}
+
+impl StreamAdmission {
+    /// The classification of one stream's opening App Check field values.
+    #[must_use]
+    pub fn new(
+        policy: Arc<ftd_core_app_check::admission::ServiceAdmission>,
+        values: &[String],
+        bypass: ftd_core_app_check::admission::PrivilegedBypass,
+        transport: &'static str,
+    ) -> Self {
+        Self {
+            policy,
+            header: ftd_core_app_check::header::classify_app_check_header(values),
+            bypass,
+            transport,
+        }
+    }
+}
+
 /// Shared pieces every stream task needs.
 pub struct StreamContext {
     /// Local backend.
@@ -55,6 +88,8 @@ pub struct StreamContext {
     pub authorization: Option<String>,
     /// Backend reset epoch when the stream opened; a reset ends the stream.
     pub epoch: u64,
+    /// App Check for this stream, or `None` when the service's baseline mode is `off`.
+    pub app_check: Option<StreamAdmission>,
 }
 
 impl StreamContext {
@@ -68,6 +103,31 @@ impl StreamContext {
         match &self.rules {
             Some(r) => r.principal_from_authorization(self.authorization.as_deref()),
             None => Ok(self.principal.clone()),
+        }
+    }
+
+    /// Admits the stream once, against the database its first request named.
+    ///
+    /// Called from exactly one place per stream — where the parent is resolved — and never
+    /// again. Unlike [`Self::refresh_principal`], which re-verifies the Auth credential on
+    /// every message so revocation ends the stream, App Check is a stream-lifetime decision.
+    fn admit_app_check(&self, parent: &Parent, operation: &'static str) -> Result<(), Status> {
+        let Some(app_check) = &self.app_check else {
+            return Ok(());
+        };
+        let decision = app_check
+            .policy
+            .admit(&ftd_core_app_check::admission::AdmissionRequest {
+                project_id: parent.project.as_str(),
+                transport: app_check.transport,
+                operation,
+                bypass: app_check.bypass,
+                header: &app_check.header,
+                now: self.local.now(),
+            });
+        match decision.reason {
+            None => Ok(()),
+            Some(reason) => Err(crate::service::app_check_denied(reason)),
         }
     }
 }
@@ -151,7 +211,11 @@ fn handle_write_request(
                 "the first Write request is the handshake and must carry no writes",
             ));
         }
-        state.parent = Some(database_parent(&req.database)?);
+        let parent = database_parent(&req.database)?;
+        // The route and the target database are resolved; App Check decides before the
+        // Firebase Auth credential, Security Rules and every mutation (section 7.4).
+        ctx.admit_app_check(&parent, "Write")?;
+        state.parent = Some(parent);
     } else if !req.stream_id.is_empty() || !req.database.is_empty() {
         return Err(Status::invalid_argument(
             "stream_id / database are only valid on the first Write request",
@@ -346,7 +410,10 @@ fn handle_listen_request(
                 "the first Listen request must name the database",
             ));
         }
-        *parent = Some(database_parent(&req.database)?);
+        let resolved = database_parent(&req.database)?;
+        // As on the Write stream: one decision, taken as soon as the database is known.
+        ctx.admit_app_check(&resolved, "Listen")?;
+        *parent = Some(resolved);
     }
     let Some(parent) = parent.as_ref() else {
         return Err(Status::internal("listen stream without database"));

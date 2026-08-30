@@ -102,7 +102,7 @@ The virtual clock starts at the wall-clock time unless `daemon.clockStart` pins 
 
 ### App Check
 
-`appCheck` is off by default. Enabling it turns on the local App Check issuer — the daemon registers Firebase app IDs from configuration, exchanges a registered debug secret for a locally signed RS256 token, and publishes the public key at a local JWKS endpoint — and lets `appCheck.services` enforce that token on Firebase Authentication, Cloud Firestore and Cloud Storage. This is milestones AC0 and AC1 of [docs/specifications/firebase-app-check.md](docs/specifications/firebase-app-check.md): `APPCHECK-CORE-1`, `APPCHECK-DEBUG-EXCHANGE-1`, `APPCHECK-JWKS-1` and `APPCHECK-ENFORCE-1`.
+`appCheck` is off by default. Enabling it turns on the local App Check issuer — the daemon registers Firebase app IDs from configuration, exchanges a registered debug secret for a locally signed RS256 token, and publishes the public key at a local JWKS endpoint — and lets `appCheck.services` enforce that token on Firebase Authentication, Cloud Firestore and Cloud Storage, while callable Functions enforce it per function. This is milestones AC0 to AC2 of [docs/specifications/firebase-app-check.md](docs/specifications/firebase-app-check.md): `APPCHECK-CORE-1`, `APPCHECK-DEBUG-EXCHANGE-1`, `APPCHECK-JWKS-1`, `APPCHECK-ENFORCE-1`, `APPCHECK-FUNCTIONS-1` and `APPCHECK-SDK-WEB-1`.
 
 ```json
 {
@@ -146,7 +146,17 @@ The signing key is a dedicated 2048-bit RSA key drawn from the operating system 
 
 `--only appcheck` selects the service, and `firebase-testd exec` then exports `FTD_APP_CHECK_EMULATOR_HOST=host:port` and `FTD_APP_CHECK_JWKS_URL=http://host:port/v1/jwks`. Selecting `functions` selects App Check implicitly when it is enabled. No raw debug secret is ever generated or exported implicitly.
 
-**Enforcement.** `appCheck.services.{auth,firestore,storage}` is `off`, `unenforced` or `enforced`. `off` does no token work at all — the header is never even read. `unenforced` classifies and records every request but denies none, and a missing or invalid token never becomes an app identity. `enforced` admits only a verified token or an explicit privileged bypass; a client sends the token as `X-Firebase-AppCheck`, exactly once.
+**Enforcement.** `appCheck.services.{auth,firestore,storage}` is `off`, `unenforced` or `enforced`. `off` does no token work at all — the header is never even read. `unenforced` classifies and records every request but denies none, and a missing or invalid token never becomes an app identity. `enforced` admits only a verified token or an explicit privileged bypass; a client sends the token as `X-Firebase-AppCheck`, exactly once. Firestore covers unary gRPC, REST, the `Write` and `Listen` streams and the browser WebChannel transport; Storage covers resumable uploads as well as everything else.
+
+**Long-lived operations.** A stream, a channel and an upload session all outlive the request that created them, so each is admitted once and keeps that admission:
+
+| Operation | Admitted | Kept for | A later request |
+|---|---|---|---|
+| `Write` / `Listen` gRPC stream | opening metadata, classified once; decided as soon as the first request names the database | the stream's whole life | is not re-decided; token expiry and a policy change do not end an admitted stream. Reconnecting is a new admission |
+| WebChannel | the opening init header block (`headers=` / `$httpHeaders`), plus a real HTTP field if one is sent | the channel's life; the channel is bound to the admitted app and the session epoch of that admission | may omit the field entirely. A replacement token has to be valid for the same app under the current epoch; a different app, or one that does not verify, closes the channel |
+| Resumable Storage upload | the initiation, which records the admitted app and epoch in the upload session | until the session ends | continuation, status query, cancel and finalization all need a valid token for the same app. The check runs before the command is read, so a refusal neither advances nor deletes the upload, and a token that expires mid-upload leaves the resumable state intact — refresh it and resume from the offset already reached |
+
+Only an `enforced` policy binds a channel or an upload session. Under `unenforced` a client may legitimately stop presenting a token, and binding it would enforce by the back door.
 
 A denial happens before Security Rules and before any side effect: no user, no issued or rotated credential, no consumed action or phone code, no MFA change, no object generation, no upload session, no Firestore mutation. It renders as `PERMISSION_DENIED` with the public code in the `ftd-code` metadata on Firestore gRPC, as an HTTP 403 Google JSON error on Firestore REST and on Auth, and as the Firebase Storage JSON error envelope with 403 on Storage. The public code is `APP_CHECK_REQUIRED` or `APP_CHECK_INVALID`; the detailed reason stays in the privileged observations.
 
@@ -169,7 +179,45 @@ Reset, project deletion and snapshot restore replace the project's App Check epo
 
 Privileged counters and observations are at `GET /v1/sessions/{session}/appCheck/observations`. Unlike the rest of the control API it needs `Authorization: Bearer $FTD_CONTROL_TOKEN` for every method whether or not an `Origin` is present, and its response is `Cache-Control: no-store`. Counters are grouped by service, verified app ID, category and outcome; an unverified identity aggregates into a bounded `unknown` bucket, so nothing a caller controls becomes a label. The retained observations behind those counters are one bounded ring for the whole runtime, not one per project, so heavy traffic to one project can push another project's recent observations out of the window; the counters are derived from what the ring still holds.
 
-**What is not enforced yet.** Firestore `Write` and `Listen` streams, WebChannel and callable Functions are milestone AC2: they serve requests as they did before, whatever `appCheck.services` says, so an enforced Firestore service today covers unary gRPC and REST but not a stream. Resumable Storage uploads *are* enforced on every request, initiation and continuation alike, but a continuation is admitted on its own token rather than on the app identity that started the upload; binding the session to that app is AC2. A client that attaches the token to the initiation but not to the continuations will therefore be refused mid-upload under `enforced`. Apps can only be registered in configuration, and adding one needs a daemon restart. There is no Emulator UI page yet; only the control API above. Limited-use tokens are unsupported: `limitedUse: true` fails closed with `501 APP_CHECK_REPLAY_UNSUPPORTED` and never returns a reusable token. Production attestation providers (Play Integrity, App Attest, DeviceCheck, reCAPTCHA) are out of scope; a local token proves nothing about device integrity. Precision is `boundary-conformance`: the exact wire messages are the ones documented here, not a recording of the real services. `GET /v1/capabilities` states the exact status of all nine `APPCHECK-*` capabilities.
+**Callable Functions.** There is no `appCheck.services.functions` mode: callable enforcement is per function, as in production. Enabling App Check and selecting `functions` activates the trusted callable protocol, and the daemon proxy then owns verification for every callable request:
+
+- `X-Firebase-AppCheck` is classified under the same contract as everywhere else. A valid token is forwarded byte for byte as exactly one field; an invalid one is removed before the runner can decode it; a missing one stays missing.
+- `Authorization` is accepted only as a Firebase ID token that verifies against the target project's users on the virtual clock. `Bearer owner`, service credentials, non-`Bearer` values and duplicate or folded fields are not callable user identities and are never reinserted.
+- Every caller-supplied copy of a field the daemon owns is stripped first: the App Check field, `Authorization`, the per-runner secret, and `x-callable-context-auth` / `x-original-auth` — the channels `firebase-functions` honours under its debug switch to override v1 callable auth context.
+- `enforceAppCheck: true` answers the callable `401 UNAUTHENTICATED` envelope for a missing or invalid token before the runner is reached at all, so a denial costs no concurrency slot and no handler run. A valid token populates v2 `request.app` / v1 `context.app` with the app ID and the decoded claims. Ordinary `onRequest` functions get the raw field list forwarded unclassified: application code owns custom-backend verification there.
+
+This is what lets the runner run with `FIREBASE_DEBUG_MODE=true` and only the `skipTokenVerification` debug feature. The runner is reachable only with the per-runner secret — without one it refuses every request rather than serving them unguarded — and it reports at startup which auth-override header names the installed SDK honours, so a renamed one fails startup instead of quietly escaping the proxy's strip list. With App Check active, a configured `functions.manifest` is reconciled against discovery: it may not call a real callable an `onRequest` function and route it around the boundary. That switch makes the SDK wrapper decode both credentials locally instead of calling Google — and *only* decode them, never verify — which is safe exactly because the daemon is the sole source of both.
+
+`consumeAppCheckToken` is not readable from a deployed endpoint: v1 and v2 alike keep it inside the callable wrapper's closure. The runner therefore observes callables as they are declared, through a version-bounded loader instrumentation (supported `firebase-functions` majors: 6 and 7) that hooks `onCallHandler`, `withInit` and `wrapTraceContext` — the one path every spelling passes through, including `functions.https.onCall`, `runWith(...).https.onCall` and `onCallGenkit`. The result is three-valued and fail-closed: `consumeAppCheckToken: true` fails function discovery with `APP_CHECK_REPLAY_UNSUPPORTED` whatever else is configured, a value that cannot be determined fails startup when App Check is enabled, and it is never guessed as `false`. Startup also fails when the installed `firebase-functions` is outside the supported range or reads the debug switches differently from what the protocol assumes.
+
+**Client integration.** Official App Check SDKs have no emulator-host switch, and `@firebase/app-check` hard-codes the production exchange endpoint, so a client uses `CustomProvider` and calls the local exchange itself. This works in a browser and in plain Node (`CustomProvider` touches no browser global, and the SDK guards its `indexedDB` token cache):
+
+```js
+import { initializeApp } from "firebase/app";
+import { CustomProvider, initializeAppCheck } from "firebase/app-check";
+
+const app = initializeApp({ projectId: "demo-app", apiKey: "fake-api-key", appId: APP_ID });
+initializeAppCheck(app, {
+  isTokenAutoRefreshEnabled: false,
+  provider: new CustomProvider({
+    getToken: async () => {
+      // FTD_APP_CHECK_EMULATOR_HOST, or the Auth/control port.
+      const url = `http://${host}/v1/projects/demo-app/apps/${encodeURIComponent(APP_ID)}:exchangeDebugToken`;
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ debugToken: DEBUG_SECRET, limitedUse: false }),
+      });
+      const { token, ttl } = await r.json();       // {"token": "<JWT>", "ttl": "3600s"}
+      return { token, expireTimeMillis: Date.now() + parseInt(ttl, 10) * 1000 };
+    },
+  }),
+});
+```
+
+The Firestore, Storage, Auth and Functions SDKs then attach the token themselves. `tools/sdk-smoke/appcheck.mjs` runs exactly this against `tools/sdk-smoke/firebase-testd.appcheck.json`. Use a clearly fake local debug secret and never a production App Check debug token.
+
+**What is not supported.** Apps can only be registered in configuration, and adding one needs a daemon restart. There is no Emulator UI page yet; only the control API above. Limited-use tokens are unsupported: `limitedUse: true` fails closed with `501 APP_CHECK_REPLAY_UNSUPPORTED` and never returns a reusable token. Production attestation providers (Play Integrity, App Attest, DeviceCheck, reCAPTCHA) are out of scope; a local token proves nothing about device integrity. Precision is `boundary-conformance`: the exact wire messages are the ones documented here, not a recording of the real services. `GET /v1/capabilities` states the exact status of all nine `APPCHECK-*` capabilities.
 
 ### Storage
 

@@ -56,6 +56,13 @@ pub async fn forward(
     let mut req = format!("{method} {path_and_query} HTTP/1.1\r\n");
     let mut has_host = false;
     for (k, v) in headers {
+        // This writer frames the request by hand. Everything it is handed today comes from
+        // hyper, which already refuses a control character in a field name or value, but the
+        // check belongs at the sink: a future caller that builds a field from anywhere else
+        // would otherwise turn one header into request smuggling.
+        if !is_framable_name(k) || !is_framable_value(v) {
+            return Err(format!("refusing to forward the unframable header {k:?}"));
+        }
         let lower = k.to_ascii_lowercase();
         if matches!(
             lower.as_str(),
@@ -94,6 +101,21 @@ pub async fn forward(
         ));
     }
     parse_response(&raw, method)
+}
+
+/// A field name that cannot break the framing: an RFC 9110 token.
+fn is_framable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&\'*+-.^_`|~".contains(&b))
+}
+
+/// A field value that cannot break the framing: visible ASCII, spaces and tabs only.
+fn is_framable_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|b| b == b'\t' || (0x20..=0x7E).contains(&b))
 }
 
 /// Parses a complete HTTP/1.1 response (`Content-Length`, chunked or close-delimited body)
@@ -211,6 +233,43 @@ async fn respond(
                 .map(|v| (k.as_str().to_owned(), v.to_owned()))
         })
         .collect();
+    // The credential fields are collected separately and lossily: a value that is not
+    // renderable as text must still count as an instance, or a second copy could hide behind
+    // one byte the general collection above drops (spec 7.3).
+    let presented_app_check =
+        field_values(req.headers(), ftd_core_app_check::header::APP_CHECK_HEADER);
+    let presented_auth = field_values(req.headers(), "authorization");
+    // The callable trusted protocol, when it is active and this is a callable: an `onRequest`
+    // function keeps receiving the raw field list, because application code owns
+    // custom-backend verification there (specification section 7.3).
+    let headers = match (
+        runtime.callable_trust(),
+        runtime.callable_enforces_app_check(function),
+    ) {
+        (Some(trust), Some(enforce_app_check)) => {
+            match trust.sanitize(&crate::callable::CallableRequest {
+                function,
+                enforce_app_check,
+                headers: &headers,
+                app_check: &presented_app_check,
+                authorization: &presented_auth,
+                now: runtime.now(),
+            }) {
+                crate::callable::CallableDecision::Forward { headers, .. } => headers,
+                crate::callable::CallableDecision::Unauthenticated { .. } => {
+                    let denial = crate::callable::unauthenticated_response();
+                    let mut builder = Response::builder().status(denial.status);
+                    for (k, v) in denial.headers {
+                        builder = builder.header(k, v);
+                    }
+                    return Ok(builder
+                        .body(Full::new(Bytes::from(denial.body)))
+                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+                }
+            }
+        }
+        _ => headers,
+    };
     let body = match Limited::new(req.into_body(), MAX_FUNCTION_BODY_BYTES)
         .collect()
         .await
@@ -244,6 +303,19 @@ async fn respond(
         Err(e) if e == crate::runtime::DROP_CONNECTION => Err(std::io::Error::other(e)),
         Err(e) => Ok(simple(StatusCode::BAD_GATEWAY, &e)),
     }
+}
+
+/// Every instance of one field, in wire order, with an unrenderable value as an empty string.
+///
+/// The empty string is not a value anything accepts: it classifies as malformed for App Check
+/// and fails ID token verification. What matters is that it still counts as an instance, so a
+/// second copy cannot hide behind a byte that does not render.
+fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
+    headers
+        .get_all(name)
+        .iter()
+        .map(|v| v.to_str().map_or_else(|_| String::new(), str::to_owned))
+        .collect()
 }
 
 /// Whether a browser `Origin` is a loopback origin.

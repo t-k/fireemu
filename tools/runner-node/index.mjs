@@ -12,7 +12,9 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import { instrumentCallables } from "./callable-app-check.mjs";
 
 const frameWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
@@ -149,7 +151,18 @@ function isV1(fn) {
   return fn.__endpoint?.platform === "gcfv1" || (!(fn.__endpoint && Object.keys(fn.__endpoint).length > 0) && !!fn.__trigger);
 }
 
-function describe(name, fn) {
+// The callable App Check options of one function, as the loader instrumentation observed
+// them. An unobserved callable is `undetermined`, never a guessed `false` (spec 13.4).
+function callableAppCheck(instrumentation, fn) {
+  const observed = instrumentation.optionsOf(fn);
+  return {
+    enforceAppCheck: observed?.enforceAppCheck === true,
+    consumeAppCheckToken: observed ? observed.consumeAppCheckToken : "undetermined",
+  };
+}
+
+function describe(name, fn, instrumentation) {
+  const callable = () => ({ type: "http", callable: true, ...callableAppCheck(instrumentation, fn) });
   const ep = fn.__endpoint;
   const base = { name, entryPoint: name };
   if (ep && ep.platform === "gcfv1") {
@@ -157,7 +170,7 @@ function describe(name, fn) {
     const region = firstRegion(ep);
     if (region) base.region = region;
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
-    if (ep.callableTrigger) return { ...base, trigger: { type: "http", callable: true } };
+    if (ep.callableTrigger) return { ...base, trigger: callable() };
     const et = ep.eventTrigger || {};
     return describeV1Event(base, String(et.eventType || ""), String(et.eventFilters?.resource || ""), ep.scheduleTrigger, !!et.retry);
   }
@@ -167,7 +180,7 @@ function describe(name, fn) {
     if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
     if (ep.concurrency) base.concurrency = ep.concurrency;
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
-    if (ep.callableTrigger) return { ...base, trigger: { type: "http", callable: true } };
+    if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.scheduleTrigger) {
       const retryCount = Number(ep.scheduleTrigger.retryConfig?.retryCount || 0);
       return {
@@ -218,7 +231,12 @@ function describe(name, fn) {
   if (t) {
     if (t.timeout) base.timeoutSeconds = Number(String(t.timeout).replace(/s$/, "")) || undefined;
     if (t.regions?.length) base.region = t.regions[0];
-    if (t.httpsTrigger) return { ...base, trigger: { type: "http", callable: !!t.labels?.["deployment-callable"] } };
+    if (t.httpsTrigger) {
+      return {
+        ...base,
+        trigger: t.labels?.["deployment-callable"] ? callable() : { type: "http", callable: false },
+      };
+    }
     const et = t.eventTrigger;
     if (et) return describeV1Event(base, String(et.eventType || ""), String(et.resource || ""), t.schedule, !!et.failurePolicy || !!t.failurePolicy);
     return { ...base, unsupported: "unknown v1 trigger shape" };
@@ -298,6 +316,15 @@ function v1Context(msg) {
   }
 }
 
+// Constant-time comparison of the per-runner secret.
+function secretMatches(presented, expected) {
+  if (typeof presented !== "string") return false;
+  const a = Buffer.from(presented, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  // `timingSafeEqual` throws on a length mismatch, which would itself be a length oracle.
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 function makeHttpServer(functions, manifest) {
   const require = createRequire(join(sourceDir, "package.json"));
   let express;
@@ -318,8 +345,16 @@ function makeHttpServer(functions, manifest) {
   const project = process.env.GCLOUD_PROJECT || "";
   app.all(route, (req, res, next) => {
     // Only the daemon's proxy may reach this server (it carries the per-runner secret and has
-    // already applied timeouts, concurrency and idle accounting).
-    if (secret && req.get("x-ftd-runner-secret") !== secret) {
+    // already applied timeouts, concurrency and idle accounting). A missing secret refuses
+    // every request instead of waving them through: this server is the one place that decodes
+    // the credentials the daemon prevalidated, and under the trusted callable protocol it also
+    // honours the auth-override headers, so an unguarded runner would be an open
+    // impersonation endpoint for anything else on the loopback interface.
+    if (!secret) {
+      res.status(500).send("FTD_RUNNER_SECRET is required");
+      return;
+    }
+    if (!secretMatches(req.get("x-ftd-runner-secret"), secret)) {
       res.status(403).send("not the firebase-testd proxy");
       return;
     }
@@ -410,6 +445,9 @@ function readFrames(onFrame, onEnd) {
 }
 
 async function main() {
+  // Before any user code loads: the callable options are only observable as a callable is
+  // declared (spec 13.4).
+  const instrumentation = instrumentCallables(sourceDir);
   let ns;
   try {
     ns = await loadCodebase();
@@ -418,7 +456,7 @@ async function main() {
     process.exit(1);
   }
   const functions = collectFunctions(ns, "", new Map());
-  const described = [...functions.entries()].map(([name, fn]) => describe(name, fn));
+  const described = [...functions.entries()].map(([name, fn]) => describe(name, fn, instrumentation));
   for (const d of described.filter((d) => d.unsupported)) {
     log("warn", `function ${d.name} skipped: ${d.unsupported}`);
   }
@@ -433,7 +471,20 @@ async function main() {
       log("error", `cannot start the HTTP server: ${e?.stack || e}`);
     }
   }
-  send({ type: "hello", runner: "node", version: process.version, httpPort, manifest });
+  send({
+    type: "hello",
+    runner: "node",
+    version: process.version,
+    httpPort,
+    manifest,
+    appCheck: {
+      firebaseFunctionsVersion: instrumentation.version,
+      instrumentation: instrumentation.supported ? "ok" : instrumentation.reason,
+      debugFeatures: instrumentation.debugFeatures,
+      debugMode: process.env.FIREBASE_DEBUG_MODE === "true",
+      authHeaders: instrumentation.authHeaders,
+    },
+  });
   readFrames(
     (msg) => {
       if (msg.type === "shutdown") process.exit(0);

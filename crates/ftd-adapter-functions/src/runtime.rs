@@ -343,6 +343,9 @@ pub struct FunctionsRuntime {
     retry: RetryPolicy,
     /// The session's fault plan, when one is shared.
     faults: Mutex<Option<ftd_core_session::fault::SharedFaults>>,
+    /// The callable trust boundary, when the callable trusted protocol is active
+    /// (specification section 13.4). `None` leaves the pre-App-Check behaviour untouched.
+    callable_trust: std::sync::RwLock<Option<Arc<crate::callable::CallableTrust>>>,
 }
 
 impl FunctionsRuntime {
@@ -411,6 +414,7 @@ impl FunctionsRuntime {
             idle: Arc::new(Notify::new()),
             retry,
             faults: Mutex::new(None),
+            callable_trust: std::sync::RwLock::new(None),
         })
     }
 
@@ -435,7 +439,9 @@ impl FunctionsRuntime {
         }
     }
 
-    fn now(&self) -> LogicalInstant {
+    /// The virtual-clock instant a request is decided at.
+    #[must_use]
+    pub fn now(&self) -> LogicalInstant {
         self.clock
             .lock()
             .map(|c| c.now())
@@ -451,6 +457,37 @@ impl FunctionsRuntime {
 
     fn faults(&self) -> Option<ftd_core_session::fault::SharedFaults> {
         self.faults.lock().ok().and_then(|f| f.clone())
+    }
+
+    /// Activates the callable trusted protocol (specification section 13.4).
+    ///
+    /// Installed after the runner started but before the functions listener serves anything,
+    /// because the App Check gate is built from the same configuration that decides whether the
+    /// runner may run in debug mode at all.
+    pub fn set_callable_trust(&self, trust: Arc<crate::callable::CallableTrust>) {
+        if let Ok(mut slot) = self.callable_trust.write() {
+            *slot = Some(trust);
+        }
+    }
+
+    /// The callable trust boundary, when the trusted protocol is active.
+    #[must_use]
+    pub fn callable_trust(&self) -> Option<Arc<crate::callable::CallableTrust>> {
+        self.callable_trust.read().ok().and_then(|t| t.clone())
+    }
+
+    /// The callable's declared `enforceAppCheck`, or `None` when the function is not a
+    /// callable at all (an `onRequest` function never gets an automatic decision, spec 7.3).
+    #[must_use]
+    pub fn callable_enforces_app_check(&self, function: &str) -> Option<bool> {
+        match self.manifest.get(function).map(|f| &f.trigger) {
+            Some(Trigger::Http {
+                callable: true,
+                enforce_app_check,
+                ..
+            }) => Some(*enforce_app_check),
+            _ => None,
+        }
     }
 
     /// Enqueues an event for `function`, plus the extra deliveries a `duplicate` fault
@@ -1262,10 +1299,17 @@ impl FunctionsRuntime {
         };
         // The slot is released even if the client disconnects and this future is dropped.
         let _admission = Admission { runtime: self, key };
-        // The runner secret is ours to add; a caller-supplied copy never passes through.
+        // The runner secret is ours to add; a caller-supplied copy never passes through. The
+        // same goes for the emulator-internal fields `firebase-functions` honours under
+        // `skipTokenVerification` to override v1 callable auth context: no client legitimately
+        // sends them, and one that does is trying to forge `context.auth`.
         let mut forwarded: Vec<(String, String)> = headers
             .iter()
-            .filter(|(k, _)| !k.eq_ignore_ascii_case("x-ftd-runner-secret"))
+            .filter(|(k, _)| {
+                !crate::callable::ALWAYS_STRIPPED
+                    .iter()
+                    .any(|owned| k.eq_ignore_ascii_case(owned))
+            })
             .cloned()
             .collect();
         forwarded.push((

@@ -22,6 +22,10 @@ pub struct Hello {
     pub http_port: Option<u16>,
     /// Discovered manifest (canonical JSON), if the runner performed discovery.
     pub manifest: Option<Value>,
+    /// The runner's callable App Check report: the installed `firebase-functions` version,
+    /// whether the loader instrumentation could be installed, and whether the debug switches
+    /// behave the way the trusted callable protocol relies on (specification section 13.4).
+    pub app_check: Option<Value>,
 }
 
 /// Outcome of one invocation.
@@ -260,6 +264,7 @@ impl Runner {
                                     .and_then(Value::as_u64)
                                     .and_then(|p| u16::try_from(p).ok()),
                                 manifest: frame.get("manifest").cloned(),
+                                app_check: frame.get("appCheck").cloned(),
                             };
                             if let Some(tx) = hello_tx.take() {
                                 let _ = tx.send(hello);

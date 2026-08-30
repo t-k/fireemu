@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod callable;
 pub mod events;
 pub mod http;
 pub mod manifest_json;

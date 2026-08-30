@@ -146,6 +146,14 @@ async fn channel_call(
     let method = req.method().as_str().to_owned();
     let params = crate::webchannel::parse_form(req.uri().query().unwrap_or(""));
     let authorization = header(&req, "authorization").map(str::to_owned);
+    // Every instance, in wire order, as on the REST path: the classifier refuses duplicates
+    // and folded values, so no caller gets to pick one of several (spec 7.3).
+    let app_check: Vec<String> = req
+        .headers()
+        .get_all(ftd_core_app_check::header::APP_CHECK_HEADER)
+        .iter()
+        .map(|v| v.to_str().unwrap_or_default().to_owned())
+        .collect();
     let Ok(bytes) = read_body(req, crate::webchannel::MAX_FORM_BYTES).await else {
         return json_response(
             &RestResponse {
@@ -161,6 +169,7 @@ async fn channel_call(
         method,
         params,
         authorization,
+        app_check,
         origin: origin.clone(),
         body,
     });

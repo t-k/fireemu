@@ -269,6 +269,25 @@ impl ServiceAdmission {
     /// route already authenticated a stronger credential.
     #[must_use]
     pub fn admit(&self, request: &AdmissionRequest<'_>) -> AdmissionDecision {
+        self.admit_bound(request).0
+    }
+
+    /// Decides one request and reports, under the very same registry read, the project session
+    /// epoch the decision was taken under.
+    ///
+    /// A long-lived operation — an admitted gRPC stream, a `WebChannel` channel, a resumable
+    /// upload session — remembers the app it was admitted for and has to remember *which*
+    /// epoch that admission belonged to, so that a later request cannot inherit an admission
+    /// taken before a reset. Reading the epoch in a second call would be a second snapshot;
+    /// this returns both halves of one (`INV-APPCHECK-005`).
+    ///
+    /// The epoch is `None` for a project the registry does not know, which is also the only
+    /// case where no token can verify at all.
+    #[must_use]
+    pub fn admit_bound(
+        &self,
+        request: &AdmissionRequest<'_>,
+    ) -> (AdmissionDecision, Option<ProjectEpoch>) {
         let registry = self
             .gate
             .registry
@@ -297,6 +316,7 @@ impl ServiceAdmission {
             registry.policy_generation(request.project_id),
             decision.allowed,
         ));
-        decision
+        let epoch = registry.project_epoch(request.project_id);
+        (decision, epoch)
     }
 }

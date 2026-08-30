@@ -104,6 +104,17 @@ exports.add = onCall((request) => {
   return { sum: a + b, uid: request.auth?.uid ?? null };
 });
 
+// A callable that enforces App Check. With appCheck disabled it behaves like any other
+// callable and never sees an app; with appCheck enabled the daemon refuses a missing or
+// invalid token with the callable 401 envelope before this handler runs, and a valid one
+// arrives here as `request.app`.
+exports.guarded = onCall({ enforceAppCheck: true }, (request) => ({
+  appId: request.app?.appId ?? null,
+  // The decoded claims of the local App Check token, minus anything secret-shaped.
+  subject: request.app?.token?.sub ?? null,
+  uid: request.auth?.uid ?? null,
+}));
+
 // Pub/Sub (v2): messages published through the control API land here.
 const { onMessagePublished } = require("firebase-functions/v2/pubsub");
 exports.onJob = onMessagePublished("jobs", async (event) => {

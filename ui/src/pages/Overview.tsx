@@ -15,6 +15,8 @@ const statusClass = (status: ProductStatus): string => {
       return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100";
     case "pendingBackend":
       return "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100";
+    case "pendingUi":
+      return "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100";
     case "substituted":
       return "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-100";
     case "notPlanned":

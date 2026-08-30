@@ -23,8 +23,9 @@ test.describe("Overview", () => {
     const scope = page.getByTestId("product-scope");
     await expect(scope.getByTestId("scope-rtdb")).toContainText("deferred");
     await expect(scope.getByTestId("scope-extensions")).toContainText("not planned");
-    await expect(scope.getByTestId("scope-requests")).toContainText("pending backend");
-    await expect(scope.getByTestId("scope-alerts")).toContainText("pending backend");
+    await expect(scope.getByTestId("scope-requests")).toContainText("supported");
+    await expect(scope.getByTestId("scope-coverage")).toContainText("pending UI");
+    await expect(scope.getByTestId("scope-alerts")).toContainText("pending UI");
     await expect(scope.getByTestId("scope-logging")).toContainText("substituted");
   });
 

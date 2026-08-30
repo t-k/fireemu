@@ -10,6 +10,7 @@ export type ProductStatus =
   | "deferred" // planned, not implemented yet
   | "notPlanned" // out of scope for fireemu
   | "pendingBackend" // the UI workflow is designed but the daemon does not serve it yet
+  | "pendingUi" // the daemon serves it; the parity UI view is not built yet
   | "substituted"; // fireemu offers a different, documented mechanism for the same need
 
 export type ProductScopeRow = {
@@ -52,10 +53,11 @@ export const productScope = (): readonly ProductScopeRow[] => [
   {
     id: "requests",
     nameKey: "scope.requests",
-    status: "pendingBackend",
+    status: "supported",
     noteKey: "scope.requestsNote",
   },
-  { id: "alerts", nameKey: "scope.alerts", status: "pendingBackend", noteKey: "scope.alertsNote" },
+  { id: "coverage", nameKey: "scope.coverage", status: "pendingUi", noteKey: "scope.coverageNote" },
+  { id: "alerts", nameKey: "scope.alerts", status: "pendingUi", noteKey: "scope.alertsNote" },
   { id: "logging", nameKey: "scope.logging", status: "substituted", noteKey: "scope.loggingNote" },
 ];
 

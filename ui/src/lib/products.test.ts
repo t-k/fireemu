@@ -8,10 +8,14 @@ describe("product scope", () => {
     expect(scope.find((r) => r.id === "extensions")?.status).toBe("notPlanned");
   });
 
-  it("marks the still-unserved diagnostics as pending backend, never as supported", () => {
+  it("marks the Firestore Requests trace supported (its panel is on the Rules page)", () => {
+    expect(productScope().find((r) => r.id === "requests")?.status).toBe("supported");
+  });
+
+  it("marks diagnostics whose backend exists but UI view does not as pending UI, never supported", () => {
     const scope = productScope();
-    expect(scope.find((r) => r.id === "requests")?.status).toBe("pendingBackend");
-    expect(scope.find((r) => r.id === "alerts")?.status).toBe("pendingBackend");
+    expect(scope.find((r) => r.id === "coverage")?.status).toBe("pendingUi");
+    expect(scope.find((r) => r.id === "alerts")?.status).toBe("pendingUi");
   });
 
   it("marks the official Logging emulator as substituted by the SSE stream", () => {

@@ -380,6 +380,7 @@ export const en = {
   "scope.status.deferred": "deferred",
   "scope.status.notPlanned": "not planned",
   "scope.status.pendingBackend": "pending backend",
+  "scope.status.pendingUi": "pending UI",
   "scope.status.substituted": "substituted",
   "scope.auth": "Authentication",
   "scope.authNote":
@@ -402,12 +403,15 @@ export const en = {
   "scope.rtdbNote": "Deferred: fireemu does not implement the Realtime Database emulator yet.",
   "scope.extensions": "Extensions",
   "scope.extensionsNote": "Not planned: outside fireemu's scope.",
-  "scope.requests": "Firestore Requests and Rules coverage",
+  "scope.requests": "Firestore Requests",
   "scope.requestsNote":
-    "Pending backend (UI-PARITY-03): the request-trace and rule-coverage diagnostics need daemon routes that this build does not serve yet. Rules decisions are already gated by the conformance suite.",
+    "Supported (UI-PARITY-03): the Rules page lists the requests Security Rules decided, newest first, each with its per-expression trace, read from the daemon's request-trace route.",
+  "scope.coverage": "Rules coverage",
+  "scope.coverageNote":
+    "Pending UI (UI-PARITY-03): the daemon serves the official :ruleCoverage report; the parity coverage view is not built yet. No fireemu-only substitute is shown in its place.",
   "scope.alerts": "Firebase alerts",
   "scope.alertsNote":
-    "Pending backend (UI-PARITY-04): synthesizing alerts needs the Eventarc google-channel / publishEvents mechanism, which this build does not serve yet. No fireemu-only injection path is offered in its place.",
+    "Pending UI (UI-PARITY-04): the daemon serves the Eventarc google-channel / publishEvents mechanism that alerts flow through; the synthesis workflow is not built in the UI yet. No fireemu-only injection path is offered in its place.",
   "scope.logging": "Logging emulator (WebSocket, port 4500)",
   "scope.loggingNote":
     "Substituted: fireemu does not serve the official Logging WebSocket. The live Functions log stream (server-sent events, filterable by level and text) is the local substitute.",

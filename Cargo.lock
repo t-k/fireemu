@@ -355,6 +355,7 @@ dependencies = [
  "fireemu-adapter-ui",
  "fireemu-core-app-check",
  "fireemu-core-auth",
+ "fireemu-core-export",
  "fireemu-core-firestore",
  "fireemu-core-functions",
  "fireemu-core-limits",

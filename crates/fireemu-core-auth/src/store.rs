@@ -741,8 +741,11 @@ impl AuthStore {
             }
             None => None,
         };
-        let sequence = self.next_sequence;
+        // Sequences start at one, exactly as `create_user` assigns them: the listing cursor
+        // is "everything after this sequence", so a zero would make the first account
+        // unlistable.
         self.next_sequence += 1;
+        let sequence = self.next_sequence;
         let mut mfa = MfaState::default();
         mfa.import_factors(user.totp_factors, user.phone_factors)
             .map_err(ImportUserError::SecondFactor)?;

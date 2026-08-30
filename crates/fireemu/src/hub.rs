@@ -13,7 +13,7 @@
 //! GET  /emulators                            every running emulator, keyed by name
 //! PUT  /functions/disableBackgroundTriggers   {"enabled": false}
 //! PUT  /functions/enableBackgroundTriggers    {"enabled": true}
-//! POST /_admin/export                        refused: fireemu has no export artifact yet
+//! POST /_admin/export                        writes an export directory (emulators:export)
 //! ```
 //!
 //! # Background triggers
@@ -78,6 +78,13 @@ impl EmulatorInfo {
     }
 }
 
+/// Writes an export directory from the live state. `main` implements it; the Hub only knows
+/// that `POST /_admin/export` calls it.
+pub trait ExportRunner: Send + Sync {
+    /// Writes the export at `path`, attributing it to `initiated_by`.
+    fn export(&self, path: &std::path::Path, initiated_by: &str) -> Result<(), String>;
+}
+
 /// Everything the Hub answers from.
 pub struct HubState {
     /// The project the locator file is named after.
@@ -88,6 +95,8 @@ pub struct HubState {
     pub emulators: Vec<EmulatorInfo>,
     /// The functions runtime, when one is loaded: the background-trigger switch.
     pub functions: Option<Arc<FunctionsRuntime>>,
+    /// The export writer `POST /_admin/export` drives.
+    pub export: Option<Arc<dyn ExportRunner>>,
 }
 
 impl HubState {
@@ -238,7 +247,6 @@ fn host_is_local(req: &Request<Incoming>) -> bool {
     matches!(name, "localhost" | "127.0.0.1" | "::1") || name.starts_with("127.")
 }
 
-#[allow(clippy::unused_async)] // the hyper service signature is async
 async fn respond(
     state: Arc<HubState>,
     req: Request<Incoming>,
@@ -257,10 +265,17 @@ async fn respond(
     }
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
-    let origin = origin.as_deref();
     if method == Method::OPTIONS {
-        return Ok(json_response(StatusCode::NO_CONTENT, &json!({}), origin));
+        return Ok(json_response(
+            StatusCode::NO_CONTENT,
+            &json!({}),
+            origin.as_deref(),
+        ));
     }
+    if (&method, path.as_str()) == (&Method::POST, "/_admin/export") {
+        return Ok(run_export(&state, req, origin.as_deref()).await);
+    }
+    let origin = origin.as_deref();
     let response = match (&method, path.as_str()) {
         (&Method::GET, "/") => {
             let mut locator = state.locator();
@@ -277,11 +292,6 @@ async fn respond(
         (&Method::PUT, "/functions/enableBackgroundTriggers") => {
             set_background_triggers(&state, true, origin)
         }
-        (&Method::POST, "/_admin/export") => json_response(
-            StatusCode::NOT_IMPLEMENTED,
-            &json!({"message": "fireemu has no on-disk export artifact yet; capture state with POST /v1/sessions/{session}/snapshots on the control API instead"}),
-            origin,
-        ),
         _ => json_response(
             StatusCode::NOT_FOUND,
             &json!({"error": format!("{method} {path} is not a Emulator Hub route")}),
@@ -289,6 +299,72 @@ async fn respond(
         ),
     };
     Ok(response)
+}
+
+/// `POST /_admin/export`: the route `firebase emulators:export` and `--export-on-exit`
+/// drive.
+///
+/// The body is the official one (`hub.ts`): `{"path": "<absolute directory>", "initiatedBy":
+/// "<who asked>"}`. A request that carries an `Origin` header is refused exactly as upstream
+/// refuses it -- a page must not be able to make the suite write its state to disk.
+async fn run_export(
+    state: &Arc<HubState>,
+    req: Request<Incoming>,
+    origin: Option<&str>,
+) -> Response<Full<Bytes>> {
+    if origin.is_some() {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            &json!({"message": "Export cannot be triggered by external callers."}),
+            origin,
+        );
+    }
+    let Some(runner) = &state.export else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &json!({"message": "No running emulators support import/export."}),
+            origin,
+        );
+    };
+    let body = match http_body_util::BodyExt::collect(req.into_body()).await {
+        Ok(collected) => collected.to_bytes(),
+        Err(e) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                &json!({"message": format!("the export request body could not be read: {e}")}),
+                origin,
+            )
+        }
+    };
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(e) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                &json!({"message": format!("the export request body is not JSON: {e}")}),
+                origin,
+            )
+        }
+    };
+    let Some(path) = parsed.get("path").and_then(Value::as_str) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &json!({"message": "the export request has no \"path\""}),
+            origin,
+        );
+    };
+    let initiated_by = parsed
+        .get("initiatedBy")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    match runner.export(std::path::Path::new(path), initiated_by) {
+        Ok(()) => json_response(StatusCode::OK, &json!({"message": "OK"}), origin),
+        Err(message) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &json!({ "message": message }),
+            origin,
+        ),
+    }
 }
 
 /// The enable / disable background-trigger routes.
@@ -358,6 +434,7 @@ mod tests {
                 },
             ],
             functions: None,
+            export: None,
         }
     }
 

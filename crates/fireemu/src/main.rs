@@ -40,6 +40,7 @@ mod control;
 mod doctor;
 mod functions;
 mod hub;
+mod import_export;
 mod sessions;
 mod snapshots;
 mod ui;
@@ -67,10 +68,10 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir>\n       fireemu doctor\n       fireemu capabilities");
+    eprintln!("usage: fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
     ExitCode::from(2)
 }
 
@@ -145,6 +146,10 @@ struct Options {
     only: Selection,
     /// `--log-verbosity`.
     verbosity: Verbosity,
+    /// The export directory to import at start (`--import`).
+    import: Option<PathBuf>,
+    /// The export directory to write at exit (`--export-on-exit`).
+    export_on_exit: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -158,11 +163,10 @@ fn main() -> ExitCode {
             Ok((options, plan)) => run(options, Some(plan)),
             Err(e) => fail(&e),
         },
-        // The import / export artifact format is a separate contract; the command exists so
-        // that a script calling it is told precisely, rather than told the name is unknown.
-        Some("emulators:export") => fail(&CliError::refused(
-            "emulators:export is not supported yet: fireemu has no on-disk import / export artifact format. Capture state with POST /v1/sessions/{session}/snapshots instead.",
-        )),
+        Some("emulators:export") => match export_command(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(&e),
+        },
         Some("doctor") => doctor::run(),
         Some("capabilities") => {
             println!(
@@ -179,6 +183,123 @@ fn main() -> ExitCode {
 fn fail(e: &CliError) -> ExitCode {
     eprintln!("error: {}", e.message);
     ExitCode::from(e.code)
+}
+
+/// `fireemu emulators:export <dir> [--project <id>] [--force]`.
+///
+/// Like the official command, this talks to a suite that is already running: it finds it
+/// through the Emulator Hub locator file the daemon wrote (`<temp>/hub-<project>.json`) and
+/// drives `POST /_admin/export`, so the export is written by the process that holds the
+/// state rather than by a second one that would have none.
+fn export_command(args: &[String]) -> Result<(), CliError> {
+    let mut path: Option<PathBuf> = None;
+    let mut project: Option<String> = None;
+    let mut force = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--project" | "-P" => {
+                project = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| CliError::usage("--project needs a value"))?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--force" | "-f" => {
+                force = true;
+                i += 1;
+            }
+            other if other.starts_with('-') => {
+                return Err(CliError::usage(format!("unknown argument {other}")))
+            }
+            other => {
+                if path.is_some() {
+                    return Err(CliError::usage("emulators:export takes one directory"));
+                }
+                path = Some(PathBuf::from(other));
+                i += 1;
+            }
+        }
+    }
+    let path = path.ok_or_else(|| CliError::usage("emulators:export needs a directory"))?;
+    if !force {
+        import_export::may_overwrite(&path).map_err(CliError::refused)?;
+    }
+    let absolute = std::path::absolute(&path)
+        .map_err(|e| CliError::refused(format!("{}: {e}", path.display())))?;
+
+    let project = match project {
+        Some(project) => project,
+        None => resolve_project(Path::new("."), None)?
+            .unwrap_or_else(|| config::RuntimeConfig::default().auth_project),
+    };
+    let locator = hub::Locator::path_for(&project);
+    let text = std::fs::read_to_string(&locator).map_err(|_| {
+        CliError::refused(format!(
+            "no running fireemu suite for {project} was found: {} does not exist. Start one with `fireemu up --project {project}`, or name the project with --project.",
+            locator.display()
+        ))
+    })?;
+    let document: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", locator.display())))?;
+    let origin = document
+        .get("origins")
+        .and_then(|o| o.get(0))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            CliError::refused(format!("{} names no Hub origin", locator.display()))
+        })?;
+    let address = origin.trim_start_matches("http://");
+    let body = serde_json::json!({
+        "path": absolute.to_string_lossy(),
+        "initiatedBy": "emulators:export",
+    })
+    .to_string();
+    let (status, response) = post_json(address, "/_admin/export", &body)
+        .map_err(|e| CliError::refused(format!("the export request to {origin} failed: {e}")))?;
+    if status != 200 {
+        let message = serde_json::from_str::<serde_json::Value>(&response)
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or(response);
+        return Err(CliError::refused(format!("export failed: {message}")));
+    }
+    println!("exported {project} to {}", absolute.display());
+    Ok(())
+}
+
+/// One `POST` against a loopback Hub, written by hand: the binary carries a server-side
+/// hyper only, and the Hub's answers are small enough to read in one go.
+fn post_json(address: &str, path: &str, body: &str) -> Result<(u16, String), String> {
+    use std::io::{Read as _, Write as _};
+    let mut stream = std::net::TcpStream::connect(address).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(120)))
+        .map_err(|e| e.to_string())?;
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|e| e.to_string())?;
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
+    let status = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    Ok((status, body.to_owned()))
 }
 
 /// `exec [options] -- <command...>`.
@@ -234,6 +355,10 @@ struct RawOptions {
     functions_source: Option<String>,
     inspect_functions: Option<u16>,
     verbosity: Verbosity,
+    /// `--import <dir>`.
+    import: Option<PathBuf>,
+    /// `--export-on-exit [dir]`; the inner `None` means "the `--import` directory".
+    export_on_exit: Option<Option<PathBuf>>,
 }
 
 /// The Node inspector port `--inspect-functions` defaults to, as in the official CLI.
@@ -334,26 +459,20 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
                 })?;
                 i += 2;
             }
-            // Parsed, then refused: the artifact format is a separate contract and a partial
-            // start with the data missing would be worse than not starting at all.
             "--import" => {
-                let dir = args
-                    .get(i + 1)
-                    .ok_or_else(|| CliError::usage("--import needs a directory"))?;
-                return Err(CliError::refused(format!(
-                    "--import {dir}: importing an official emulator export is not supported yet; nothing was started. Seed state through the SDKs or restore a snapshot (POST /v1/sessions/{{session}}/snapshots/{{name}}:restore) instead."
-                )));
+                raw.import = Some(PathBuf::from(
+                    args.get(i + 1)
+                        .ok_or_else(|| CliError::usage("--import needs a directory"))?,
+                ));
+                i += 2;
             }
             "--export-on-exit" => {
-                let dir = optional_value(args, i + 1).cloned().unwrap_or_default();
-                return Err(CliError::refused(format!(
-                    "--export-on-exit{}: writing an official emulator export is not supported yet; nothing was started. Capture state with POST /v1/sessions/{{session}}/snapshots instead.",
-                    if dir.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {dir}")
-                    }
-                )));
+                let (dir, step) = match optional_value(args, i + 1) {
+                    Some(v) => (Some(PathBuf::from(v)), 2),
+                    None => (None, 1),
+                };
+                raw.export_on_exit = Some(dir);
+                i += step;
             }
             other => return Err(CliError::usage(format!("unknown argument {other}"))),
         }
@@ -476,10 +595,45 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
             0
         });
     }
+    // `--export-on-exit` without a directory means "where --import read from", exactly as
+    // the official CLI resolves it (`commandUtils.ts` `setExportOnExitOptions`). A target
+    // that is the working directory or one of its parents is refused there too, because an
+    // export replaces what the directory holds.
+    let export_on_exit = match raw.export_on_exit {
+        None => None,
+        Some(Some(dir)) => Some(dir),
+        Some(None) => Some(raw.import.clone().ok_or_else(|| {
+            CliError::usage(
+                "--export-on-exit must be used with --import, or be given a directory of its own",
+            )
+        })?),
+    };
+    if let Some(dir) = &export_on_exit {
+        let absolute = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+        if let Ok(cwd) = std::env::current_dir() {
+            if cwd.starts_with(&absolute) {
+                return Err(CliError::refused(format!(
+                    "--export-on-exit {}: that is the working directory or one of its parents, and an export replaces what the directory holds; choose a dedicated directory",
+                    dir.display()
+                )));
+            }
+        }
+        import_export::may_overwrite(dir).map_err(CliError::refused)?;
+    }
+    if let Some(dir) = &raw.import {
+        if !dir.is_dir() {
+            return Err(CliError::refused(format!(
+                "--import {}: no such directory",
+                dir.display()
+            )));
+        }
+    }
     Ok(Options {
         cfg,
         only,
         verbosity: raw.verbosity,
+        import: raw.import,
+        export_on_exit,
     })
 }
 
@@ -915,6 +1069,43 @@ fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: BoundAddrs) {
     );
 }
 
+/// Everything an export reads, held for as long as the daemon runs.
+///
+/// The Emulator Hub route, `fireemu emulators:export` (through that route) and
+/// `--export-on-exit` all go through this one object, so there is a single description of
+/// what an export covers and a single place that decides the directory may be written.
+struct Exporter {
+    backend: Arc<LocalBackend>,
+    auth: Arc<fireemu_core_auth::store::AuthRegistry>,
+    storage: Arc<fireemu_adapter_http::storage::StorageState>,
+    clock: Arc<Mutex<VirtualClock>>,
+    project: String,
+    products: import_export::Products,
+}
+
+impl Exporter {
+    fn endpoints(&self) -> import_export::Endpoints<'_> {
+        import_export::Endpoints {
+            backend: &self.backend,
+            auth: &self.auth,
+            storage: &self.storage,
+            clock: &self.clock,
+            project: &self.project,
+        }
+    }
+}
+
+impl hub::ExportRunner for Exporter {
+    fn export(&self, path: &Path, initiated_by: &str) -> Result<(), String> {
+        import_export::may_overwrite(path)?;
+        // The directory is emptied first, so a document that no longer exists cannot survive
+        // in an export that is supposed to describe the current state.
+        import_export::clear_export_dir(path)?;
+        import_export::export(path, self.products, &self.endpoints(), initiated_by)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Resolves on SIGTERM (so a killed daemon still stops its runner); never on platforms
 /// without it.
 async fn terminate_signal() {
@@ -1102,6 +1293,8 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         mut cfg,
         only,
         verbosity,
+        import,
+        export_on_exit,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
     if !cfg.clock_start_pinned {
@@ -1381,11 +1574,38 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         ));
         // The Emulator Hub's locator file lives as long as this scope: dropping it removes
         // the file, so a clean exit on either signal path leaves no stale discovery behind.
+        // The export seam: one object that owns everything an export reads, shared by the
+        // Hub's route, `emulators:export` and `--export-on-exit`.
+        let exporter = Arc::new(Exporter {
+            backend: backend.clone(),
+            auth: registry.clone(),
+            storage: storage.clone(),
+            clock: clock.clone(),
+            project: cfg.auth_project.clone(),
+            products: import_export::Products::from(&only),
+        });
+        // The import happens before the command starts and before the banner claims the
+        // suite is ready: a run that cannot install its fixture must not run at all.
+        if let Some(dir) = &import {
+            let prepared = import_export::prepare(dir, exporter.products, &cfg.auth_project)
+                .map_err(|e| format!("--import {}: {e}", dir.display()))?;
+            if !quiet {
+                for notice in &prepared.notices {
+                    eprintln!("note: --import {}: {notice}", dir.display());
+                }
+            }
+            import_export::apply(&prepared, &exporter.endpoints())
+                .map_err(|e| format!("--import {}: {e}", dir.display()))?;
+            if !quiet {
+                println!("  imported: {} ({})", dir.display(), prepared.summary());
+            }
+        }
         let hub_state = Arc::new(hub::HubState {
             project: cfg.auth_project.clone(),
             addr: hub_addr.unwrap_or(http_addr),
             emulators: hub_emulators(addrs),
             functions: functions_runtime.clone(),
+            export: Some(exporter.clone() as Arc<dyn hub::ExportRunner>),
         });
         let _locator = hub_addr.map(|_| {
             let (locator, note) = hub::Locator::write(&hub_state);
@@ -1564,6 +1784,21 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             }
             _ => 0,
         };
+        // `--export-on-exit` runs on every path that reached a served suite: a clean exit, a
+        // command that failed, and SIGINT or SIGTERM. It runs before the runner is shut down
+        // and while every store is still in memory, and a failure to write it is reported
+        // without changing the exit code the run already earned (`DATA-04`).
+        if let Some(dir) = &export_on_exit {
+            use hub::ExportRunner as _;
+            match exporter.export(dir, "exit") {
+                Ok(()) => {
+                    if !quiet {
+                        println!("exported to {}", dir.display());
+                    }
+                }
+                Err(e) => eprintln!("error: --export-on-exit {}: {e}", dir.display()),
+            }
+        }
         if let Some(runtime) = functions_runtime {
             runtime.runner().shutdown().await;
         }

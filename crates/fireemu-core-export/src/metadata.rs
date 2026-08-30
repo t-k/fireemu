@@ -115,6 +115,27 @@ pub struct Section {
     pub metadata_file: Option<String>,
 }
 
+/// The manifest member fireemu writes its own extension sections under.
+///
+/// The official CLI reads only the members it knows (`hubExport.ts` picks
+/// `metadata.firestore`, `metadata.auth`, ... by name), so an extra member is carried
+/// through an official import and export untouched. fireemu uses exactly one: the Firestore
+/// databases other than `(default)`, which the official managed export has no place for --
+/// its request is hard-coded to `projects/{p}/databases/(default)`. Writing them into the
+/// official `firestore_export` section would produce a directory the official emulator
+/// silently mis-imports; writing them here means the official suite reads the default
+/// database and fireemu reads all of them.
+pub const EXTENSION_KEY: &str = "fireemu";
+
+/// The extension sections, keyed by database id.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Extension {
+    /// The fireemu version that wrote them.
+    pub version: String,
+    /// One Firestore section per named database, in database order.
+    pub firestore_databases: Vec<(String, Section)>,
+}
+
 /// The parsed manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExportMetadata {
@@ -122,6 +143,8 @@ pub struct ExportMetadata {
     pub version: String,
     /// The sections present, in product order.
     pub sections: Vec<(Product, Section)>,
+    /// fireemu's own sections, when the export carries any.
+    pub extension: Option<Extension>,
 }
 
 /// Why a manifest was refused.
@@ -143,7 +166,33 @@ impl ExportMetadata {
         Self {
             version: version.into(),
             sections: Vec::new(),
+            extension: None,
         }
+    }
+
+    /// Adds a Firestore section for a database other than `(default)`.
+    pub fn set_named_database(
+        &mut self,
+        fireemu_version: &str,
+        database: impl Into<String>,
+        section: Section,
+    ) {
+        let extension = self.extension.get_or_insert_with(|| Extension {
+            version: fireemu_version.to_owned(),
+            firestore_databases: Vec::new(),
+        });
+        let database = database.into();
+        extension.firestore_databases.retain(|(d, _)| *d != database);
+        extension.firestore_databases.push((database, section));
+        extension.firestore_databases.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+
+    /// The Firestore sections of the databases other than `(default)`.
+    #[must_use]
+    pub fn named_databases(&self) -> &[(String, Section)] {
+        self.extension
+            .as_ref()
+            .map_or(&[], |e| e.firestore_databases.as_slice())
     }
 
     /// Adds or replaces a product's section, keeping the official product order.
@@ -196,6 +245,41 @@ impl ExportMetadata {
             };
             metadata.set(product, parse_section(product, section)?);
         }
+        if let Some(extension) = value.get(EXTENSION_KEY) {
+            if !matches!(extension, JsonValue::Object(_)) {
+                return Err(MetadataError(format!(
+                    "the {EXTENSION_KEY} section of the export manifest is not an object"
+                )));
+            }
+            let mut databases = Vec::new();
+            if let Some(JsonValue::Array(items)) = extension.get("firestoreDatabases") {
+                for item in items {
+                    let database = item
+                        .get("database")
+                        .and_then(JsonValue::as_str)
+                        .ok_or_else(|| {
+                            MetadataError(format!(
+                                "a {EXTENSION_KEY}.firestoreDatabases entry has no string \"database\""
+                            ))
+                        })?
+                        .to_owned();
+                    if database.is_empty() || database == "(default)" {
+                        return Err(MetadataError(format!(
+                            "the {EXTENSION_KEY} section names the database {database:?}, which belongs in the official firestore section"
+                        )));
+                    }
+                    databases.push((database, parse_section(Product::Firestore, item)?));
+                }
+            }
+            metadata.extension = Some(Extension {
+                version: extension
+                    .get("version")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                firestore_databases: databases,
+            });
+        }
         Ok(metadata)
     }
 
@@ -213,6 +297,32 @@ impl ExportMetadata {
                 section.metadata_file.as_ref().map(Json::string),
             );
             doc.insert(product.key(), node);
+        }
+        if let Some(extension) = &self.extension {
+            if !extension.firestore_databases.is_empty() {
+                let mut node = Json::object();
+                node.insert("version", Json::string(&extension.version));
+                node.insert(
+                    "firestoreDatabases",
+                    Json::Array(
+                        extension
+                            .firestore_databases
+                            .iter()
+                            .map(|(database, section)| {
+                                let mut entry = Json::object();
+                                entry.insert("database", Json::string(database));
+                                entry.insert("path", Json::string(&section.path));
+                                entry.insert_some(
+                                    "metadata_file",
+                                    section.metadata_file.as_ref().map(Json::string),
+                                );
+                                entry
+                            })
+                            .collect(),
+                    ),
+                );
+                doc.insert(EXTENSION_KEY, node);
+            }
         }
         doc.to_pretty()
     }
@@ -365,6 +475,58 @@ mod tests {
     fn a_manifest_that_is_not_json_is_refused_with_its_offset() {
         assert!(ExportMetadata::parse("{\"version\": ").is_err());
         assert!(ExportMetadata::parse("[]").is_err());
+    }
+
+    #[test]
+    fn a_named_database_section_round_trips_under_the_fireemu_extension() {
+        let mut metadata = ExportMetadata::new("15.28.2");
+        metadata.set(
+            Product::Firestore,
+            Section {
+                version: "1.22.0".to_owned(),
+                path: "firestore_export".to_owned(),
+                metadata_file: Some("firestore_export/x".to_owned()),
+            },
+        );
+        metadata.set_named_database(
+            "0.1.0",
+            "analytics",
+            Section {
+                version: "0.1.0".to_owned(),
+                path: "firestore_export_analytics".to_owned(),
+                metadata_file: Some("firestore_export_analytics/x".to_owned()),
+            },
+        );
+        let text = metadata.to_json();
+        assert!(text.contains("\"fireemu\""));
+        let again = ExportMetadata::parse(&text).expect("the written manifest parses");
+        assert_eq!(again.named_databases().len(), 1);
+        assert_eq!(again.named_databases()[0].0, "analytics");
+        assert_eq!(
+            again.named_databases()[0].1.path,
+            "firestore_export_analytics"
+        );
+        // The official section is untouched by the extension.
+        assert_eq!(
+            again.section(Product::Firestore).map(|s| s.path.as_str()),
+            Some("firestore_export")
+        );
+    }
+
+    #[test]
+    fn a_manifest_without_the_extension_reports_no_named_databases() {
+        let parsed = ExportMetadata::parse(OFFICIAL).expect("the official manifest parses");
+        assert!(parsed.named_databases().is_empty());
+        assert!(!parsed.to_json().contains("fireemu"));
+    }
+
+    #[test]
+    fn an_extension_that_names_the_default_database_is_refused() {
+        let text = r#"{"version":"1","fireemu":{"version":"0.1.0","firestoreDatabases":[{"database":"(default)","path":"x"}]}}"#;
+        assert!(ExportMetadata::parse(text).is_err());
+        let empty = r#"{"version":"1","fireemu":{"firestoreDatabases":[{"path":"x"}]}}"#;
+        assert!(ExportMetadata::parse(empty).is_err());
+        assert!(ExportMetadata::parse(r#"{"version":"1","fireemu":[]}"#).is_err());
     }
 
     #[test]

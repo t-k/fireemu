@@ -258,12 +258,15 @@ fn imported_accounts_list_in_the_order_they_were_imported() {
     for id in ["zeta", "alpha", "mu"] {
         store.import_user(account(id)).expect("the import succeeds");
     }
-    let ids: Vec<&str> = store
-        .users_by_creation()
-        .iter()
-        .map(|u| u.local_id.as_str())
-        .collect();
+    let users = store.users_by_creation();
+    let ids: Vec<&str> = users.iter().map(|u| u.local_id.as_str()).collect();
     assert_eq!(ids, vec!["zeta", "alpha", "mu"]);
+    // The listing cursor of `accounts:batchGet` is "everything after this sequence", so a
+    // sequence of zero would hide the first imported account from `listUsers`.
+    assert!(
+        users.iter().all(|u| u.sequence > 0),
+        "imported accounts take listable sequences"
+    );
 }
 
 #[test]

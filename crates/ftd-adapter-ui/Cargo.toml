@@ -28,6 +28,7 @@ bytes = "1"
 include_dir = "0.7"
 
 [dev-dependencies]
+ftd-core-app-check = { path = "../ftd-core-app-check" }
 ftd-core-firestore = { path = "../ftd-core-firestore" }
 ftd-core-rules = { path = "../ftd-core-rules" }
 

@@ -10,6 +10,7 @@ const NAV: { href: string; key: MessageKey }[] = [
   { href: "/storage", key: "nav.storage" },
   { href: "/functions", key: "nav.functions" },
   { href: "/rules", key: "nav.rules" },
+  { href: "/appcheck", key: "nav.appCheck" },
   { href: "/runtime", key: "nav.runtime" },
 ];
 

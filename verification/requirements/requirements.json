@@ -735,15 +735,30 @@
       "criticality": "important",
       "owner": "adapter-http",
       "status": "partial",
-      "note": "The control API serves per-project counters by service, verified app ID, category and outcome at GET /v1/sessions/{session}/appCheck/observations; it requires the control token for every method whatever the Origin and sets Cache-Control: no-store. Callable Functions requests are observed under the functions service with the function name as the operation. Two things keep this partial: there is no Emulator UI page, and the retained observations are one bounded ring for the runtime rather than one per project, so heavy traffic to one project can evict another project's recent observations.",
+      "note": "The control API serves per-project counters by service, verified app ID, category and outcome at GET /v1/sessions/{session}/appCheck/observations; it requires the control token for every method whatever the Origin and sets Cache-Control: no-store. Callable Functions requests are observed under the functions service with the function name as the operation. Milestone AC3 added the Emulator UI App Check page at /ui/appcheck and the same-origin fronts behind it (GET /ui/api/appcheck/config, the debug-token routes, and the observation route through the control front), each Cache-Control: no-store; a generated debug secret reaches the page in the creation response alone and lives in one signal that the page drops when it is dismissed or left. One thing keeps this partial: the retained observations are one bounded ring for the runtime rather than one per project, so heavy traffic to one project can evict another project's recent observations.",
       "artifacts": {
         "integration": [
           "crates/ftd-adapter-http/tests/app_check_control.rs",
-          "crates/ftd-core-app-check/tests/admission.rs"
+          "crates/ftd-core-app-check/tests/admission.rs",
+          "crates/ftd-adapter-ui/tests/ui.rs",
+          "ui/e2e/appcheck.spec.ts"
         ],
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
           "M-APPCHECK-008"
+        ]
+      }
+    },
+    {
+      "id": "AC-CAP-001",
+      "statement": "The capability manifest states every APPCHECK-* capability with its status and precision, the surfaces and bypasses App Check enforcement covers, the published local divergences, and that replay protection and production attestation providers are unsupported.",
+      "criticality": "important",
+      "owner": "firebase-testd",
+      "status": "implemented",
+      "note": "crates/firebase-testd/tests/capabilities.rs reads GET /v1/capabilities from a daemon started on ephemeral ports, so the assertions cover what the shipped binary publishes rather than the constant behind it. It pins the status and precision of all nine capabilities of specification section 6, refuses an undeclared APPCHECK-* entry, and checks that the enforcement entry names the three baseline modes, the supported product surfaces and transports and every row of the bypass matrix of section 12.2 with the credential it requires; that the ftd_epoch and JWKS no-store divergences are published; and that the unsupported entries say how they fail closed.",
+      "artifacts": {
+        "integration": [
+          "crates/firebase-testd/tests/capabilities.rs"
         ]
       }
     }

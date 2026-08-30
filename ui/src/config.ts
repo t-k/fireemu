@@ -17,6 +17,7 @@ export type RuntimeConfig = {
   rulesEnforced: boolean;
   clockPinned: boolean;
   functionsConfigured: boolean;
+  appCheckEnabled: boolean;
   uiBundled: boolean;
   sessions: Session[];
   controlToken: string;
@@ -71,6 +72,7 @@ export const initialConfig = (): RuntimeConfig => {
     rulesEnforced: c.rulesEnforced ?? true,
     clockPinned: c.clockPinned ?? false,
     functionsConfigured: c.functionsConfigured ?? false,
+    appCheckEnabled: c.appCheckEnabled ?? false,
     uiBundled: c.uiBundled ?? true,
     sessions: c.sessions ?? [],
     controlToken: controlToken(),

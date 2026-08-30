@@ -35,6 +35,9 @@ pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiRespo
     if rest == "functions/logs" {
         return sse::functions_logs(state, req);
     }
+    if let Some(path) = rest.strip_prefix("appcheck/") {
+        return app_check(state, path, req);
+    }
     if let Some(path) = rest.strip_prefix("control/") {
         return control(state, path, req).await;
     }
@@ -279,6 +282,120 @@ fn functions(state: &UiState) -> UiResponse {
     )
 }
 
+/// The same response with `Cache-Control: no-store`: what it carries is privileged and, for
+/// one creation response, a credential that exists nowhere else.
+fn no_store(mut response: UiResponse) -> UiResponse {
+    response
+        .headers
+        .push(("cache-control".to_owned(), "no-store".to_owned()));
+    response
+}
+
+/// The App Check surface (specification sections 9 and 15).
+///
+/// `appcheck/config` is a read-only summary of the static registration: the apps this runtime
+/// knows, whether each is enabled, how many debug-token digests each carries, and the
+/// effective baseline mode of every service. It deliberately carries no digest, no raw secret
+/// and no project epoch: a digest is a credential verifier and an epoch never leaves the
+/// runtime (specification section 7.2).
+///
+/// `appcheck/projects/{p}/apps/{a}/debugTokens[/{id}]` fronts the daemon's own privileged
+/// management routes. Those require the control token on every method whatever the `Origin`,
+/// so the front presents the credential the target route asks for; the browser already proved
+/// it knows the token to reach this front at all ([`crate::guard`]).
+fn app_check(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
+    if path == "config" {
+        return if req.method == "GET" {
+            app_check_config(state, req)
+        } else {
+            UiResponse::error(405, "METHOD_NOT_ALLOWED")
+        };
+    }
+    if !path.starts_with("projects/") {
+        return UiResponse::error(
+            404,
+            "NOT_FOUND : only the configuration summary and the debug-token routes are exposed",
+        );
+    }
+    let Some(app_check) = &state.app_check else {
+        return app_check_disabled();
+    };
+    if req.body.len() > MAX_JSON_BODY_BYTES {
+        return UiResponse::error(413, "PAYLOAD_TOO_LARGE");
+    }
+    let headers = RequestHeaders {
+        authorization: Some(format!("Bearer {}", app_check.control_token)),
+        ..RequestHeaders::default()
+    };
+    let full = format!("/emulator/v1/{path}");
+    let response = ftd_adapter_http::app_check::handle_raw(
+        app_check,
+        &ftd_adapter_http::app_check::RawRequest {
+            method: &req.method,
+            path: &full,
+            headers: &headers,
+            body: &req.body,
+        },
+    );
+    // A creation response carries the raw debug secret exactly once; nothing on the way to
+    // the page may keep a copy.
+    no_store(UiResponse::json(response.status, &response.body))
+}
+
+/// The answer when the runtime never enabled App Check.
+fn app_check_disabled() -> UiResponse {
+    UiResponse::error(
+        404,
+        "NOT_FOUND : App Check is not enabled in this runtime (appCheck.enabled)",
+    )
+}
+
+/// `GET appcheck/config[?project=]`: the registration summary described on [`app_check`].
+fn app_check_config(state: &UiState, req: &UiRequest) -> UiResponse {
+    let info = state.info.app_check.as_ref();
+    let modes: Vec<Value> = info.map_or_else(Vec::new, |i| {
+        i.modes
+            .iter()
+            .map(|(service, mode)| json!({"service": service, "mode": mode}))
+            .collect()
+    });
+    let Some(app_check) = &state.app_check else {
+        return no_store(UiResponse::json(
+            200,
+            &json!({"enabled": false, "kid": Value::Null, "modes": modes, "apps": []}),
+        ));
+    };
+    let Ok(registry) = app_check.registry.read() else {
+        return UiResponse::error(500, "INTERNAL");
+    };
+    let filter = req.param("project");
+    let apps: Vec<Value> = registry
+        .apps()
+        .filter(|a| filter.as_deref().is_none_or(|p| p == a.project_id()))
+        .map(|a| {
+            let dynamic = a.dynamic_tokens().len();
+            json!({
+                "appId": a.app_id(),
+                "projectId": a.project_id(),
+                "projectNumber": a.project_number(),
+                "enabled": a.enabled(),
+                "staticDigestCount": a.digest_count().saturating_sub(dynamic),
+                "dynamicTokenCount": dynamic,
+            })
+        })
+        .collect();
+    no_store(UiResponse::json(
+        200,
+        &json!({
+            "enabled": true,
+            "kid": info.map(|i| i.kid.as_str()),
+            "modes": modes,
+            "tokenTtlSeconds": registry.token_ttl_seconds(),
+            "apps": apps,
+        }),
+    ))
+}
+
 /// The control API: `control/v1/...` → `/v1/...` (no `Origin`: the UI guard already ran).
 async fn control(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
     if !path.starts_with("v1/") && !path.starts_with("health/") {
@@ -293,11 +410,24 @@ async fn control(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
     } else {
         format!("/{path}?{}", req.query)
     };
-    let headers = RequestHeaders::default();
+    // The App Check observation route is privileged for every method whatever the `Origin`,
+    // unlike the rest of the control API, whose guard only challenges browser requests. The
+    // front therefore presents the daemon's control token: the browser already proved it knows
+    // it to reach this front at all ([`crate::guard`]), so this grants no authority the
+    // caller did not already have.
+    let headers = RequestHeaders {
+        authorization: Some(format!("Bearer {}", state.control_token)),
+        ..RequestHeaders::default()
+    };
     let response = if req.method == "POST" && ftd_adapter_http::control::is_await_idle_path(&full) {
         ftd_adapter_http::control::await_idle(&state.control, &body).await
     } else {
         ftd_adapter_http::control::handle_with(&state.control, &req.method, &full, &headers, &body)
     };
-    UiResponse::json(response.status, &response.body)
+    let out = UiResponse::json(response.status, &response.body);
+    if ftd_adapter_http::control::is_no_store_path(&full) {
+        no_store(out)
+    } else {
+        out
+    }
 }

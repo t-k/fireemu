@@ -1232,6 +1232,33 @@
       }
     },
     {
+      "id": "PUBSUB-WIRE-001",
+      "statement": "The google.pubsub.v1 wire emulator answers what the official Pub/Sub emulator answers for the documented subset -- topic and subscription lifecycle, publish, pull, ack, filters, ordering keys, nack redelivery and seek -- or diverges only where the divergence is pinned in the recorded matrix.",
+      "criticality": "important",
+      "owner": "core-pubsub",
+      "status": "implemented",
+      "note": "The state machine lives in fireemu-core-pubsub (unit tests inline); the gRPC surface is exercised end to end in crates/fireemu-adapter-pubsub/tests/grpc.rs, and the differential pubsub-probe records agreement with the official pubsub-emulator 0.8.35 in conformance/pubsub-matrix.json.",
+      "artifacts": {
+        "conformance": "conformance/pubsub-matrix.json",
+        "integration": [
+          "crates/fireemu-adapter-pubsub/tests/grpc.rs"
+        ]
+      }
+    },
+    {
+      "id": "PUBSUB-DELIVERY-001",
+      "statement": "A message published through the Pub/Sub wire protocol reaches every Cloud Function subscribed to its topic (onMessagePublished v2 and topic().onPublish v1), through the same runtime delivery path the control publish route uses.",
+      "criticality": "important",
+      "owner": "adapter-pubsub",
+      "status": "implemented",
+      "note": "The daemon bridges a successful Publish to FunctionsRuntime::publish; tools/sdk-smoke/pubsub.mjs proves it end to end with the real @google-cloud/pubsub client, and the bridge itself is in crates/fireemu-adapter-pubsub/src/publisher.rs with the daemon wiring in crates/fireemu/src/functions.rs.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-pubsub/tests/grpc.rs"
+        ]
+      }
+    },
+    {
       "id": "REQ-FS-PARITY-01",
       "statement": "Firestore query, write, transaction and error semantics over the REST surface answer what the pinned official emulator answers, or diverge only where the divergence is pinned row by row.",
       "criticality": "critical",

@@ -303,6 +303,30 @@
       "task retry backoff runs on real time, not the virtual clock, as it does upstream and in production; the default unit is 100 ms, so three attempts cost 300 ms rather than a clock advance, and await-idle waits for a task across its attempts"
     ]
   },
+  "PUBSUB-WIRE-1": {
+    "status": "implemented",
+    "precision": "boundary-conformance",
+    "implemented": [
+      "the google.pubsub.v1 Publisher and Subscriber services over gRPC on the loopback port PUBSUB_EMULATOR_HOST names (default 8085): CreateTopic / GetTopic / ListTopics / ListTopicSubscriptions / DeleteTopic, CreateSubscription / GetSubscription / UpdateSubscription / ListSubscriptions / DeleteSubscription, Publish, Pull, StreamingPull, Acknowledge, ModifyAckDeadline and Seek (to a timestamp)",
+      "topic and subscription state: publish fans a message out to every subscription whose filter admits it; a subscription reports _deleted-topic_ once its topic is deleted",
+      "delivery semantics: ack ids and message ids assigned deterministically under the daemon seed, ack deadlines and redelivery of unacked messages on the virtual clock, nack (ModifyAckDeadline 0) for immediate redelivery, ordering keys that hold a key's later messages until the earlier one is acked, subscription filters over attributes (equality, inequality, existence, hasPrefix, NOT/AND/OR), dead-letter forwarding after maxDeliveryAttempts, and seek-to-timestamp replay",
+      "input hardening: resource names validated against the documented Pub/Sub rules (3..=255, leading letter, the [A-Za-z0-9._~%+-] alphabet, no goog prefix), message size and attribute count bounds, and NUL rejection in attribute keys/values and ordering keys; topics, subscriptions and retained messages are bounded so a client cannot exhaust memory",
+      "a message published through the wire protocol also reaches subscribed Cloud Functions (onMessagePublished v2, topic().onPublish v1) through the existing FunctionsRuntime delivery path, so EVTINFRA-02 flows through real topic state without regressing the control publish route"
+    ],
+    "unimplemented": [
+      "snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / DeleteSnapshot) and seek-to-snapshot: reported UNIMPLEMENTED",
+      "push delivery to an endpoint: a push config is accepted and returned but delivery uses pull and streaming pull",
+      "UpdateTopic: reported UNIMPLEMENTED, as the official emulator does not support it either",
+      "REST/JSON transcoding on the port: the surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak",
+      "schemas (Avro or protobuf) and BigQuery / Cloud Storage subscription delivery"
+    ],
+    "notes": [
+      "conformance: the pubsub-probe records 22 parity steps and 1 documented divergence against the official pubsub-emulator 0.8.35 (conformance/pubsub-matrix.json, conformance/PUBSUB-MATRIX.md, conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
+      "the one documented divergence is a superset: fireemu retains acknowledged messages for seek even when retainAckedMessages is false, so a seek never returns fewer messages than the official emulator (conformance divergences.json pubsub-probe/seek-to-time#replayed)",
+      "ack deadlines and redelivery run on the virtual clock, so a test advances time with the control clock rather than sleeping, and await-idle stays deterministic",
+      "the Pub/Sub broker state lives for the daemon's lifetime and is not yet wiped by a session reset or captured by a snapshot"
+    ]
+  },
   "FN-HTTP-1": {
     "implemented": [
       "onRequest / onCall (v2) and v1 HTTPS functions proxied to the runner at /{project}/{region}/{function}[/path], with the path and query below the mount point reaching the handler",

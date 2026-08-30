@@ -57,6 +57,18 @@ Snapshots copy the Firestore databases, Storage objects, Auth users, the clock a
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 
+### Emulator UI
+
+The daemon serves an Emulator UI on `--ui-port` (default 4000, best effort: a busy port only disables it; `--ui-port 0` turns it off) at `http://127.0.0.1:4000/ui`: an overview, a Firestore data browser with a typed field editor and live updates, Auth users with custom claims / second factors / pending action codes, Storage objects, Functions (registered triggers, invocation history, a live log stream, manual schedule runs and Pub/Sub publishes), both rulesets, and the runtime controls (virtual clock, snapshots, fault plans, sessions). Its API under `/ui/api/` is a same-origin, privileged front to the existing surfaces (Firestore REST as owner, the Identity Toolkit admin routes, the Storage JSON API, the control API); a page must present the control token, which the served page carries, and the listener answers only to loopback hosts.
+
+The app lives in `ui/` (Solid, Vite, Tailwind) and is embedded into the binary at compile time; a binary built without it serves a placeholder page that says so:
+
+```sh
+pnpm -C ui install && pnpm -C ui build     # writes ui/dist (not committed)
+cargo build --release -p firebase-testd    # embeds it
+pnpm -C ui test && pnpm -C ui e2e          # unit tests; Playwright against a real daemon
+```
+
 ### Composite indexes
 
 `firestore.indexValidationPolicy` decides what happens to a query whose composite index is not in `firestore.indexFile`:

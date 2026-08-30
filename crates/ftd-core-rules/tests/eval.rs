@@ -757,4 +757,77 @@ fn range_values_decide_comparisons_only_when_every_member_agrees() {
     assert!(!allows(&rules("request.query.limit <= 5"), &limited));
     assert!(!allows(&rules("request.query.orderBy == 'age'"), &limited));
     assert!(!allows(&rules("request.query.limit <= 10"), &adults));
+    // A range inside an exact list is still undetermined for the list methods (a negated
+    // hasAny must not become a proof), and so is an undetermined argument.
+    for unprovable in [
+        "![resource.data.age].hasAny([18])",
+        "![resource.data.age].hasAll([18])",
+        "[resource.data.age].hasOnly([18])",
+        "!([1, 2].hasAny([resource.data.age]))",
+        "[resource.data.age].size() == 1",
+    ] {
+        assert!(!allows(&rules(unprovable), &adults), "{unprovable}");
+    }
+}
+
+#[test]
+fn integers_and_doubles_compare_exactly_beyond_2_to_the_53() {
+    use ftd_core_rules::value::{RangeBound, ValueRange};
+    let rules = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /big/{{id}} {{ allow list: if {cond}; }} }} }}")
+    };
+    // 2^53 as a double is exactly 9007199254740992; 9007199254740993 is not representable.
+    let at_2_53 = abstract_ctx(
+        "/databases/(default)/documents/big/ftd-placeholder",
+        vec![(
+            "n",
+            RulesValue::Range(ValueRange {
+                lower: Some(RangeBound {
+                    value: Box::new(RulesValue::Float(9_007_199_254_740_992.0)),
+                    inclusive: true,
+                }),
+                upper: None,
+            }),
+        )],
+    );
+    assert!(allows(
+        &rules("resource.data.n >= 9007199254740992"),
+        &at_2_53
+    ));
+    assert!(
+        !allows(&rules("resource.data.n >= 9007199254740993"), &at_2_53),
+        "9007199254740992 is a member and is below the integer bound"
+    );
+    assert!(!allows(
+        &rules("resource.data.n == 9007199254740993"),
+        &at_2_53
+    ));
+    let exact = abstract_ctx(
+        "/databases/(default)/documents/big/ftd-placeholder",
+        vec![("n", RulesValue::Int(9_007_199_254_740_993))],
+    );
+    assert!(!allows(
+        &rules("resource.data.n == 9007199254740992.0"),
+        &exact
+    ));
+    assert!(allows(
+        &rules("resource.data.n > 9007199254740992.0"),
+        &exact
+    ));
+    assert!(allows(
+        &rules("resource.data.n != 9007199254740992.0"),
+        &exact
+    ));
+    let extreme = abstract_ctx(
+        "/databases/(default)/documents/big/ftd-placeholder",
+        vec![("n", RulesValue::Int(i64::MAX))],
+    );
+    assert!(allows(
+        &rules("resource.data.n < 9223372036854775808.0"),
+        &extreme
+    ));
+    assert!(allows(
+        &rules("resource.data.n > -9223372036854775808.0"),
+        &extreme
+    ));
 }

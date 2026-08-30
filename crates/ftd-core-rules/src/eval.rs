@@ -1074,9 +1074,44 @@ fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
     );
     match (a, b) {
         (RulesValue::Int(x), RulesValue::Float(y)) | (RulesValue::Float(y), RulesValue::Int(x)) => {
-            (*x as f64) == *y
+            !y.is_nan() && cmp_int_double(*x, *y) == core::cmp::Ordering::Equal
         }
         _ => a == b,
+    }
+}
+
+/// Exact ordering of an `i64` against a non-NaN `f64` (no conversion of the integer to a
+/// double, which loses precision above 2^53).
+fn cmp_int_double(i: i64, d: f64) -> core::cmp::Ordering {
+    use core::cmp::Ordering;
+    if d.is_infinite() {
+        return if d > 0.0 {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
+    }
+    // 2^63 exactly: every i64 is below it.
+    if d >= 9_223_372_036_854_775_808.0 {
+        return Ordering::Less;
+    }
+    if d < -9_223_372_036_854_775_808.0 {
+        return Ordering::Greater;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let t = d.trunc() as i64;
+    match i.cmp(&t) {
+        Ordering::Equal => {
+            let frac = d - d.trunc();
+            if frac > 0.0 {
+                Ordering::Less
+            } else if frac < 0.0 {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        }
+        o => o,
     }
 }
 
@@ -1157,9 +1192,10 @@ fn compare(a: &RulesValue, b: &RulesValue) -> Result<core::cmp::Ordering, EvalEr
         (V::Timestamp(x), V::Timestamp(y)) => Ok(x.cmp(y)),
         (V::String(x), V::String(y)) => Ok(x.cmp(y)),
         (V::Bytes(x), V::Bytes(y)) => Ok(x.cmp(y)),
-        (V::Int(_) | V::Float(_), V::Int(_) | V::Float(_)) => as_float(a)?
-            .partial_cmp(&as_float(b)?)
-            .ok_or_else(|| soft("NaN comparison")),
+        (V::Float(x), V::Float(y)) => x.partial_cmp(y).ok_or_else(|| soft("NaN comparison")),
+        (V::Int(i), V::Float(d)) if !d.is_nan() => Ok(cmp_int_double(*i, *d)),
+        (V::Float(d), V::Int(i)) if !d.is_nan() => Ok(cmp_int_double(*i, *d).reverse()),
+        (V::Int(_) | V::Float(_), V::Int(_) | V::Float(_)) => Err(soft("NaN comparison")),
         _ => Err(soft(format!(
             "cannot compare {} with {}",
             a.type_name(),
@@ -1207,6 +1243,14 @@ fn method_call(
     args: &[RulesValue],
 ) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
+    // An exact list / map holding an undetermined member, or an undetermined argument,
+    // cannot be searched, joined or compared with a definite result (query proofs). The
+    // partially known containers have their own arms below.
+    if (matches!(receiver, V::List(_) | V::Map(_)) && undetermined(receiver))
+        || args.iter().any(undetermined)
+    {
+        return Err(EvalError::Unknown);
+    }
     let arity = |n: usize| -> Result<(), EvalError> {
         if args.len() == n {
             Ok(())

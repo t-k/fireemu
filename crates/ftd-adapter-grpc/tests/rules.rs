@@ -903,5 +903,29 @@ service cloud.firestore {
             .unwrap_err();
         assert_eq!(err.code(), tonic::Code::PermissionDenied, "{limit:?}");
     }
+    // ListDocuments: the page size is the limit the rules see (100 by default).
+    let listing = |page_size: i32| pb::ListDocumentsRequest {
+        parent: DOCS.to_owned(),
+        collection_id: "paged".to_owned(),
+        page_size,
+        ..Default::default()
+    };
+    assert!(h
+        .client
+        .list_documents(with_bearer(listing(20), &alice_token))
+        .await
+        .is_ok());
+    for (page_size, code) in [
+        (21, tonic::Code::PermissionDenied),
+        (0, tonic::Code::PermissionDenied),
+        (-1, tonic::Code::InvalidArgument),
+    ] {
+        let err = h
+            .client
+            .list_documents(with_bearer(listing(page_size), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), code, "page_size {page_size}");
+    }
     h.handle.abort();
 }

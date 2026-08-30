@@ -1073,7 +1073,20 @@ impl LocalBackend {
         );
         let after = list_page_cursor(&req.page_token, &identity)?;
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("page_size must not be negative"));
+        }
         let accepted = self.accepted_query(&parent, &list_query(req))?;
+        // The rules see the page size as `request.query.limit` (the number of documents the
+        // request can return); the scan itself stays unlimited so the page cursor applies
+        // before truncation.
+        let page_size = if req.page_size > 0 {
+            usize::try_from(req.page_size).unwrap_or(usize::MAX)
+        } else {
+            DEFAULT_LIST_PAGE_SIZE
+        };
+        let mut proof_query = accepted.query.clone();
+        proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
         self.with_db(&parent, |db| {
             let version = match (&txn, read_at) {
                 (Some(t), _) => {
@@ -1092,7 +1105,7 @@ impl LocalBackend {
                 version,
                 ReadCheck::Query {
                     parent: &parent,
-                    query: &accepted.query,
+                    query: &proof_query,
                 },
             )?;
             // Inside a transaction the scan is recorded like a query, so a concurrent
@@ -1106,11 +1119,6 @@ impl LocalBackend {
             if let Some(after) = &after {
                 docs.retain(|d| d.path.resource_name() > *after);
             }
-            let page_size = if req.page_size > 0 {
-                usize::try_from(req.page_size).unwrap_or(usize::MAX)
-            } else {
-                DEFAULT_LIST_PAGE_SIZE
-            };
             let has_more = docs.len() > page_size;
             docs.truncate(page_size);
             let next_page_token = if has_more {

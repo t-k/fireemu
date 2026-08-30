@@ -12,7 +12,7 @@ use fireemu_core_limits::evaluate::{
 use fireemu_core_limits::model::{EnforcementPrecision, LimitDefinition};
 use fireemu_core_limits::plan::FirestorePlanProfile;
 
-use crate::ast::{Expr, FunctionDecl, Item, MatchBlock, PathSegment, Ruleset, Span};
+use crate::ast::{Expr, ExprKind, FunctionDecl, Item, MatchBlock, PathSegment, Ruleset, Span};
 use crate::parse::{parse_ruleset, ParseError};
 
 /// Linter options.
@@ -336,13 +336,13 @@ fn describe_path(path: &[PathSegment]) -> String {
 }
 
 fn collect_calls(expr: &Expr, scope: &[usize], from: Option<usize>, out: &mut Vec<CallSite>) {
-    match expr {
-        Expr::Call { callee, args, span } => {
-            if let Expr::Ident(name) = callee.as_ref() {
+    match expr.kind() {
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Ident(name) = callee.kind() {
                 out.push(CallSite {
                     callee: name.clone(),
                     args: args.len() as u64,
-                    span: *span,
+                    span: expr.span,
                     scope: scope.to_vec(),
                     from,
                 });
@@ -353,17 +353,24 @@ fn collect_calls(expr: &Expr, scope: &[usize], from: Option<usize>, out: &mut Ve
                 collect_calls(a, scope, from, out);
             }
         }
-        Expr::Member { object, .. } => collect_calls(object, scope, from, out),
-        Expr::Index { object, index } => {
+        ExprKind::Member { object, .. } => collect_calls(object, scope, from, out),
+        ExprKind::Index { object, index } => {
             collect_calls(object, scope, from, out);
             collect_calls(index, scope, from, out);
         }
-        Expr::Unary { expr, .. } | Expr::Is { expr, .. } => collect_calls(expr, scope, from, out),
-        Expr::Binary { left, right, .. } => {
+        ExprKind::Slice { object, start, end } => {
+            collect_calls(object, scope, from, out);
+            collect_calls(start, scope, from, out);
+            collect_calls(end, scope, from, out);
+        }
+        ExprKind::Unary { expr, .. } | ExprKind::Is { expr, .. } => {
+            collect_calls(expr, scope, from, out);
+        }
+        ExprKind::Binary { left, right, .. } => {
             collect_calls(left, scope, from, out);
             collect_calls(right, scope, from, out);
         }
-        Expr::Ternary {
+        ExprKind::Ternary {
             cond,
             then,
             otherwise,
@@ -372,24 +379,24 @@ fn collect_calls(expr: &Expr, scope: &[usize], from: Option<usize>, out: &mut Ve
             collect_calls(then, scope, from, out);
             collect_calls(otherwise, scope, from, out);
         }
-        Expr::List(items) => {
+        ExprKind::List(items) => {
             for i in items {
                 collect_calls(i, scope, from, out);
             }
         }
-        Expr::Map(entries) => {
+        ExprKind::Map(entries) => {
             for (_, v) in entries {
                 collect_calls(v, scope, from, out);
             }
         }
-        Expr::Path(segments) => {
+        ExprKind::Path(segments) => {
             for s in segments {
                 if let PathSegment::Binding(e) = s {
                     collect_calls(e, scope, from, out);
                 }
             }
         }
-        Expr::Literal(_) | Expr::Ident(_) => {}
+        ExprKind::Literal(_) | ExprKind::Ident(_) => {}
     }
 }
 
@@ -520,9 +527,12 @@ fn lint_functions(functions: &[DeclaredFunction<'_>], calls: &[CallSite], ctx: &
         }
     }
     if let Some(root) = deepest_root {
+        // The official compiler counts *calls*, not frames: a chain of 21 functions -- 20
+        // function-to-function calls -- compiles, and one more does not
+        // (`conformance/rules-programs.json`, `recursion-depth-chain-21-calls`).
         ctx.check(
             "RULES-FUNCTION-CALL-DEPTH",
-            deepest,
+            deepest.saturating_sub(1),
             Some(functions[root].decl.span),
             Some(functions[root].decl.name.clone()),
             "function call depth",

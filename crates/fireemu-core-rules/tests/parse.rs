@@ -1,6 +1,6 @@
 //! Parser coverage for the native Rules subset (spec 13.3, 13.4).
 
-use fireemu_core_rules::ast::{Expr, Item, Method, PathSegment};
+use fireemu_core_rules::ast::{ExprKind, Item, Method, PathSegment};
 use fireemu_core_rules::parse::parse_ruleset;
 
 const SAMPLE: &str = r#"
@@ -87,7 +87,10 @@ fn expression_precedence_and_forms() {
         Item::Function(_) => panic!(),
     };
     let cond = m.allows[0].condition.as_ref().unwrap();
-    assert!(matches!(cond, Expr::Ternary { .. }));
+    assert!(matches!(cond.kind(), ExprKind::Ternary { .. }));
+    // Every node carries the extent a coverage report is keyed by.
+    assert_eq!(cond.span.line, 4);
+    assert!(cond.end > cond.span.offset);
 }
 
 #[test]
@@ -98,9 +101,9 @@ fn path_literals_with_bindings_parse_in_expressions() {
         Item::Match(m) => m,
         Item::Function(_) => panic!(),
     };
-    match m.allows[0].condition.as_ref().unwrap() {
-        Expr::Call { args, .. } => match &args[0] {
-            Expr::Path(segments) => {
+    match m.allows[0].condition.as_ref().unwrap().kind() {
+        ExprKind::Call { args, .. } => match args[0].kind() {
+            ExprKind::Path(segments) => {
                 assert_eq!(segments.len(), 5);
                 assert!(matches!(&segments[1], PathSegment::Binding(_)));
             }

@@ -206,9 +206,74 @@ pub enum BinaryOp {
     Mod,
 }
 
-/// Expressions.
+/// An expression together with the source extent it occupies.
+///
+/// The extent is what a coverage report is keyed by: the official Firestore emulator's
+/// `:ruleCoverage` names every evaluated expression by its line, column, `currentOffset`
+/// and `endOffset`, so every node has to carry both ends.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub struct Expr {
+    /// What the expression is.
+    pub kind: Box<ExprKind>,
+    /// Start of the expression (1-based line and column, 0-based byte offset).
+    pub span: Span,
+    /// Byte offset just past the expression's last token.
+    pub end: usize,
+}
+
+impl Expr {
+    /// Builds an expression node.
+    #[must_use]
+    pub fn new(kind: ExprKind, span: Span, end: usize) -> Self {
+        Self {
+            kind: Box::new(kind),
+            span,
+            end,
+        }
+    }
+
+    /// The kind, for matching.
+    #[must_use]
+    pub fn kind(&self) -> &ExprKind {
+        &self.kind
+    }
+
+    /// The sub-expressions, in source order.
+    #[must_use]
+    pub fn children(&self) -> Vec<&Self> {
+        match self.kind() {
+            ExprKind::Literal(_) | ExprKind::Ident(_) => Vec::new(),
+            ExprKind::Member { object, .. } => vec![object],
+            ExprKind::Index { object, index } => vec![object, index],
+            ExprKind::Slice { object, start, end } => vec![object, start, end],
+            ExprKind::Call { callee, args } => {
+                let mut out = vec![callee];
+                out.extend(args);
+                out
+            }
+            ExprKind::Unary { expr, .. } | ExprKind::Is { expr, .. } => vec![expr],
+            ExprKind::Binary { left, right, .. } => vec![left, right],
+            ExprKind::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => vec![cond, then, otherwise],
+            ExprKind::List(items) => items.iter().collect(),
+            ExprKind::Map(entries) => entries.iter().map(|(_, v)| v).collect(),
+            ExprKind::Path(segments) => segments
+                .iter()
+                .filter_map(|s| match s {
+                    PathSegment::Binding(e) => Some(e),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Expression kinds.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
     /// Literal.
     Literal(Literal),
     /// Identifier.
@@ -216,50 +281,57 @@ pub enum Expr {
     /// `object.name`
     Member {
         /// Object.
-        object: Box<Expr>,
+        object: Expr,
         /// Member name.
         name: String,
     },
     /// `object[index]`
     Index {
         /// Object.
-        object: Box<Expr>,
+        object: Expr,
         /// Index expression.
-        index: Box<Expr>,
+        index: Expr,
+    },
+    /// `object[start:end]`: the range index of a list or a string.
+    Slice {
+        /// Object.
+        object: Expr,
+        /// First index, included.
+        start: Expr,
+        /// Last index, excluded.
+        end: Expr,
     },
     /// `callee(args)`
     Call {
         /// Callee.
-        callee: Box<Expr>,
+        callee: Expr,
         /// Arguments.
         args: Vec<Expr>,
-        /// Position of the call.
-        span: Span,
     },
     /// Unary operation.
     Unary {
         /// Operator.
         op: UnaryOp,
         /// Operand.
-        expr: Box<Expr>,
+        expr: Expr,
     },
     /// Binary operation.
     Binary {
         /// Operator.
         op: BinaryOp,
         /// Left operand.
-        left: Box<Expr>,
+        left: Expr,
         /// Right operand.
-        right: Box<Expr>,
+        right: Expr,
     },
     /// `cond ? then : otherwise`
     Ternary {
         /// Condition.
-        cond: Box<Expr>,
+        cond: Expr,
         /// Then branch.
-        then: Box<Expr>,
+        then: Expr,
         /// Else branch.
-        otherwise: Box<Expr>,
+        otherwise: Expr,
     },
     /// `[a, b]`
     List(Vec<Expr>),
@@ -270,8 +342,27 @@ pub enum Expr {
     /// `expr is type`
     Is {
         /// Expression.
-        expr: Box<Expr>,
+        expr: Expr,
         /// Type name.
         type_name: String,
     },
 }
+
+/// The type names the `is` operator accepts. The official compiler rejects anything else
+/// with "An unsupported type identifier was used with the 'is' operator", which is a
+/// compile error rather than a `false` answer.
+pub const IS_TYPE_NAMES: &[&str] = &[
+    "bool",
+    "bytes",
+    "duration",
+    "float",
+    "int",
+    "latlng",
+    "list",
+    "map",
+    "number",
+    "path",
+    "set",
+    "string",
+    "timestamp",
+];

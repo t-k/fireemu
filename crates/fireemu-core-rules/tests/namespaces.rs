@@ -102,24 +102,24 @@ fn latlng_math_and_hashing_namespaces() {
         "latlng.value(35.6812, 139.7671).latitude() == 35.6812",
         "latlng.value(35.6812, 139.7671).longitude() == 139.7671",
         // Tokyo Station to Shin-Osaka: about 400 km.
-        "latlng.value(35.6812, 139.7671).distance(latlng.value(34.7334, 135.5002)) > 395.0",
-        "latlng.value(35.6812, 139.7671).distance(latlng.value(34.7334, 135.5002)) < 405.0",
+        "latlng.value(35.6812, 139.7671).distance(latlng.value(34.7334, 135.5002)) > 395000.0",
+        "latlng.value(35.6812, 139.7671).distance(latlng.value(34.7334, 135.5002)) < 405000.0",
         "latlng.value(0, 0).distance(latlng.value(0, 0)) == 0.0",
         "latlng.value(1, 2) is latlng",
         "math.abs(-3) == 3",
         "math.abs(-2.5) == 2.5",
         "math.ceil(1.2) == 2.0",
         "math.floor(1.8) == 1.0",
-        "math.round(2.5) == 3.0",
+        "math.round(2.5) == 3",
+        "math.round(-1.5) == -1",
         "math.sqrt(16.0) == 4.0",
         "math.pow(2.0, 10.0) == 1024.0",
         "math.isNaN(0.0 / 0.0)",
-        "math.isInfinite(1.0 / 0.0)",
         "!math.isNaN(1.0)",
-        "hashing.md5('abc').toHexString() == '900150983cd24fb0d6963f7d28e17f72'",
-        "hashing.sha256('abc').toHexString() == 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'",
-        "hashing.crc32('123456789').toHexString() == 'cbf43926'",
-        "hashing.crc32c('123456789').toHexString() == 'e3069283'",
+        "hashing.md5('abc').toHexString() == '900150983CD24FB0D6963F7D28E17F72'",
+        "hashing.sha256('abc').toHexString() == 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD'",
+        "hashing.crc32('123456789').toHexString() == '2639F4CB'",
+        "hashing.crc32c('123456789').toHexString() == '839206E3'",
         "hashing.sha256('abc') == hashing.sha256('abc'.toUtf8())",
         "hashing.sha256('abc').size() == 32",
         "hashing.md5('foobar'.toUtf8()).toBase64() == 'OFj2IjCsPJFfMAxmQxLGPw=='",
@@ -129,6 +129,16 @@ fn latlng_math_and_hashing_namespaces() {
         assert!(holds(cond), "{cond}");
     }
     assert!(!holds("latlng.value(91, 0).latitude() == 91.0"));
+    // `math.isInfinite` is not a function name the official Firestore runtime knows; the
+    // differential matrix recorded it as an error, so fireemu refuses it too.
+    assert!(!holds("math.isInfinite(1.0)"));
+    // `distance()` answers metres.
+    assert!(holds(
+        "latlng.value(0.0, 0.0).distance(latlng.value(1.0, 0.0)) > 111000.0"
+    ));
+    assert!(holds(
+        "latlng.value(0.0, 0.0).distance(latlng.value(1.0, 0.0)) < 112000.0"
+    ));
     assert!(!holds("math.abs('x') == 1"));
 }
 
@@ -161,9 +171,11 @@ fn map_diff_reports_added_removed_changed_and_unchanged_keys() {
     let diff = "request.resource.data.diff(resource.data)";
     for cond in [
         format!("{diff}.addedKeys().hasOnly(['added'])"),
-        format!("{diff}.removedKeys() == ['gone']"),
+        format!("{diff}.removedKeys() == ['gone'].toSet()"),
         format!("{diff}.changedKeys().hasAll(['title']) && {diff}.changedKeys().size() == 1"),
-        format!("{diff}.unchangedKeys() == ['owner']"),
+        format!("{diff}.unchangedKeys() == ['owner'].toSet()"),
+        // Every one of these key collections is a `set`, never a list.
+        format!("!({diff}.removedKeys() == ['gone'])"),
         format!("{diff}.affectedKeys().hasOnly(['added', 'gone', 'title'])"),
         format!("!{diff}.affectedKeys().hasAny(['owner'])"),
         format!("'title' in {diff}.affectedKeys()"),

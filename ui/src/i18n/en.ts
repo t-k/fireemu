@@ -247,6 +247,18 @@ export const en = {
   "rules.dropConfirm": "Drop the loaded {which} rules? Every request will be allowed.",
   "rules.saved": "Rules replaced",
   "rules.source": "Source",
+  "rules.requests": "Requests",
+  "rules.requestsNone": "No request has been decided against the loaded rules yet.",
+  "rules.refresh": "Refresh",
+  "rules.method": "Method",
+  "rules.path": "Path",
+  "rules.uid": "UID",
+  "rules.decision": "Decision",
+  "rules.allowed": "Allowed",
+  "rules.denied": "Denied",
+  "rules.trace": "Trace",
+  "rules.position": "Position",
+  "rules.values": "Values",
 
   "appCheck.title": "App Check",
   "appCheck.disabled":

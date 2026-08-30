@@ -126,9 +126,7 @@ export function runTestd({ variant, outPath, config, timeoutMs = 600_000 }) {
       .map((p) => join(REPO_ROOT, p))
       .find((p) => existsSync(p));
   if (!binary) {
-    throw new Error(
-      "fireemu is not built: run `cargo build -p fireemu` (or set FIREEMU_BIN)",
-    );
+    throw new Error("fireemu is not built: run `cargo build -p fireemu` (or set FIREEMU_BIN)");
   }
   return runSupervisor({
     name: `testd/${variant}`,
@@ -170,7 +168,5 @@ export function runTestd({ variant, outPath, config, timeoutMs = 600_000 }) {
 export const configFor = (variant) =>
   join(
     CONFORMANCE_DIR,
-    variant === "appCheckEnforced"
-      ? "fireemu.appcheck-enforced.json"
-      : "fireemu.baseline.json",
+    variant === "appCheckEnforced" ? "fireemu.appcheck-enforced.json" : "fireemu.baseline.json",
   );

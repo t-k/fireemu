@@ -11,6 +11,7 @@
 //! POST /v1/sessions/{session}:awaitIdle       { "timeoutSeconds": n }
 //! GET  /v1/sessions/{session}/functions
 //! POST /v1/sessions/{session}/functions/{name}:run
+//! GET  /v1/sessions/{session}/rules/requests
 //! ```
 //!
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
@@ -429,6 +430,81 @@ pub fn handle_with(
     }
 }
 
+/// `GET /v1/sessions/{s}/rules/requests`: the last requests Security Rules decided, newest
+/// first, each with what every expression evaluated to while it was being decided
+/// (`RULES-PARITY-04`).
+///
+/// This is fireemu's own route rather than an official one, and it carries the guard every
+/// privileged control route carries. What it publishes is the same class of information the
+/// official emulator prints in a denial message and serves from `:ruleCoverage`: positions,
+/// counts and evaluated values. It never carries a token, a signature or a claim other than
+/// the subject the rule saw as `request.auth.uid`.
+///
+/// `limit` caps the number of requests returned (default and maximum
+/// [`fireemu_core_rules::coverage::REQUEST_TRACE_CAPACITY`]).
+fn rules_requests_route(state: &ControlState, method: &str) -> JsonResponse {
+    use fireemu_core_rules::coverage::{ExprValue, REQUEST_TRACE_CAPACITY};
+
+    if method != "GET" {
+        return error(400, "INVALID_ARGUMENT : the request trace is read with GET");
+    }
+    let Ok(rules) = state.rules.read() else {
+        return error(500, "INTERNAL");
+    };
+    let Ok(diagnostics) = rules.diagnostics.lock() else {
+        return error(500, "INTERNAL");
+    };
+    let value = |v: &ExprValue| match v {
+        ExprValue::Null => json!({"kind": "null"}),
+        ExprValue::Bool(b) => json!({"kind": "bool", "bool": b}),
+        ExprValue::Int(i) => json!({"kind": "int", "int": i.to_string()}),
+        ExprValue::Float(f) => json!({"kind": "float", "float": f}),
+        ExprValue::String(s) => json!({"kind": "string", "string": s}),
+        ExprValue::Composite(t) => json!({"kind": "composite", "type": t}),
+        ExprValue::Undefined(cause) => json!({
+            "kind": "undefined",
+            "cause": {
+                "line": cause.span.line,
+                "column": cause.span.column,
+                "currentOffset": cause.span.offset,
+                "endOffset": cause.end,
+                "message": cause.message,
+            },
+        }),
+    };
+    let requests: Vec<Value> = diagnostics
+        .requests()
+        .into_iter()
+        .take(REQUEST_TRACE_CAPACITY)
+        .map(|trace| {
+            json!({
+                "sequence": trace.sequence,
+                "service": "firestore",
+                "method": trace.method,
+                "path": trace.path,
+                "allowed": trace.allowed,
+                "reason": trace.reason,
+                "uid": trace.uid,
+                "expressions": trace.expressions.iter().map(|e| json!({
+                    "line": e.span.line,
+                    "column": e.span.column,
+                    "currentOffset": e.span.offset,
+                    "endOffset": e.end,
+                    "values": e.values.iter().map(|(v, count)| json!({
+                        "value": value(v),
+                        "count": count,
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    ok(json!({
+        "capacity": REQUEST_TRACE_CAPACITY,
+        "loaded": rules.is_loaded(),
+        "requests": requests,
+    }))
+}
+
 /// GET / PUT / DELETE on a rules slot.
 fn rules_route(slot: &RwLock<LoadedRules>, method: &str, body: &Value) -> JsonResponse {
     match method {
@@ -740,6 +816,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     }
     if action == "faultPlan" {
         return fault_plan_route(state, session, &project, method, body);
+    }
+    if action == "rules/requests" {
+        return rules_requests_route(state, method);
     }
     if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
         return text_index_route(state, session, &project, method, rest, body);

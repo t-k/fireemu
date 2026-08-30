@@ -449,7 +449,7 @@
         },
         {
           "id": "FS-CLAIM-RULES",
-          "statement": "Security Rules are evaluated natively on every Firestore surface: reads against the returned snapshot, writes inside the commit, and queries proven from their constraints.",
+          "statement": "Security Rules are evaluated natively on every Firestore surface -- reads against the returned snapshot, writes inside the commit, queries proven from their constraints -- and the language they are written in is measured against the pinned official runtime rather than assumed.",
           "capabilities": [
             {
               "id": "RULES-1",
@@ -470,23 +470,32 @@
           ],
           "evidence": {
             "tests": [
+              "prop_rules_boolean_operators_absorb_a_raised_operand",
+              "prop_rules_call_graph_limits_are_compile_errors",
+              "prop_rules_set_operations_are_set_theoretic",
+              "prop_rules_slice_is_in_range_exactly_where_the_official_runtime_says",
               "the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admits",
-              "the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify",
               "the_firebase_profile_keeps_the_project_binding_and_the_signature_it_can_check",
-              "the_profile_decides_whether_rest_admits_a_mock_token"
+              "the_profile_decides_whether_rest_admits_a_mock_token",
+              "the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify"
             ],
             "integration": [
+              "conformance/rules-matrix.json",
+              "conformance/rules-programs.json",
+              "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/tests/rules.rs",
               "crates/fireemu-core-rules/tests/eval.rs",
               "crates/fireemu-core-rules/tests/lint.rs",
-              "crates/fireemu-adapter-grpc/tests/rules.rs",
-              "crates/fireemu-adapter-grpc/tests/rest.rs"
+              "crates/fireemu-core-rules/tests/namespaces.rs",
+              "crates/fireemu-core-rules/tests/regex.rs"
             ],
             "conformance": [
               "firestore/rules-decisions"
             ]
           },
           "officialLimitations": [
-            "the official emulator renders request.query.orderBy as \"field ASC, other DESC\"; production's rendering is undocumented, so the emulator form is the one reproduced"
+            "the official compiler's static type checker rejects three of the 680 recorded language claims while it compiles the file, where fireemu raises on them at evaluation; the request decision is the same in both and each row is pinned in conformance/rules-matrix.json",
+            "the official emulator answers a denial with a per-allow trace of its own evaluation; that text is a diagnostic rather than an API contract, so fireemu answers with its own message and publishes the same information through :ruleCoverage and the request-trace control route"
           ],
           "fireemuOnly": [
             {
@@ -494,7 +503,7 @@
               "precision": "conservative"
             },
             {
-              "behaviour": "static rules linting and runtime expression / document-access budgets",
+              "behaviour": "static rules linting beyond what the official compiler reports, and runtime expression budgets",
               "precision": "exact-for-local-semantics"
             }
           ],
@@ -561,6 +570,40 @@
           "preview": [
             "Firestore Enterprise edition and its text search surface are preview; the pinned official emulator ships no equivalent, so this claim is scoped to definition validation only"
           ]
+        },
+        {
+          "id": "FS-CLAIM-RULES-DIAGNOSTICS",
+          "statement": "Rules evaluation is observable the way the official emulator makes it observable: the ruleset is loaded through :securityRules, and :ruleCoverage and :ruleCoverage.html report every expression by its source position with the values it took.",
+          "capabilities": [
+            {
+              "id": "RULES-DIAG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "the_emulator_security_rules_route_replaces_the_ruleset_and_reports_the_compiler",
+              "the_rule_coverage_route_reports_every_expression_by_its_source_position",
+              "the_rules_request_trace_lists_decided_requests_newest_first_with_their_expressions"
+            ],
+            "integration": [
+              "crates/fireemu-core-rules/tests/coverage.rs",
+              "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-http/tests/control.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official report's `undefined` values name a zero-width position for the cause of some errors; fireemu names the extent of the innermost expression that raised, which is the same information at a position a reader can select"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests with their per-expression traces, behind the control token",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
         }
       ]
     },

@@ -598,6 +598,7 @@ dependencies = [
  "fireemu-core-auth",
  "fireemu-core-events",
  "fireemu-core-limits",
+ "fireemu-core-rules",
  "fireemu-core-session",
  "fireemu-core-types",
  "proptest",

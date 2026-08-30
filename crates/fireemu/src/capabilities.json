@@ -443,14 +443,17 @@
       "get / create / update / delete against the returned snapshot or the staged commit",
       "list / aggregation / Listen queries proven from equality, in, !=, not-in, array-contains(-any) and inequality (range) constraints plus request.query.limit / offset / orderBy (RULES-QUERY-CONSTRAINTS)",
       "get() / exists() / getAfter() (getAfter over the state the whole commit leaves behind; fails closed on reads and query proofs)",
-      "timestamp / duration / latlng / math / hashing namespaces, map.diff(), bytes and string conversions",
+      "the string, list, map, set, path, timestamp, duration, latlng, math and hashing surfaces, map.diff() and its key sets, range indexing (x[i:j]), path.bind(), and the int / float / string / path conversions",
       "collection groups need a recursive wildcard rule"
     ],
     "notes": [
+      "the language is measured rather than assumed: conformance/src/rules-probe installs the same bounded Rules programs into the pinned official Firestore emulator and into fireemu and compares every verdict (680 claims in conformance/rules-matrix.json, 22 whole-program probes in conformance/rules-programs.json)",
       "query proofs are sound, not complete: a rule that reads an unconstrained field denies the query",
       "the principal request.auth is built from follows the compatibility profile on both the Firestore and the Storage Rules surfaces (see AUTH-RULES-1); the rules themselves are evaluated identically under both profiles",
-      "request.query.orderBy is rendered as \"field ASC, other DESC\" (the Emulator's form; production's rendering is undocumented)",
-      "string.matches()/replace(): RE2-style subset without lookarounds, flags or word boundaries",
+      "request.query.orderBy is a map from field path to \"ASC\" / \"DESC\", request.query.limit is null without a limit, and request.resource and request.query are absent rather than null on a request that has neither",
+      "string.matches() / replace(): the RE2 surface the official runtime has -- capturing groups with $0 / $1 expansion, the inline flags (?i) (?s) (?m), POSIX and Unicode classes, hex escapes -- and, as in RE2, no lookarounds and no backreferences; a literal pattern is compiled while the ruleset is, so an unusable one fails the load",
+      "a recursive call and a call chain of more than twenty calls are compile errors, with the official compiler's messages",
+      "three language rows are documented divergences, all the same one: the official compiler's static type checker rejects at load what fireemu raises at evaluation; the request decision is the same",
       "conformance: firestore/rules-decisions (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "precision": "conservative",
@@ -459,11 +462,33 @@
   "RULES-BUDGET-1": {
     "implemented": [
       "RULES-EXPRESSIONS-PER-REQUEST 1000",
-      "RULES-FUNCTION-CALL-DEPTH 20",
+      "RULES-FUNCTION-CALL-DEPTH 20 calls (a chain of 21 functions is the deepest that compiles), refused when the ruleset loads",
+      "RULES-RECURSION 0: a recursive or cyclical call is refused when the ruleset loads",
       "RULES-DOC-ACCESS-SINGLE 10 per operation and per query proof (get, exists and getAfter of one path each count once)",
       "RULES-DOC-ACCESS-MULTI-TOTAL 20 across atomic commits and BatchGetDocuments"
     ],
-    "status": "implemented"
+    "status": "implemented",
+    "notes": [
+      "each number is measured against the pinned official emulator, not read off the documentation: ten document accesses are served and eleven are denied, thirty accesses of one path are served, and the call-depth boundary is the one its compiler reports (conformance/rules-programs.json)"
+    ]
+  },
+  "RULES-DIAG-1": {
+    "status": "implemented",
+    "precision": "boundary-conformance",
+    "implemented": [
+      "GET /emulator/v1/projects/{project}:ruleCoverage on the Firestore port: the loaded rules files, then a report of one tree per allow condition and per function body, each node naming its sourcePosition (line, column, currentOffset, endOffset) and the values it took with a count each",
+      "GET /emulator/v1/projects/{project}:ruleCoverage.html: the same document as a page that underlines every evaluated expression and shows its values on hover",
+      "PUT /emulator/v1/projects/{project}:securityRules: the official load route, answering 200 with issues or 400 whose message names the rejected position as L<line>:<column>",
+      "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests, newest first, each with its decision and what every expression evaluated to",
+      "the Emulator UI's Rules page lists the decided requests and expands one into its per-expression trace, reading the same control route"
+    ],
+    "notes": [
+      "an expression that raised is reported as undefined carrying the innermost expression that raised and its message; an expression nothing reached has children and no values, as the official report does",
+      "the coverage and the traces live with the ruleset they describe, so loading another one replaces both and no stale position is ever served",
+      "the two emulator routes take no credential, because the official ones take none and @firebase/rules-unit-testing calls them with no headers; both are loopback-only and both echo the values the ruleset computed, which is what a coverage report is",
+      "the control route carries the control token like every privileged route, and never carries a token, a signature or any claim other than the subject the rule saw as request.auth.uid",
+      "the denial message fireemu returns is its own: the official emulator answers PERMISSION_DENIED with a per-allow trace of its evaluation, which is a diagnostic rather than an API contract, and fireemu publishes the same information through these routes instead"
+    ]
   },
   "RULES-LINT-1": {
     "status": "implemented"
@@ -561,15 +586,15 @@
       "FIREBASE_EMULATOR_HUB exported to the exec command as a bare host:port",
       "@firebase/rules-unit-testing 5.0.2 discovers the suite with no explicit host: tools/sdk-smoke/rules-unit-testing.mjs runs initializeTestEnvironment with an empty configuration and exercises the rules decisions, withSecurityRulesDisabled, clearFirestore and a trigger-suppressed write",
       "DELETE /emulator/v1/projects/{project}/databases/{database}/documents on the Firestore port, which is what clearFirestore() calls",
-      "POST /_admin/export with the official body {\"path\", \"initiatedBy\"}, refusing a request that carries an Origin header exactly as upstream does; it is what fireemu emulators:export drives after finding the suite through its locator file"
+      "POST /_admin/export with the official body {\"path\", \"initiatedBy\"}, refusing a request that carries an Origin header exactly as upstream does; it is what fireemu emulators:export drives after finding the suite through its locator file",
+      "PUT /emulator/v1/projects/{project}:securityRules on the Firestore port, which is what loading rules from a test environment calls (see RULES-DIAG-1)"
     ],
     "unimplemented": [
       "POST /dataconnect/clearData: fireemu serves no Data Connect emulator"
     ],
     "notes": [
       "the Hub answers loopback Host headers only, which the official Hub does not check; it can disable background triggers, so a page on a routable name must not reach it by DNS rebinding",
-      "a suite moving from the official emulator has to do two things until the Auth gaps close: state an iat on the token authenticatedContext mints (createMockUserToken defaults to iat 0, so exp is 3600 and the token expired in 1970, which fireemu's virtual clock refuses) and create the users the contexts stand for, because fireemu resolves an ID token subject against the project Auth store",
-      "PUT /emulator/v1/projects/{project}:securityRules is not served: load rules from firestore.rules in firebase.json, from rules.source, or through PUT /v1/rules on the control API"
+      "a suite moving from the official emulator has to do two things until the Auth gaps close: state an iat on the token authenticatedContext mints (createMockUserToken defaults to iat 0, so exp is 3600 and the token expired in 1970, which fireemu's virtual clock refuses) and create the users the contexts stand for, because fireemu resolves an ID token subject against the project Auth store"
     ]
   },
   "CLI-04": {

@@ -44,8 +44,9 @@ use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, Unary
 use fireemu_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, WriteOp};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::ast::Ruleset;
+use fireemu_core_rules::coverage::{CoverageEntry, RequestTrace, RulesDiagnostics};
 use fireemu_core_rules::eval::{
-    evaluate_request_with, try_compare, Decision, DenyReason, DocumentAccess, Method,
+    evaluate_request_traced, try_compare, Decision, DenyReason, DocumentAccess, Method,
     RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::runtime::LoadedRules;
@@ -339,6 +340,15 @@ pub fn check_audience(principal: &Principal, project: &str) -> Result<(), Status
     }
 }
 
+/// Why replacing a ruleset failed.
+#[derive(Debug)]
+pub enum RulesLoadError {
+    /// The source does not compile; the position is the compiler's.
+    Compile(fireemu_core_rules::parse::ParseError),
+    /// The rules lock is poisoned.
+    Poisoned,
+}
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RwLock<LoadedRules>>,
@@ -369,6 +379,12 @@ impl RulesEnforcer {
         }
     }
 
+    /// The loaded rules, whose `diagnostics` a coverage report and a request trace read.
+    #[must_use]
+    pub fn rules(&self) -> &Arc<RwLock<LoadedRules>> {
+        &self.rules
+    }
+
     /// Verifies tokens of every registered session project, not only the default one.
     #[must_use]
     pub fn with_registry(mut self, registry: Arc<fireemu_core_auth::store::AuthRegistry>) -> Self {
@@ -390,6 +406,19 @@ impl RulesEnforcer {
             .lock()
             .map(|c| c.now())
             .map_err(|_| Status::internal("clock lock poisoned"))
+    }
+
+    /// Replaces the loaded ruleset, as `PUT /emulator/v1/projects/{p}:securityRules` and the
+    /// control API's `PUT /v1/rules` both do. The swap is atomic: a source that does not
+    /// compile leaves the previous ruleset in force, so a failed load never opens a session
+    /// up.
+    pub fn replace_source(&self, source: &str) -> Result<(), RulesLoadError> {
+        let loaded = LoadedRules::from_source(source).map_err(RulesLoadError::Compile)?;
+        let mut slot = self.rules.write().map_err(|_| RulesLoadError::Poisoned)?;
+        // The new ruleset brings its own diagnostics store, so every position recorded
+        // against the old source goes with it.
+        *slot = loaded;
+        Ok(())
     }
 
     /// Whether a ruleset is loaded (poisoned state is an error, never "no rules").
@@ -495,6 +524,7 @@ impl RulesEnforcer {
             request_resource,
             now,
             access,
+            Some(&rules.diagnostics),
         )
     }
 
@@ -549,6 +579,7 @@ impl RulesEnforcer {
                 None,
                 now,
                 &reader,
+                Some(&rules.diagnostics),
             )?;
             let accessed = reader.seen.borrow().len() as u64;
             if items.len() > 1 && accessed > multi_total {
@@ -606,7 +637,14 @@ impl RulesEnforcer {
                     abstract_path: true,
                     request_query: Some(query_value(query)),
                 };
-                decide(ruleset, &ctx, Method::List, &placeholder, &reader)?;
+                decide(
+                    ruleset,
+                    &ctx,
+                    Method::List,
+                    &placeholder,
+                    &reader,
+                    Some(&rules.diagnostics),
+                )?;
                 let accessed = reader.seen.borrow().len() as u64;
                 if accessed > single_max {
                     return Err(Status::permission_denied(format!(
@@ -700,6 +738,7 @@ impl RulesEnforcer {
                 preview.as_ref(),
                 at,
                 &reader,
+                Some(&rules.diagnostics),
             )?;
             let accessed = reader.seen.borrow().len() as u64;
             if writes.len() > 1 && accessed > multi_total {
@@ -727,6 +766,7 @@ fn evaluate_with(
     request_resource: Option<&Document>,
     now: LogicalInstant,
     access: &dyn DocumentAccess,
+    diagnostics: Option<&Mutex<RulesDiagnostics>>,
 ) -> Result<(), Status> {
     let ctx = RequestContext {
         service: RulesService::Firestore,
@@ -742,7 +782,7 @@ fn evaluate_with(
         abstract_path: false,
         request_query: None,
     };
-    decide(ruleset, &ctx, method, path, access)
+    decide(ruleset, &ctx, method, path, access, diagnostics)
 }
 
 fn decide(
@@ -751,15 +791,38 @@ fn decide(
     method: Method,
     path: &DocumentPath,
     access: &dyn DocumentAccess,
+    diagnostics: Option<&Mutex<RulesDiagnostics>>,
 ) -> Result<(), Status> {
-    match evaluate_request_with(ruleset, ctx, Some(access)).decision {
-        Decision::Allow => Ok(()),
-        Decision::Deny(reason) => Err(Status::permission_denied(format!(
+    let (report, coverage) = evaluate_request_traced(ruleset, ctx, Some(access));
+    let denial = match &report.decision {
+        Decision::Allow => None,
+        Decision::Deny(reason) => Some(format!(
             "{} on {} denied by Security Rules: {}",
             method_name(method),
             path.relative(),
-            deny_text(&reason)
-        ))),
+            deny_text(reason)
+        )),
+    };
+    if let Some(sink) = diagnostics {
+        if let Ok(mut sink) = sink.lock() {
+            let expressions: Vec<CoverageEntry> = coverage.entries().into_iter().cloned().collect();
+            let path = path.relative();
+            let uid = ctx.auth.as_ref().map(|a| a.uid.clone());
+            let reason = denial.clone().unwrap_or_default();
+            sink.push(&coverage, move |sequence| RequestTrace {
+                sequence,
+                method: method_name(method),
+                path,
+                allowed: reason.is_empty(),
+                reason,
+                uid,
+                expressions,
+            });
+        }
+    }
+    match denial {
+        None => Ok(()),
+        Some(message) => Err(Status::permission_denied(message)),
     }
 }
 
@@ -946,9 +1009,14 @@ fn tighten(mut range: ValueRange, (bound, is_lower): (RangeBound, bool)) -> Opti
     Some(range)
 }
 
-/// `request.query` of a list request: `limit`, `offset` and `orderBy`. `orderBy` is the
-/// explicit ordering rendered as `"field ASC, other DESC"` (the Emulator's form; the
-/// production rendering is not documented) and `null` without one.
+/// `request.query` of a list request: `limit`, `offset` and `orderBy`.
+///
+/// `orderBy` is a **map** from field path to `"ASC"` / `"DESC"`, which is what the pinned
+/// official emulator carries: `request.query.orderBy.keys() == ['n']` and
+/// `request.query.orderBy['n'] == 'ASC'` both hold for a query ordered by `n` ascending,
+/// while `orderBy is list` does not (`conformance/rules-programs.json`,
+/// `query-order-by-shape`). Without an explicit ordering it is `null`, as `limit` is
+/// without a limit.
 fn query_value(query: &Query) -> RulesValue {
     let mut m = BTreeMap::new();
     m.insert(
@@ -966,22 +1034,23 @@ fn query_value(query: &Query) -> RulesValue {
         if query.order_by.is_empty() {
             RulesValue::Null
         } else {
-            RulesValue::String(
+            RulesValue::Map(
                 query
                     .order_by
                     .iter()
                     .map(|o| {
-                        format!(
-                            "{} {}",
+                        (
                             o.field.canonical(),
-                            match o.direction {
-                                Direction::Ascending => "ASC",
-                                Direction::Descending => "DESC",
-                            }
+                            RulesValue::String(
+                                match o.direction {
+                                    Direction::Ascending => "ASC",
+                                    Direction::Descending => "DESC",
+                                }
+                                .to_owned(),
+                            ),
                         )
                     })
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                    .collect(),
             )
         },
     );

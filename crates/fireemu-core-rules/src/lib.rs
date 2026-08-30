@@ -3,6 +3,7 @@
 
 pub mod ast;
 pub mod civil;
+pub mod coverage;
 pub mod eval;
 pub mod hash;
 pub mod lint;

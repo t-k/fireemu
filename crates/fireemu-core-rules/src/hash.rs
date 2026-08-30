@@ -292,10 +292,14 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Standard base64 with padding (`bytes.toBase64()`).
+/// URL-safe base64 with padding (`bytes.toBase64()`).
+///
+/// The alphabet is measured, not assumed: the official runtime prints the SHA-256 of
+/// `'abc'` as `ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0=`, so `-` and `_` replace `+`
+/// and `/` while the `=` padding stays (`conformance/rules-matrix.json`, area `encoding`).
 #[must_use]
 pub fn base64(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let mut buf = [0u8; 3];
@@ -313,13 +317,13 @@ pub fn base64(data: &[u8]) -> String {
     out
 }
 
-/// Lowercase hex (`bytes.toHexString()`).
+/// Uppercase hex (`bytes.toHexString()`), which is the case the official runtime prints.
 #[must_use]
 pub fn hex(data: &[u8]) -> String {
     use core::fmt::Write as _;
     data.iter()
         .fold(String::with_capacity(data.len() * 2), |mut s, b| {
-            let _ = write!(s, "{b:02x}");
+            let _ = write!(s, "{b:02X}");
             s
         })
 }

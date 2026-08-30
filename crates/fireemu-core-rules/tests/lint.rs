@@ -126,17 +126,20 @@ fn chain(depth: usize) -> String {
 }
 
 #[test]
-fn call_depth_19_20_21() {
-    assert_eq!(
-        level_of(&chain(19), "RULES-FUNCTION-CALL-DEPTH"),
-        Some(DiagnosticLevel::Warning(WarningSeverity::Critical))
-    );
+fn call_depth_counts_calls_not_frames_as_the_official_compiler_does() {
+    // A chain of `n` functions is `n - 1` calls. The official compiler compiles 21 functions
+    // and refuses 22 (`conformance/rules-programs.json`, `recursion-depth-chain-21-calls`),
+    // so the maximum of 20 is reached at 21 functions and exceeded at 22.
     assert_eq!(
         level_of(&chain(20), "RULES-FUNCTION-CALL-DEPTH"),
         Some(DiagnosticLevel::Warning(WarningSeverity::Critical))
     );
     assert_eq!(
         level_of(&chain(21), "RULES-FUNCTION-CALL-DEPTH"),
+        Some(DiagnosticLevel::Warning(WarningSeverity::Critical))
+    );
+    assert_eq!(
+        level_of(&chain(22), "RULES-FUNCTION-CALL-DEPTH"),
         Some(DiagnosticLevel::Error)
     );
     assert_eq!(level_of(&chain(10), "RULES-FUNCTION-CALL-DEPTH"), None);

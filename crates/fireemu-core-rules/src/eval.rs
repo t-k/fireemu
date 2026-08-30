@@ -22,9 +22,10 @@ use fireemu_core_limits::catalogs::FIREBASE_RULES_2026_08_25;
 use fireemu_core_limits::model::LimitMaximum;
 
 use crate::ast::{
-    Allow, BinaryOp, Expr, FunctionDecl, Item, Literal, MatchBlock, Method as AstMethod,
+    Allow, BinaryOp, Expr, ExprKind, FunctionDecl, Item, Literal, MatchBlock, Method as AstMethod,
     PathSegment, Ruleset, UnaryOp,
 };
+use crate::coverage::{Coverage, ExprValue, UndefinedCause};
 use crate::value::{AuthContext, MapDiff, RulesValue, ValueRange};
 
 /// Namespaces callable as `namespace.function(...)` unless shadowed by a binding.
@@ -182,7 +183,6 @@ pub struct EvaluationReport {
 enum EvalError {
     /// Condition is false because of a type / missing member error. The message is kept for
     /// the `rules explain` output (Milestone H); it does not influence the decision.
-    #[allow(dead_code)]
     Soft(String),
     /// The value is not determined by the request (query proofs); the condition cannot be
     /// proven and the allow does not apply.
@@ -225,13 +225,16 @@ impl Budget {
         Ok(())
     }
 
+    /// One more frame. The budget counts *calls* rather than frames, as the official
+    /// compiler does: a chain of 21 functions is 20 calls and is within a maximum of 20.
     fn enter_call(&mut self) -> Result<(), EvalError> {
         self.depth = self.depth.saturating_add(1);
         self.max_depth_seen = self.max_depth_seen.max(self.depth);
-        if u64::from(self.depth) > self.depth_max {
+        let calls = u64::from(self.depth).saturating_sub(1);
+        if calls > self.depth_max {
             return Err(EvalError::Budget {
                 limit_id: "RULES-FUNCTION-CALL-DEPTH",
-                current: u64::from(self.depth),
+                current: calls,
                 maximum: self.depth_max,
             });
         }
@@ -289,6 +292,11 @@ struct Evaluator<'a> {
     absent_resource_used: core::cell::Cell<bool>,
     budget: Budget,
     scope: Scope<'a>,
+    /// Where every evaluated expression's value is recorded, when a trace was asked for.
+    coverage: Option<&'a core::cell::RefCell<Coverage>>,
+    /// The innermost expression that raised while the current error propagates, so an
+    /// `undefined` value names the cause rather than the outermost node.
+    cause: Option<UndefinedCause>,
 }
 
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
@@ -296,6 +304,19 @@ struct Evaluator<'a> {
 #[must_use]
 pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationReport {
     evaluate_request_with(ruleset, ctx, None)
+}
+
+/// Evaluates a request and records what every expression evaluated to, which is what a
+/// coverage report and a request trace are built from (`RULES-PARITY-04`).
+#[must_use]
+pub fn evaluate_request_traced(
+    ruleset: &Ruleset,
+    ctx: &RequestContext,
+    access: Option<&dyn DocumentAccess>,
+) -> (EvaluationReport, Coverage) {
+    let coverage = core::cell::RefCell::new(Coverage::default());
+    let report = evaluate_with_coverage(ruleset, ctx, access, Some(&coverage));
+    (report, coverage.into_inner())
 }
 
 /// Evaluates a request against a ruleset; `access` serves `get()` / `exists()` within the
@@ -309,6 +330,15 @@ pub fn evaluate_request_with(
     ruleset: &Ruleset,
     ctx: &RequestContext,
     access: Option<&dyn DocumentAccess>,
+) -> EvaluationReport {
+    evaluate_with_coverage(ruleset, ctx, access, None)
+}
+
+fn evaluate_with_coverage(
+    ruleset: &Ruleset,
+    ctx: &RequestContext,
+    access: Option<&dyn DocumentAccess>,
+    coverage: Option<&core::cell::RefCell<Coverage>>,
 ) -> EvaluationReport {
     let mut budget = Budget {
         expressions: 0,
@@ -358,6 +388,8 @@ pub fn evaluate_request_with(
             absent_resource_used: core::cell::Cell::new(false),
             budget,
             scope,
+            coverage,
+            cause: None,
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -437,16 +469,15 @@ fn build_request(ctx: &RequestContext) -> RulesValue {
         "time".to_owned(),
         RulesValue::Timestamp(ctx.time_unix_nanos),
     );
-    m.insert(
-        "resource".to_owned(),
-        ctx.request_resource.clone().unwrap_or(RulesValue::Null),
-    );
-    // Outside a list request `request.query` is an error in production; undetermined here
-    // has the same effect (the rule cannot be proven).
-    m.insert(
-        "query".to_owned(),
-        ctx.request_query.clone().unwrap_or(RulesValue::Unknown),
-    );
+    // `request.resource` and `request.query` are absent, not null, when the request has no
+    // such thing: reading either on a `get` is a missing-member error in the official
+    // runtime, and `request.keys()` does not list them (recorded, area `detail`).
+    if let Some(resource) = ctx.request_resource.clone() {
+        m.insert("resource".to_owned(), resource);
+    }
+    if let Some(query) = ctx.request_query.clone() {
+        m.insert("query".to_owned(), query);
+    }
     RulesValue::Map(m)
 }
 
@@ -633,6 +664,19 @@ fn evaluate_allows<'a>(
     }
 }
 
+/// One line of why an expression is undefined, for a trace.
+fn describe(e: &EvalError) -> String {
+    match e {
+        EvalError::Soft(m) | EvalError::Unsupported(m) => m.clone(),
+        EvalError::Unknown => "the request does not determine this value".to_owned(),
+        EvalError::Budget {
+            limit_id,
+            current,
+            maximum,
+        } => format!("{limit_id}: {current} exceeds {maximum}"),
+    }
+}
+
 fn soft(msg: impl Into<String>) -> EvalError {
     EvalError::Soft(msg.into())
 }
@@ -657,7 +701,7 @@ fn undetermined(v: &RulesValue) -> bool {
         | RulesValue::Range(_)
         | RulesValue::OneOf(_)
         | RulesValue::NotOneOf(_) => true,
-        RulesValue::List(items) => items.iter().any(undetermined),
+        RulesValue::List(items) | RulesValue::Set(items) => items.iter().any(undetermined),
         RulesValue::Map(m) => m.values().any(undetermined),
         _ => false,
     }
@@ -837,23 +881,29 @@ impl<'a> Evaluator<'a> {
                     other => V::Float(as_float(other)?.abs()),
                 }
             }
-            ("math", "ceil" | "floor" | "round" | "sqrt") => {
+            ("math", "ceil" | "floor" | "sqrt") => {
                 arity(1)?;
                 let x = float_arg(0)?;
                 V::Float(match name {
                     "ceil" => x.ceil(),
                     "floor" => x.floor(),
-                    "round" => x.round(),
                     _ => x.sqrt(),
                 })
+            }
+            // Alone among them, `round` answers an int, and it rounds a half towards
+            // positive infinity: `math.round(-1.5)` is -1, recorded.
+            ("math", "round") => {
+                arity(1)?;
+                let rounded = (float_arg(0)? + 0.5).floor();
+                if !rounded.is_finite() || rounded < -(2f64.powi(63)) || rounded >= 2f64.powi(63) {
+                    return Err(soft("math.round() out of the int range"));
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                V::Int(rounded as i64)
             }
             ("math", "pow") => {
                 arity(2)?;
                 V::Float(float_arg(0)?.powf(float_arg(1)?))
-            }
-            ("math", "isInfinite") => {
-                arity(1)?;
-                V::Bool(float_arg(0)?.is_infinite())
             }
             ("math", "isNaN") => {
                 arity(1)?;
@@ -872,8 +922,10 @@ impl<'a> Evaluator<'a> {
                     }
                 };
                 V::Bytes(match name {
-                    "crc32" => crate::hash::crc32(&input).to_be_bytes().to_vec(),
-                    "crc32c" => crate::hash::crc32c(&input).to_be_bytes().to_vec(),
+                    // The checksums come back little-endian: `hashing.crc32('abc')` prints
+                    // as `C2412435` where the checksum itself is `0x352441C2`, recorded.
+                    "crc32" => crate::hash::crc32(&input).to_le_bytes().to_vec(),
+                    "crc32c" => crate::hash::crc32c(&input).to_le_bytes().to_vec(),
                     "md5" => crate::hash::md5(&input).to_vec(),
                     _ => crate::hash::sha256(&input).to_vec(),
                 })
@@ -901,24 +953,57 @@ impl<'a> Evaluator<'a> {
         self.nesting += 1;
         let result = self.eval_inner(expr);
         self.nesting -= 1;
+        if self.coverage.is_some() {
+            self.record(expr, &result);
+        }
         result
+    }
+
+    /// Records one evaluation of `expr`. A success is recorded as its value; a failure as
+    /// `undefined`, carrying the innermost expression that actually raised.
+    fn record(&mut self, expr: &Expr, result: &Result<RulesValue, EvalError>) {
+        let value = match result {
+            Ok(v) => {
+                self.cause = None;
+                ExprValue::of(v)
+            }
+            Err(e) => {
+                if self.cause.is_none() {
+                    self.cause = Some(UndefinedCause {
+                        span: expr.span,
+                        end: expr.end,
+                        message: describe(e),
+                    });
+                }
+                ExprValue::Undefined(self.cause.clone().unwrap_or_else(|| UndefinedCause {
+                    span: expr.span,
+                    end: expr.end,
+                    message: describe(e),
+                }))
+            }
+        };
+        if let Some(coverage) = self.coverage {
+            if let Ok(mut c) = coverage.try_borrow_mut() {
+                c.record(expr.span, expr.end, value);
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)]
     fn eval_inner(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
         self.budget.charge()?;
-        match expr {
-            Expr::Literal(l) => Ok(match l {
+        match expr.kind() {
+            ExprKind::Literal(l) => Ok(match l {
                 Literal::Null => RulesValue::Null,
                 Literal::Bool(b) => RulesValue::Bool(*b),
                 Literal::Int(i) => RulesValue::Int(*i),
                 Literal::Float(f) => RulesValue::Float(*f),
                 Literal::Str(s) => RulesValue::String(s.clone()),
             }),
-            Expr::Ident(name) => self
+            ExprKind::Ident(name) => self
                 .lookup(name)
                 .ok_or_else(|| soft(format!("unknown identifier {name}"))),
-            Expr::Member { object, name } => {
+            ExprKind::Member { object, name } => {
                 let obj = self.eval(object)?;
                 match obj {
                     RulesValue::Map(m) => m
@@ -934,7 +1019,7 @@ impl<'a> Evaluator<'a> {
                     other => Err(soft(format!("member {name} of {}", other.type_name()))),
                 }
             }
-            Expr::Index { object, index } => {
+            ExprKind::Index { object, index } => {
                 let obj = self.eval(object)?;
                 let idx = self.eval(index)?;
                 match (obj, idx) {
@@ -967,8 +1052,14 @@ impl<'a> Evaluator<'a> {
                     ))),
                 }
             }
-            Expr::Call { callee, args, .. } => self.call(callee, args),
-            Expr::Unary { op, expr } => {
+            ExprKind::Slice { object, start, end } => {
+                let obj = self.eval(object)?;
+                let lo = self.eval(start)?;
+                let hi = self.eval(end)?;
+                slice(&obj, &lo, &hi)
+            }
+            ExprKind::Call { callee, args } => self.call(callee, args),
+            ExprKind::Unary { op, expr } => {
                 let v = self.eval(expr)?;
                 match (op, v) {
                     (_, v) if undetermined(&v) => Err(EvalError::Unknown),
@@ -981,8 +1072,8 @@ impl<'a> Evaluator<'a> {
                     (_, v) => Err(soft(format!("unary operator on {}", v.type_name()))),
                 }
             }
-            Expr::Binary { op, left, right } => self.binary(*op, left, right),
-            Expr::Ternary {
+            ExprKind::Binary { op, left, right } => self.binary(*op, left, right),
+            ExprKind::Ternary {
                 cond,
                 then,
                 otherwise,
@@ -994,20 +1085,20 @@ impl<'a> Evaluator<'a> {
                     self.eval(otherwise)
                 }
             }
-            Expr::List(items) => Ok(RulesValue::List(
+            ExprKind::List(items) => Ok(RulesValue::List(
                 items
                     .iter()
                     .map(|i| self.eval(i))
                     .collect::<Result<_, _>>()?,
             )),
-            Expr::Map(entries) => {
+            ExprKind::Map(entries) => {
                 let mut m = BTreeMap::new();
                 for (k, v) in entries {
                     m.insert(k.clone(), self.eval(v)?);
                 }
                 Ok(RulesValue::Map(m))
             }
-            Expr::Path(segments) => {
+            ExprKind::Path(segments) => {
                 let mut out = Vec::new();
                 for s in segments {
                     match s {
@@ -1028,7 +1119,7 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(RulesValue::Path(out))
             }
-            Expr::Is { expr, type_name } => {
+            ExprKind::Is { expr, type_name } => {
                 let v = self.eval(expr)?;
                 if matches!(v, RulesValue::Unknown) {
                     return Err(EvalError::Unknown);
@@ -1087,11 +1178,11 @@ impl<'a> Evaluator<'a> {
         if matches!(op, BinaryOp::And | BinaryOp::Or) {
             let mut operands: Vec<&Expr> = vec![right];
             let mut cursor = left;
-            while let Expr::Binary {
+            while let ExprKind::Binary {
                 op: inner,
                 left: l,
                 right: r,
-            } = cursor
+            } = cursor.kind()
             {
                 if *inner != op {
                     break;
@@ -1109,13 +1200,29 @@ impl<'a> Evaluator<'a> {
             // evaluation; an undetermined operand (which may be a runtime error for some
             // potential document) makes the whole expression undetermined.
             let stop_on = matches!(op, BinaryOp::Or);
+            // The official runtime absorbs a raised operand: `error || true` is true and
+            // `error && false` is false, because the deciding operand settles the answer
+            // whatever the other one did. A raised operand is therefore remembered rather
+            // than propagated, and only surfaces when nothing decides.
+            //
+            // A budget exhaustion and an unsupported construct are not absorbed: the first
+            // ends the request, and the second is fireemu admitting it cannot evaluate the
+            // operand, which must never be allowed to read as a permissive answer.
+            let mut deferred: Option<EvalError> = None;
             for operand in operands.into_iter().rev() {
-                let b = truthy(&self.eval(operand)?)?;
-                if b == stop_on {
-                    return Ok(RulesValue::Bool(stop_on));
+                match self.eval(operand).and_then(|v| truthy(&v)) {
+                    Ok(b) if b == stop_on => return Ok(RulesValue::Bool(stop_on)),
+                    Ok(_) => {}
+                    Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                        return Err(e)
+                    }
+                    Err(e) => deferred = Some(deferred.map_or(e, |first| first)),
                 }
             }
-            return Ok(RulesValue::Bool(!stop_on));
+            return match deferred {
+                Some(e) => Err(e),
+                None => Ok(RulesValue::Bool(!stop_on)),
+            };
         }
         let l = self.eval(left)?;
         let r = self.eval(right)?;
@@ -1205,7 +1312,7 @@ impl<'a> Evaluator<'a> {
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
             (BinaryOp::Eq, a, b) => V::Bool(values_equal(a, b)),
             (BinaryOp::Ne, a, b) => V::Bool(!values_equal(a, b)),
-            (BinaryOp::In, item, V::List(items)) => {
+            (BinaryOp::In, item, V::List(items) | V::Set(items)) => {
                 V::Bool(items.iter().any(|x| values_equal(x, item)))
             }
             (BinaryOp::In, V::String(k), V::Map(m)) => V::Bool(m.contains_key(k)),
@@ -1262,8 +1369,8 @@ impl<'a> Evaluator<'a> {
     }
 
     fn call(&mut self, callee: &Expr, args: &[Expr]) -> Result<RulesValue, EvalError> {
-        match callee {
-            Expr::Ident(name) => {
+        match callee.kind() {
+            ExprKind::Ident(name) => {
                 if let Some(f) = self.function(name) {
                     let values = args
                         .iter()
@@ -1293,14 +1400,14 @@ impl<'a> Evaluator<'a> {
                     _ => Err(soft(format!("unknown function {name}"))),
                 }
             }
-            Expr::Member { object, name } => {
-                if let Expr::Ident(ns) = object.as_ref() {
-                    if NAMESPACES.contains(&ns.as_str()) && self.lookup(ns).is_none() {
+            ExprKind::Member { object, name } => {
+                if let ExprKind::Ident(ns) = object.kind() {
+                    if NAMESPACES.contains(&ns.as_str()) && self.lookup(ns.as_str()).is_none() {
                         let values = args
                             .iter()
                             .map(|a| self.eval(a))
                             .collect::<Result<Vec<_>, _>>()?;
-                        return self.namespace_call(ns, name, &values);
+                        return self.namespace_call(ns.as_str(), name, &values);
                     }
                 }
                 let receiver = self.eval(object)?;
@@ -1355,6 +1462,11 @@ fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
     match (a, b) {
         (RulesValue::Int(x), RulesValue::Float(y)) | (RulesValue::Float(y), RulesValue::Int(x)) => {
             !y.is_nan() && cmp_int_double(*x, *y) == core::cmp::Ordering::Equal
+        }
+        // Two sets are equal when they hold the same members, in whatever order; a set is
+        // never equal to a list.
+        (RulesValue::Set(x), RulesValue::Set(y)) => {
+            x.len() == y.len() && x.iter().all(|i| y.iter().any(|j| values_equal(i, j)))
         }
         _ => a == b,
     }
@@ -1489,22 +1601,26 @@ fn convert(name: &str, v: RulesValue) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     Ok(match (name, v) {
         ("int", V::Int(i)) => V::Int(i),
-        ("int", V::String(s)) => V::Int(
-            s.trim()
-                .parse()
-                .map_err(|_| soft("int() of non-numeric string"))?,
-        ),
-        ("int", V::Float(f)) if f.is_finite() && f.fract() == 0.0 => V::Int(f as i64),
+        // No trimming: the official runtime raises on `int(' 12 ')` and on `int('12abc')`,
+        // and it truncates a float rather than requiring a whole one.
+        ("int", V::String(s)) => {
+            V::Int(s.parse().map_err(|_| soft("int() of non-numeric string"))?)
+        }
+        ("int", V::Float(f)) if f.is_finite() && f.trunc().abs() < 2f64.powi(63) => {
+            V::Int(f.trunc() as i64)
+        }
         ("float", V::Int(i)) => V::Float(i as f64),
         ("float", V::Float(f)) => V::Float(f),
         ("float", V::String(s)) => V::Float(
-            s.trim()
-                .parse()
+            s.parse()
                 .map_err(|_| soft("float() of non-numeric string"))?,
         ),
         ("string", V::String(s)) => V::String(s),
         ("string", V::Int(i)) => V::String(i.to_string()),
         ("string", V::Bool(b)) => V::String(b.to_string()),
+        ("string", V::Null) => V::String("null".to_owned()),
+        ("string", V::Float(f)) => V::String(format_float(f)),
+        ("string", V::Path(p)) => V::String(format!("/{}", p.join("/"))),
         ("path", V::String(s)) => V::Path(
             s.trim_start_matches('/')
                 .split('/')
@@ -1526,7 +1642,14 @@ fn method_call(
     // An exact list / map holding an undetermined member, or an undetermined argument,
     // cannot be searched, joined or compared with a definite result (query proofs). The
     // partially known containers have their own arms below.
-    if (matches!(receiver, V::List(_) | V::Map(_)) && undetermined(receiver))
+    //
+    // `keys()` and `size()` of a map are the exception: both read the key set, which an
+    // undetermined *value* leaves fully known. `request.keys()` depends on it, because
+    // `request.auth` is undetermined while a query is being proven.
+    let shape_only = matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
+    if (!shape_only
+        && matches!(receiver, V::List(_) | V::Set(_) | V::Map(_))
+        && undetermined(receiver))
         || args.iter().any(undetermined)
     {
         return Err(EvalError::Unknown);
@@ -1645,7 +1768,7 @@ fn method_call(
                 .map_err(|e| EvalError::Unsupported(e.to_string()))?;
             V::String(re.replace_all(s, replacement))
         }
-        (V::List(items), "size") => {
+        (V::List(items) | V::Set(items), "size") => {
             arity(0)?;
             V::Int(i64::try_from(items.len()).unwrap_or(i64::MAX))
         }
@@ -1680,14 +1803,13 @@ fn method_call(
             arity(1)?;
             match &args[0] {
                 V::String(sep) => {
+                    // The official runtime stringifies members rather than requiring
+                    // strings: `[1, 2].join(',')` is `'1,2'`, recorded.
                     let parts: Result<Vec<String>, EvalError> = items
                         .iter()
-                        .map(|i| match i {
-                            V::String(s) => Ok(s.clone()),
-                            other => Err(soft(format!(
-                                "join() on list containing {}",
-                                other.type_name()
-                            ))),
+                        .map(|i| match convert("string", i.clone()) {
+                            Ok(V::String(s)) => Ok(s),
+                            _ => Err(soft(format!("join() on list containing {}", i.type_name()))),
                         })
                         .collect();
                     V::String(parts?.join(sep))
@@ -1698,6 +1820,63 @@ fn method_call(
         (V::List(items), "concat") => {
             arity(1)?;
             V::List(items.iter().cloned().chain(list_arg(&args[0])?).collect())
+        }
+        (V::List(items), "removeAll") => {
+            arity(1)?;
+            let removed = list_arg(&args[0])?;
+            V::List(
+                items
+                    .iter()
+                    .filter(|i| !removed.iter().any(|r| values_equal(i, r)))
+                    .cloned()
+                    .collect(),
+            )
+        }
+        (V::List(items), "toSet") => {
+            arity(0)?;
+            make_set(items.iter().cloned())
+        }
+        // A `set` is its own type: it compares unordered, `is` never recognises it, and its
+        // operations take another set rather than a list.
+        (V::Set(items), "union" | "intersection" | "difference") => {
+            arity(1)?;
+            let V::Set(other) = &args[0] else {
+                return Err(soft(format!(
+                    "{name}() expects a set, got {}",
+                    args[0].type_name()
+                )));
+            };
+            let member = |xs: &[RulesValue], v: &RulesValue| xs.iter().any(|x| values_equal(x, v));
+            match name {
+                "union" => make_set(items.iter().chain(other).cloned()),
+                "intersection" => make_set(
+                    items
+                        .iter()
+                        .filter(|v| member(other, v))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+                _ => make_set(
+                    items
+                        .iter()
+                        .filter(|v| !member(other, v))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+            }
+        }
+        (V::Set(items), "hasAll" | "hasAny" | "hasOnly") => {
+            arity(1)?;
+            let other = match &args[0] {
+                V::Set(xs) => xs.clone(),
+                _ => list_arg(&args[0])?,
+            };
+            let member = |xs: &[RulesValue], v: &RulesValue| xs.iter().any(|x| values_equal(x, v));
+            V::Bool(match name {
+                "hasAll" => other.iter().all(|w| member(items, w)),
+                "hasAny" => other.iter().any(|w| member(items, w)),
+                _ => items.iter().all(|i| member(&other, i)),
+            })
         }
         (V::Map(m), "keys") => {
             arity(0)?;
@@ -1715,12 +1894,68 @@ fn method_call(
             arity(2)?;
             match &args[0] {
                 V::String(k) => m.get(k).cloned().unwrap_or_else(|| args[1].clone()),
+                // A list key walks nested maps: `{'a': {'b': 1}}.get(['a', 'b'], 0)` is 1.
+                V::List(path) => {
+                    let mut current = receiver.clone();
+                    for step in path {
+                        let V::String(k) = step else {
+                            return Err(soft("get() expects string keys in a key path"));
+                        };
+                        match current {
+                            V::Map(ref inner) => match inner.get(k) {
+                                Some(v) => current = v.clone(),
+                                None => return Ok(args[1].clone()),
+                            },
+                            _ => return Ok(args[1].clone()),
+                        }
+                    }
+                    current
+                }
                 _ => return Err(soft("get() expects a string key")),
             }
         }
-        (V::Path(p), "size") => {
-            arity(0)?;
-            V::Int(i64::try_from(p.len()).unwrap_or(i64::MAX))
+        // `path.bind()` fills the `{name}` placeholders of a path literal. Every binding has
+        // to be used: the official runtime raises on one the path does not name, and it has
+        // no `size()` on a path at all.
+        (V::Path(p), "bind") => {
+            arity(1)?;
+            let V::Map(bindings) = &args[0] else {
+                return Err(soft(format!(
+                    "bind() expects a map, got {}",
+                    args[0].type_name()
+                )));
+            };
+            let mut used: Vec<&String> = Vec::new();
+            let mut out = Vec::new();
+            for segment in p {
+                match segment
+                    .strip_prefix('{')
+                    .and_then(|s| s.strip_suffix('}'))
+                    .filter(|s| !s.is_empty())
+                {
+                    Some(placeholder) => {
+                        let Some((key, value)) = bindings.get_key_value(placeholder) else {
+                            return Err(soft(format!("bind() has no value for {{{placeholder}}}")));
+                        };
+                        used.push(key);
+                        out.push(match value {
+                            V::String(s) => s.clone(),
+                            V::Int(i) => i.to_string(),
+                            other => {
+                                return Err(soft(format!(
+                                    "bind() cannot put a {} in a path",
+                                    other.type_name()
+                                )))
+                            }
+                        });
+                    }
+                    None => out.push(segment.clone()),
+                }
+            }
+            if used.len() != bindings.len() {
+                return Err(soft("bind() was given a name the path does not use"));
+            }
+            V::Path(out)
         }
         (V::Timestamp(t), "toMillis") => {
             arity(0)?;
@@ -1792,7 +2027,7 @@ fn method_call(
             else {
                 return Err(soft("distance() expects a latlng"));
             };
-            V::Float(haversine_km(*latitude, *longitude, *lat2, *lng2))
+            V::Float(haversine_metres(*latitude, *longitude, *lat2, *lng2))
         }
         (V::Map(m), "diff") => {
             arity(1)?;
@@ -1841,7 +2076,8 @@ fn method_call(
                     all
                 }
             };
-            V::List(keys.into_iter().map(V::String).collect())
+            // Every one of these is a `set` in the official runtime, not a list.
+            make_set(keys.into_iter().map(V::String))
         }
         (V::Timestamp(t), "seconds") => {
             arity(0)?;
@@ -1872,14 +2108,91 @@ fn method_call(
     })
 }
 
+/// `receiver[start:end]` over a list or a string.
+///
+/// The bounds the official runtime accepts are asymmetric, and measured rather than
+/// guessed (`conformance/rules-matrix.json`, area `slice`): `start` has to be a valid
+/// index, `0 <= start < len`, while `end` has to be a valid *position after* one,
+/// `0 < end <= len`, and `start <= end`. So `[1, 2, 3][1:1]` is the empty list while
+/// `[1, 2, 3][0:0]`, `[1, 2, 3][3:3]` and `[][0:0]` all raise.
+fn slice(
+    receiver: &RulesValue,
+    start: &RulesValue,
+    end: &RulesValue,
+) -> Result<RulesValue, EvalError> {
+    use RulesValue as V;
+    if undetermined(receiver) || undetermined(start) || undetermined(end) {
+        return Err(EvalError::Unknown);
+    }
+    let (V::Int(lo), V::Int(hi)) = (start, end) else {
+        return Err(soft(format!(
+            "a range index takes two ints, got {} and {}",
+            start.type_name(),
+            end.type_name()
+        )));
+    };
+    let len = match receiver {
+        V::List(items) => items.len(),
+        V::String(s) => s.chars().count(),
+        other => {
+            return Err(soft(format!(
+                "{} cannot be range indexed",
+                other.type_name()
+            )))
+        }
+    };
+    let len = i64::try_from(len).unwrap_or(i64::MAX);
+    if *lo < 0 || *lo >= len || *hi <= 0 || *hi > len || lo > hi {
+        return Err(soft(format!("range index [{lo}:{hi}] is out of range")));
+    }
+    let (lo, hi) = (
+        usize::try_from(*lo).unwrap_or(0),
+        usize::try_from(*hi).unwrap_or(0),
+    );
+    Ok(match receiver {
+        V::List(items) => V::List(items[lo..hi].to_vec()),
+        V::String(s) => V::String(s.chars().skip(lo).take(hi - lo).collect()),
+        _ => unreachable!("the length arm already rejected every other receiver"),
+    })
+}
+
 /// Nanoseconds per day.
 const NANOS_PER_DAY: i128 = 86_400_000_000_000;
 
 /// `v is type_name` for a concrete value.
+///
+/// A `set` answers `false` to every type name, `set` included -- measured, not assumed:
+/// `[1, 2].toSet() is set`, `is list` and `is map` are all false in the official runtime.
 fn is_type(v: &RulesValue, type_name: &str) -> bool {
+    if matches!(v, RulesValue::Set(_)) {
+        return false;
+    }
     match type_name {
         "number" => matches!(v, RulesValue::Int(_) | RulesValue::Float(_)),
         t => v.type_name() == t,
+    }
+}
+
+/// A set with each member kept once, in first-seen order.
+fn make_set(items: impl IntoIterator<Item = RulesValue>) -> RulesValue {
+    let mut out: Vec<RulesValue> = Vec::new();
+    for item in items {
+        if !out.iter().any(|x| values_equal(x, &item)) {
+            out.push(item);
+        }
+    }
+    RulesValue::Set(out)
+}
+
+/// `string(float)`: a whole float still prints with no decimal part, as the runtime does
+/// for `string(1.5)` and for the members `join()` stringifies.
+fn format_float(f: f64) -> String {
+    if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e15 {
+        format!("{f:.1}")
+            .strip_suffix(".0")
+            .map_or_else(|| f.to_string(), str::to_owned)
+    } else {
+        f.to_string()
     }
 }
 
@@ -1928,8 +2241,10 @@ fn unanimous(answers: impl Iterator<Item = Result<bool, EvalError>>) -> Result<b
 }
 
 /// Great-circle distance in kilometres (`latlng.distance()`).
-fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
-    const EARTH_RADIUS_KM: f64 = 6_371.0;
+fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
+    // `latlng.distance()` answers metres: one degree of latitude measures more than
+    // 111 000 of them and less than 112 000, which is what the official runtime records.
+    const EARTH_RADIUS_KM: f64 = 6_371_000.0;
     let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
     let (dp, dl) = ((lat2 - lat1).to_radians(), (lng2 - lng1).to_radians());
     let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);

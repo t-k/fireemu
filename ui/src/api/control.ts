@@ -130,3 +130,46 @@ export const awaitIdle = (
 
 export const capabilities = (): ResultAsync<Json, ApiError> =>
   request("GET", "control/v1/capabilities");
+
+/** One value an expression took while a request was decided. */
+export type RulesExprValue = {
+  kind: "null" | "bool" | "int" | "float" | "string" | "composite" | "undefined";
+  bool?: boolean;
+  int?: string;
+  float?: number;
+  string?: string;
+  type?: string;
+  cause?: {
+    line: number;
+    column: number;
+    currentOffset: number;
+    endOffset: number;
+    message: string;
+  };
+};
+
+/** One expression of the ruleset, with what it evaluated to. */
+export type RulesExpression = {
+  line: number;
+  column: number;
+  currentOffset: number;
+  endOffset: number;
+  values: { value: RulesExprValue; count: number }[];
+};
+
+/** One request Security Rules decided, newest first in the list. */
+export type RulesRequest = {
+  sequence: number;
+  service: string;
+  method: string;
+  path: string;
+  allowed: boolean;
+  reason: string;
+  uid: string | null;
+  expressions: RulesExpression[];
+};
+
+export type RulesRequests = { capacity: number; loaded: boolean; requests: RulesRequest[] };
+
+export const rulesRequests = (session: string): ResultAsync<RulesRequests, ApiError> =>
+  request<RulesRequests>("GET", `${base(session)}/rules/requests`);

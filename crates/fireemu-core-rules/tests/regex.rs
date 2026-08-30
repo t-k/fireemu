@@ -32,10 +32,13 @@ fn matches_is_a_full_match_with_the_documented_syntax() {
     assert!(!full("a.c", "a\nc"), ". does not match a newline");
     assert!(Regex::new("(unclosed").is_err());
     assert!(Regex::new("*bad").is_err());
-    assert!(
-        Regex::new("(?i)flags").is_err(),
-        "unsupported syntax fails closed"
-    );
+    // The official runtime compiles these and answers `true`; a first differential run
+    // recorded every one of them (`conformance/rules-matrix.json`, area `regex`).
+    assert!(full("(?i)flags", "FLAGS"), "(?i) folds case");
+    assert!(full("(?s)a.b", "a\nb"), "(?s) lets . cross a newline");
+    assert!(full("[[:alpha:]][[:digit:]]", "a1"), "POSIX classes");
+    assert!(full("\\p{L}+", "abc"), "Unicode classes");
+    assert!(full("a\\x62c", "abc"), "hex escapes");
 }
 
 #[test]
@@ -82,7 +85,6 @@ fn quantifier_group_escape_and_class_syntax_boundaries() {
         "a{1001}",
         "a{0,1001}",
         "a{2",
-        "(?i)a",
         "(?P<n>a)",
         "(?=a)",
         "(?!a)",
@@ -97,7 +99,9 @@ fn quantifier_group_escape_and_class_syntax_boundaries() {
     ] {
         assert!(Regex::new(bad).is_err(), "{bad}");
     }
-    assert!(!Regex::new("(?i)a").unwrap_err().to_string().is_empty());
+    assert!(!Regex::new("(?=a)").unwrap_err().to_string().is_empty());
+    // A backreference is RE2's other refusal, and the official compiler's too.
+    assert!(Regex::new("(a)\\1").is_err());
 }
 
 #[test]
@@ -128,4 +132,40 @@ fn matching_boundaries_and_replace_all_edge_cases() {
     assert_eq!(re("a+").replace_all("aaa", "b"), "b");
     assert_eq!(re("b").replace_all("", "x"), "");
     assert_eq!(re("^").replace_all("ab", "^"), "^ab");
+}
+
+#[test]
+fn replace_expands_the_capture_group_references_the_official_runtime_expands() {
+    let re = |p: &str| Regex::new(p).unwrap();
+    // Recorded against the official emulator: `'abc'.replace('(a)(b)', '$2$1') == 'bac'`
+    // is true and the `\2\1` spelling is false.
+    assert_eq!(re("(a)(b)").replace_all("abc", "$2$1"), "bac");
+    assert_eq!(re("(a)(b)").replace_all("abc", "\\2\\1"), "\\2\\1c");
+    assert_eq!(re("a").replace_all("a", "$0$0"), "aa");
+    assert_eq!(re("(a)").replace_all("ab", "[$1]"), "[a]b");
+    assert_eq!(re("a").replace_all("a", "$$"), "$");
+    // A group that never participated expands to nothing, and a reference past the last
+    // group is dropped rather than raising.
+    assert_eq!(re("(a)|(b)").replace_all("a", "<$2>"), "<>");
+    assert_eq!(re("a").replace_all("a", "$7"), "");
+}
+
+#[test]
+fn inline_flags_and_named_classes_behave_as_the_official_runtime_records_them() {
+    let full = |p: &str, s: &str| Regex::new(p).unwrap().is_full_match(s);
+    assert!(full("(?i)abc", "ABC"));
+    assert!(!full("abc", "ABC"));
+    assert!(full("(?i)[a-z]+", "ABC"), "case folding reaches classes");
+    assert!(full("(?s)a.b", "a\nb"));
+    assert!(!full("a.b", "a\nb"));
+    assert!(full("[[:digit:]]+", "123"));
+    assert!(!full("[[:digit:]]+", "abc"));
+    assert!(full("[[:alpha:][:digit:]]+", "a1"));
+    assert!(full("\\p{Lu}", "A"));
+    assert!(!full("\\p{Lu}", "a"));
+    assert!(full("\\x41", "A"));
+    assert!(full("\\x{1F600}", "\u{1F600}"));
+    assert!(full("a\\sb", "a b"));
+    assert!(Regex::new("[[:bogus:]]").is_err());
+    assert!(Regex::new("\\p{Bogus}").is_err());
 }

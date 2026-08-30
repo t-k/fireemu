@@ -6,6 +6,7 @@
 // `tonic::Status` is the error type shared with the gRPC surface.
 #![allow(clippy::result_large_err)]
 
+pub mod coverage;
 pub mod json;
 
 use std::collections::BTreeMap;
@@ -321,10 +322,19 @@ impl RestState {
     /// cannot reach it either: `DELETE` is not a CORS-simple method, so it needs a preflight
     /// that this surface never answers.
     ///
-    /// `PUT /emulator/v1/projects/{project}:securityRules` is deliberately absent: load
-    /// rules from `firestore.rules` in `firebase.json`, from `rules.source`, or through
-    /// `PUT /v1/rules` on the control API.
+    /// `PUT .../{project}:securityRules` replaces the session's Firestore ruleset, which is
+    /// what `@firebase/rules-unit-testing` calls from `initializeTestEnvironment` and from
+    /// `loadFirestoreRules`. It carries the same guard as the clear route and for the same
+    /// reason: a loopback-only listener plus a method no CORS-simple request can use.
     fn emulator_route(&self, req: &RestRequest, rest: &str) -> Result<RestResponse, Status> {
+        if let Some(project) = rest.strip_suffix(":securityRules") {
+            return self.security_rules_route(req, project);
+        }
+        for (suffix, html) in [(":ruleCoverage.html", true), (":ruleCoverage", false)] {
+            if let Some(project) = rest.strip_suffix(suffix) {
+                return self.rule_coverage_route(req, project, html);
+            }
+        }
         let mut parts = rest.split('/');
         let (Some(project), Some("databases"), Some(database), Some("documents"), None) = (
             parts.next(),
@@ -350,6 +360,100 @@ impl RestState {
         // clearing one never touches another session's data.
         self.local.reset_project(project);
         Ok(ok(Value::Object(serde_json::Map::new())))
+    }
+
+    /// `PUT /emulator/v1/projects/{project}:securityRules`.
+    ///
+    /// The body is the official one, `{"rules": {"files": [{"name", "content"}]}}`, and the
+    /// answer is the official one too: `200` with the compiler's `issues` (fireemu reports
+    /// none, so the list is empty) or `400` whose message names the first rejected position
+    /// as `L<line>:<column>`, which is the form the CLI and the test libraries print.
+    ///
+    /// fireemu keeps one Firestore ruleset per session rather than per project -- exactly as
+    /// `PUT /v1/rules` on the control API does, and as the official emulator's
+    /// `singleProjectMode` does -- so the project in the path is validated but names no
+    /// separate slot.
+    fn security_rules_route(
+        &self,
+        req: &RestRequest,
+        project: &str,
+    ) -> Result<RestResponse, Status> {
+        if req.method != "PUT" {
+            return Err(Status::invalid_argument(format!(
+                "{} is not supported on {}; the ruleset is replaced with PUT",
+                req.method, req.path
+            )));
+        }
+        if project.is_empty() || project.contains('/') {
+            return Err(Status::invalid_argument(
+                "the project of a securityRules load must be named",
+            ));
+        }
+        let Some(rules) = self.rules.as_ref() else {
+            return Err(Status::failed_precondition(
+                "this daemon evaluates no Security Rules, so none can be loaded",
+            ));
+        };
+        let files = req.body["rules"]["files"].as_array().ok_or_else(|| {
+            Status::invalid_argument("rules.files must be an array of {name, content}")
+        })?;
+        let [file] = files.as_slice() else {
+            return Err(Status::invalid_argument(format!(
+                "Cloud Firestore takes exactly one rules file, got {}",
+                files.len()
+            )));
+        };
+        let source = file["content"].as_str().ok_or_else(|| {
+            Status::invalid_argument("rules.files[0].content must be the rules source")
+        })?;
+        match rules.replace_source(source) {
+            Ok(()) => Ok(ok(json!({"issues": []}))),
+            Err(rules::RulesLoadError::Compile(e)) => Err(Status::invalid_argument(format!(
+                "Error compiling rules:\nL{}:{} {}",
+                e.line, e.column, e.message
+            ))),
+            Err(rules::RulesLoadError::Poisoned) => Err(Status::internal("rules lock poisoned")),
+        }
+    }
+
+    /// `GET /emulator/v1/projects/{project}:ruleCoverage` and its `.html` form.
+    fn rule_coverage_route(
+        &self,
+        req: &RestRequest,
+        project: &str,
+        html: bool,
+    ) -> Result<RestResponse, Status> {
+        if req.method != "GET" {
+            return Err(Status::invalid_argument(format!(
+                "{} is not supported on {}; a coverage report is read with GET",
+                req.method, req.path
+            )));
+        }
+        if project.is_empty() || project.contains('/') {
+            return Err(Status::invalid_argument(
+                "the project of a coverage report must be named",
+            ));
+        }
+        let Some(rules) = self.rules.as_ref() else {
+            return Err(Status::failed_precondition(
+                "this daemon evaluates no Security Rules, so it reports no coverage",
+            ));
+        };
+        let loaded = rules
+            .rules()
+            .read()
+            .map_err(|_| Status::internal("rules lock poisoned"))?;
+        let diagnostics = loaded
+            .diagnostics
+            .lock()
+            .map_err(|_| Status::internal("rules diagnostics lock poisoned"))?;
+        Ok(if html {
+            ok(json!({
+                coverage::HTML_KEY: coverage::coverage_html(&loaded, diagnostics.coverage()),
+            }))
+        } else {
+            ok(coverage::coverage_json(&loaded, diagnostics.coverage()))
+        })
     }
 
     /// Handles one request.

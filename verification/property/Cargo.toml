@@ -13,6 +13,7 @@ fireemu-core-app-check = { path = "../../crates/fireemu-core-app-check" }
 fireemu-core-auth = { path = "../../crates/fireemu-core-auth" }
 fireemu-core-events = { path = "../../crates/fireemu-core-events" }
 fireemu-core-limits = { path = "../../crates/fireemu-core-limits" }
+fireemu-core-rules = { path = "../../crates/fireemu-core-rules" }
 fireemu-core-session = { path = "../../crates/fireemu-core-session" }
 fireemu-core-types = { path = "../../crates/fireemu-core-types" }
 proptest.workspace = true

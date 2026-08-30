@@ -114,7 +114,7 @@ fn each_allow_method_covers_exactly_its_operations() {
     assert!(allowed(
         "request.path[0] == 'databases' && request.path[3] == 'notes'"
     ));
-    assert!(allowed("request.path.size() == 5"));
+    assert!(allowed("request.path[4] is string"));
 }
 
 #[test]
@@ -170,7 +170,10 @@ fn indexing_conversions_and_calls() {
         "'abc'[1] == 'b'",
         "{'a': 1}['a'] == 1",
         "path('/a/b')[1] == 'b'",
-        "path('/a/b').size() == 2",
+        // The official runtime has no `size()` on a path -- it is one of the type errors
+        // the differential matrix recorded -- but it does have `bind()`.
+        "path('/a/b').bind({}) == path('/a/b')",
+        "path('/a/{seg}').bind({'seg': 'b'}) == path('/a/b')",
         "int(2.0) == 2",
         "int('7') == 7",
         "float(1) == 1.0",
@@ -181,6 +184,11 @@ fn indexing_conversions_and_calls() {
         "{'a': 1}.get('a', 0) == 1",
         "{'a': 1}.get('b', 0) == 0",
         "'a,b'.split(',')[1] == 'b'",
+        "int(2.5) == 2",
+        "[1, 2, 3][0:2] == [1, 2]",
+        "'abcdef'[1:3] == 'bc'",
+        "[1, 2, 3].removeAll([2]) == [1, 3]",
+        "[1, 2].toSet().union([3].toSet()) == [1, 2, 3].toSet()",
         "['a', 'b'].join('-') == 'a-b'",
         "{'a': 1}.keys()[0] == 'a'",
         "{'a': 1}.values()[0] == 1",
@@ -195,7 +203,6 @@ fn indexing_conversions_and_calls() {
         "[1, 2, 3][-1] == 3",
         "'abc'[5] == 'b'",
         "{'a': 1}['b'] == 1",
-        "int(2.5) == 2",
         "int(true) == 1",
         "int('x') == 0",
         "{'a': 1}.get(1, 0) == 0",
@@ -206,6 +213,11 @@ fn indexing_conversions_and_calls() {
         "duration.value(1, 's') == 1",
         "hashing.md5('x') == 'x'",
         "unknownFunction(1)",
+        "path('/a/b').size() == 2",
+        "[1, 2].toSet() is set",
+        "[1, 2, 3][0:0] == []",
+        "'abc'[3:3] == ''",
+        "math.isInfinite(1.0)",
     ] {
         assert!(!allowed(err), "{err}");
     }
@@ -221,18 +233,30 @@ fn function_call_depth_boundary_comes_from_the_catalog() {
             _ => None,
         })
         .unwrap();
-    // `down(n)` makes n + 1 nested calls.
+    // A chain of distinct functions, because a recursive one does not compile at all. `n`
+    // functions make `n - 1` calls once the allow has entered the first.
     let src = |n: u64| {
+        let functions: Vec<String> = (0..n)
+            .map(|i| {
+                let body = if i + 1 < n {
+                    format!("f{}()", i + 1)
+                } else {
+                    "true".to_owned()
+                };
+                format!("function f{i}() {{ return {body}; }}")
+            })
+            .collect();
         format!(
-            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function down(n) {{ return n == 0 ? true : down(n - 1); }} match /notes/{{id}} {{ allow read: if down({n}); }} }} }}"
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ {} match /notes/{{id}} {{ allow read: if f0(); }} }} }}",
+            functions.join(" ")
         )
     };
-    let at_limit = decide(&src(max - 1), &ctx(Method::Get, &[]));
+    let at_limit = decide(&src(max + 1), &ctx(Method::Get, &[]));
     assert!(
         matches!(at_limit, Decision::Allow),
         "{max} calls: {at_limit:?}"
     );
-    let over = decide(&src(max), &ctx(Method::Get, &[]));
+    let over = decide(&src(max + 2), &ctx(Method::Get, &[]));
     assert!(
         matches!(
             over,
@@ -574,11 +598,14 @@ fn proof_captures_partial_map_get_and_absent_resource_reporting() {
         format!("rules_version = '2';\nservice cloud.firestore {{ match /{{prefix=**}}/notes/{{id}} {{ allow list: if {cond}; }} match /{{all=**}} {{ allow list: if {cond}; }} }}")
     };
     assert!(matches!(
-        decide(&prefixed("prefix.size() == 3"), &r),
+        decide(
+            &prefixed("prefix[0] == 'databases' && prefix[2] == 'documents'"),
+            &r
+        ),
         Decision::Allow
     ));
     assert!(!matches!(
-        decide(&prefixed("all.size() == 5"), &r),
+        decide(&prefixed("all[4] is string"), &r),
         Decision::Allow
     ));
     // PartialMap.get: known key decides, unknown key stays open, non-string key errors.

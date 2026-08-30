@@ -8,7 +8,7 @@
 use core::fmt;
 
 use crate::ast::{
-    Allow, BinaryOp, Expr, FunctionDecl, Item, LetBinding, Literal, MatchBlock, Method,
+    Allow, BinaryOp, Expr, ExprKind, FunctionDecl, Item, LetBinding, Literal, MatchBlock, Method,
     PathSegment, Ruleset, Service, Span, UnaryOp,
 };
 
@@ -48,7 +48,10 @@ impl std::error::Error for ParseError {}
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Ident(String),
-    Int(i64),
+    /// Widened to `i128` so that `-9223372036854775808` -- which the official compiler
+    /// accepts and which no `i64` literal can hold before its sign is applied -- reaches
+    /// the parser instead of dying in the lexer.
+    Int(i128),
     Float(f64),
     Str(String),
     Punct(&'static str),
@@ -104,7 +107,66 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
         pos: 0,
         expr_depth: 0,
     };
-    p.ruleset()
+    let ruleset = p.ruleset()?;
+    check_literal_patterns(&ruleset)?;
+    Ok(ruleset)
+}
+
+/// The official compiler compiles every literal `matches()` / `replace()` pattern while it
+/// compiles the file, and rejects the file when one of them is not a valid RE2 pattern --
+/// a lookahead, a backreference or an unterminated class never reaches the runtime. This
+/// walk reproduces that, so an unusable pattern is a load failure on both sides.
+fn check_literal_patterns(ruleset: &Ruleset) -> Result<(), ParseError> {
+    // Both walks are worklists rather than recursion: a left-nested `&&` chain is as deep
+    // as it is long, and a recursive visitor would overflow the stack on a source the
+    // parser itself accepts.
+    let mut exprs: Vec<&Expr> = Vec::new();
+    let mut items: Vec<&Item> = ruleset.services.iter().flat_map(|s| &s.items).collect();
+    while let Some(item) = items.pop() {
+        match item {
+            Item::Match(m) => {
+                items.extend(&m.items);
+                exprs.extend(m.allows.iter().filter_map(|a| a.condition.as_ref()));
+                exprs.extend(m.path.iter().filter_map(|s| match s {
+                    PathSegment::Binding(e) => Some(e),
+                    _ => None,
+                }));
+            }
+            Item::Function(f) => {
+                exprs.extend(f.lets.iter().map(|b| &b.value));
+                exprs.push(&f.body);
+            }
+        }
+    }
+    while let Some(e) = exprs.pop() {
+        let span = e.span;
+        match e.kind() {
+            ExprKind::Call { callee, args } => {
+                if let ExprKind::Member { name, .. } = callee.kind() {
+                    if matches!(name.as_str(), "matches" | "replace") {
+                        if let Some(ExprKind::Literal(Literal::Str(pattern))) =
+                            args.first().map(Expr::kind)
+                        {
+                            if crate::regex::Regex::new(pattern).is_err() {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "Invalid regular expression pattern. Pattern: {pattern}."
+                                    ),
+                                    line: span.line,
+                                    column: span.column,
+                                    offset: span.offset,
+                                });
+                            }
+                        }
+                    }
+                }
+                exprs.push(callee);
+                exprs.extend(args);
+            }
+            _ => exprs.extend(e.children()),
+        }
+    }
+    Ok(())
 }
 
 impl<'a> Parser<'a> {
@@ -223,14 +285,24 @@ impl<'a> Parser<'a> {
         }
         let text = &rest[..end];
         self.pos += end;
+        // An integer literal is never a receiver: the official lexer reads the `.` of
+        // `0.hasAny` as the start of a decimal part and rejects the file, so `0.join(x)` is
+        // a compile error rather than a runtime one. A float has already consumed its
+        // point, so `1.5.toMillis()` parses and raises at evaluation time instead --
+        // both measured (`conformance/rules-matrix.json`, generated area).
+        if !is_float && self.rest().starts_with('.') {
+            return Err(self.error("an integer literal cannot be followed by `.`"));
+        }
         if is_float {
             text.parse::<f64>()
                 .map(Token::Float)
                 .map_err(|_| self.error("invalid float"))
         } else {
-            text.parse::<i64>()
+            text.parse::<i128>()
+                .ok()
+                .filter(|v| *v <= -i128::from(i64::MIN))
                 .map(Token::Int)
-                .map_err(|_| self.error("integer out of range"))
+                .ok_or_else(|| self.error("integer out of range"))
         }
     }
 
@@ -254,6 +326,8 @@ impl<'a> Parser<'a> {
                         'n' => '\n',
                         't' => '\t',
                         'r' => '\r',
+                        '0' => '\0',
+                        'u' | 'x' | 'U' => self.unicode_escape(e)?,
                         '\\' | '\'' | '"' | '/' => e,
                         _ => return Err(self.error(format!("invalid escape `\\{e}`"))),
                     });
@@ -265,6 +339,29 @@ impl<'a> Parser<'a> {
                 c => out.push(c),
             }
         }
+    }
+
+    /// `\xHH`, `\uHHHH` and `\UHHHHHHHH` inside a string literal.
+    fn unicode_escape(&mut self, kind: char) -> Result<char, ParseError> {
+        let width = match kind {
+            'x' => 2,
+            'u' => 4,
+            _ => 8,
+        };
+        let mut digits = String::new();
+        for _ in 0..width {
+            match self.rest().chars().next().filter(char::is_ascii_hexdigit) {
+                Some(c) => {
+                    digits.push(c);
+                    self.pos += c.len_utf8();
+                }
+                None => return Err(self.error(format!("`\\{kind}` needs {width} hex digits"))),
+            }
+        }
+        u32::from_str_radix(&digits, 16)
+            .ok()
+            .and_then(char::from_u32)
+            .ok_or_else(|| self.error(format!("`\\{kind}{digits}` names no character")))
     }
 
     fn expect_punct(&mut self, p: &'static str) -> Result<(), ParseError> {
@@ -570,11 +667,17 @@ impl<'a> Parser<'a> {
             let then = self.expr()?;
             self.expect_punct(":")?;
             let otherwise = self.expr()?;
-            return Ok(Expr::Ternary {
-                cond: Box::new(cond),
-                then: Box::new(then),
-                otherwise: Box::new(otherwise),
-            });
+            let span = cond.span;
+            let end = otherwise.end;
+            return Ok(Expr::new(
+                ExprKind::Ternary {
+                    cond,
+                    then,
+                    otherwise,
+                },
+                span,
+                end,
+            ));
         }
         self.pos = save;
         Ok(cond)
@@ -619,11 +722,28 @@ impl<'a> Parser<'a> {
                     if w == "in" {
                         matched = Some(BinaryOp::In);
                     } else if w == "is" {
-                        let (type_name, _) = self.expect_ident("type name")?;
-                        left = Expr::Is {
-                            expr: Box::new(left),
-                            type_name,
+                        let at = {
+                            self.skip_trivia()?;
+                            self.pos
                         };
+                        let (type_name, _) = self.expect_ident("type name")?;
+                        if !crate::ast::IS_TYPE_NAMES.contains(&type_name.as_str()) {
+                            self.pos = at;
+                            return Err(self.error(format!(
+                                "An unsupported type identifier was used with the 'is' operator. Received {type_name}. Expected one of [{}]",
+                                crate::ast::IS_TYPE_NAMES.join(", ")
+                            )));
+                        }
+                        let span = left.span;
+                        let end = self.pos;
+                        left = Expr::new(
+                            ExprKind::Is {
+                                expr: left,
+                                type_name,
+                            },
+                            span,
+                            end,
+                        );
                         continue;
                     }
                 }
@@ -633,34 +753,60 @@ impl<'a> Parser<'a> {
                 return Ok(left);
             };
             let right = self.binary(level + 1)?;
-            left = Expr::Binary {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
+            let span = left.span;
+            let end = right.end;
+            left = Expr::new(ExprKind::Binary { op, left, right }, span, end);
         }
     }
 
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        self.skip_trivia()?;
         let save = self.pos;
         match self.next()? {
             Token::Punct("!") => {
                 self.enter()?;
                 let e = self.unary();
                 self.expr_depth -= 1;
-                Ok(Expr::Unary {
-                    op: UnaryOp::Not,
-                    expr: Box::new(e?),
-                })
+                let expr = e?;
+                let end = expr.end;
+                Ok(Expr::new(
+                    ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        expr,
+                    },
+                    self.span_at(save),
+                    end,
+                ))
             }
             Token::Punct("-") => {
+                // `-9223372036854775808` is one literal to the official compiler, not a
+                // negation of a literal that no `i64` can hold. Folding it here is the only
+                // way to accept it, and it is folded only for that exact value.
+                let after_minus = self.pos;
+                if let Token::Int(v) = self.peek()? {
+                    if v == -i128::from(i64::MIN) {
+                        self.pos = after_minus;
+                        let _ = self.next()?;
+                        return Ok(Expr::new(
+                            ExprKind::Literal(Literal::Int(i64::MIN)),
+                            self.span_at(save),
+                            self.pos,
+                        ));
+                    }
+                }
                 self.enter()?;
                 let e = self.unary();
                 self.expr_depth -= 1;
-                Ok(Expr::Unary {
-                    op: UnaryOp::Neg,
-                    expr: Box::new(e?),
-                })
+                let expr = e?;
+                let end = expr.end;
+                Ok(Expr::new(
+                    ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        expr,
+                    },
+                    self.span_at(save),
+                    end,
+                ))
             }
             _ => {
                 self.pos = save;
@@ -676,18 +822,31 @@ impl<'a> Parser<'a> {
             match self.next()? {
                 Token::Punct(".") => {
                     let (name, _) = self.expect_ident("member name")?;
-                    e = Expr::Member {
-                        object: Box::new(e),
-                        name,
-                    };
+                    let span = e.span;
+                    e = Expr::new(ExprKind::Member { object: e, name }, span, self.pos);
                 }
                 Token::Punct("[") => {
                     let index = self.expr()?;
-                    self.expect_punct("]")?;
-                    e = Expr::Index {
-                        object: Box::new(e),
-                        index: Box::new(index),
-                    };
+                    let after_index = self.pos;
+                    if self.next()? == Token::Punct(":") {
+                        let end = self.expr()?;
+                        self.expect_punct("]")?;
+                        let span = e.span;
+                        e = Expr::new(
+                            ExprKind::Slice {
+                                object: e,
+                                start: index,
+                                end,
+                            },
+                            span,
+                            self.pos,
+                        );
+                    } else {
+                        self.pos = after_index;
+                        self.expect_punct("]")?;
+                        let span = e.span;
+                        e = Expr::new(ExprKind::Index { object: e, index }, span, self.pos);
+                    }
                 }
                 Token::Punct("(") => {
                     let mut args = Vec::new();
@@ -703,11 +862,8 @@ impl<'a> Parser<'a> {
                         }
                     }
                     self.expect_punct(")")?;
-                    e = Expr::Call {
-                        callee: Box::new(e),
-                        args,
-                        span: self.span_at(save),
-                    };
+                    let span = e.span;
+                    e = Expr::new(ExprKind::Call { callee: e, args }, span, self.pos);
                 }
                 _ => {
                     self.pos = save;
@@ -720,18 +876,33 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> Result<Expr, ParseError> {
         self.skip_trivia()?;
         let at = self.pos;
+        // Every arm below builds its node through this, so a node's extent is always the
+        // text the parser actually consumed for it.
+        macro_rules! node {
+            ($kind:expr) => {
+                Expr::new($kind, self.span_at(at), self.pos)
+            };
+        }
         if self.rest().starts_with('/') {
-            return Ok(Expr::Path(self.path(false)?));
+            let segments = self.path(false)?;
+            return Ok(node!(ExprKind::Path(segments)));
         }
         match self.next()? {
-            Token::Int(i) => Ok(Expr::Literal(Literal::Int(i))),
-            Token::Float(f) => Ok(Expr::Literal(Literal::Float(f))),
-            Token::Str(s) => Ok(Expr::Literal(Literal::Str(s))),
+            Token::Int(i) => {
+                if let Ok(i) = i64::try_from(i) {
+                    Ok(node!(ExprKind::Literal(Literal::Int(i))))
+                } else {
+                    self.pos = at;
+                    Err(self.error("integer out of range"))
+                }
+            }
+            Token::Float(f) => Ok(node!(ExprKind::Literal(Literal::Float(f)))),
+            Token::Str(s) => Ok(node!(ExprKind::Literal(Literal::Str(s)))),
             Token::Ident(w) => Ok(match w.as_str() {
-                "true" => Expr::Literal(Literal::Bool(true)),
-                "false" => Expr::Literal(Literal::Bool(false)),
-                "null" => Expr::Literal(Literal::Null),
-                _ => Expr::Ident(w),
+                "true" => node!(ExprKind::Literal(Literal::Bool(true))),
+                "false" => node!(ExprKind::Literal(Literal::Bool(false))),
+                "null" => node!(ExprKind::Literal(Literal::Null)),
+                _ => node!(ExprKind::Ident(w)),
             }),
             Token::Punct("(") => {
                 let e = self.expr()?;
@@ -752,7 +923,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_punct("]")?;
-                Ok(Expr::List(items))
+                Ok(node!(ExprKind::List(items)))
             }
             Token::Punct("{") => {
                 let mut entries = Vec::new();
@@ -778,7 +949,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_punct("}")?;
-                Ok(Expr::Map(entries))
+                Ok(node!(ExprKind::Map(entries)))
             }
             t => {
                 self.pos = at;

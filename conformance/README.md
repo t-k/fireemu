@@ -77,6 +77,41 @@ the runtime with token verification skipped, so any value in the field becomes a
 null id. Both facts are recorded as oracle results. What a real project denies under enforcement
 is `pending`, never invented.
 
+## The Security Rules language matrix
+
+The scenario corpus compares fixed requests. `src/rules-probe/` compares the *language*: it
+installs bounded Rules programs into both sides through the same
+`PUT /emulator/v1/projects/{project}:securityRules` route, reads each verdict back out of a
+document read, and fails on any disagreement.
+
+```sh
+pnpm -C conformance run matrix          # record the oracle -> rules-matrix.json, RULES-MATRIX.md
+pnpm -C conformance run matrix:check    # replay fireemu and diff
+pnpm -C conformance run programs        # record the whole-program probes -> rules-programs.json
+pnpm -C conformance run programs:check  # replay fireemu and diff
+```
+
+A **claim** is one boolean Rules expression. It is compiled into two `match` blocks, one
+guarded by the claim and one by its negation, which separates the three outcomes the language
+has -- `true`, `false` and `error` (it raised, or produced a non-boolean) -- and the compiler's
+own rejection is recorded as `compile-error` with the position it named. `matrix.mjs` holds 420
+curated claims across every builtin, namespace, coercion, operator and regex construct;
+`generate.mjs` adds 260 more from a seeded PRNG over a typed grammar and shrinks a mismatch to
+the smallest expression that still disagrees.
+
+A **program** is a whole ruleset plus the requests that exercise it, for the things one
+expression cannot express: document-access budgets, runtime errors, function recursion, the
+call-depth limit, `getAfter()` inside a commit, and query authorization. The gated value is the
+HTTP status, the canonical error code and the shape of a success. The *text* of a denial is
+not gated: the official emulator answers `PERMISSION_DENIED` with a per-`allow` trace of its own
+evaluation, which is a diagnostic rather than an API contract, and fireemu publishes the same
+information through `:ruleCoverage` and `GET /v1/sessions/{s}/rules/requests` instead. Drift in
+those messages is reported and never fails.
+
+Divergences work as they do in `divergences.json`: a row named in `DIVERGENCES` inside
+`run.mjs` is gated against fireemu's own recorded answer, with the reason beside it, so a
+deliberate difference is pinned rather than tolerated and an unlisted one still fails.
+
 ## Layout
 
 ```

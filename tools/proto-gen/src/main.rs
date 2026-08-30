@@ -11,19 +11,40 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const PROTO_ROOT: &str = "crates/fireemu-proto-firestore/proto";
-const OUT_DIR: &str = "crates/fireemu-proto-firestore/src/generated";
-const FILES: &[&str] = &[
-    "google/firestore/v1/firestore.proto",
-    "google/firestore/v1/pipeline.proto",
-    "google/firestore/v1/explain_stats.proto",
+/// One generated-protobuf crate: its vendored proto root, its checked-in output directory and
+/// the entry `.proto` files to compile.
+struct Target {
+    proto_root: &'static str,
+    out_dir: &'static str,
+    files: &'static [&'static str],
+}
+
+const TARGETS: &[Target] = &[
+    Target {
+        proto_root: "crates/fireemu-proto-firestore/proto",
+        out_dir: "crates/fireemu-proto-firestore/src/generated",
+        files: &[
+            "google/firestore/v1/firestore.proto",
+            "google/firestore/v1/pipeline.proto",
+            "google/firestore/v1/explain_stats.proto",
+        ],
+    },
+    Target {
+        proto_root: "crates/fireemu-proto-pubsub/proto",
+        out_dir: "crates/fireemu-proto-pubsub/src/generated",
+        files: &[
+            "google/pubsub/v1/pubsub.proto",
+            "google/pubsub/v1/schema.proto",
+        ],
+    },
 ];
 
-fn generate(out: &Path) -> Result<(), String> {
+fn generate_target(target: &Target, out: &Path) -> Result<(), String> {
     fs::create_dir_all(out).map_err(|e| e.to_string())?;
-    let files: Vec<PathBuf> = FILES
+    let files: Vec<PathBuf> = target
+        .files
         .iter()
-        .map(|f| Path::new(PROTO_ROOT).join(f))
+        .map(|f| Path::new(target.proto_root).join(f))
         .collect();
     tonic_build::configure()
         .build_server(true)
@@ -31,10 +52,10 @@ fn generate(out: &Path) -> Result<(), String> {
         .build_transport(false)
         .out_dir(out)
         .emit_rerun_if_changed(false)
-        .compile_protos(&files, &[Path::new(PROTO_ROOT)])
+        .compile_protos(&files, &[Path::new(target.proto_root)])
         .map_err(|e| format!("protoc failed: {e}"))?;
     // Stamp the upstream commit so that drift between protos and generated code is visible.
-    let commit = fs::read_to_string(Path::new(PROTO_ROOT).join("UPSTREAM_COMMIT"))
+    let commit = fs::read_to_string(Path::new(target.proto_root).join("UPSTREAM_COMMIT"))
         .map_err(|e| e.to_string())?;
     fs::write(out.join("UPSTREAM_COMMIT"), format!("{}\n", commit.trim()))
         .map_err(|e| e.to_string())?;
@@ -59,15 +80,54 @@ fn read_dir_sorted(dir: &Path) -> Vec<(String, Vec<u8>)> {
     entries
 }
 
+fn generate_all() -> Result<(), String> {
+    for target in TARGETS {
+        generate_target(target, Path::new(target.out_dir))?;
+        println!("generated into {}", target.out_dir);
+    }
+    Ok(())
+}
+
+fn check_all() -> Result<(), String> {
+    for target in TARGETS {
+        let tmp = std::env::temp_dir().join(format!(
+            "fireemu-proto-gen-{}-{}",
+            std::process::id(),
+            target.out_dir.replace('/', "_")
+        ));
+        let outcome = generate_target(target, &tmp).and_then(|()| {
+            let expected = read_dir_sorted(&tmp);
+            let actual = read_dir_sorted(Path::new(target.out_dir));
+            if expected == actual {
+                Ok(())
+            } else {
+                Err(format!(
+                    "generated protobuf code in {} differs from the vendored protos; run `cargo run -p proto-gen -- generate`",
+                    target.out_dir
+                ))
+            }
+        });
+        let _ = fs::remove_dir_all(&tmp);
+        outcome?;
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let mode = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "check".to_owned());
-    let out = Path::new(OUT_DIR);
     match mode.as_str() {
-        "generate" => match generate(out) {
+        "generate" => match generate_all() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        "check" => match check_all() {
             Ok(()) => {
-                println!("generated into {OUT_DIR}");
+                println!("generated protobuf code is up to date");
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -75,30 +135,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        "check" => {
-            let tmp =
-                std::env::temp_dir().join(format!("fireemu-proto-gen-{}", std::process::id()));
-            let outcome = generate(&tmp).and_then(|()| {
-                let expected = read_dir_sorted(&tmp);
-                let actual = read_dir_sorted(out);
-                if expected == actual {
-                    Ok(())
-                } else {
-                    Err("generated protobuf code differs from the vendored protos; run `cargo run -p proto-gen -- generate`".to_owned())
-                }
-            });
-            let _ = fs::remove_dir_all(&tmp);
-            match outcome {
-                Ok(()) => {
-                    println!("generated protobuf code is up to date");
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
         other => {
             eprintln!("error: unknown mode {other}; use generate or check");
             ExitCode::FAILURE

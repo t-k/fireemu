@@ -347,6 +347,41 @@
       "id": "M-AUTH-004",
       "fault": "TOTP secret written to trace / snapshot in clear text",
       "critical": true
+    },
+    {
+      "id": "M-APPCHECK-001",
+      "fault": "App Check token accepted after signature verification fails",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-002",
+      "fault": "App Check project audience validation omitted",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-003",
+      "fault": "App Check treats now == exp as valid",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-005",
+      "fault": "App Check token stays valid across an epoch change",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-008",
+      "fault": "raw debug secret exposed in a list or observation",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-010",
+      "fault": "debug-token exchange accepts an unregistered digest",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-011",
+      "fault": "the first of several App Check header values is selected",
+      "critical": true
     }
   ]
 }

@@ -521,6 +521,78 @@
           "crates/ftd-core-auth/tests/mfa.rs"
         ]
       }
+    },
+    {
+      "id": "AC-CFG-001",
+      "statement": "App Check defaults preserve current behaviour, and invalid keys, types, service modes, token TTLs, app IDs, project numbers and debug-token digests fail closed in both the canonical JSON Schema and the Rust loader.",
+      "criticality": "important",
+      "owner": "firebase-testd",
+      "status": "implemented",
+      "note": "The loader delegates every binding rule to the core registry, so the schema, the loader and the runtime cannot disagree; tools/config-schema-check checks the same rules over spec/config/examples and spec/config/invalid-examples.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-core-app-check/tests/config.rs",
+          "crates/firebase-testd/tests/exec.rs"
+        ],
+        "conformance": "spec/config/invalid-examples"
+      }
+    },
+    {
+      "id": "AC-TOKEN-001",
+      "statement": "Valid, malformed, forged, expired, future-issued, wrong-key, wrong-project, unknown-app, disabled-app and wrong-epoch App Check tokens classify correctly under the virtual clock.",
+      "criticality": "critical",
+      "owner": "core-app-check",
+      "status": "implemented",
+      "note": "prop_app_check_foreign_keys_never_verify covers INV-APPCHECK-011 alongside the window property; the real RSA key isolation is checked in crates/ftd-adapter-http/tests/app_check.rs.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-core-app-check/tests/token.rs",
+          "crates/ftd-core-app-check/tests/jwt.rs"
+        ],
+        "property": "prop_app_check_token_window_is_half_open",
+        "mutation": [
+          "M-APPCHECK-001",
+          "M-APPCHECK-002",
+          "M-APPCHECK-003",
+          "M-APPCHECK-005"
+        ]
+      }
+    },
+    {
+      "id": "AC-EXCHANGE-001",
+      "statement": "Only a constant-time digest match produces an App Check token, and an invalid app, project and debug secret are externally indistinguishable.",
+      "criticality": "critical",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "note": "The exchange scans the fixed-capacity digest set without an early exit and performs equivalent dummy work for an unknown app; that limits timing differences and does not claim resistance to a local process-level side channel.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-adapter-http/tests/app_check.rs",
+          "crates/ftd-core-app-check/tests/exchange.rs"
+        ],
+        "property": "prop_app_check_exchange_needs_the_registered_digest",
+        "mutation": [
+          "M-APPCHECK-008",
+          "M-APPCHECK-010"
+        ]
+      }
+    },
+    {
+      "id": "AC-HEADER-001",
+      "statement": "Duplicate, comma-folded, empty, oversized and otherwise ambiguous X-Firebase-AppCheck values are refused consistently, and no adapter selects one of several values.",
+      "criticality": "critical",
+      "owner": "core-app-check",
+      "status": "partial",
+      "note": "Milestone AC0 implements and proves the transport-neutral classifier. The per-transport adapters (Firestore gRPC and WebChannel, Storage, the Functions proxy) adopt it in AC1 and AC2, so the requirement stays partial until those integration tests exist.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-core-app-check/tests/header.rs"
+        ],
+        "property": "prop_app_check_header_never_selects_one_of_several",
+        "mutation": [
+          "M-APPCHECK-011"
+        ]
+      }
     }
   ]
 }

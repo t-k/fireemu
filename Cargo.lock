@@ -602,6 +602,7 @@ dependencies = [
 name = "ftd-verification-property"
 version = "0.1.0"
 dependencies = [
+ "ftd-core-app-check",
  "ftd-core-auth",
  "ftd-core-events",
  "ftd-core-limits",

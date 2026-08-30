@@ -9,6 +9,7 @@ publish.workspace = true
 description = "Property tests named by verification/requirements/requirements.json; run with cargo test"
 
 [dev-dependencies]
+ftd-core-app-check = { path = "../../crates/ftd-core-app-check" }
 ftd-core-auth = { path = "../../crates/ftd-core-auth" }
 ftd-core-events = { path = "../../crates/ftd-core-events" }
 ftd-core-limits = { path = "../../crates/ftd-core-limits" }

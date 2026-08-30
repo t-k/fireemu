@@ -100,6 +100,54 @@ The virtual clock starts at the wall-clock time unless `daemon.clockStart` pins 
 - `unsigned-emulator` (default): `alg: none`, the Firebase Auth Emulator format. The Admin SDK accepts these tokens whenever `FIREBASE_AUTH_EMULATOR_HOST` is set, and it accepts nothing else in that mode.
 - `session-rsa`: RS256 with a 2048-bit RSA key derived deterministically from the session seed (`kid` is the SHA-256 prefix of the modulus). The JWKS is served at `/.well-known/jwks.json` and at `/www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com` on the HTTP port, for backends that verify tokens with a JOSE library against a configurable JWKS URL. Once the signer is installed, every surface (Identity Toolkit, Firestore rules, Storage rules) refuses unsigned and foreign-signed tokens. Keep the default when the Admin SDK's `verifyIdToken` is on the path: `firebase-admin` skips key fetching in emulator mode and only accepts `alg: none`.
 
+### App Check
+
+`appCheck` is off by default. Enabling it turns on the local App Check issuer: the daemon registers Firebase app IDs from configuration, exchanges a registered debug secret for a locally signed RS256 token, and publishes the public key at a local JWKS endpoint. This is milestone AC0 of [docs/specifications/firebase-app-check.md](docs/specifications/firebase-app-check.md) — `APPCHECK-CORE-1`, `APPCHECK-DEBUG-EXCHANGE-1` and `APPCHECK-JWKS-1`.
+
+```json
+{
+  "appCheck": {
+    "enabled": true,
+    "tokenSigning": "instance-rsa",
+    "tokenTtlSeconds": 3600,
+    "apps": [
+      {
+        "projectId": "demo-app",
+        "projectNumber": "1234567890",
+        "appId": "1:1234567890:web:local-test-app",
+        "debugTokenSha256": ["db8055e0e0307d5a016bec4dc338d69875eb0fb7e614a8b125b08fb082095d98"]
+      }
+    ],
+    "services": { "auth": "off", "firestore": "unenforced", "storage": "unenforced" }
+  }
+}
+```
+
+Configuration stores only the SHA-256 digest of a debug secret, never the secret itself; the digest is of the lowercase hyphenated canonical UUIDv4 text. Use clearly fake local values and never a production App Check debug token. `tokenTtlSeconds` is between 1800 and 604800, one project ID maps to exactly one project number and back, one app ID belongs to exactly one project, and a standard `1:{projectNumber}:{platform}:{opaque}` app ID must embed its own project number. Unknown keys are errors everywhere, and a non-`off` service mode while `enabled` is false is refused.
+
+The routes share the Auth/control listener and never cache (`Cache-Control: no-store`):
+
+```sh
+# exchange a registered debug secret (the v1beta twin behaves identically; ?key= is ignored)
+curl -X POST "http://127.0.0.1:9099/v1/projects/demo-app/apps/1:1234567890:web:local-test-app:exchangeDebugToken" \
+     -H 'content-type: application/json' -d '{"debugToken": "<uuid>", "limitedUse": false}'
+# -> {"token": "<RS256 JWT>", "ttl": "3600s"}
+
+curl http://127.0.0.1:9099/v1/jwks            # this instance's public App Check key
+
+# privileged: the control token is required for every method, whatever the Origin
+curl -X POST "http://127.0.0.1:9099/emulator/v1/projects/demo-app/apps/1:1234567890:web:local-test-app/debugTokens" \
+     -H "authorization: Bearer $FTD_CONTROL_TOKEN" -H 'content-type: application/json' \
+     -d '{"displayName": "ci runner", "generate": true}'
+# -> the raw secret exactly once; a later list shows only the id, name, creation time and digest prefix
+```
+
+The signing key is a dedicated 2048-bit RSA key drawn from the operating system CSPRNG once per daemon instance (`instance-rsa`); its `kid` starts with `ftd-app-check-` and it is never the Auth session key. Two normally started daemons therefore reject each other's tokens, and a restart invalidates the previous instance's JWKS. Tokens carry the production claim shape (`iss`, `sub`, both `projects/{projectNumber}` and `projects/{projectId}` audiences, `iat`, `exp`, `jti`) plus a local private `ftd_epoch` claim that binds a token to the project session epoch. Expiry is decided on the virtual clock: `iat <= now < exp`, with `now == exp` already expired.
+
+`--only appcheck` selects the service, and `firebase-testd exec` then exports `FTD_APP_CHECK_EMULATOR_HOST=host:port` and `FTD_APP_CHECK_JWKS_URL=http://host:port/v1/jwks`. Selecting `functions` selects App Check implicitly when it is enabled. No raw debug secret is ever generated or exported implicitly.
+
+**What is not enforced yet.** No Firebase product reads the App Check decision in this milestone: Firestore, Storage, Auth and callable Functions serve requests exactly as they did before, whatever `appCheck.services` says (the configured modes are parsed, validated and printed at start). Apps can only be registered in configuration, and adding one needs a daemon restart. A session reset does not yet rotate the App Check epoch, so tokens issued before a reset keep verifying at the HTTP surface. Limited-use tokens are unsupported: `limitedUse: true` fails closed with `501 APP_CHECK_REPLAY_UNSUPPORTED` and never returns a reusable token. Production attestation providers (Play Integrity, App Attest, DeviceCheck, reCAPTCHA) are out of scope; a local token proves nothing about device integrity. `GET /v1/capabilities` states the exact status of all nine `APPCHECK-*` capabilities.
+
 ### Storage
 
 An object is at most 256 MiB; a request body is at most 260 MiB (the object boundary plus multipart framing) and is refused with `413` beyond that. Upload bytes are never duplicated on the way in: the request buffer is handed to the object store as it is, and a multipart data part is carved out of the same allocation, so a near-limit upload costs one payload-sized buffer, not two or three.

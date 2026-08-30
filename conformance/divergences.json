@@ -242,6 +242,10 @@
       "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
       "reason": "The same envelope and link-host divergence on the metadataUpdated event that creating a download token publishes."
     },
+    "storage-probe/gcs-update-list-delete#get-missing-media": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); conformance/storage-matrix.json",
+      "reason": "The official emulator types the missing-object media body text/html, which reflects the decoded object name; that route is a top-level GET reachable with no Origin (so the loopback guard never fires), making the reflection a reflected-XSS vector on the emulator origin, and the JSON API dialect is unauthenticated and rules-free. fireemu answers the identical 404 status and body bytes as text/plain, which no browser executes. Security fix M-1 of the storage parity review."
+    },
     "storage-probe/triggers#json-api-resumable-finalize": {
       "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
       "reason": "The same envelope and link-host divergence on the finalize event of a JSON API resumable upload."

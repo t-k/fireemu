@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 196,
-    "documented-divergence": 23,
+    "parity": 195,
+    "documented-divergence": 24,
     "debt": 0
   },
   "programs": [
@@ -408,7 +408,16 @@
           "id": "multipart-data-ending-in-line-breaks",
           "status": "parity",
           "value": {
-            "bytes": [108, 105, 110, 101, 13, 10, 13, 10],
+            "bytes": [
+              108,
+              105,
+              110,
+              101,
+              13,
+              10,
+              13,
+              10
+            ],
             "status": 200
           }
         }
@@ -1709,7 +1718,10 @@
                   "name": "open/lst/zz.txt"
                 }
               ],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"]
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -1799,14 +1811,25 @@
           "value": {
             "0": {
               "hasNext": true,
-              "items": ["open/lst/a.txt", "open/lst/b.txt"],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
+              "items": [
+                "open/lst/a.txt",
+                "open/lst/b.txt"
+              ],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "items": ["open/lst/zz.txt"],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
+              "items": [
+                "open/lst/zz.txt"
+              ],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
               "status": 200
             }
           }
@@ -1815,7 +1838,10 @@
           "id": "page-token-shape",
           "status": "parity",
           "value": {
-            "items": ["open/lst/a.txt", "open/lst/b.txt"],
+            "items": [
+              "open/lst/a.txt",
+              "open/lst/b.txt"
+            ],
             "nextPageToken": "open/lst/dir/c.txt"
           }
         },
@@ -3512,7 +3538,9 @@
                 }
               ],
               "kind": "storage#objects",
-              "prefixes": ["open/gcsu/list/dir/"]
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -3554,14 +3582,22 @@
           "value": {
             "0": {
               "hasNext": true,
-              "names": ["open/gcsu/list/a.txt"],
-              "prefixes": ["open/gcsu/list/dir/"],
+              "names": [
+                "open/gcsu/list/a.txt"
+              ],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "names": ["open/gcsu/list/b.txt"],
-              "prefixes": ["open/gcsu/list/dir/"],
+              "names": [
+                "open/gcsu/list/b.txt"
+              ],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
               "status": 200
             }
           }
@@ -3570,7 +3606,10 @@
           "id": "list-short-route",
           "status": "parity",
           "value": {
-            "names": ["open/gcsu/list/dir/c.txt", "open/gcsu/list/dir/d.txt"],
+            "names": [
+              "open/gcsu/list/dir/c.txt",
+              "open/gcsu/list/dir/d.txt"
+            ],
             "status": 200
           }
         },
@@ -3799,14 +3838,23 @@
         },
         {
           "id": "get-missing-media",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "No such object: demo-storage-probe.appspot.com/open/gcsu/doc.txt",
             "headers": {
               "content-type": "text/html; charset=utf-8"
             },
             "status": 404
-          }
+          },
+          "fireemu": {
+            "body": "No such object: demo-storage-probe.appspot.com/open/gcsu/doc.txt",
+            "headers": {
+              "content-type": "text/plain; charset=utf-8"
+            },
+            "status": 404
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); conformance/storage-matrix.json",
+          "reason": "The official emulator types the missing-object media body text/html, which reflects the decoded object name; that route is a top-level GET reachable with no Origin (so the loopback guard never fires), making the reflection a reflected-XSS vector on the emulator origin, and the JSON API dialect is unauthenticated and rules-free. fireemu answers the identical 404 status and body bytes as text/plain, which no browser executes. Security fix M-1 of the storage parity review."
         },
         {
           "id": "delete-short-route-missing",
@@ -4689,7 +4737,9 @@
           "status": "parity",
           "value": {
             "kind": "storage#buckets",
-            "names": ["demo-storage-probe.appspot.com"],
+            "names": [
+              "demo-storage-probe.appspot.com"
+            ],
             "status": 200
           }
         },

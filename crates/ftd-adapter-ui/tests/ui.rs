@@ -1074,25 +1074,34 @@ async fn the_debug_token_front_refuses_an_unconfigured_app_and_a_browser_without
         .starts_with("CONTROL_TOKEN_REQUIRED"));
 }
 
+/// One observation of `project`, as an adapter would have recorded it.
+fn ac_observation(
+    project: &str,
+    service: &'static str,
+    operation: &str,
+) -> ftd_core_app_check::observe::Observation {
+    ftd_core_app_check::observe::Observation {
+        project_id: project.to_owned(),
+        service,
+        transport: "grpc",
+        operation: operation.to_owned(),
+        mode: ftd_core_app_check::verify::BaselineMode::Enforced,
+        category: ftd_core_app_check::observe::CredentialCategory::Invalid,
+        failure: Some(ftd_core_app_check::verify::AppCheckFailure::Malformed),
+        app_id: ftd_core_app_check::observe::UNKNOWN_APP_LABEL.to_owned(),
+        at: LogicalInstant::from_unix_seconds(1_788_004_860),
+        policy_generation: 1,
+        admitted: false,
+    }
+}
+
 #[tokio::test]
 async fn the_observation_route_answers_through_the_control_front() {
     let app_check = ac_state();
     let s = state_with(Some(app_check.clone()));
     {
         let registry = app_check.registry.read().unwrap();
-        registry.record_observation(ftd_core_app_check::observe::Observation {
-            project_id: "demo-app".to_owned(),
-            service: "firestore",
-            transport: "grpc",
-            operation: "Commit".to_owned(),
-            mode: ftd_core_app_check::verify::BaselineMode::Enforced,
-            category: ftd_core_app_check::observe::CredentialCategory::Invalid,
-            failure: Some(ftd_core_app_check::verify::AppCheckFailure::Malformed),
-            app_id: ftd_core_app_check::observe::UNKNOWN_APP_LABEL.to_owned(),
-            at: LogicalInstant::from_unix_seconds(1_788_004_860),
-            policy_generation: 1,
-            admitted: false,
-        });
+        registry.record_observation(ac_observation("demo-app", "firestore", "Commit"));
     }
     let r = handle(
         &s,
@@ -1124,4 +1133,68 @@ async fn the_observation_route_answers_through_the_control_front() {
     let text = serde_json::to_string(&body).unwrap();
     assert!(!text.contains(AC_SECRET));
     assert!(!text.contains(&ac_digest_hex()));
+}
+
+/// The page is served the selected session's project and nothing else: the front carries the
+/// session name through to the control API, which reads that project's own ring.
+#[tokio::test]
+async fn the_observation_front_serves_only_the_selected_sessions_project() {
+    let app_check = ac_state();
+    let s = state_with(Some(app_check.clone()));
+    s.control
+        .sessions
+        .lock()
+        .unwrap()
+        .insert("second".to_owned(), "demo-other".to_owned());
+    {
+        let registry = app_check.registry.read().unwrap();
+        registry.record_observation(ac_observation("demo-app", "firestore", "Commit"));
+        for _ in 0..3 {
+            registry.record_observation(ac_observation("demo-other", "storage", "storage.upload"));
+        }
+    }
+
+    let default = handle(
+        &s,
+        &request(
+            "GET",
+            "/ui/api/control/v1/sessions/default/appCheck/observations",
+            &Value::Null,
+        ),
+    )
+    .await
+    .body_json()
+    .unwrap();
+    assert_eq!(default["project"], json!("demo-app"));
+    let observations = default["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 1, "{observations:?}");
+    assert_eq!(observations[0]["operation"], json!("Commit"));
+    assert!(
+        !serde_json::to_string(&default)
+            .unwrap()
+            .contains("storage.upload"),
+        "the other session's traffic is not this session's: {default}"
+    );
+
+    let second = handle(
+        &s,
+        &request(
+            "GET",
+            "/ui/api/control/v1/sessions/second/appCheck/observations",
+            &Value::Null,
+        ),
+    )
+    .await
+    .body_json()
+    .unwrap();
+    assert_eq!(second["project"], json!("demo-other"));
+    assert_eq!(second["observations"].as_array().unwrap().len(), 3);
+    let counters = second["counters"].as_array().unwrap();
+    assert_eq!(counters.len(), 1, "{counters:?}");
+    assert_eq!(counters[0]["service"], json!("storage"));
+    assert_eq!(counters[0]["count"], json!(3));
+    assert!(
+        counters[0]["function"].is_null(),
+        "only a callable name is a counter label: {counters:?}"
+    );
 }

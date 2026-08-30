@@ -113,12 +113,48 @@ fn record(
     }
 }
 
+/// Records `count` classified requests of one service against one project.
+fn record_for(
+    gate: &ftd_core_app_check::AppCheckGate,
+    project: &str,
+    service: &'static str,
+    operation: &str,
+    count: usize,
+) {
+    let policy = ftd_core_app_check::admission::ServiceAdmission::new(
+        gate.clone(),
+        service,
+        BaselineMode::Unenforced,
+    )
+    .expect("a non-off mode has an admission");
+    for _ in 0..count {
+        let _ = policy.admit(&AdmissionRequest {
+            project_id: project,
+            transport: "http",
+            operation,
+            bypass: PrivilegedBypass::None,
+            header: &HeaderClassification::Missing,
+            now: LogicalInstant::from_unix_seconds(fixture::START),
+        });
+    }
+}
+
 fn gate() -> (
     ftd_core_app_check::AppCheckGate,
     Arc<ftd_adapter_http::app_check::AppCheckState>,
 ) {
     let app_check = fixture::app_check_state(1, fixture::clock());
     (app_check.gate(), app_check)
+}
+
+/// A runtime with two sessions over two projects, as `POST /v1/sessions` would leave it.
+fn two_session_state(gate: ftd_core_app_check::AppCheckGate) -> ControlState {
+    let mut s = state(Some(gate));
+    s.sessions = Mutex::new(std::collections::BTreeMap::from([
+        ("default".to_owned(), "demo-app".to_owned()),
+        ("second".to_owned(), "demo-other".to_owned()),
+    ]));
+    s
 }
 
 // ------------------------------------------------------------------------------------------
@@ -241,6 +277,144 @@ fn observations_count_by_service_app_category_and_outcome() {
         "{observations:?}"
     );
     assert!(observations.iter().all(|o| o["mode"] == "unenforced"));
+}
+
+/// Section 15: a session is served its own project's ring and counters, and nothing else.
+///
+/// The registry keeps one ring per project, so this is scoping by construction rather than a
+/// filter over a shared window: session B never sees what session A classified, and neither
+/// session's traffic changes what the other is answered.
+#[test]
+fn a_session_reads_only_its_own_projects_observations() {
+    let (gate, app_check) = gate();
+    record(&gate, &app_check);
+    record_for(&gate, "demo-other", "storage", "storage.upload", 3);
+    let s = two_session_state(gate);
+
+    let first = handle_with(&s, "GET", OBSERVATIONS, &control(), &json!({}));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.body["project"], "demo-app");
+    let first_observations = first.body["observations"].as_array().expect("observations");
+    assert_eq!(first_observations.len(), 5);
+    assert!(
+        first_observations
+            .iter()
+            .all(|o| o["service"] == "firestore"),
+        "session A never sees session B's storage traffic: {first_observations:?}"
+    );
+    assert!(
+        !first.body.to_string().contains("storage.upload"),
+        "{}",
+        first.body
+    );
+
+    let second = handle_with(
+        &s,
+        "GET",
+        "/v1/sessions/second/appCheck/observations",
+        &control(),
+        &json!({}),
+    );
+    assert_eq!(second.status, 200, "{}", second.body);
+    assert_eq!(second.body["project"], "demo-other");
+    let second_observations = second.body["observations"]
+        .as_array()
+        .expect("observations");
+    assert_eq!(second_observations.len(), 3);
+    assert!(
+        second_observations
+            .iter()
+            .all(|o| o["operation"] == "storage.upload"),
+        "{second_observations:?}"
+    );
+    let second_counters = second.body["counters"].as_array().expect("counters");
+    assert_eq!(second_counters.len(), 1, "{second_counters:?}");
+    assert_eq!(second_counters[0]["service"], "storage");
+    assert_eq!(second_counters[0]["count"], 3);
+}
+
+/// A project's own window is its own: filling it evicts nothing from another project, and the
+/// counters keep counting past the eviction.
+#[test]
+fn one_projects_flood_never_shortens_another_projects_window() {
+    let (gate, _app_check) = gate();
+    record_for(&gate, "demo-other", "firestore", "GetDocument", 1);
+    let flood = ftd_core_app_check::limits::MAX_RETAINED_OBSERVATIONS_PER_PROJECT + 5;
+    record_for(&gate, "demo-app", "firestore", "Commit", flood);
+    let s = two_session_state(gate);
+
+    let quiet = handle_with(
+        &s,
+        "GET",
+        "/v1/sessions/second/appCheck/observations",
+        &control(),
+        &json!({}),
+    );
+    assert_eq!(
+        quiet.body["observations"]
+            .as_array()
+            .expect("observations")
+            .len(),
+        1,
+        "the quiet project keeps its only observation"
+    );
+
+    let busy = handle_with(&s, "GET", OBSERVATIONS, &control(), &json!({}));
+    let retained = busy.body["observations"]
+        .as_array()
+        .expect("observations")
+        .len();
+    assert_eq!(
+        retained,
+        ftd_core_app_check::limits::MAX_RETAINED_OBSERVATIONS_PER_PROJECT,
+        "a project's own ring is still bounded"
+    );
+    let counters = busy.body["counters"].as_array().expect("counters");
+    assert_eq!(counters.len(), 1, "{counters:?}");
+    assert_eq!(
+        counters[0]["count"].as_u64(),
+        Some(flood as u64),
+        "the counters count what the ring dropped as well"
+    );
+}
+
+/// Callable observations are grouped per callable; a route operation of any other service is
+/// not a counter label, so the bounded label rule still holds.
+#[test]
+fn counters_group_callables_by_function_name() {
+    let (gate, _app_check) = gate();
+    record_for(&gate, "demo-app", "functions", "addMessage", 2);
+    record_for(&gate, "demo-app", "functions", "deleteMessage", 1);
+    record_for(&gate, "demo-app", "firestore", "Commit", 1);
+    let s = state(Some(gate));
+    let r = handle_with(&s, "GET", OBSERVATIONS, &control(), &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let counters = r.body["counters"].as_array().expect("counters");
+    let functions: Vec<(&str, u64)> = counters
+        .iter()
+        .filter(|c| c["service"] == "functions")
+        .map(|c| {
+            (
+                c["function"].as_str().expect("a callable name"),
+                c["count"].as_u64().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        functions,
+        vec![("addMessage", 2), ("deleteMessage", 1)],
+        "{counters:?}"
+    );
+    let firestore: Vec<&serde_json::Value> = counters
+        .iter()
+        .filter(|c| c["service"] == "firestore")
+        .collect();
+    assert_eq!(firestore.len(), 1);
+    assert!(
+        firestore[0]["function"].is_null(),
+        "only a callable name is a label: {:?}",
+        firestore[0]
+    );
 }
 
 /// Section 15: nothing the caller controls becomes a counter label, and no secret is exposed.

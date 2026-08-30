@@ -24,6 +24,7 @@ ftd-proto-firestore = { path = "../ftd-proto-firestore" }
 ftd-adapter-grpc = { path = "../ftd-adapter-grpc" }
 ftd-adapter-http = { path = "../ftd-adapter-http" }
 ftd-adapter-functions = { path = "../ftd-adapter-functions" }
+ftd-adapter-ui = { path = "../ftd-adapter-ui" }
 ftd-core-functions = { path = "../ftd-core-functions" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync"] }

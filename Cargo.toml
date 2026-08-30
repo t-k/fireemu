@@ -14,6 +14,7 @@ members = [
     "crates/ftd-adapter-grpc",
     "crates/ftd-adapter-http",
     "crates/ftd-adapter-functions",
+    "crates/ftd-adapter-ui",
     "crates/firebase-testd",
     "tools/limit-catalog-gen",
     "tools/traceability-check",

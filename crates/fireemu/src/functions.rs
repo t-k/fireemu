@@ -1,6 +1,6 @@
 //! Functions runtime wiring: runner process, event subscriptions, control hooks.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,16 +34,117 @@ pub struct EmulatorHosts {
     pub storage: String,
 }
 
-/// The bundled Node runner (overridable with `FIREEMU_RUNNER_NODE`).
-fn default_runner() -> Vec<String> {
-    let script = std::env::var("FIREEMU_RUNNER_NODE").unwrap_or_else(|_| {
-        concat!(
+/// Where a located runner script came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerSource {
+    /// `FIREEMU_RUNNER_NODE` named it.
+    Environment,
+    /// A `runner-node/` directory shipped beside the binary: the release layout, in which the
+    /// platform package holds `bin/fireemu` next to `bin/runner-node/index.mjs`.
+    BesideBinary,
+    /// `tools/runner-node/` in the workspace this binary was built from (development builds).
+    WorkspaceSource,
+}
+
+impl RunnerSource {
+    /// A short phrase for `doctor` and for error messages.
+    #[must_use]
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Environment => "FIREEMU_RUNNER_NODE",
+            Self::BesideBinary => "bundled beside the binary",
+            Self::WorkspaceSource => "workspace source tree",
+        }
+    }
+}
+
+/// The bundled Node runner as located on this host.
+#[derive(Debug, Clone)]
+pub struct RunnerScript {
+    /// Absolute (or as-given, for the environment override) path of `index.mjs`.
+    pub path: PathBuf,
+    /// Where it was found.
+    pub source: RunnerSource,
+}
+
+/// Every place the runner is looked for, in the order they are tried.
+///
+/// `FIREEMU_RUNNER_NODE` wins outright so a consumer can point the daemon at a runner of its
+/// own. Otherwise the release layout is preferred over the source tree: a packaged binary must
+/// never reach back into the machine that built it. Two shapes are accepted beside the binary,
+/// `<exe dir>/runner-node/` and `<exe dir>/../runner-node/`, so the script can sit either next
+/// to the executable or one level up in a package root.
+#[must_use]
+pub fn runner_candidates() -> Vec<(RunnerSource, PathBuf)> {
+    let mut out = Vec::new();
+    if let Some(script) = std::env::var_os("FIREEMU_RUNNER_NODE") {
+        out.push((RunnerSource::Environment, PathBuf::from(script)));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        // The executable may be reached through a symlink (npm's `node_modules/.bin`), and the
+        // runner lives beside the real file, not beside the link.
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        if let Some(dir) = exe.parent() {
+            out.push((
+                RunnerSource::BesideBinary,
+                dir.join("runner-node").join("index.mjs"),
+            ));
+            if let Some(up) = dir.parent() {
+                out.push((
+                    RunnerSource::BesideBinary,
+                    up.join("runner-node").join("index.mjs"),
+                ));
+            }
+        }
+    }
+    out.push((
+        RunnerSource::WorkspaceSource,
+        PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tools/runner-node/index.mjs"
-        )
-        .to_owned()
-    });
-    vec!["node".to_owned(), script]
+        )),
+    ));
+    out
+}
+
+/// Locates the bundled Node runner, or explains every place that was tried.
+///
+/// The environment override is reported as missing rather than silently skipped: a consumer
+/// that named a runner meant that one, and falling back to another would run different code
+/// than it asked for.
+pub fn locate_runner() -> Result<RunnerScript, String> {
+    let candidates = runner_candidates();
+    if let Some((source, path)) = candidates.first() {
+        if *source == RunnerSource::Environment && !path.is_file() {
+            return Err(format!(
+                "FIREEMU_RUNNER_NODE names {}, which is not a readable file",
+                path.display()
+            ));
+        }
+    }
+    for (source, path) in &candidates {
+        if path.is_file() {
+            return Ok(RunnerScript {
+                path: path.clone(),
+                source: *source,
+            });
+        }
+    }
+    Err(format!(
+        "the bundled Node runner (runner-node/index.mjs) was not found; tried {}. Set \
+         FIREEMU_RUNNER_NODE to an index.mjs, or reinstall the platform package that ships it",
+        candidates
+            .iter()
+            .map(|(_, p)| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+/// The bundled Node runner as a command (overridable wholesale with `functions.runner`).
+fn default_runner() -> Result<Vec<String>, String> {
+    let script = locate_runner()?;
+    Ok(vec!["node".to_owned(), script.path.display().to_string()])
 }
 
 /// Starts the runner and the runtime for `cfg.functions_source` and installs it as the
@@ -65,7 +166,10 @@ pub async fn start(
     if !Path::new(&source).is_dir() {
         return Err(format!("functions.source {source:?} is not a directory"));
     }
-    let mut command = cfg.functions_runner.clone().unwrap_or_else(default_runner);
+    let mut command = match cfg.functions_runner.clone() {
+        Some(command) => command,
+        None => default_runner()?,
+    };
     command.push("--source".to_owned());
     command.push(source.clone());
     let default_bucket = format!("{}.appspot.com", cfg.auth_project);

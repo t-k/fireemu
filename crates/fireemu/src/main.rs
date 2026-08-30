@@ -19,6 +19,7 @@
 
 mod config;
 mod control;
+mod doctor;
 mod functions;
 mod sessions;
 mod snapshots;
@@ -77,22 +78,7 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
-        Some("doctor") => {
-            println!("fireemu {}", env!("CARGO_PKG_VERSION"));
-            println!(
-                "vendored googleapis commit: {}",
-                fireemu_proto_firestore::UPSTREAM_COMMIT.trim()
-            );
-            println!(
-                "limit catalogs: {}",
-                fireemu_core_limits::catalogs::ALL_CATALOGS
-                    .iter()
-                    .map(|c| c.meta.id)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            ExitCode::SUCCESS
-        }
+        Some("doctor") => doctor::run(),
         Some("capabilities") => {
             println!(
                 "{}",

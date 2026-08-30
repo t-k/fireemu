@@ -1,0 +1,35 @@
+[package]
+name = "ftd-adapter-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Emulator UI: the embedded single-page app and its same-origin privileged API"
+build = "build.rs"
+
+[dependencies]
+ftd-core-types = { path = "../ftd-core-types" }
+ftd-core-auth = { path = "../ftd-core-auth" }
+ftd-core-session = { path = "../ftd-core-session" }
+ftd-core-storage = { path = "../ftd-core-storage" }
+ftd-core-functions = { path = "../ftd-core-functions" }
+ftd-adapter-grpc = { path = "../ftd-adapter-grpc" }
+ftd-adapter-http = { path = "../ftd-adapter-http" }
+ftd-adapter-functions = { path = "../ftd-adapter-functions" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util", "time"] }
+tokio-stream = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+include_dir = "0.7"
+
+[dev-dependencies]
+ftd-core-firestore = { path = "../ftd-core-firestore" }
+ftd-core-rules = { path = "../ftd-core-rules" }
+
+[lints]
+workspace = true

@@ -459,6 +459,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-adapter-ui"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "ftd-adapter-functions",
+ "ftd-adapter-grpc",
+ "ftd-adapter-http",
+ "ftd-core-auth",
+ "ftd-core-firestore",
+ "ftd-core-functions",
+ "ftd-core-rules",
+ "ftd-core-session",
+ "ftd-core-storage",
+ "ftd-core-types",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "include_dir",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "ftd-core-auth"
 version = "0.1.0"
 dependencies = [
@@ -917,6 +941,25 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]

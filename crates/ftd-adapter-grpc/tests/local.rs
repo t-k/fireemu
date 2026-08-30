@@ -1,6 +1,9 @@
 //! End-to-end local execution through a real tonic client: documents, queries, transactions,
 //! aggregations and batch writes on the virtual clock.
 
+// `tonic::Status` is the error type of the backend's own closures.
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -1590,4 +1593,443 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
         .snapshot_scope(&Scope::AllExcept(std::collections::BTreeSet::new()))
         .ids
         .is_some());
+}
+
+// ---------------------------------------------------------------------------------------
+// Database lock isolation (FS-LOCK-01 .. FS-LOCK-06)
+//
+// The backend keeps one lock per database and holds the catalog lock only long enough to
+// find an entry, so unrelated databases run concurrently while one database stays
+// serialized. These tests pin an operation inside its critical section (through the change
+// sink or through its write guard) and observe what other operations can do meanwhile.
+// ---------------------------------------------------------------------------------------
+
+use ftd_adapter_grpc::local::{Actor, CommitEvent};
+use ftd_adapter_grpc::rules::allow_all;
+use ftd_core_firestore::store::{FirestoreState, Write};
+use ftd_core_session::tenancy::Scope;
+
+/// How long a test waits for something that must happen.
+const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a test waits to convince itself that something does not happen.
+const BRIEF: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A rendezvous the change sink or a write guard blocks on, so a test can pin operations
+/// inside their database critical sections.
+#[derive(Default)]
+struct Gate {
+    state: Mutex<GateState>,
+    signal: std::sync::Condvar,
+}
+
+#[derive(Default)]
+struct GateState {
+    arrived: usize,
+    open: bool,
+}
+
+impl Gate {
+    /// Records an arrival and blocks until [`Gate::open`].
+    fn hold(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.arrived += 1;
+        self.signal.notify_all();
+        while !state.open {
+            let (next, timeout) = self.signal.wait_timeout(state, PATIENCE).unwrap();
+            assert!(!timeout.timed_out(), "the gate was never opened");
+            state = next;
+        }
+    }
+
+    /// Records an arrival and blocks until `n` operations wait here: it only completes if
+    /// they really do hold their databases at the same time.
+    fn rendezvous(&self, n: usize) {
+        let mut state = self.state.lock().unwrap();
+        state.arrived += 1;
+        self.signal.notify_all();
+        while state.arrived < n {
+            let (next, timeout) = self.signal.wait_timeout(state, PATIENCE).unwrap();
+            assert!(
+                !timeout.timed_out(),
+                "{n} operations never held their databases at the same time"
+            );
+            state = next;
+        }
+    }
+
+    /// Waits until `n` operations are held at the gate.
+    fn wait_for(&self, n: usize) {
+        let mut state = self.state.lock().unwrap();
+        while state.arrived < n {
+            let (next, timeout) = self.signal.wait_timeout(state, PATIENCE).unwrap();
+            assert!(!timeout.timed_out(), "no operation reached the gate");
+            state = next;
+        }
+    }
+
+    fn open(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.open = true;
+        self.signal.notify_all();
+    }
+}
+
+fn lock_test_backend() -> Arc<LocalBackend> {
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    Arc::new(LocalBackend::new(gateway, clock, 11))
+}
+
+fn lock_test_commit(project: &str, document: &str) -> pb::CommitRequest {
+    pb::CommitRequest {
+        database: format!("projects/{project}/databases/(default)"),
+        writes: vec![pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("projects/{project}/databases/(default)/documents/{document}"),
+                fields: [("v".to_owned(), i(1))].into_iter().collect(),
+                create_time: None,
+                update_time: None,
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+fn lock_test_parent(project: &str) -> ftd_adapter_grpc::decode::Parent {
+    ftd_adapter_grpc::decode::parse_parent(&format!(
+        "projects/{project}/databases/(default)/documents"
+    ))
+    .unwrap()
+}
+
+/// The database's current version, or `None` when the catalog has no such database.
+fn lock_test_version(backend: &LocalBackend, project: &str) -> Option<u64> {
+    backend.read_unadmitted(&lock_test_parent(project), |db| {
+        db.current_version().value()
+    })
+}
+
+/// Installs a change sink that holds the first commit of `project` at the gate and records
+/// every event it sees.
+fn hold_first_commit(
+    backend: &LocalBackend,
+    project: &'static str,
+    gate: &Arc<Gate>,
+    seen: &Arc<Mutex<Vec<(String, u64)>>>,
+) {
+    let gate = gate.clone();
+    let seen = seen.clone();
+    let held = std::sync::atomic::AtomicBool::new(false);
+    backend.set_change_sink(Arc::new(move |event: &CommitEvent| {
+        seen.lock()
+            .unwrap()
+            .push((event.project.clone(), event.version));
+        if event.project == project && !held.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            gate.hold();
+        }
+    }));
+}
+
+/// FS-LOCK-01: a commit pinned inside one project's database does not keep another
+/// project's commit out.
+#[test]
+fn a_held_operation_in_one_project_does_not_block_another() {
+    let backend = lock_test_backend();
+    let gate = Arc::new(Gate::default());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    hold_first_commit(&backend, "demo-held", &gate, &seen);
+
+    let holder = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            backend
+                .commit_with(&lock_test_commit("demo-held", "items/a"), &allow_all)
+                .unwrap();
+        })
+    };
+    gate.wait_for(1);
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let other = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            let outcome =
+                backend.commit_with(&lock_test_commit("demo-free", "items/b"), &allow_all);
+            done.send(outcome.is_ok()).unwrap();
+        })
+    };
+    assert_eq!(
+        finished.recv_timeout(PATIENCE),
+        Ok(true),
+        "a commit in another project queued behind the held database"
+    );
+
+    gate.open();
+    holder.join().unwrap();
+    other.join().unwrap();
+    assert_eq!(lock_test_version(&backend, "demo-held"), Some(1));
+    assert_eq!(lock_test_version(&backend, "demo-free"), Some(1));
+}
+
+/// FS-LOCK-02: two commits to one database stay serialized and are published in commit
+/// order.
+#[test]
+fn commits_to_one_database_stay_serialized() {
+    let backend = lock_test_backend();
+    let gate = Arc::new(Gate::default());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    hold_first_commit(&backend, "demo-serial", &gate, &seen);
+
+    let first = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            backend
+                .commit_with(&lock_test_commit("demo-serial", "items/a"), &allow_all)
+                .unwrap();
+        })
+    };
+    gate.wait_for(1);
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let second = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            backend
+                .commit_with(&lock_test_commit("demo-serial", "items/b"), &allow_all)
+                .unwrap();
+            done.send(()).unwrap();
+        })
+    };
+    assert!(
+        finished.recv_timeout(BRIEF).is_err(),
+        "a second commit entered the database while the first one held it"
+    );
+
+    gate.open();
+    assert!(finished.recv_timeout(PATIENCE).is_ok());
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![("demo-serial".to_owned(), 1), ("demo-serial".to_owned(), 2)],
+        "the two commits of one database were not published in commit order"
+    );
+    assert_eq!(lock_test_version(&backend, "demo-serial"), Some(2));
+}
+
+/// FS-LOCK-05: two commits that hold different databases at the same time each publish
+/// their own principal, whatever order they were staged and released in.
+#[test]
+fn concurrent_commits_in_different_databases_keep_their_own_actor() {
+    let backend = lock_test_backend();
+    let gate = Arc::new(Gate::default());
+    let seen: Arc<Mutex<Vec<(String, Actor)>>> = Arc::new(Mutex::new(Vec::new()));
+    {
+        let seen = seen.clone();
+        backend.set_change_sink(Arc::new(move |event: &CommitEvent| {
+            seen.lock()
+                .unwrap()
+                .push((event.project.clone(), event.actor.clone()));
+        }));
+    }
+
+    let commit_as = |project: &'static str, uid: &'static str| {
+        let backend = backend.clone();
+        let gate = gate.clone();
+        std::thread::spawn(move || {
+            let staging = backend.clone();
+            let actor = Actor {
+                auth_type: "app_user".to_owned(),
+                auth_id: Some(uid.to_owned()),
+            };
+            // Both guards stage their principal and only then meet here, so each commit
+            // runs with the other's principal already staged.
+            let guard = move |_: &FirestoreState,
+                              _: &[Write],
+                              _: LogicalInstant|
+                  -> Result<(), tonic::Status> {
+                staging.set_actor(actor.clone());
+                gate.rendezvous(2);
+                Ok(())
+            };
+            backend
+                .commit_with(&lock_test_commit(project, "items/a"), &guard)
+                .unwrap();
+        })
+    };
+    let alice = commit_as("demo-p1", "alice");
+    let bob = commit_as("demo-p2", "bob");
+    alice.join().unwrap();
+    bob.join().unwrap();
+
+    let mut published = seen.lock().unwrap().clone();
+    published.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        published,
+        vec![
+            (
+                "demo-p1".to_owned(),
+                Actor {
+                    auth_type: "app_user".to_owned(),
+                    auth_id: Some("alice".to_owned()),
+                }
+            ),
+            (
+                "demo-p2".to_owned(),
+                Actor {
+                    auth_type: "app_user".to_owned(),
+                    auth_id: Some("bob".to_owned()),
+                }
+            ),
+        ]
+    );
+}
+
+/// FS-LOCK-04: a database dropped by a reset or replaced by a restore cannot be reached
+/// through a handle retained across it.
+#[test]
+fn a_reset_or_restore_detaches_retained_database_handles() {
+    let backend = lock_test_backend();
+    backend
+        .commit_with(&lock_test_commit("demo-detach", "items/a"), &allow_all)
+        .unwrap();
+    let parent = lock_test_parent("demo-detach");
+    let handle = backend.database_handle(&parent).unwrap();
+    assert_eq!(
+        handle.with(|db| Ok(db.current_version().value())).unwrap(),
+        1
+    );
+
+    backend.reset_scope(&Scope::Project("demo-detach".to_owned()));
+    assert!(handle.is_detached());
+    assert_eq!(
+        handle
+            .with(|db| Ok(db.current_version().value()))
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unavailable
+    );
+    assert!(
+        lock_test_version(&backend, "demo-detach").is_none(),
+        "the reset left the wiped database in the catalog"
+    );
+
+    // The catalog serves a fresh, empty database under the same name.
+    let fresh = backend.database_handle(&parent).unwrap();
+    assert_eq!(
+        fresh.with(|db| Ok(db.current_version().value())).unwrap(),
+        0
+    );
+
+    // A restore retires the database it replaced the same way.
+    backend
+        .commit_with(&lock_test_commit("demo-detach", "items/b"), &allow_all)
+        .unwrap();
+    let snapshot = backend.snapshot_scope(&Scope::Project("demo-detach".to_owned()));
+    backend.restore_scope(&Scope::Project("demo-detach".to_owned()), &snapshot);
+    assert!(fresh.is_detached());
+    assert_eq!(
+        fresh.with(|_| Ok(())).unwrap_err().code(),
+        tonic::Code::Unavailable
+    );
+    assert_eq!(lock_test_version(&backend, "demo-detach"), Some(1));
+}
+
+/// FS-LOCK-03: a reset taken under the exclusive barrier waits for the operation it races
+/// and then starts a new epoch (ADR-011).
+#[test]
+fn a_reset_waits_for_the_operation_it_races() {
+    let backend = lock_test_backend();
+    let gate = Arc::new(Gate::default());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    hold_first_commit(&backend, "demo-race", &gate, &seen);
+    let epoch_before = backend.epoch();
+
+    let holder = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            backend
+                .commit_with(&lock_test_commit("demo-race", "items/a"), &allow_all)
+                .unwrap();
+        })
+    };
+    gate.wait_for(1);
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let resetter = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            let barrier = backend.barrier();
+            let _exclusive = barrier.exclusive();
+            backend.reset();
+            done.send(()).unwrap();
+        })
+    };
+    assert!(
+        finished.recv_timeout(BRIEF).is_err(),
+        "the reset did not wait for the commit that was in flight"
+    );
+
+    gate.open();
+    assert!(finished.recv_timeout(PATIENCE).is_ok());
+    holder.join().unwrap();
+    resetter.join().unwrap();
+    assert_eq!(backend.epoch(), epoch_before + 1);
+    assert_eq!(lock_test_version(&backend, "demo-race"), None);
+    // The commit that was in flight was published whole, before the reset's wipe.
+    assert_eq!(
+        seen.lock().unwrap().first(),
+        Some(&("demo-race".to_owned(), 1))
+    );
+}
+
+/// FS-LOCK-06: capture and restore under the exclusive barrier keep every database of the
+/// scope consistent, and no operation runs while they do.
+#[test]
+fn capture_and_restore_stay_atomic_under_the_barrier() {
+    let backend = lock_test_backend();
+    for project in ["demo-s1", "demo-s2"] {
+        backend
+            .commit_with(&lock_test_commit(project, "items/a"), &allow_all)
+            .unwrap();
+    }
+    let everything = Scope::AllExcept(std::collections::BTreeSet::new());
+
+    let barrier = backend.barrier();
+    let exclusive = barrier.exclusive();
+    let (done, finished) = std::sync::mpsc::channel();
+    let writer = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            let outcome = backend.commit_with(&lock_test_commit("demo-s1", "items/b"), &allow_all);
+            done.send(outcome.is_ok()).unwrap();
+        })
+    };
+    assert!(
+        finished.recv_timeout(BRIEF).is_err(),
+        "an operation was admitted while a capture held the barrier exclusively"
+    );
+
+    let snapshot = backend.snapshot_scope(&everything);
+    assert_eq!(snapshot.databases.len(), 2);
+    backend.reset();
+    backend.restore_scope(&everything, &snapshot);
+    drop(exclusive);
+
+    assert_eq!(finished.recv_timeout(PATIENCE), Ok(true));
+    writer.join().unwrap();
+    // Both databases came back whole, and the waiting commit landed on top of the restore
+    // rather than on a half-restored state.
+    assert_eq!(lock_test_version(&backend, "demo-s1"), Some(2));
+    assert_eq!(lock_test_version(&backend, "demo-s2"), Some(1));
 }

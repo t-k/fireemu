@@ -1856,6 +1856,200 @@ mod tests {
         );
     }
 
+    /// Every `firebase.json` in the corpus `tools/config-schema-check` validates is loaded
+    /// by the real loader too, and every invalid one is refused by it. Without this the two
+    /// could drift: a file the schema accepts but the daemon refuses would only be found by
+    /// a user.
+    #[test]
+    fn the_firebase_json_corpus_agrees_with_the_loader() {
+        let spec = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config");
+        let read = |dir: &str| -> Vec<(String, Value)> {
+            let mut out = Vec::new();
+            let entries = std::fs::read_dir(spec.join(dir))
+                .unwrap_or_else(|e| panic!("{dir} is readable: {e}"));
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|x| x == "json") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let json: Value = serde_json::from_str(&text)
+                        .unwrap_or_else(|e| panic!("{} parses: {e}", path.display()));
+                    out.push((
+                        path.file_name().unwrap().to_string_lossy().into_owned(),
+                        json,
+                    ));
+                }
+            }
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            out
+        };
+        let base = std::path::Path::new("/proj");
+        // Functions are left out: a codebase is chosen by `--only functions:<codebase>`, which
+        // is a selection question rather than a validity one, and every codebase is parsed and
+        // validated either way.
+        let only = Selection::parse("firestore,auth,storage").unwrap();
+
+        let valid = read("firebase-json-examples");
+        assert!(valid.len() >= 4, "the corpus must not silently shrink");
+        for (name, json) in &valid {
+            let mut cfg = RuntimeConfig::default();
+            let report = cfg.apply_firebase_json(json, base, &only);
+            assert!(report.is_ok(), "{name} must load: {report:?}");
+        }
+
+        let invalid = read("firebase-json-invalid-examples");
+        assert!(invalid.len() >= 8, "the corpus must not silently shrink");
+        for (name, json) in &invalid {
+            let mut cfg = RuntimeConfig::default();
+            // The functions corpus needs functions selected for the codebase rules to run.
+            let selection = if name.starts_with("functions-") {
+                Selection::default()
+            } else {
+                only.clone()
+            };
+            assert!(
+                cfg.apply_firebase_json(json, base, &selection).is_err(),
+                "{name} must be refused by the loader, not only by the schema"
+            );
+        }
+    }
+
+    #[test]
+    fn a_multi_codebase_section_is_ambiguous_until_a_codebase_is_named() {
+        let json = json!({
+            "functions": [
+                {"source": "fn/api", "codebase": "api", "runtime": "nodejs20"},
+                {"source": "fn/workers", "codebase": "workers", "ignore": ["node_modules"]}
+            ]
+        });
+        let base = std::path::Path::new("/proj");
+
+        let mut cfg = RuntimeConfig::default();
+        let refusal = cfg.apply_firebase_json(&json, base, &Selection::default());
+        let message = refusal.unwrap_err().0;
+        assert!(message.contains("api, workers"), "{message}");
+        assert!(message.contains("--only functions:<codebase>"), "{message}");
+        // Every codebase was still parsed, so the daemon can name them.
+        assert_eq!(cfg.functions_codebases.len(), 2);
+        assert_eq!(cfg.functions_codebases[0].codebase, "api");
+        assert_eq!(cfg.functions_codebases[0].source, "/proj/fn/api");
+        assert_eq!(
+            cfg.functions_codebases[0].runtime.as_deref(),
+            Some("nodejs20")
+        );
+        assert_eq!(cfg.functions_codebases[1].ignore, vec!["node_modules"]);
+
+        // Naming one loads it and nothing else.
+        let mut cfg = RuntimeConfig::default();
+        let only = Selection::parse("functions:workers").unwrap();
+        cfg.apply_firebase_json(&json, base, &only).unwrap();
+        assert_eq!(cfg.functions_source.as_deref(), Some("/proj/fn/workers"));
+
+        // A single codebase needs no name at all, in either spelling.
+        for section in [
+            json!({"functions": {"source": "functions"}}),
+            json!({"functions": [{"source": "functions", "codebase": "default"}]}),
+        ] {
+            let mut cfg = RuntimeConfig::default();
+            cfg.apply_firebase_json(&section, base, &Selection::default())
+                .unwrap();
+            assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+        }
+    }
+
+    #[test]
+    fn emulator_entries_configure_the_served_products_the_hub_and_the_ui() {
+        let json = json!({
+            "emulators": {
+                "singleProjectMode": true,
+                "firestore": {"host": "localhost", "port": 8081},
+                "auth": {"port": 9100},
+                "storage": {"port": 9200},
+                "functions": {"port": 5002},
+                "hub": {"port": 4401},
+                "ui": {"port": 4001, "enabled": false}
+            }
+        });
+        let mut cfg = RuntimeConfig::default();
+        let report = cfg
+            .apply_firebase_json(&json, std::path::Path::new("/proj"), &Selection::default())
+            .unwrap();
+        assert!(report.notices.is_empty(), "{:?}", report.notices);
+        assert_eq!(cfg.firestore_addr, "localhost:8081");
+        assert_eq!(cfg.http_addr, "127.0.0.1:9100");
+        assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
+        assert_eq!(cfg.functions_addr, "127.0.0.1:5002");
+        assert_eq!(cfg.hub_addr, "127.0.0.1:4401");
+        assert!(
+            cfg.hub_addr_explicit,
+            "a configured hub port must be honoured exactly"
+        );
+        assert_eq!(cfg.ui_addr, "127.0.0.1:4001");
+        assert!(!cfg.ui_enabled);
+        assert!(cfg.single_project_mode);
+    }
+
+    #[test]
+    fn firebaserc_aliases_resolve_the_project() {
+        let rc = json!({"projects": {"default": "demo-a", "staging": "demo-b"}});
+        assert_eq!(
+            resolve_project_alias(&rc, None).unwrap().as_deref(),
+            Some("demo-a")
+        );
+        assert_eq!(
+            resolve_project_alias(&rc, Some("staging"))
+                .unwrap()
+                .as_deref(),
+            Some("demo-b")
+        );
+        // A value that is not an alias is a project ID, as `firebase --project` treats it.
+        assert_eq!(
+            resolve_project_alias(&rc, Some("demo-literal"))
+                .unwrap()
+                .as_deref(),
+            Some("demo-literal")
+        );
+        // Without a `default` alias and without --project nothing is resolved, so the
+        // configured project stands.
+        assert_eq!(
+            resolve_project_alias(&json!({"projects": {"staging": "demo-b"}}), None).unwrap(),
+            None
+        );
+        assert!(resolve_project_alias(&json!({"projects": []}), None).is_err());
+        assert!(resolve_project_alias(&json!({"projects": {"default": 1}}), None).is_err());
+    }
+
+    #[test]
+    fn the_only_list_names_services_and_at_most_one_functions_codebase() {
+        let sel = Selection::parse("firestore,functions:api").unwrap();
+        assert!(sel.firestore && sel.functions && sel.explicit);
+        assert_eq!(sel.functions_codebase.as_deref(), Some("api"));
+        assert!(!sel.auth && !sel.storage && !sel.appcheck);
+        // Without --only everything served is selected and nothing is explicit.
+        let all = Selection::default();
+        assert!(all.firestore && all.auth && all.storage && all.functions && all.appcheck);
+        assert!(!all.explicit);
+        // A qualifier belongs to functions alone.
+        assert!(Selection::parse("firestore:default").is_err());
+        assert!(Selection::parse("functions:").is_err());
+        // Every official service fireemu does not serve is refused with its status.
+        for (name, status) in UNSERVED_OFFICIAL_SERVICES {
+            let message = Selection::parse(&format!("firestore,{name}"))
+                .unwrap_err()
+                .0;
+            assert!(message.contains(name), "{name}: {message}");
+            assert!(message.contains(status), "{name}: {message}");
+        }
+        for name in NON_SERVICE_EMULATORS {
+            assert!(
+                Selection::parse(name)
+                    .unwrap_err()
+                    .0
+                    .contains("not a service emulator"),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn the_auth_section_never_downgrades_silently() {
         assert_eq!(

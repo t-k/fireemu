@@ -3,7 +3,10 @@
 //! - every file under `spec/config/examples/` must satisfy `fireemu.schema.json` and
 //!   the cross-field rules below;
 //! - every file under `spec/config/invalid-examples/` must be rejected by at least one of them;
-//! - referenced limit catalogs must exist under `spec/limits/`.
+//! - referenced limit catalogs must exist under `spec/limits/`;
+//! - the same pair for `firebase.json`: every file under `spec/config/firebase-json-examples/`
+//!   must satisfy `firebase-json.schema.json` and the cross-field rules the loader enforces,
+//!   and every file under `spec/config/firebase-json-invalid-examples/` must be rejected.
 //!
 //! Cross-field rules (spec 17, 3.5, 8.9.19) that JSON Schema alone cannot express:
 //!
@@ -221,6 +224,109 @@ fn app_check_problems(cfg: &Value) -> Vec<String> {
     problems
 }
 
+/// The keys one `firestore` entry of a `firebase.json` may carry; the Rust loader rejects
+/// the rest, so a typo can never be read as "no rules file".
+const FIRESTORE_ENTRY_KEYS: [&str; 4] = ["database", "rules", "indexes", "index"];
+
+/// The keys one `functions` codebase may carry.
+const FUNCTIONS_ENTRY_KEYS: [&str; 6] = [
+    "source",
+    "codebase",
+    "runtime",
+    "ignore",
+    "predeploy",
+    "postdeploy",
+];
+
+/// Cross-field rules of a `firebase.json` that JSON Schema cannot express. Exactly the set
+/// `RuntimeConfig::apply_firebase_json` enforces, so the corpus and the loader agree.
+fn firebase_json_problems(cfg: &Value) -> Vec<String> {
+    let mut problems = Vec::new();
+    let entries = |v: Option<&Value>| -> Vec<Value> {
+        match v {
+            Some(Value::Array(a)) => a.clone(),
+            Some(other) => vec![other.clone()],
+            None => Vec::new(),
+        }
+    };
+
+    // 1. Unknown keys fail closed, and one database is declared at most once.
+    let mut databases: BTreeSet<String> = BTreeSet::new();
+    for entry in entries(cfg.get("firestore")) {
+        let Some(obj) = entry.as_object() else {
+            problems.push("firestore entries must be objects".to_owned());
+            continue;
+        };
+        for key in obj.keys() {
+            if !FIRESTORE_ENTRY_KEYS.contains(&key.as_str()) {
+                problems.push(format!("unknown key firestore.{key}"));
+            }
+        }
+        if let Some(rules) = obj.get("rules") {
+            if !rules.is_string() {
+                problems.push("firestore.rules must be a string".to_owned());
+            }
+        }
+        let database = obj
+            .get("database")
+            .and_then(Value::as_str)
+            .unwrap_or("(default)")
+            .to_owned();
+        if !databases.insert(database.clone()) {
+            problems.push(format!("firestore declares the database {database} twice"));
+        }
+    }
+
+    // 2. Every codebase needs a source, and a codebase name is declared at most once.
+    let mut codebases: BTreeSet<String> = BTreeSet::new();
+    for entry in entries(cfg.get("functions")) {
+        let Some(obj) = entry.as_object() else {
+            problems.push("functions entries must be objects".to_owned());
+            continue;
+        };
+        for key in obj.keys() {
+            if !FUNCTIONS_ENTRY_KEYS.contains(&key.as_str()) {
+                problems.push(format!("unknown key functions.{key}"));
+            }
+        }
+        if obj.get("source").and_then(Value::as_str).is_none() {
+            problems.push("functions.source is required and must be a string".to_owned());
+        }
+        let codebase = obj
+            .get("codebase")
+            .and_then(Value::as_str)
+            .unwrap_or("default")
+            .to_owned();
+        if !codebases.insert(codebase.clone()) {
+            problems.push(format!("functions declares the codebase {codebase} twice"));
+        }
+    }
+
+    // 3. A listener binds loopback only: the daemon serves without a control token.
+    if let Some(emulators) = cfg.get("emulators").and_then(Value::as_object) {
+        for (name, entry) in emulators {
+            if name == "singleProjectMode" {
+                if !entry.is_boolean() {
+                    problems.push("emulators.singleProjectMode must be a boolean".to_owned());
+                }
+                continue;
+            }
+            let Some(obj) = entry.as_object() else {
+                problems.push(format!("emulators.{name} must be an object"));
+                continue;
+            };
+            if let Some(host) = obj.get("host").and_then(Value::as_str) {
+                if !["127.0.0.1", "localhost", "::1", "[::1]"].contains(&host) {
+                    problems.push(format!(
+                        "emulators.{name}.host {host}: only loopback binds are supported"
+                    ));
+                }
+            }
+        }
+    }
+    problems
+}
+
 fn json_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).collect())
@@ -283,6 +389,8 @@ fn run(root: &Path) -> Result<(), Vec<String>> {
         }
     }
 
+    problems.extend(check_firebase_json(root));
+
     if problems.is_empty() {
         println!(
             "config schema: ok ({} valid examples, {} invalid examples rejected)",
@@ -293,6 +401,73 @@ fn run(root: &Path) -> Result<(), Vec<String>> {
     } else {
         Err(problems)
     }
+}
+
+/// The `firebase.json` corpus: the examples fireemu must accept and the ones it must
+/// refuse, against the same schema and cross-field rules the loader applies.
+fn check_firebase_json(root: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
+    let schema_path = root.join("spec/config/firebase-json.schema.json");
+    let schema = match read_json(&schema_path) {
+        Ok(v) => v,
+        Err(e) => return vec![e],
+    };
+    let validator = match jsonschema::validator_for(&schema) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("{}: invalid schema: {e}", schema_path.display())],
+    };
+
+    let examples = json_files(&root.join("spec/config/firebase-json-examples"));
+    if examples.is_empty() {
+        problems.push("no firebase.json examples found".to_owned());
+    }
+    for path in &examples {
+        let cfg = match read_json(path) {
+            Ok(v) => v,
+            Err(e) => {
+                problems.push(e);
+                continue;
+            }
+        };
+        for err in validator.iter_errors(&cfg) {
+            problems.push(format!(
+                "{}: schema: {err} at {}",
+                path.display(),
+                err.instance_path
+            ));
+        }
+        for p in firebase_json_problems(&cfg) {
+            problems.push(format!("{}: {p}", path.display()));
+        }
+    }
+
+    let invalid = json_files(&root.join("spec/config/firebase-json-invalid-examples"));
+    if invalid.is_empty() {
+        problems.push("no invalid firebase.json examples found".to_owned());
+    }
+    for path in &invalid {
+        let cfg = match read_json(path) {
+            Ok(v) => v,
+            Err(e) => {
+                problems.push(e);
+                continue;
+            }
+        };
+        if validator.is_valid(&cfg) && firebase_json_problems(&cfg).is_empty() {
+            problems.push(format!(
+                "{}: expected rejection but the firebase.json was accepted",
+                path.display()
+            ));
+        }
+    }
+    if problems.is_empty() {
+        println!(
+            "firebase.json schema: ok ({} valid examples, {} invalid examples rejected)",
+            examples.len(),
+            invalid.len()
+        );
+    }
+    problems
 }
 
 fn main() -> ExitCode {

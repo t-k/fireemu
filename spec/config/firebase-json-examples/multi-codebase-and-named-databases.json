@@ -1,0 +1,18 @@
+{
+  "firestore": [
+    { "database": "(default)", "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
+    { "database": "reports", "rules": "reports.rules" }
+  ],
+  "storage": [
+    { "rules": "storage.rules" },
+    { "target": "uploads", "rules": "uploads.rules" }
+  ],
+  "functions": [
+    { "source": "functions/api", "codebase": "api", "runtime": "nodejs20" },
+    { "source": "functions/workers", "codebase": "workers" }
+  ],
+  "emulators": {
+    "firestore": { "port": 8080 },
+    "functions": { "port": 5001 }
+  }
+}

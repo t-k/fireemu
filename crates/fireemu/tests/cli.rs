@@ -94,8 +94,14 @@ fn export_is_refused_precisely_rather_than_reported_as_unknown() {
         "a command that exists but is not implemented is a refusal, not a usage error"
     );
     let text = stderr(&out);
-    assert!(text.contains("emulators:export is not supported yet"), "{text}");
-    assert!(text.contains("snapshots"), "{text}: it must say what to use instead");
+    assert!(
+        text.contains("emulators:export is not supported yet"),
+        "{text}"
+    );
+    assert!(
+        text.contains("snapshots"),
+        "{text}: it must say what to use instead"
+    );
 }
 
 #[test]
@@ -231,10 +237,17 @@ fn config_accepts_a_firebase_json_as_well_as_the_canonical_configuration() {
         "firebase.json",
         r#"{"emulators": {"singleProjectMode": true}}"#,
     );
-    write(&dir, ".firebaserc", r#"{"projects": {"default": "demo-cfg"}}"#);
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-cfg"}}"#,
+    );
     // `firebase emulators:exec --config firebase.json` works verbatim: a file without
     // `schemaVersion` is a firebase.json.
-    let env = env_of(&dir, &["--config", dir.join("firebase.json").to_str().unwrap()]);
+    let env = env_of(
+        &dir,
+        &["--config", dir.join("firebase.json").to_str().unwrap()],
+    );
     assert_eq!(env["GCLOUD_PROJECT"], "demo-cfg");
 
     // A canonical configuration through --config still loads, and passing one to
@@ -254,7 +267,11 @@ fn config_accepts_a_firebase_json_as_well_as_the_canonical_configuration() {
     assert_eq!(env["GCLOUD_PROJECT"], "demo-canonical");
     let out = exec_with(&["--firebase-json", canonical.to_str().unwrap()], &["true"]);
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("pass it with --config"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("pass it with --config"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -288,7 +305,10 @@ fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
     );
 
     // Naming one in --only is refused before anything binds; the message names the product.
-    let out = exec_with(&["--firebase-json", firebase, "--only", "database"], &["true"]);
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "database"],
+        &["true"],
+    );
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("database"), "{}", stderr(&out));
 }
@@ -320,7 +340,10 @@ fn a_multi_codebase_functions_section_names_the_codebase_to_load() {
 
     // Naming one selects it; the directory is empty, so the runner fails on the codebase
     // itself rather than on the configuration -- which is the point: it was loaded.
-    let out = exec_with(&["--firebase-json", firebase, "--only", "functions:alpha"], &["true"]);
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "functions:alpha"],
+        &["true"],
+    );
     let text = stderr(&out);
     assert!(
         !text.contains("--only functions:<codebase>"),
@@ -328,14 +351,20 @@ fn a_multi_codebase_functions_section_names_the_codebase_to_load() {
     );
 
     // An unknown codebase names the ones that exist.
-    let out = exec_with(&["--firebase-json", firebase, "--only", "functions:gamma"], &["true"]);
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "functions:gamma"],
+        &["true"],
+    );
     assert_eq!(out.status.code(), Some(1));
     let text = stderr(&out);
     assert!(text.contains("no such codebase"), "{text}");
     assert!(text.contains("alpha, beta"), "{text}");
 
     // Not selecting functions at all leaves the ambiguity moot.
-    let out = exec_with(&["--firebase-json", firebase, "--only", "firestore"], &["true"]);
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "firestore"],
+        &["true"],
+    );
     assert!(out.status.success(), "{}", stderr(&out));
 }
 
@@ -389,7 +418,11 @@ fn a_routable_emulator_host_is_refused() {
 #[test]
 fn a_command_line_port_overrides_the_one_in_firebase_json() {
     let dir = scratch("override");
-    write(&dir, ".firebaserc", r#"{"projects": {"default": "demo-ports"}}"#);
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-ports"}}"#,
+    );
     let firebase = write(
         &dir,
         "firebase.json",

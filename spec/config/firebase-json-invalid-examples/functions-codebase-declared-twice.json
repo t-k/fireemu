@@ -1,0 +1,6 @@
+{
+  "functions": [
+    { "source": "functions/a", "codebase": "shared" },
+    { "source": "functions/b", "codebase": "shared" }
+  ]
+}

@@ -252,9 +252,13 @@ fn rfc3339(t: LogicalInstant) -> String {
 /// multipart/related: returns (metadata JSON part, data content type, data bytes). A
 /// delimiter is recognized only at the start of a line and exactly the framing line break
 /// before it is removed, so payloads ending in line breaks survive intact.
+///
+/// The request buffer is taken by value and the data part is carved out of it in place
+/// (`truncate` + `drain`), so a near-limit payload is never duplicated: the returned vector
+/// is the request allocation itself (`STG-MEM-02`).
 fn parse_multipart(
     content_type: &str,
-    body: &[u8],
+    mut body: Vec<u8>,
 ) -> Result<(Value, Option<String>, Vec<u8>), String> {
     let boundary = content_type
         .split(';')
@@ -263,8 +267,31 @@ fn parse_multipart(
         .map(|b| b.trim_matches('"').to_owned())
         .ok_or_else(|| "multipart/related without boundary".to_owned())?;
     let delimiter = format!("--{boundary}").into_bytes();
-    let mut parts: Vec<(BTreeMap<String, String>, Vec<u8>)> = Vec::new();
-    let Some(mut cursor) = find_delimiter(body, 0, &delimiter) else {
+    let parts = split_multipart_parts(&body, &delimiter)?;
+    let metadata: Value = if parts.len() >= 2 {
+        serde_json::from_slice(&body[parts[0].1.clone()])
+            .map_err(|e| format!("metadata part: {e}"))?
+    } else {
+        Value::Object(Map::new())
+    };
+    let ct = parts
+        .last()
+        .and_then(|(h, _)| h.get("content-type").cloned())
+        .filter(|_| parts.len() >= 2);
+    let data = parts.last().map_or(0..0, |(_, range)| range.clone());
+    // Carve the data part out of the request buffer: `truncate` and `drain` keep the
+    // allocation, so the payload is moved inside its own buffer instead of copied.
+    body.truncate(data.end);
+    body.drain(..data.start);
+    Ok((metadata, ct, body))
+}
+
+/// Ranges of the parts of a multipart body (headers parsed, content borrowed as a range).
+type MultipartPart = (BTreeMap<String, String>, std::ops::Range<usize>);
+
+fn split_multipart_parts(body: &[u8], delimiter: &[u8]) -> Result<Vec<MultipartPart>, String> {
+    let mut parts: Vec<MultipartPart> = Vec::new();
+    let Some(mut cursor) = find_delimiter(body, 0, delimiter) else {
         return Err("multipart body has no parts".into());
     };
     loop {
@@ -280,33 +307,23 @@ fn parse_multipart(
         if body.get(p) == Some(&b'\n') {
             p += 1;
         }
-        let Some(next) = find_delimiter(body, p, &delimiter) else {
+        let Some(next) = find_delimiter(body, p, delimiter) else {
             return Err("unterminated multipart part".into());
         };
-        let mut part = &body[p..next];
-        if part.ends_with(b"\r\n") {
-            part = &part[..part.len() - 2];
-        } else if part.ends_with(b"\n") {
-            part = &part[..part.len() - 1];
+        let mut end = next;
+        if body[p..end].ends_with(b"\r\n") {
+            end -= 2;
+        } else if body[p..end].ends_with(b"\n") {
+            end -= 1;
         }
-        let (headers, content) = split_headers(part);
-        parts.push((headers, content.to_vec()));
+        let (headers, content_start) = split_headers(&body[p..end]);
+        parts.push((headers, (p + content_start)..end));
         cursor = next;
     }
     if parts.is_empty() {
         return Err("multipart body has no parts".into());
     }
-    let metadata: Value = if parts.len() >= 2 {
-        serde_json::from_slice(&parts[0].1).map_err(|e| format!("metadata part: {e}"))?
-    } else {
-        Value::Object(Map::new())
-    };
-    let data = parts.last().map(|(_, c)| c.clone()).unwrap_or_default();
-    let ct = parts
-        .last()
-        .and_then(|(h, _)| h.get("content-type").cloned())
-        .filter(|_| parts.len() >= 2);
-    Ok((metadata, ct, data))
+    Ok(parts)
 }
 
 /// Position of the next delimiter at or after `from` that starts a line.
@@ -342,7 +359,8 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-fn split_headers(part: &[u8]) -> (BTreeMap<String, String>, &[u8]) {
+/// Part headers and the offset of the part content inside `part`.
+fn split_headers(part: &[u8]) -> (BTreeMap<String, String>, usize) {
     let sep = find(part, b"\r\n\r\n")
         .map(|i| (i, 4))
         .or_else(|| find(part, b"\n\n").map(|i| (i, 2)));
@@ -354,9 +372,9 @@ fn split_headers(part: &[u8]) -> (BTreeMap<String, String>, &[u8]) {
                 .filter_map(|l| l.split_once(':'))
                 .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_owned()))
                 .collect();
-            (headers, &part[i + n..])
+            (headers, i + n)
         }
-        None => (BTreeMap::new(), part),
+        None => (BTreeMap::new(), 0),
     }
 }
 
@@ -973,8 +991,11 @@ fn base64_decode(text: &str) -> Result<Vec<u8>, ()> {
 }
 
 /// Handles one request.
+///
+/// The request is taken by value: upload routes move [`StorageRequest::body`] all the way
+/// into the object store, so a near-limit upload is never duplicated (`STG-MEM-01`).
 #[must_use]
-pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
+pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let params = query_params(&req.query);
     let host = req.host.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
     let route = match route(&req.path) {
@@ -997,14 +1018,16 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
             Err(e) => return error_response(dialect, 401, &e),
         },
     };
+    // The method is copied out so that upload routes can take the request by value.
+    let method = req.method.clone();
     let outcome = match route {
         Route::BucketMeta { bucket } => bucket_meta(&bucket, &host),
-        Route::Bucket { dialect, bucket } => match req.method.as_str() {
+        Route::Bucket { dialect, bucket } => match method.as_str() {
             "GET" => list(state, &principal, dialect, &bucket, &params, &host),
             "POST" => upload(state, &principal, dialect, &bucket, req, &params, &host),
             _ => Err((405, "method not allowed".to_owned())),
         },
-        Route::GcsUpload { bucket } => match req.method.as_str() {
+        Route::GcsUpload { bucket } => match method.as_str() {
             "POST" | "PUT" => upload(
                 state,
                 &principal,
@@ -1035,7 +1058,7 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
             &name,
             &dst_bucket,
             &dst_name,
-            req,
+            &req,
             &params,
             &host,
         ),
@@ -1137,7 +1160,7 @@ fn upload(
     principal: &Principal,
     dialect: Dialect,
     bucket: &str,
-    req: &StorageRequest,
+    mut req: StorageRequest,
     params: &BTreeMap<String, String>,
     host: &str,
 ) -> Outcome {
@@ -1158,8 +1181,11 @@ fn upload(
         || protocol == Some("resumable")
         || command.contains("start");
     if is_multipart {
+        // The body is moved into the parser, which hands back the data part carved out of
+        // the same allocation; `req` keeps only its headers from here on.
+        let body = std::mem::take(&mut req.body);
         let (meta_json, part_ct, data) =
-            parse_multipart(&content_type, &req.body).map_err(|e| (400, e))?;
+            parse_multipart(&content_type, body).map_err(|e| (400, e))?;
         let name = params
             .get("name")
             .cloned()
@@ -1173,7 +1199,7 @@ fn upload(
         let n = object_name(&name)?;
         let meta = new_metadata_from_json(&meta_json, part_ct);
         let pre = precondition(params)?;
-        let hashes = verify_hashes(req, Some(&meta_json), &data)?;
+        let hashes = verify_hashes(&req, Some(&meta_json), &data)?;
         return commit_bytes(
             state, principal, dialect, &b, &n, data, meta, pre, hashes, now, host,
         );
@@ -1210,7 +1236,7 @@ fn upload(
         };
         let meta = new_metadata_from_json(&meta_json, declared_ct);
         let pre = precondition(params)?;
-        let (expected_md5, expected_crc32c) = declared_hashes(req, Some(&meta_json))?;
+        let (expected_md5, expected_crc32c) = declared_hashes(&req, Some(&meta_json))?;
         // Rules run at finalization against the received bytes (as the official Emulator
         // does): the declared size and metadata alone cannot decide rules that inspect the
         // hashes, and the destination may change while the session is open. The session
@@ -1268,19 +1294,11 @@ fn upload(
         ..NewMetadata::default()
     };
     let pre = precondition(params)?;
-    let hashes = verify_hashes(req, None, &req.body)?;
+    // The body is the object: it is moved into the store, never copied.
+    let body = std::mem::take(&mut req.body);
+    let hashes = verify_hashes(&req, None, &body)?;
     commit_bytes(
-        state,
-        principal,
-        dialect,
-        &b,
-        &n,
-        req.body.clone(),
-        meta,
-        pre,
-        hashes,
-        now,
-        host,
+        state, principal, dialect, &b, &n, body, meta, pre, hashes, now, host,
     )
 }
 
@@ -1389,11 +1407,14 @@ fn resumable_continue(
     state: &StorageState,
     dialect: Dialect,
     upload_id: &str,
-    req: &StorageRequest,
+    mut req: StorageRequest,
     host: &str,
 ) -> Outcome {
     let id = UploadId::from_str_unchecked(upload_id);
     let now = state.now();
+    // The chunk is moved out of the request: a session that has received nothing yet
+    // adopts this buffer as its own instead of copying it.
+    let chunk = std::mem::take(&mut req.body);
     let mut store = state.store()?;
     // Firebase X-Goog-Upload protocol.
     if let Some(command) = req.header("x-goog-upload-command") {
@@ -1421,13 +1442,13 @@ fn resumable_continue(
         };
         if commands.contains(&"upload") {
             store
-                .append_upload(&id, offset, &req.body, now)
+                .append_upload_owned(&id, offset, chunk, now)
                 .map_err(core_err)?;
-        } else if !req.body.is_empty() {
+        } else if !chunk.is_empty() {
             return Err((400, "a body needs the upload command".to_owned()));
         }
         if commands.contains(&"finalize") {
-            let m = finalize_resumable(state, &mut store, &id, req, now)?;
+            let m = finalize_resumable(state, &mut store, &id, &req, now)?;
             return Ok(
                 StorageResponse::json(200, &metadata_json(dialect, &m, host))
                     .with_header("x-goog-upload-status", "final")
@@ -1446,8 +1467,8 @@ fn resumable_continue(
         }
         None => ContentRange::Span {
             start: 0,
-            end: Some(req.body.len() as u64),
-            total: Some(req.body.len() as u64),
+            end: Some(chunk.len() as u64),
+            total: Some(chunk.len() as u64),
         },
     };
     let (start, end, total) = match range {
@@ -1461,7 +1482,7 @@ fn resumable_continue(
         }
         ContentRange::Span { start, end, total } => (start, end, total),
     };
-    let body_len = req.body.len() as u64;
+    let body_len = chunk.len() as u64;
     if let Some(end) = end {
         if end.checked_sub(start) != Some(body_len) {
             return Err((
@@ -1480,7 +1501,7 @@ fn resumable_continue(
         store.set_upload_total(&id, t, now).map_err(core_err)?;
     }
     store
-        .append_upload(&id, start, &req.body, now)
+        .append_upload_owned(&id, start, chunk, now)
         .map_err(core_err)?;
     // A known total finishes when reached; an open-ended range (`START-*/*`, or no
     // Content-Range at all) carries the rest of the object in this request.
@@ -1490,7 +1511,7 @@ fn resumable_continue(
         (None, _) => true,
     };
     if finalize {
-        let m = finalize_resumable(state, &mut store, &id, req, now)?;
+        let m = finalize_resumable(state, &mut store, &id, &req, now)?;
         return Ok(StorageResponse::json(200, &gcs_json(&m, host)));
     }
     let (received, _) = store.upload_status(&id, now).map_err(core_err)?;
@@ -1599,14 +1620,16 @@ fn object(
     dialect: Dialect,
     bucket: &str,
     name: &str,
-    req: &StorageRequest,
+    req: StorageRequest,
     params: &BTreeMap<String, String>,
     host: &str,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
     let n = object_name(name)?;
     let now = state.now();
-    match req.method.as_str() {
+    // Copied out so that the resumable continuation below can take the request by value.
+    let method = req.method.clone();
+    match method.as_str() {
         "GET" => {
             let store = state.store()?;
             let meta = select_generation(store.get(&b, &n).cloned(), params, "generation")?;

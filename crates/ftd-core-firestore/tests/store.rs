@@ -696,3 +696,52 @@ fn read_time_snapshots_resolve_to_the_version_committed_at_or_before() {
         1
     );
 }
+
+fn server_timestamp_write(p: &str) -> Write {
+    Write {
+        op: WriteOp::Set {
+            path: path(p),
+            fields: fields(&[]),
+            update_mask: None,
+        },
+        precondition: None,
+        transforms: vec![
+            FieldTransform {
+                field: FieldPath::parse("createdAt").unwrap(),
+                kind: TransformKind::ServerTimestamp,
+            },
+            FieldTransform {
+                field: FieldPath::parse("updatedAt").unwrap(),
+                kind: TransformKind::ServerTimestamp,
+            },
+        ],
+    }
+}
+
+fn timestamp_nanos(s: &FirestoreState, p: &str, field: &str) -> i128 {
+    match s.get(&path(p)).unwrap().fields.get(field) {
+        Some(Value::Timestamp(ts)) => {
+            i128::from(ts.seconds()) * 1_000_000_000 + i128::from(ts.nanos())
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn server_timestamps_follow_the_commit_order_when_the_clock_stands_still() {
+    let mut s = FirestoreState::new();
+    s.commit(&[server_timestamp_write("t/first")], None, t(0))
+        .unwrap();
+    s.commit(&[server_timestamp_write("t/second")], None, t(0))
+        .unwrap();
+    let first = timestamp_nanos(&s, "t/first", "createdAt");
+    let second = timestamp_nanos(&s, "t/second", "createdAt");
+    // Commit times are microsecond-aligned and strictly increasing: one microsecond apart.
+    assert_eq!(second - first, 1_000);
+    assert_eq!(first % 1_000, 0);
+    // Every transform of one commit observes the same request time.
+    assert_eq!(first, timestamp_nanos(&s, "t/first", "updatedAt"));
+    // Committed values carry the commit time itself.
+    let doc = s.get(&path("t/second")).unwrap();
+    assert_eq!(doc.update_time.as_nanos(), second);
+}

@@ -520,7 +520,14 @@ impl LocalBackend {
     ) -> BTreeMap<(String, String), FirestoreState> {
         self.handles_of(scope)
             .into_iter()
-            .filter_map(|(key, handle)| handle.read(Clone::clone).map(|state| (key, state)))
+            .filter_map(|(key, handle)| {
+                // A snapshot retains the visible state, not the MVCC history: a restore is
+                // a new epoch in which nothing can ask for the history any more, so copying
+                // it would only multiply the retained bytes.
+                handle
+                    .read(FirestoreState::visible_snapshot)
+                    .map(|state| (key, state))
+            })
             .collect()
     }
 
@@ -1716,7 +1723,9 @@ impl LocalBackend {
         })
     }
 
-    /// `ListDocuments`: paged by name; transaction and `read_time` snapshots supported.
+    /// `ListDocuments`: paged by name (or by the request's `order_by`); transaction and
+    /// `read_time` snapshots and `show_missing` supported.
+    #[allow(clippy::too_many_lines)]
     pub fn list_documents(
         &self,
         req: &pb::ListDocumentsRequest,
@@ -2106,7 +2115,6 @@ pub fn document_summary(
 }
 
 /// Structured query of a `ListDocuments` request (unfiltered collection scan).
-#[must_use]
 pub fn list_query(req: &pb::ListDocumentsRequest) -> Result<pb::StructuredQuery, Status> {
     Ok(pb::StructuredQuery {
         from: vec![pb::structured_query::CollectionSelector {

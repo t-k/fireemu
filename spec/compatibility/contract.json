@@ -169,6 +169,12 @@
           "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the project and a signed token still verified",
           "emulatorValue": "no verification at all: the token is decoded and request.auth is built from whatever it carries",
           "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The firebase profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. Both are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
+        },
+        {
+          "key": "firestore.semantics",
+          "profileValue": "the 324-row Firestore semantics matrix (conformance/firestore-matrix.json), with 20 rows pinned to fireemu's own answer in conformance/src/firestore-probe/divergences.mjs",
+          "emulatorValue": "the same rows as the official emulator records them",
+          "note": "Measured against the pinned suite on 2026-08-31 over the REST surface both emulators serve. The pinned rows fall into five families: (1) the transaction model -- fireemu is optimistic (the reading transaction is ABORTED at commit and the out-of-band write succeeds) where the official emulator locks the read set and refuses the out-of-band writer with ABORTED 'Transaction lock timeout.'; (2) official REST-adapter defects fireemu does not reproduce -- a bytes-typed query parameter (?transaction=) hangs the connection without a response, ?readTime= misparses, a malformed page token and a fileless :securityRules body answer HTTP 500; (3) official leniencies fireemu refuses -- a query without a collection selector, a write addressed to another database than the route, an uppercase database id; (4) an official aggregation defect -- a count beside a sum or avg over a field some documents lack counts only the documents that hold it; (5) capabilities fireemu serves that the official emulator refuses -- orderBy(__name__, desc) and PartitionQuery. Everything else in the matrix is parity, gated on status, canonical code and normalized body."
         }
       ]
     },
@@ -269,8 +275,7 @@
       ],
       "notes": [],
       "gaps": [
-        "import and export of the official Firestore emulator artifacts",
-        "PartitionQuery is served but not recorded in a conformance fixture"
+        "import and export of the official Firestore emulator artifacts"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -301,7 +306,8 @@
               "crates/fireemu-adapter-grpc/tests/local.rs",
               "crates/fireemu-adapter-grpc/tests/streams.rs",
               "crates/fireemu-core-firestore/tests/query_execution.rs",
-              "crates/fireemu-core-firestore/tests/store.rs"
+              "crates/fireemu-core-firestore/tests/store.rs",
+              "conformance/firestore-matrix.json"
             ],
             "conformance": [
               "firestore/values-and-ordering",
@@ -311,7 +317,7 @@
           },
           "officialLimitations": [
             "the official Firestore emulator holds every database in memory and loses it on exit unless the run exports it, so no fixture may assume durable state",
-            "the official Firestore emulator enforces none of the production document, transaction or index limits, so the firebase profile must not reject a request the official emulator admits"
+            "measured by the semantics matrix: the official Firestore emulator does enforce the per-value byte cap (1,048,487 bytes), the nesting depth of 20, the 1,500-byte field-name and document-id caps, at most 30 IN values and a single array-contains clause; it does not enforce the 500-transforms-per-document budget or any composite index, so the firebase profile observes those instead of refusing them"
           ],
           "fireemuOnly": [
             {
@@ -341,7 +347,8 @@
           "evidence": {
             "tests": [],
             "integration": [
-              "crates/fireemu-adapter-grpc/tests/rest.rs"
+              "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "conformance/firestore-matrix.json"
             ],
             "conformance": [
               "firestore/rest-error-shapes",
@@ -434,7 +441,7 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the official emulator enforces no production limit at all, so every limit disposition is off in the firebase profile"
+            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest (transforms per document, composite indexes, transaction budgets are unmeasured); the firebase profile refuses exactly the measured subset and observes the production-only limits as warnings"
           ],
           "fireemuOnly": [
             {

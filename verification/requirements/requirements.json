@@ -1125,6 +1125,66 @@
           "crates/fireemu-adapter-grpc/tests/rules.rs"
         ]
       }
+    },
+    {
+      "id": "REQ-FS-PARITY-01",
+      "statement": "Firestore query, write, transaction and error semantics over the REST surface answer what the pinned official emulator answers, or diverge only where the divergence is pinned row by row.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "note": "Measured, not asserted: conformance/src/firestore-probe runs 324 REST requests -- values and type order, filters with null/NaN edges, cursors, collection groups, aggregations, listings, preconditions, masks, transforms, batched writes, the transaction lifecycle, error shapes, emulator routes, read_time -- through the identical session against both emulators and gates each row on status, canonical code and normalized body. Twenty rows are pinned divergences (divergences.mjs), each published in contract.json under firestore.semantics.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/local.rs",
+          "crates/fireemu-adapter-grpc/tests/rest.rs",
+          "crates/fireemu-core-firestore/tests/query.rs",
+          "crates/fireemu-core-firestore/tests/store.rs"
+        ],
+        "conformance": "conformance/firestore-matrix.json",
+        "property": "optimized_and_reference_execution_agree"
+      }
+    },
+    {
+      "id": "REQ-FS-AGG-STREAM-01",
+      "statement": "Scalar aggregations fold over borrowed selected rows: no document is cloned, an unbounded aggregation retains no candidate, and the results equal the materializing reference over the generated query corpus.",
+      "criticality": "important",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "note": "run_aggregation_with_stats reports cloned_documents and peak_candidates; the retention test measures both over 500 documents of 4 KiB each, and the equivalence property compares count, sum and avg (empty, mixed integer/double, NaN, offset, limit, cursors, count.up_to) with a reference computed from the reference executor's result.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-firestore/tests/execute.rs"
+        ],
+        "property": "streaming_aggregations_agree_with_the_materializing_reference"
+      }
+    },
+    {
+      "id": "REQ-SNAP-MEM-01",
+      "statement": "A named snapshot retains the visible state, not the running session: Firestore parts hold one version per live document and Storage parts share object data with the live store by allocation, while capture and restore stay exact and isolated.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "partial",
+      "note": "Firestore snapshots copy the newest version of every live document and refuse older read_times and resume tokens exactly as after a compaction; Storage blobs are Arc-shared between the live store, every capture and the restore, measured through retained_blob_bytes / blob_bytes_shared_with. The Auth part still clones its whole store eagerly (owned by the Auth workstream), and no byte budget gates capture admission yet.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-firestore/tests/snapshot.rs",
+          "crates/fireemu-core-storage/tests/snapshot.rs"
+        ]
+      }
+    },
+    {
+      "id": "REQ-LIMIT-META-01",
+      "statement": "A limit the runtime can refuse a request over is never published as unsupported: the catalogs' implemented sets, the FS-LIM-1 capability entry and /v1/limits all equal the enforced set, in both directions.",
+      "criticality": "important",
+      "owner": "core-limits",
+      "status": "implemented",
+      "note": "fireemu_core_firestore::limits names every enforced limit id; tests/enforced_limits.rs compares it with the Standard and Standard-query catalogs in both directions, and the daemon test the_limit_metadata_agrees_with_the_enforcement compares FS-LIM-1.implemented and /v1/limits from a started binary against the same set.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-firestore/tests/enforced_limits.rs",
+          "crates/fireemu/tests/capabilities.rs"
+        ]
+      }
     }
   ]
 }

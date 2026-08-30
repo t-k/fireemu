@@ -11,8 +11,10 @@
 
 use std::collections::BTreeSet;
 
-use fireemu_core_firestore::limits::ENFORCED_LIMIT_IDS;
-use fireemu_core_limits::catalogs::FIRESTORE_STANDARD_2026_08_25;
+use fireemu_core_firestore::limits::{ENFORCED_LIMIT_IDS, ENFORCED_QUERY_LIMIT_IDS};
+use fireemu_core_limits::catalogs::{
+    FIRESTORE_STANDARD_2026_08_25, FIRESTORE_STANDARD_QUERY_2026_08_25,
+};
 use fireemu_core_limits::model::{EnforcementPrecision, ImplementationStatus};
 
 #[test]
@@ -54,4 +56,32 @@ fn every_catalog_entry_marked_implemented_is_enforced() {
 fn the_enforced_list_has_no_duplicates() {
     let unique: BTreeSet<&str> = ENFORCED_LIMIT_IDS.iter().copied().collect();
     assert_eq!(unique.len(), ENFORCED_LIMIT_IDS.len());
+    let unique: BTreeSet<&str> = ENFORCED_QUERY_LIMIT_IDS.iter().copied().collect();
+    assert_eq!(unique.len(), ENFORCED_QUERY_LIMIT_IDS.len());
+}
+
+#[test]
+fn the_query_catalog_and_the_evaluated_query_limits_are_the_same_set() {
+    for id in ENFORCED_QUERY_LIMIT_IDS {
+        let limit = FIRESTORE_STANDARD_QUERY_2026_08_25
+            .find(id)
+            .unwrap_or_else(|| panic!("{id} is evaluated but is not in the query catalog"));
+        assert_eq!(
+            limit.implemented,
+            ImplementationStatus::Implemented,
+            "{id} is evaluated by check_standard_limits but the catalog reports it {:?}",
+            limit.implemented
+        );
+    }
+    let evaluated: BTreeSet<&str> = ENFORCED_QUERY_LIMIT_IDS.iter().copied().collect();
+    let implemented: BTreeSet<&str> = FIRESTORE_STANDARD_QUERY_2026_08_25
+        .limits
+        .iter()
+        .filter(|l| l.implemented == ImplementationStatus::Implemented)
+        .map(|l| l.id)
+        .collect();
+    assert_eq!(
+        implemented, evaluated,
+        "the query catalog's implemented set and the evaluated set differ"
+    );
 }

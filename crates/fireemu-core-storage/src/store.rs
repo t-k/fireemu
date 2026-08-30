@@ -574,6 +574,29 @@ impl StorageState {
         self.events.clear();
     }
 
+    /// Bytes of object data this state retains, each blob counted once (`SNAP-MEM-01`).
+    #[must_use]
+    pub fn retained_blob_bytes(&self) -> u64 {
+        self.blobs.values().map(|b| b.len() as u64).sum()
+    }
+
+    /// Bytes of object data shared with `other` by allocation: blobs whose buffer is the
+    /// same `Arc` on both sides, so capturing or restoring them copied nothing
+    /// (`SNAP-MEM-02`).
+    #[must_use]
+    pub fn blob_bytes_shared_with(&self, other: &Self) -> u64 {
+        self.blobs
+            .iter()
+            .filter_map(|(id, bytes)| {
+                other
+                    .blobs
+                    .get(id)
+                    .filter(|theirs| Arc::ptr_eq(bytes, theirs))
+                    .map(|_| bytes.len() as u64)
+            })
+            .sum()
+    }
+
     /// Takes the events recorded since the last call.
     pub fn drain_events(&mut self) -> Vec<StorageEvent> {
         std::mem::take(&mut self.events)

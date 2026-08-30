@@ -203,12 +203,18 @@ fn published() -> &'static (Value, Value) {
 /// request over is therefore never published as unsupported anywhere.
 #[test]
 fn the_limit_metadata_agrees_with_the_enforcement() {
-    use fireemu_core_firestore::limits::ENFORCED_LIMIT_IDS;
-    use fireemu_core_limits::catalogs::FIRESTORE_STANDARD_2026_08_25;
+    use fireemu_core_firestore::limits::{ENFORCED_LIMIT_IDS, ENFORCED_QUERY_LIMIT_IDS};
+    use fireemu_core_limits::catalogs::{
+        FIRESTORE_STANDARD_2026_08_25, FIRESTORE_STANDARD_QUERY_2026_08_25,
+    };
     use fireemu_core_limits::model::ImplementationStatus;
     use std::collections::BTreeSet;
 
-    let enforced: BTreeSet<&str> = ENFORCED_LIMIT_IDS.iter().copied().collect();
+    let enforced: BTreeSet<&str> = ENFORCED_LIMIT_IDS
+        .iter()
+        .chain(ENFORCED_QUERY_LIMIT_IDS)
+        .copied()
+        .collect();
 
     let manifest = manifest();
     let listed: BTreeSet<&str> = manifest["capabilities"]["FS-LIM-1"]["implemented"]
@@ -222,41 +228,54 @@ fn the_limit_metadata_agrees_with_the_enforcement() {
         "FS-LIM-1.implemented and the enforced set differ"
     );
 
-    let catalog: BTreeSet<&str> = FIRESTORE_STANDARD_2026_08_25
-        .limits
-        .iter()
-        .filter(|l| l.implemented == ImplementationStatus::Implemented)
-        .map(|l| l.id)
-        .collect();
-    assert_eq!(
-        catalog, enforced,
-        "the catalog's implemented set and the enforced set differ"
-    );
+    for (catalog, expected) in [
+        (
+            &FIRESTORE_STANDARD_2026_08_25,
+            ENFORCED_LIMIT_IDS.iter().copied().collect::<BTreeSet<_>>(),
+        ),
+        (
+            &FIRESTORE_STANDARD_QUERY_2026_08_25,
+            ENFORCED_QUERY_LIMIT_IDS.iter().copied().collect(),
+        ),
+    ] {
+        let implemented: BTreeSet<&str> = catalog
+            .limits
+            .iter()
+            .filter(|l| l.implemented == ImplementationStatus::Implemented)
+            .map(|l| l.id)
+            .collect();
+        assert_eq!(
+            implemented, expected,
+            "{}: the catalog's implemented set and the enforced set differ",
+            catalog.meta.id
+        );
 
-    let served = limits()["catalogs"]
-        .as_array()
-        .expect("catalogs are listed")
-        .iter()
-        .find(|c| c["id"] == FIRESTORE_STANDARD_2026_08_25.meta.id)
-        .expect("the Standard catalog is served");
-    let mut reported = BTreeSet::new();
-    for limit in served["limits"].as_array().expect("limits are listed") {
-        let id = limit["id"].as_str().expect("a limit id");
-        let status = limit["implemented"].as_str().expect("a status");
-        if enforced.contains(id) {
-            assert_eq!(status, "Implemented", "/v1/limits reports {id} as {status}");
-            reported.insert(id);
-        } else {
-            assert_ne!(
-                status, "Implemented",
-                "/v1/limits reports {id} implemented but nothing enforces it"
-            );
+        let served = limits()["catalogs"]
+            .as_array()
+            .expect("catalogs are listed")
+            .iter()
+            .find(|c| c["id"] == catalog.meta.id)
+            .unwrap_or_else(|| panic!("{} is served by /v1/limits", catalog.meta.id));
+        let mut reported = BTreeSet::new();
+        for limit in served["limits"].as_array().expect("limits are listed") {
+            let id = limit["id"].as_str().expect("a limit id");
+            let status = limit["implemented"].as_str().expect("a status");
+            if expected.contains(id) {
+                assert_eq!(status, "Implemented", "/v1/limits reports {id} as {status}");
+                reported.insert(id);
+            } else {
+                assert_ne!(
+                    status, "Implemented",
+                    "/v1/limits reports {id} implemented but nothing enforces it"
+                );
+            }
         }
+        assert_eq!(
+            reported, expected,
+            "/v1/limits does not name every enforced limit of {}",
+            catalog.meta.id
+        );
     }
-    assert_eq!(
-        reported, enforced,
-        "/v1/limits does not name every enforced limit"
-    );
 }
 
 #[test]

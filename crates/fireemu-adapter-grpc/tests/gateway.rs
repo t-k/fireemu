@@ -338,7 +338,7 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
 
     let strict = Gateway {
         enforce_limits: true,
-        ctx: ctx.clone(),
+        ctx,
         indexes: IndexSet::default(),
     };
     let rejection = strict.validate_query(&query).unwrap_err();

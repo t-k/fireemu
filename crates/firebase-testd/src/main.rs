@@ -950,7 +950,7 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
                 state.signer.kid()
             );
             println!(
-                "  app check modes:  auth={} firestore={} storage={}   (configured; no product enforces them yet, milestone AC0)",
+                "  app check modes:  auth={} firestore={} storage={}   (enforced for Auth, Firestore unary/REST and non-resumable Storage; streams, WebChannel, resumable uploads and callables are milestone AC2)",
                 only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
                 only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
                 only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),

@@ -583,14 +583,129 @@
       "criticality": "critical",
       "owner": "core-app-check",
       "status": "partial",
-      "note": "Milestone AC0 implements and proves the transport-neutral classifier. The per-transport adapters (Firestore gRPC and WebChannel, Storage, the Functions proxy) adopt it in AC1 and AC2, so the requirement stays partial until those integration tests exist.",
+      "note": "Milestone AC0 implemented and proved the transport-neutral classifier; AC1 adopted it on the Firebase Auth HTTP surface, the Storage HTTP surface, Firestore unary gRPC metadata and Firestore REST, each with duplicate, folded, empty and oversized cases and, for the two HTTP listeners, two field instances over a real socket. WebChannel and the callable Functions proxy adopt it in AC2, so the requirement stays partial.",
       "artifacts": {
         "integration": [
-          "crates/ftd-core-app-check/tests/header.rs"
+          "crates/ftd-core-app-check/tests/header.rs",
+          "crates/ftd-adapter-http/tests/app_check_auth.rs",
+          "crates/ftd-adapter-http/tests/app_check_storage.rs",
+          "crates/ftd-adapter-grpc/tests/app_check.rs"
         ],
         "property": "prop_app_check_header_never_selects_one_of_several",
         "mutation": [
           "M-APPCHECK-011"
+        ]
+      }
+    },
+    {
+      "id": "AC-BOUNDARY-001",
+      "statement": "An App Check denial happens before Security Rules and before every side effect: no user, credential, OOB or phone code, MFA change, object generation, upload session, Firestore mutation, event or rules document-access budget consumption survives it.",
+      "criticality": "critical",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "note": "Each product is checked independently: Auth by an observable absence (no user, a refresh token that still works, an MFA assertion that still finalizes), Storage by an unchanged object store and an unconsumed upload-session identifier, Firestore by the App Check reason preceding a rules denial the same request would also have earned.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-adapter-http/tests/app_check_auth.rs",
+          "crates/ftd-adapter-http/tests/app_check_storage.rs",
+          "crates/ftd-adapter-grpc/tests/app_check.rs"
+        ],
+        "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
+        "mutation": [
+          "M-APPCHECK-004",
+          "M-APPCHECK-006"
+        ]
+      }
+    },
+    {
+      "id": "AC-AUTH-001",
+      "statement": "End-user Identity Toolkit and Secure Token routes enforce the configured App Check baseline; Admin and emulator inspection routes follow the explicit bypass; a denial consumes no credential and no action code.",
+      "criticality": "critical",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "note": "The published route classification is `identity_toolkit::end_user_operation`, which also bounds the observation label. The Admin bypass requires the owner credential itself, so an Admin-shaped path without it is an ordinary end-user request.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-adapter-http/tests/app_check_auth.rs"
+        ],
+        "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
+        "mutation": [
+          "M-APPCHECK-004",
+          "M-APPCHECK-012"
+        ]
+      }
+    },
+    {
+      "id": "AC-FS-001",
+      "statement": "Firestore unary gRPC, Write, Listen, REST and WebChannel obey the same mode and credential matrix and the same stream-lifetime contract.",
+      "criticality": "critical",
+      "owner": "adapter-grpc",
+      "status": "partial",
+      "note": "Milestone AC1 covers unary gRPC and REST: both ingresses run the full mode x credential matrix against a real listener, refuse duplicate, folded and empty fields, and take the owner bypass only for the exact owner credential. The Write and Listen streams and WebChannel, with their stream-lifetime contract, are AC2.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-adapter-grpc/tests/app_check.rs"
+        ],
+        "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
+        "mutation": [
+          "M-APPCHECK-004",
+          "M-APPCHECK-012"
+        ]
+      }
+    },
+    {
+      "id": "AC-ST-001",
+      "statement": "Storage metadata, list, upload, resumable continuation and finalization, download, update, delete, the JSON API bypass and the download-token bypass are explicit.",
+      "criticality": "critical",
+      "owner": "adapter-http",
+      "status": "partial",
+      "note": "Milestone AC1 covers the non-resumable operations plus the admission of a resumable start; the download token is compared in constant time and must bind to the resolved bucket, object name and generation, and the privileged JSON API classification is shared with the Security Rules bypass so the two cannot drift apart. The per-continuation contract of specification section 13.2 is AC2.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-adapter-http/tests/app_check_storage.rs"
+        ],
+        "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
+        "mutation": [
+          "M-APPCHECK-007",
+          "M-APPCHECK-012"
+        ]
+      }
+    },
+    {
+      "id": "AC-LIFE-001",
+      "statement": "Reset, restore, project deletion and session isolation invalidate or isolate App Check tokens and counters as specified.",
+      "criticality": "critical",
+      "owner": "firebase-testd",
+      "status": "implemented",
+      "note": "Creating, resetting and deleting a project rotates its epoch through the ProjectHooks seam; a snapshot restore replaces the scope's dynamic debug-token registrations and then rotates the epoch. The epochs are drawn from the operating system CSPRNG before any is installed, so a failing draw reports itself instead of becoming a predictable epoch, and the installation is one write under the exclusive admission barrier.",
+      "artifacts": {
+        "integration": [
+          "crates/firebase-testd/src/sessions.rs",
+          "crates/firebase-testd/src/snapshots.rs",
+          "crates/ftd-adapter-grpc/tests/app_check.rs",
+          "crates/ftd-core-app-check/tests/admission.rs"
+        ],
+        "property": "prop_app_check_epoch_rotation_invalidates_every_earlier_token",
+        "mutation": [
+          "M-APPCHECK-005"
+        ]
+      }
+    },
+    {
+      "id": "AC-OBS-001",
+      "statement": "App Check metrics distinguish valid, missing, invalid, bypass, admitted and denied without exposing a secret, and never create a metric label from unverified input.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "partial",
+      "note": "The control API serves per-project counters by service, verified app ID, category and outcome at GET /v1/sessions/{session}/appCheck/observations; it requires the control token for every method whatever the Origin and sets Cache-Control: no-store. The Emulator UI page is not built yet, which is what keeps this partial.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-adapter-http/tests/app_check_control.rs",
+          "crates/ftd-core-app-check/tests/admission.rs"
+        ],
+        "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
+        "mutation": [
+          "M-APPCHECK-008"
         ]
       }
     }

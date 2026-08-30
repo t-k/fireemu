@@ -1,11 +1,16 @@
-//! Property artifacts for `AC-TOKEN-001`, `AC-EXCHANGE-001` and `AC-HEADER-001`
-//! (`docs/specifications/firebase-app-check.md` sections 7.3, 10.1 and 11).
+//! Property artifacts for `AC-TOKEN-001`, `AC-EXCHANGE-001`, `AC-HEADER-001`,
+//! `AC-BOUNDARY-001`, `AC-AUTH-001`, `AC-FS-001`, `AC-ST-001`, `AC-LIFE-001` and
+//! `AC-OBS-001` (`docs/specifications/firebase-app-check.md` sections 7.3, 7.4, 10.1, 11,
+//! 12, 14 and 15).
 //!
 //! The core owns no primitive, so these tests supply keyed, deterministic stand-ins for RS256
 //! and SHA-256. They are reproducible and collision-free over the generated inputs, and they
 //! are not cryptography; the real `rsa` / `sha2` / `subtle` implementations are exercised by
 //! `crates/ftd-adapter-http/tests/app_check.rs`.
 
+use ftd_core_app_check::admission::{
+    AdmissionRequest, AppCheckGate, PrivilegedBypass, ServiceAdmission,
+};
 use ftd_core_app_check::crypto::{AppCheckSigner, ConstantTimeEq, DebugTokenHasher};
 use ftd_core_app_check::exchange::{
     canonical_debug_token, exchange, ExchangeOutcome, ExchangeRequest,
@@ -13,10 +18,11 @@ use ftd_core_app_check::exchange::{
 use ftd_core_app_check::header::{classify_app_check_header, HeaderClassification};
 use ftd_core_app_check::jwt::encode;
 use ftd_core_app_check::limits::MAX_TOKEN_BYTES;
+use ftd_core_app_check::observe::{CredentialCategory, UNKNOWN_APP_LABEL};
 use ftd_core_app_check::registry::{
     AppCheckRegistry, AppRegistration, DebugTokenDigest, ProjectEpoch,
 };
-use ftd_core_app_check::verify::{verify_token, AppCheckFailure};
+use ftd_core_app_check::verify::{verify_token, AppCheckFailure, BaselineMode};
 use ftd_core_types::determinism::{DeterministicRng, SplitMix64};
 use ftd_core_types::time::LogicalInstant;
 use proptest::prelude::*;
@@ -126,6 +132,28 @@ fn uuid_v4(bytes: [u8; 16]) -> String {
         hex(&b[10..16])
     )
 }
+
+/// A gate over the fixture registry, and one valid token for it.
+fn gate_and_token(key: u64) -> (AppCheckGate, String) {
+    let registry = registry(SECRET, 3600);
+    let signer: std::sync::Arc<dyn AppCheckSigner> = std::sync::Arc::new(TestSigner::new(key));
+    let token = {
+        let claims = registry
+            .issue_claims("demo-app", APP_ID, LogicalInstant::from_unix_seconds(START))
+            .expect("the fixture app may exchange");
+        encode(&claims, signer.as_ref())
+    };
+    (
+        AppCheckGate::new(
+            std::sync::Arc::new(std::sync::RwLock::new(registry)),
+            signer,
+        ),
+        token,
+    )
+}
+
+/// The debug secret every property fixture registers.
+const SECRET: &str = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
 
 proptest! {
     /// AC-TOKEN-001: the virtual-clock window is exactly `iat <= now < exp`. There is no
@@ -312,5 +340,128 @@ proptest! {
                 HeaderClassification::Malformed
             );
         }
+    }
+}
+
+proptest! {
+    /// AC-BOUNDARY-001, AC-AUTH-001, AC-FS-001, AC-ST-001: one decision table, whatever the
+    /// transport. `unenforced` never denies, `enforced` admits exactly a verified token or an
+    /// explicit privileged bypass, and no admitted request ever carries an app identity that
+    /// did not come from a verified token.
+    #[test]
+    fn prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass(
+        key in 1u64..64,
+        unenforced in any::<bool>(),
+        privileged in any::<bool>(),
+        present in any::<bool>(),
+        corrupt in any::<bool>(),
+        service in prop::sample::select(vec!["auth", "firestore", "storage"]),
+    ) {
+        let (gate, valid) = gate_and_token(key);
+        let mode = if unenforced { BaselineMode::Unenforced } else { BaselineMode::Enforced };
+        let policy = ServiceAdmission::new(gate.clone(), service, mode)
+            .expect("a non-off mode always has an admission");
+        let header = match (present, corrupt) {
+            (false, _) => HeaderClassification::Missing,
+            (true, false) => HeaderClassification::Present(valid.clone()),
+            (true, true) => HeaderClassification::Present(format!("{valid}x")),
+        };
+        let bypass = if privileged {
+            PrivilegedBypass::FirestoreOwner
+        } else {
+            PrivilegedBypass::None
+        };
+        let decision = policy.admit(&AdmissionRequest {
+            project_id: "demo-app",
+            transport: "grpc",
+            operation: "Commit",
+            bypass,
+            header: &header,
+            now: LogicalInstant::from_unix_seconds(START),
+        });
+
+        let verified = present && !corrupt && !privileged;
+        prop_assert_eq!(
+            decision.allowed,
+            unenforced || privileged || verified,
+            "mode {}, privileged {}, present {}, corrupt {}",
+            mode,
+            privileged,
+            present,
+            corrupt
+        );
+        prop_assert_eq!(decision.identity().is_some(), verified);
+        prop_assert_eq!(decision.reason.is_some(), !decision.allowed);
+
+        // AC-OBS-001: every classified request leaves exactly one secret-free observation,
+        // and an unverified identity aggregates into the bounded bucket.
+        let observed = gate.registry().read().expect("readable").observations();
+        prop_assert_eq!(observed.len(), 1);
+        let o = &observed[0];
+        prop_assert_eq!(o.service, service);
+        prop_assert_eq!(o.admitted, decision.allowed);
+        prop_assert_eq!(
+            o.category,
+            if privileged {
+                CredentialCategory::Bypass
+            } else if !present {
+                CredentialCategory::Missing
+            } else if corrupt {
+                CredentialCategory::Invalid
+            } else {
+                CredentialCategory::Valid
+            }
+        );
+        prop_assert_eq!(
+            o.app_id.as_str(),
+            if verified { APP_ID } else { UNKNOWN_APP_LABEL }
+        );
+        let rendered = format!("{observed:?}");
+        prop_assert!(!rendered.contains(&valid));
+    }
+
+    /// AC-LIFE-001: an epoch rotation invalidates every token issued before it, whatever the
+    /// mode was, and a token minted after it is admitted again.
+    #[test]
+    fn prop_app_check_epoch_rotation_invalidates_every_earlier_token(
+        key in 1u64..64,
+        epoch in any::<u128>(),
+    ) {
+        let (gate, before) = gate_and_token(key);
+        let policy = ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Enforced)
+            .expect("a non-off mode always has an admission");
+        let admit = |token: &str| {
+            policy
+                .admit(&AdmissionRequest {
+                    project_id: "demo-app",
+                    transport: "grpc",
+                    operation: "Commit",
+                    bypass: PrivilegedBypass::None,
+                    header: &HeaderClassification::Present(token.to_owned()),
+                    now: LogicalInstant::from_unix_seconds(START),
+                })
+                .allowed
+        };
+        prop_assert!(admit(&before));
+
+        let previous = gate
+            .registry()
+            .read()
+            .expect("readable")
+            .project_epoch("demo-app")
+            .expect("the fixture project has an epoch");
+        prop_assume!(epoch != previous.expose());
+        gate.set_epochs(&[("demo-app".to_owned(), ProjectEpoch::new(epoch))]);
+
+        prop_assert!(!admit(&before), "a pre-rotation token is never admitted");
+
+        let after = {
+            let registry = gate.registry().read().expect("readable");
+            let claims = registry
+                .issue_claims("demo-app", APP_ID, LogicalInstant::from_unix_seconds(START))
+                .expect("the fixture app may exchange");
+            encode(&claims, gate.signer().as_ref())
+        };
+        prop_assert!(admit(&after), "a token of the new epoch verifies");
     }
 }

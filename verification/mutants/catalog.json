@@ -382,6 +382,26 @@
       "id": "M-APPCHECK-011",
       "fault": "the first of several App Check header values is selected",
       "critical": true
+    },
+    {
+      "id": "M-APPCHECK-004",
+      "fault": "Security Rules run before an App Check denial",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-006",
+      "fault": "an App Check denial still creates the request's side effect",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-007",
+      "fault": "a resumable upload advances after an App Check denial",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-012",
+      "fault": "an owner-shaped path or header alone grants the App Check bypass",
+      "critical": true
     }
   ]
 }

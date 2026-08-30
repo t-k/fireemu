@@ -63,7 +63,8 @@
         "integration": [
           "crates/ftd-core-events/tests/state_machine.rs"
         ]
-      }
+      },
+      "note": "terminal_event_rejects_every_transition builds a real event, so it allocates: on macOS with Kani 0.67 it hits the known 'malloc with missing definition' limitation recorded in the README and only verifies where the allocator is modelled."
     },
     {
       "id": "INV-IDLE-001",
@@ -145,9 +146,9 @@
       "criticality": "critical",
       "owner": "core-limits",
       "status": "partial",
-      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E).",
+      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E), and LimitRejection.tla is pending with it.",
       "artifacts": {
-        "tla": "LimitRejection.tla::LimitRejectionAtomicity",
+        "tla": "pending:LimitRejection.tla::LimitRejectionAtomicity",
         "kani": "limit_boundary_classification",
         "property": "prop_boundary_reject_precedes_warning",
         "mutation": [
@@ -223,7 +224,7 @@
       "owner": "core-firestore",
       "status": "partial",
       "artifacts": {
-        "kani": "conservative_index_never_false_accepts",
+        "kani": "pending:conservative_index_never_false_accepts",
         "mutation": [
           "M-INDEX-001",
           "M-INDEX-002",
@@ -456,7 +457,7 @@
         "loom": [
           "totp_verify_races_with_clock_advance"
         ],
-        "kani": "totp_window_boundary",
+        "kani": "pending:totp_window_boundary",
         "property": "prop_same_step_same_code",
         "mutation": [
           "M-AUTH-001",
@@ -466,7 +467,8 @@
           "crates/ftd-core-auth/tests/mfa.rs",
           "crates/ftd-core-auth/tests/totp.rs"
         ]
-      }
+      },
+      "note": "The Kani harness is pending: the acceptance window is decided from HMAC-SHA1 codes and from a 128-bit division in time_step, which bounded model checking does not finish in usable time. The window and replay boundary are covered by AuthTotp.tla, prop_same_step_same_code and the RFC 6238 vectors in crates/ftd-core-auth/tests/totp.rs."
     },
     {
       "id": "INV-AUTH-002",

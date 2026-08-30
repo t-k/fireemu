@@ -2,6 +2,8 @@
 //! daemon on ephemeral ports (`--*-port 0`) and checks the command's environment, the exit
 //! status, and that nothing keeps listening or running afterwards.
 
+mod census;
+
 use std::collections::BTreeMap;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -200,6 +202,12 @@ fn sigterm_stops_the_command_and_the_services_without_leaving_processes() {
     }
     assert!(!alive(&child_pid), "the command outlived the supervisor");
     assert!(refused(&firestore), "the daemon kept listening");
+    // Nextest only sees processes still holding this test's captured output; the census also
+    // covers descendants that closed or redirected it.
+    census::assert_no_owned_descendants(
+        "sigterm_stops_the_command_and_the_services_without_leaving_processes",
+        Duration::from_secs(5),
+    );
 }
 
 #[test]
@@ -235,6 +243,10 @@ fn a_background_job_the_command_leaves_behind_is_swept() {
     assert!(
         !alive(&sleeper),
         "the background job survived the supervisor"
+    );
+    census::assert_no_owned_descendants(
+        "a_background_job_the_command_leaves_behind_is_swept",
+        Duration::from_secs(5),
     );
 }
 

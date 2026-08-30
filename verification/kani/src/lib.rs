@@ -5,6 +5,9 @@
 
 #[cfg(kani)]
 mod harnesses {
+    use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
+    use ftd_core_events::retry::RetryPolicy;
+    use ftd_core_events::state::{EventRecord, EventTransitionError};
     use ftd_core_limits::evaluate::{
         classify_severity, ratio_micros, violates_boundary, DEFAULT_THRESHOLDS,
     };
@@ -13,7 +16,7 @@ mod harnesses {
     use ftd_core_session::idle::{AwaitIdleOptions, WorkKind};
     use ftd_core_session::session::{Session, WorkResult};
     use ftd_core_types::determinism::Clock;
-    use ftd_core_types::ids::{Epoch, SessionId};
+    use ftd_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
     use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 
     /// INV-LIMIT-001 (boundary part): inclusive allows N, exclusive rejects N, and a boundary
@@ -110,6 +113,75 @@ mod harnesses {
             kinds[pick] != WorkKind::TextIndexBuild
         );
         assert!(!WorkKind::ScheduledFutureWork.is_fenced(&options));
+    }
+
+    /// INV-EVENT-001: once an event is terminal, every transition is refused with `Terminal`
+    /// and the record keeps its state and attempt counter. The four terminal states and the
+    /// eight transitions are enumerated symbolically.
+    ///
+    /// This harness allocates (an event carries an event type, a subject and a payload), so it
+    /// needs a Kani build whose allocator model is available; see the README.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn terminal_event_rejects_every_transition() {
+        let epoch = Epoch::initial();
+        let policy = RetryPolicy::try_new(
+            1,
+            LogicalDuration::from_seconds(1),
+            LogicalDuration::from_seconds(60),
+        )
+        .unwrap();
+        let mut record = EventRecord::new(LogicalEvent {
+            event_id: EventId::new(1),
+            session_id: SessionId::new(1),
+            epoch,
+            source: EventSource::Firestore,
+            event_type: EventType::try_new("google.cloud.firestore.document.v1.created").unwrap(),
+            subject: String::new(),
+            logical_time: LogicalInstant::UNIX_EPOCH,
+            causation_id: None,
+            correlation_id: CorrelationId::new(1),
+            payload: Vec::new(),
+        });
+        let kind: u8 = kani::any();
+        kani::assume(kind < 4);
+        match kind {
+            0 => {
+                record.lease().unwrap();
+                record.start().unwrap();
+                record.succeed().unwrap();
+            }
+            1 => {
+                record.lease().unwrap();
+                record.start().unwrap();
+                let _ = record.fail(&policy, LogicalInstant::UNIX_EPOCH).unwrap();
+            }
+            2 => record.cancel().unwrap(),
+            _ => record.discard_stale(epoch.next().unwrap()).unwrap(),
+        }
+        assert!(record.is_terminal());
+        let expected = EventTransitionError::Terminal {
+            state: record.state().name(),
+        };
+        let before_state = record.state().clone();
+        let before_attempt = record.attempt();
+        let action: u8 = kani::any();
+        kani::assume(action < 8);
+        let now = LogicalInstant::from_nanos(kani::any());
+        let result = match action {
+            0 => record.lease(),
+            1 => record.start(),
+            2 => record.succeed(),
+            3 => record.fail(&policy, now).map(|_| ()),
+            4 => record.interrupt(),
+            5 => record.retry_due(now),
+            6 => record.cancel(),
+            _ => record.discard_stale(Epoch::new(kani::any())),
+        };
+        assert_eq!(result, Err(expected));
+        assert_eq!(record.state(), &before_state);
+        assert_eq!(record.attempt(), before_attempt);
+        assert!(record.is_terminal());
     }
 
     /// Rejection precedes warnings for every value outside the boundary (allocation-free form

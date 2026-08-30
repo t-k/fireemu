@@ -1,5 +1,30 @@
 # Test execution profiles. The `ci` profile never retries: a test that passes
 # only after a retry is a flaky diagnosis, not a success.
+#
+# Leak detection (`leak-timeout`) covers exactly one thing: a process started by a test that
+# still holds the test's captured stdout or stderr after the test process exited. It says
+# nothing about a process that closed or redirected those handles; that is what the process
+# census in `crates/firebase-testd/tests/census/mod.rs` is for, and
+# `crates/firebase-testd/tests/leak_fixture.rs` gates both.
+#
+# The 30s period is measured, not guessed. Sweeping it over ~100 workspace runs on an 18-core
+# machine, with and without 9 competing busy loops (the numbers are in the work log for this
+# change):
+#
+#   1ms - 10ms   arbitrary pure-computation tests are reported leaky; scheduler noise.
+#   100ms - 5s   roughly one run in eight is reported leaky. The attributed test varies and
+#                includes tests that spawn nothing at all (a pure `config::tests` unit test),
+#                the reported duration is always "test time + the whole period", and a process
+#                census sampled every 100ms finds no surviving descendant and no orphan. What
+#                is alive for the whole period is an unrelated test process of the same run:
+#                on macOS a captured pipe is created without an atomic CLOEXEC, so a
+#                concurrently spawned test can inherit another test's pipe and hold it until
+#                it exits. The victim is whichever test the pipe belonged to.
+#   30s          0 leaky runs in 30 consecutive runs (20 idle, 10 under the busy loops).
+#
+# 30s is therefore chosen to exceed the longest test in the workspace (~12s) with head room:
+# a false holder is another test, so it always exits inside the period, while a genuinely
+# leaked daemon or shell never does and still fails the run.
 [profile.default]
 retries = 0
 fail-fast = true
@@ -7,10 +32,12 @@ fail-fast = true
 [profile.pr]
 retries = 0
 fail-fast = true
+leak-timeout = { period = "30s", result = "fail" }
 
 [profile.ci]
 retries = 0
 fail-fast = false
+leak-timeout = { period = "30s", result = "fail" }
 
 [profile.ci.junit]
 path = "junit.xml"
@@ -24,3 +51,11 @@ test-threads = "num-cpus"
 # Retries are allowed here only for diagnosis; this profile is never a gate.
 retries = 3
 fail-fast = false
+
+# Drives the intentional-leak fixtures in `crates/firebase-testd/tests/leak_fixture.rs`. The
+# fixture children live far longer than any period, so this only has to be short enough to keep
+# the nested run quick.
+[profile.leak-fixture]
+retries = 0
+fail-fast = false
+leak-timeout = { period = "200ms", result = "fail" }

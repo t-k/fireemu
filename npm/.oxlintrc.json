@@ -1,0 +1,13 @@
+{
+  "plugins": ["unicorn", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "rules": {
+    "no-unused-vars": "error",
+    "no-console": "off"
+  },
+  "ignorePatterns": ["dist", "platforms/build", "node_modules"]
+}

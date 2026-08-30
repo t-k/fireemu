@@ -1,0 +1,38 @@
+{
+  "name": "fireemu",
+  "version": "0.0.0-dev",
+  "description": "A deterministic, test-only local runtime for Firebase SDK and Functions code",
+  "keywords": [
+    "emulator",
+    "firebase",
+    "firebase-functions",
+    "firestore",
+    "testing"
+  ],
+  "homepage": "https://github.com/reckona/fireemu#readme",
+  "bugs": "https://github.com/reckona/fireemu/issues",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reckona/fireemu.git"
+  },
+  "bin": {
+    "fireemu": "bin/fireemu.mjs"
+  },
+  "files": [
+    "bin/fireemu.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "optionalDependencies": {
+    "@fireemu/darwin-arm64": "0.0.0-dev",
+    "@fireemu/darwin-x64": "0.0.0-dev",
+    "@fireemu/linux-arm64": "0.0.0-dev",
+    "@fireemu/linux-x64": "0.0.0-dev",
+    "@fireemu/win32-x64": "0.0.0-dev"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

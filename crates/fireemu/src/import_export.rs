@@ -834,6 +834,10 @@ fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject,
         content_language: meta.content_language.clone(),
         cache_control: meta.cache_control.clone(),
         custom: meta.custom_metadata.iter().cloned().collect(),
+        // The export document model keeps custom metadata as a list, so an official
+        // artifact's defined-but-empty `customMetadata: {}` imports as undefined; only the
+        // Firebase dialect's metadata JSON can observe that difference.
+        custom_defined: !meta.custom_metadata.is_empty(),
         time_created: rfc3339_instant(meta.time_created.as_deref())
             .unwrap_or(LogicalInstant::from_unix_seconds(0)),
         updated: rfc3339_instant(meta.updated.as_deref())

@@ -16,6 +16,16 @@ use crate::name::{BucketName, ObjectName};
 pub const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 /// Custom metadata budget (Cloud Storage: 8 KiB of keys and values).
 pub const MAX_CUSTOM_METADATA_BYTES: usize = 8 * 1024;
+
+/// The most download tokens one object may carry. Production keeps a small handful; the cap
+/// is a fireemu-only safety bound (the official emulator has none), so an unauthenticated
+/// `PATCH` cannot grow an object's token list without limit.
+pub const MAX_DOWNLOAD_TOKENS: usize = 32;
+
+/// The longest a single download token may be. fireemu mints 36-character UUIDs; the cap
+/// leaves room for the client-supplied tokens the Firebase dialect honours while refusing an
+/// oversized one.
+pub const MAX_DOWNLOAD_TOKEN_LEN: usize = 128;
 /// Resumable upload sessions expire after a week of virtual time (Cloud Storage: 7 days).
 pub const UPLOAD_SESSION_TTL_SECONDS: i64 = 7 * 24 * 3600;
 /// Maximum upload sessions still receiving bytes (abandoned sessions expire).
@@ -60,8 +70,21 @@ pub struct NewMetadata {
     pub content_language: Option<String>,
     /// `Cache-Control`.
     pub cache_control: Option<String>,
-    /// Custom key/value metadata.
-    pub custom: BTreeMap<String, String>,
+    /// Custom key/value metadata. `None` and `Some` of an empty map differ the way they
+    /// differ upstream: the Firebase dialect's metadata JSON carries a `metadata` key only
+    /// when custom metadata was ever defined, even when it is empty.
+    pub custom: Option<BTreeMap<String, String>>,
+}
+
+/// What a patch does to custom metadata, mirroring the official emulator's `update()`:
+/// `metadata: null` clears everything, an object merges per key (a `null` value removes
+/// that key).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CustomMetadataPatch {
+    /// `metadata: null`: every custom key goes and the map becomes undefined.
+    Clear,
+    /// Merge: keys mapped to `None` are removed, others inserted.
+    Merge(BTreeMap<String, Option<String>>),
 }
 
 /// Metadata patch: `Some(None)` clears a field, `None` keeps it.
@@ -77,8 +100,8 @@ pub struct MetadataPatch {
     pub content_language: Option<Option<String>>,
     /// `Cache-Control`.
     pub cache_control: Option<Option<String>>,
-    /// Custom metadata: keys mapped to `None` are removed; `Some(map)` merges.
-    pub custom: Option<BTreeMap<String, Option<String>>>,
+    /// Custom metadata change; `None` keeps what is stored.
+    pub custom: Option<CustomMetadataPatch>,
 }
 
 /// Stored object metadata (one generation).
@@ -106,6 +129,10 @@ pub struct ObjectMetadata {
     pub cache_control: Option<String>,
     /// Custom metadata.
     pub custom: BTreeMap<String, String>,
+    /// Whether custom metadata is defined at all: an empty-but-defined map and no map
+    /// serialize differently on the Firebase dialect, exactly as upstream keeps
+    /// `customMetadata` as `{}` or `undefined`.
+    pub custom_defined: bool,
     /// MD5 of the data.
     pub md5: [u8; 16],
     /// CRC32C of the data.
@@ -163,6 +190,9 @@ pub struct ImportedObject {
     pub cache_control: Option<String>,
     /// Custom metadata.
     pub custom: BTreeMap<String, String>,
+    /// Whether the artifact's metadata JSON carried a `customMetadata` member at all (the
+    /// official emulator serializes an empty-but-defined map and no map differently).
+    pub custom_defined: bool,
     /// The creation time the artifact recorded.
     pub time_created: LogicalInstant,
     /// The update time the artifact recorded.
@@ -311,6 +341,23 @@ enum UploadState {
     Receiving,
     Committed(Box<ObjectMetadata>),
     Aborted,
+    /// Finalization ran and Security Rules refused it: terminal like `Committed`. Only the
+    /// received byte count is kept observable; the bytes themselves are dropped, so a
+    /// refused near-limit upload does not sit in memory until its TTL (S-2).
+    Denied(u64),
+}
+
+/// What a status query observes about a resumable upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UploadPhase {
+    /// Still receiving bytes.
+    Active(u64),
+    /// Committed; the exact generation the upload produced.
+    Finalized(Box<ObjectMetadata>),
+    /// Cancelled (or aborted by a failed size or checksum check).
+    Cancelled(u64),
+    /// Finalized and refused by Security Rules; no object was published.
+    Denied(u64),
 }
 
 /// The app a resumable upload session was admitted for.
@@ -443,6 +490,29 @@ pub struct StorageState {
 fn custom_metadata_size(custom: &BTreeMap<String, String>) -> usize {
     custom.iter().map(|(k, v)| k.len() + v.len()).sum()
 }
+
+/// The bytes charged against the custom-metadata budget: the plain custom map plus the
+/// download tokens as they serialize back into the `firebaseStorageDownloadTokens` key.
+///
+/// Download tokens are lifted out of custom metadata before the plain map is measured, so
+/// counting the plain map alone would let a caller smuggle unbounded state past the 8 KiB
+/// budget through that one key (an unauthenticated `PATCH` can set it, and each `GET` then
+/// scans every token in constant time). Charging the tokens here closes that, and does it
+/// consistently across `put`, `update_metadata`, `add_download_token` and the resumable
+/// start, which used to check inconsistently.
+fn metadata_budget_size(custom: &BTreeMap<String, String>, download_tokens: &[String]) -> usize {
+    let mut size = custom_metadata_size(custom);
+    if !download_tokens.is_empty() {
+        size += TOKENS_METADATA_KEY.len();
+        size += download_tokens.iter().map(String::len).sum::<usize>();
+        // The comma separators of the joined value.
+        size += download_tokens.len().saturating_sub(1);
+    }
+    size
+}
+
+/// The custom-metadata key download tokens ride in on, as the official emulator stores them.
+const TOKENS_METADATA_KEY: &str = "firebaseStorageDownloadTokens";
 
 impl StorageState {
     /// Empty store with a deterministic token generator.
@@ -602,8 +672,45 @@ impl StorageState {
         std::mem::take(&mut self.events)
     }
 
+    /// A download token in the UUID v4 shape the official emulator and production mint
+    /// (`crypto.randomUUID()` upstream); here it is drawn from the store's seeded RNG, so a
+    /// seeded run reproduces its tokens.
     fn token(&mut self) -> String {
-        format!("{:016x}{:016x}", self.rng.next_u64(), self.rng.next_u64())
+        let mut bytes = [0u8; 16];
+        bytes[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[6] = (bytes[6] & 0x0F) | 0x40;
+        bytes[8] = (bytes[8] & 0x3F) | 0x80;
+        let h = |r: std::ops::Range<usize>| {
+            bytes[r].iter().fold(String::new(), |mut s, b| {
+                use std::fmt::Write as _;
+                let _ = write!(s, "{b:02x}");
+                s
+            })
+        };
+        format!(
+            "{}-{}-{}-{}-{}",
+            h(0..4),
+            h(4..6),
+            h(6..8),
+            h(8..10),
+            h(10..16)
+        )
+    }
+
+    /// Mints one download token (the caller decides where it goes: the Firebase upload
+    /// dialect injects it into the incoming `firebaseStorageDownloadTokens` metadata, as the
+    /// official emulator does).
+    pub fn mint_download_token(&mut self) -> String {
+        self.token()
+    }
+
+    /// The generation the next commit will draw, for the `request.resource` a rules
+    /// evaluation sees before the commit exists (the official emulator builds the whole
+    /// prospective object, generation included, before its rules run).
+    #[must_use]
+    pub fn next_generation_preview(&self) -> u64 {
+        self.next_generation + 1
     }
 
     /// Object metadata.
@@ -636,7 +743,14 @@ impl StorageState {
         if bytes.len() as u64 > MAX_OBJECT_BYTES {
             return Err(StorageError::TooLarge);
         }
-        if custom_metadata_size(&metadata.custom) > MAX_CUSTOM_METADATA_BYTES {
+        // Download tokens ride in as the `firebaseStorageDownloadTokens` custom metadata
+        // key and are lifted out of it, exactly as the official emulator's
+        // `setDownloadTokensFromCustomMetadata` does. A new generation carries only the
+        // tokens its own upload declared: the previous generation's tokens die with it.
+        let custom_defined = metadata.custom.is_some();
+        let mut custom = metadata.custom.unwrap_or_default();
+        let download_tokens = extract_download_tokens(&mut custom, Vec::new());
+        if metadata_budget_size(&custom, &download_tokens) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
         let key = (bucket.clone(), name.clone());
@@ -644,16 +758,6 @@ impl StorageState {
         self.next_blob += 1;
         let blob = BlobId(self.next_blob);
         self.next_generation += 1;
-        let previous_tokens = self
-            .objects
-            .get(&key)
-            .map(|m| m.download_tokens.clone())
-            .unwrap_or_default();
-        let download_tokens = if previous_tokens.is_empty() {
-            vec![self.token()]
-        } else {
-            previous_tokens
-        };
         let meta = ObjectMetadata {
             bucket: bucket.clone(),
             name: name.clone(),
@@ -667,7 +771,8 @@ impl StorageState {
             content_encoding: metadata.content_encoding,
             content_language: metadata.content_language,
             cache_control: metadata.cache_control,
-            custom: metadata.custom,
+            custom,
+            custom_defined,
             md5: md5(&bytes),
             crc32c: crc32c(&bytes),
             time_created: now,
@@ -696,7 +801,12 @@ impl StorageState {
         Self::check(self.objects.get(&key), pre)?;
         let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
         let mut next = patch.apply(meta);
-        if custom_metadata_size(&next.custom) > MAX_CUSTOM_METADATA_BYTES {
+        // A patch may write `firebaseStorageDownloadTokens`; the key is lifted into the
+        // token list (merged with the tokens the object already has), never stored as
+        // ordinary custom metadata.
+        next.download_tokens =
+            extract_download_tokens(&mut next.custom, std::mem::take(&mut next.download_tokens));
+        if metadata_budget_size(&next.custom, &next.download_tokens) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
         next.metageneration += 1;
@@ -707,34 +817,67 @@ impl StorageState {
         Ok(next)
     }
 
-    /// Adds a Firebase download token.
+    /// Adds a Firebase download token. A token is a metadata change: the metageneration is
+    /// bumped, `updated` moves, and a `MetadataUpdated` event is recorded, exactly as the
+    /// official emulator's `addDownloadToken` behaves.
     pub fn add_download_token(
         &mut self,
         bucket: &BucketName,
         name: &ObjectName,
-    ) -> Result<String, StorageError> {
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
         let token = self.token();
         let meta = self
             .objects
             .get_mut(&(bucket.clone(), name.clone()))
             .ok_or(StorageError::NotFound)?;
-        meta.download_tokens.push(token.clone());
-        Ok(token)
+        // The token-mint route (?create_token=true) has no other size gate, so the count
+        // cap is enforced here too: an unauthenticated caller cannot grow the list without
+        // limit one token at a time (S-1).
+        if meta.download_tokens.len() >= MAX_DOWNLOAD_TOKENS {
+            return Err(StorageError::MetadataTooLarge);
+        }
+        meta.download_tokens.push(token);
+        meta.metageneration += 1;
+        meta.updated = now;
+        let updated = meta.clone();
+        self.events
+            .push(StorageEvent::MetadataUpdated(updated.clone()));
+        Ok(updated)
     }
 
-    /// Removes a Firebase download token.
+    /// Removes a Firebase download token. Removing the last one mints a replacement, any
+    /// removal on an object that has tokens bumps the metageneration and records a
+    /// `MetadataUpdated` event, and a removal from an object with no tokens changes
+    /// nothing, exactly as the official emulator's `deleteDownloadToken` behaves.
     pub fn remove_download_token(
         &mut self,
         bucket: &BucketName,
         name: &ObjectName,
         token: &str,
-    ) -> Result<(), StorageError> {
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let replacement = self.token();
         let meta = self
             .objects
             .get_mut(&(bucket.clone(), name.clone()))
             .ok_or(StorageError::NotFound)?;
+        if meta.download_tokens.is_empty() {
+            return Ok(meta.clone());
+        }
         meta.download_tokens.retain(|t| t != token);
-        Ok(())
+        if meta.download_tokens.is_empty() {
+            meta.download_tokens.push(replacement);
+            // Upstream's replacement mint is its own (silent) metadata update, so removing
+            // the last token moves the metageneration by two while emitting one event.
+            meta.metageneration += 1;
+        }
+        meta.metageneration += 1;
+        meta.updated = now;
+        let updated = meta.clone();
+        self.events
+            .push(StorageEvent::MetadataUpdated(updated.clone()));
+        Ok(updated)
     }
 
     /// Deletes the current generation.
@@ -774,14 +917,17 @@ impl StorageState {
             content_encoding: src.content_encoding.clone(),
             content_language: src.content_language.clone(),
             cache_control: src.cache_control.clone(),
-            custom: src.custom.clone(),
+            custom: src.custom_defined.then(|| src.custom.clone()),
         });
         self.put(dst_bucket, dst_name, bytes, metadata, pre, now)
     }
 
-    /// Lists objects of `bucket` under `prefix`, bytewise by name. With a `delimiter`, names
-    /// containing it after the prefix are folded into `prefixes`. Page tokens are the last
-    /// name of the previous page.
+    /// Lists objects of `bucket` under `prefix`, bytewise by name, the way the official
+    /// emulator lists them: every folded prefix is returned on every page, only items are
+    /// paged, the page token is the name of the first item of the next page (the token
+    /// item is included), and a token that names no item restarts from the beginning.
+    /// `max_results` caps the items only (`None` is the official default of 1000;
+    /// `Some(0)` is an empty page whose token names the first item).
     #[must_use]
     pub fn list(
         &self,
@@ -789,49 +935,41 @@ impl StorageState {
         prefix: &str,
         delimiter: Option<&str>,
         page_token: Option<&str>,
-        max_results: usize,
+        max_results: Option<usize>,
     ) -> ListPage {
-        let max_results = if max_results == 0 {
-            DEFAULT_LIST_PAGE_SIZE
-        } else {
-            max_results
-        };
-        let mut items = Vec::new();
+        let mut items: Vec<ObjectMetadata> = Vec::new();
         let mut prefixes: Vec<String> = Vec::new();
-        let mut next_page_token = None;
-        let mut entries = 0usize;
-        // The token is the last raw object name consumed by the page (an object folded into
-        // an already emitted prefix counts as consumed), so the next page resumes after it.
-        let mut last_consumed: Option<&str> = None;
         for ((b, name), meta) in &self.objects {
             if b != bucket || !name.as_str().starts_with(prefix) {
-                continue;
-            }
-            if page_token.is_some_and(|t| name.as_str() <= t) {
                 continue;
             }
             let rest = &name.as_str()[prefix.len()..];
             let folded = delimiter
                 .filter(|d| !d.is_empty())
                 .and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])));
-            if let Some(p) = &folded {
-                if prefixes.last() == Some(p) {
-                    last_consumed = Some(name.as_str());
-                    continue;
-                }
-            }
-            if entries >= max_results {
-                next_page_token = last_consumed.map(str::to_owned);
-                break;
-            }
             if let Some(p) = folded {
-                prefixes.push(p);
+                // Names sharing a folded prefix are contiguous in name order, so a
+                // duplicate is always adjacent.
+                if prefixes.last() != Some(&p) {
+                    prefixes.push(p);
+                }
             } else {
                 items.push(meta.clone());
             }
-            entries += 1;
-            last_consumed = Some(name.as_str());
         }
+        if let Some(token) = page_token {
+            if let Some(idx) = items.iter().position(|m| m.name.as_str() == token) {
+                items.drain(..idx);
+            }
+        }
+        let max = max_results.unwrap_or(DEFAULT_LIST_PAGE_SIZE);
+        let next_page_token = if items.len() > max {
+            let token = items[max].name.as_str().to_owned();
+            items.truncate(max);
+            Some(token)
+        } else {
+            None
+        };
         ListPage {
             items,
             prefixes,
@@ -926,6 +1064,7 @@ impl StorageState {
             content_language: object.content_language,
             cache_control: object.cache_control,
             custom: object.custom,
+            custom_defined: object.custom_defined,
             md5,
             crc32c: crc,
             time_created: object.time_created,
@@ -989,7 +1128,11 @@ impl StorageState {
         if options.total.is_some_and(|t| t > MAX_OBJECT_BYTES) {
             return Err(StorageError::TooLarge);
         }
-        if custom_metadata_size(&metadata.custom) > MAX_CUSTOM_METADATA_BYTES {
+        if metadata
+            .custom
+            .as_ref()
+            .is_some_and(|c| custom_metadata_size(c) > MAX_CUSTOM_METADATA_BYTES)
+        {
             return Err(StorageError::MetadataTooLarge);
         }
         self.sweep_uploads(now);
@@ -1091,8 +1234,43 @@ impl StorageState {
         let u = self.upload_mut(id, now)?;
         Ok(match &u.state {
             UploadState::Committed(m) => (m.size, Some((**m).clone())),
+            UploadState::Denied(received) => (*received, None),
             UploadState::Receiving | UploadState::Aborted => (u.received.len() as u64, None),
         })
+    }
+
+    /// The full lifecycle phase of an upload, for the status queries the protocols answer.
+    pub fn upload_phase(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<UploadPhase, StorageError> {
+        let u = self.upload_mut(id, now)?;
+        Ok(match &u.state {
+            UploadState::Receiving => UploadPhase::Active(u.received.len() as u64),
+            UploadState::Committed(m) => UploadPhase::Finalized(m.clone()),
+            UploadState::Aborted => UploadPhase::Cancelled(u.received.len() as u64),
+            UploadState::Denied(received) => UploadPhase::Denied(*received),
+        })
+    }
+
+    /// Marks an upload whose finalization Security Rules refused: terminal like a commit,
+    /// but no object was published, and the received byte count stays observable — the
+    /// official emulator answers a repeated finalize of such a session with the refusal it
+    /// gave the first time.
+    pub fn mark_upload_denied(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<(), StorageError> {
+        let u = self.upload_mut(id, now)?;
+        if u.state == UploadState::Receiving {
+            // Keep the count for a later status query; drop the bytes, exactly as a cancel
+            // and a size / checksum abort do (S-2).
+            u.state = UploadState::Denied(u.received.len() as u64);
+            u.received = Vec::new();
+        }
+        Ok(())
     }
 
     /// Declares (or confirms) the total size of an upload; a different total than the one
@@ -1127,7 +1305,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted => {
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
                 return Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving => {}
@@ -1169,7 +1347,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted => {
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
                 return Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving => {}
@@ -1200,7 +1378,9 @@ impl StorageState {
     ) -> Result<PendingUpload<'_>, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted => Err(StorageError::UploadFinalized),
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
+                Err(StorageError::UploadFinalized)
+            }
             UploadState::Receiving => Ok(PendingUpload {
                 bucket: &u.bucket,
                 name: &u.name,
@@ -1226,6 +1406,22 @@ impl StorageState {
         Ok(self.upload_mut(id, now)?.admission.as_ref())
     }
 
+    /// The bucket a session belongs to, whatever state the session is in.
+    ///
+    /// Like [`Self::upload_admission`] and unlike [`Self::pending_upload`], this answers for a
+    /// terminal (committed, aborted or rules-denied) session too, so the protocol layer can
+    /// refuse a request that names the wrong bucket before it learns the session's received
+    /// byte count or status. A `pending_upload`-only check let a `query` command on one
+    /// bucket's URL read a terminal session that belongs to another bucket (and so another
+    /// project).
+    pub fn upload_bucket(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<&BucketName, StorageError> {
+        Ok(&self.upload_mut(id, now)?.bucket)
+    }
+
     /// Commits the received bytes as a new generation.
     pub fn finalize_upload(
         &mut self,
@@ -1235,7 +1431,7 @@ impl StorageState {
         let (bucket, name, metadata, precondition, bytes) = {
             let u = self.upload_mut(id, now)?;
             match u.state {
-                UploadState::Committed(_) | UploadState::Aborted => {
+                UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
                     return Err(StorageError::UploadFinalized)
                 }
                 UploadState::Receiving => {}
@@ -1311,17 +1507,72 @@ impl StorageState {
         })
     }
 
-    /// Cancels an upload.
+    /// Cancels an upload. A finalized session (committed, or refused by rules at
+    /// finalization) is not cancellable, as the official emulator answers.
     pub fn cancel_upload(
         &mut self,
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<(), StorageError> {
         let u = self.upload_mut(id, now)?;
+        match u.state {
+            UploadState::Committed(_) | UploadState::Denied(_) => {
+                return Err(StorageError::UploadFinalized)
+            }
+            UploadState::Receiving | UploadState::Aborted => {}
+        }
         u.state = UploadState::Aborted;
         u.received = Vec::new();
         Ok(())
     }
+
+    /// Applies the Firebase dialect's post-commit `contentDisposition: "inline"` default to
+    /// a stored object, exactly as the official emulator mutates the stored metadata after
+    /// its rules ran and after the finalize event was built: no metageneration bump and no
+    /// event. Returns the updated metadata.
+    pub fn default_content_disposition_inline(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let meta = self
+            .objects
+            .get_mut(&(bucket.clone(), name.clone()))
+            .ok_or(StorageError::NotFound)?;
+        if meta.content_disposition.is_none() {
+            meta.content_disposition = Some("inline".to_owned());
+        }
+        Ok(meta.clone())
+    }
+}
+
+/// Lifts the `firebaseStorageDownloadTokens` key out of custom metadata into the token
+/// list, merging with `existing` (order kept, duplicates dropped), as the official
+/// emulator's `setDownloadTokensFromCustomMetadata` does.
+fn extract_download_tokens(
+    custom: &mut BTreeMap<String, String>,
+    existing: Vec<String>,
+) -> Vec<String> {
+    let mut tokens = existing;
+    if let Some(joined) = custom.remove(TOKENS_METADATA_KEY) {
+        for t in joined.split(',') {
+            // Every write path funnels through here, so bounding the count and length here
+            // is the single place that stops an unauthenticated caller from smuggling
+            // unbounded token state past the custom-metadata budget through this one key
+            // (S-1). An over-long candidate is dropped whole rather than truncated, so a
+            // token is never silently mangled into a different value.
+            if t.is_empty() || t.len() > MAX_DOWNLOAD_TOKEN_LEN {
+                continue;
+            }
+            if tokens.len() >= MAX_DOWNLOAD_TOKENS {
+                break;
+            }
+            if !tokens.iter().any(|x| x == t) {
+                tokens.push(t.to_owned());
+            }
+        }
+    }
+    tokens
 }
 
 impl MetadataPatch {
@@ -1346,16 +1597,25 @@ impl MetadataPatch {
         if let Some(v) = &self.cache_control {
             next.cache_control.clone_from(v);
         }
-        if let Some(custom) = &self.custom {
-            for (k, v) in custom {
-                match v {
-                    Some(v) => {
-                        next.custom.insert(k.clone(), v.clone());
-                    }
-                    None => {
-                        next.custom.remove(k);
+        match &self.custom {
+            None => {}
+            Some(CustomMetadataPatch::Clear) => {
+                next.custom.clear();
+                next.custom_defined = false;
+            }
+            Some(CustomMetadataPatch::Merge(entries)) => {
+                for (k, v) in entries {
+                    match v {
+                        Some(v) => {
+                            next.custom.insert(k.clone(), v.clone());
+                        }
+                        None => {
+                            next.custom.remove(k);
+                        }
                     }
                 }
+                // Upstream drops the map entirely when the merge leaves no keys.
+                next.custom_defined = !next.custom.is_empty();
             }
         }
         next

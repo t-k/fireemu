@@ -1073,9 +1073,11 @@ async fn the_storage_preflight_allows_the_app_check_request_header() {
         listener,
         Arc::new(h.storage),
     ));
+    // The preflight reflects the requested headers, as the official emulator's cors
+    // middleware reflects them, so a browser SDK that asks for the App Check field gets it.
     let response = raw(
         addr,
-        &format!("OPTIONS /v0/b/{BUCKET}/o HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:5173\r\nConnection: close\r\n\r\n"),
+        &format!("OPTIONS /v0/b/{BUCKET}/o HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:5173\r\nAccess-Control-Request-Method: POST\r\nAccess-Control-Request-Headers: authorization,x-firebase-appcheck\r\nConnection: close\r\n\r\n"),
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 204"), "{response}");

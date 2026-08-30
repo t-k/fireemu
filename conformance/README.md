@@ -13,7 +13,19 @@ pnpm -C conformance run corpus     # what the suite covers, starts nothing
 pnpm -C conformance run selftest   # the gate's own tests, no emulator
 pnpm -C conformance run oracle     # records fixtures/, ORACLE.md and DEBT.md (needs Java)
 pnpm -C conformance run check      # replays fireemu and diffs; fails the process on drift
+pnpm -C conformance run storage-probe        # records storage-matrix.json (needs Java)
+pnpm -C conformance run storage-probe:check  # replays fireemu against the recorded matrix
 ```
+
+The **storage probe** (`src/storage-probe/`) is the Cloud Storage sibling of the rules
+probe: 18 raw-HTTP programs (218 steps) run identically against both Storage emulators —
+both dialects' uploads, downloads, listings, error bodies and route tables, the resumable
+command grammar, download tokens, the Rules request model with Firestore access, and the
+Functions trigger payloads a `storage-probe-functions/` codebase reports back to the
+session. `record` folds the two runs into `storage-matrix.json` with the same
+parity / documented-divergence / debt classification as the fixtures (annotations come
+from `divergences.json`, keyed `storage-probe/<program>#<step>`), and `check` replays
+fireemu alone against the recorded matrix.
 
 `check` needs `cargo build -p fireemu` first (or `FIREEMU_BIN=/path/to/fireemu`).
 `CONFORMANCE_VERBOSE=1` streams both supervisors' output.
@@ -28,7 +40,7 @@ collides with the default emulator ports or with `tools/sdk-smoke`.
 | --- | --- |
 | Firestore | value types and the documented type ordering; the missing composite index decision on gRPC, REST and Lite; a transaction whose read set is invalidated; a Listen sequence with a resume; Rules decisions; the REST error envelopes |
 | Auth | client sign-up / sign-in errors; the raw Identity Toolkit envelopes; out-of-band code shapes; multi-factor enrolment and sign-in errors |
-| Storage | Admin JSON API uploads, downloads, metadata and listing; the Firebase protocol with resumable uploads; Rules denials on both dialects |
+| Storage | Admin JSON API uploads, downloads, metadata and listing; the Firebase protocol with resumable uploads; Rules denials on both dialects. The storage probe below covers the raw wire |
 | Functions | the callable envelope for a result and every `HttpsError` code; the Auth context for an anonymous, signed-in, forged and privileged caller |
 | App Check | the exchange and JWKS routes; the `X-Firebase-AppCheck` matrix (missing / valid / unverifiable / duplicate) across Firestore, Auth, Storage, an enforcing callable, a non-enforcing callable and an `onRequest` function, both with enforcement off and with fireemu enforcing |
 

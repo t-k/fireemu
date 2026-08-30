@@ -12,7 +12,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - **documented divergence** -- a difference that is intended and written down. These are listed
   for completeness; `check` does gate them, against the recorded fireemu value.
 
-## Debt (8)
+## Debt (7)
 
 ### `firestore/lite-rest-transport#write-into-a-rules-closed-collection-is-denied`
 
@@ -48,11 +48,6 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"\nfalse for 'get' @ L17"}`
 - fireemu: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_owner/<uid> denied by Security Rules: no allow statement evaluated to true"}`
-
-### `storage/admin-upload-download-metadata#download-a-missing-object`
-
-- oracle: `{"thrown":true,"code":"404","message":"No such object: demo-conformance.appspot.com/conf_public/definitely-missing.txt"}`
-- fireemu: `{"thrown":true,"code":"404","message":"{\"error\":{\"code\":404,\"errors\":[{\"domain\":\"global\",\"message\":\"Not Found. Could not get object\",\"reason\":\"notFound\"}],\"message\":\"Not Found. Could not get object\"}}"}`
 
 
 ## Pending: needs a real project (6)

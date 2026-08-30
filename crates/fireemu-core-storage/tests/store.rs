@@ -83,7 +83,9 @@ fn generations_metagenerations_and_preconditions() {
     );
     assert_eq!(first.content_type, "application/octet-stream");
     assert_eq!(s.bytes(&first), b"one");
-    assert_eq!(first.download_tokens.len(), 1);
+    // Tokens are not minted by the store: they ride in as `firebaseStorageDownloadTokens`
+    // custom metadata (the Firebase upload dialect injects one), as upstream stores them.
+    assert_eq!(first.download_tokens.len(), 0);
 
     // Metadata update bumps the metageneration only.
     let patched = s
@@ -92,7 +94,9 @@ fn generations_metagenerations_and_preconditions() {
             &n,
             &MetadataPatch {
                 content_type: Some(Some("text/plain".into())),
-                custom: Some(BTreeMap::from([("k".to_owned(), Some("v".to_owned()))])),
+                custom: Some(fireemu_core_storage::store::CustomMetadataPatch::Merge(
+                    BTreeMap::from([("k".to_owned(), Some("v".to_owned()))]),
+                )),
                 ..MetadataPatch::default()
             },
             Precondition::default(),
@@ -103,7 +107,8 @@ fn generations_metagenerations_and_preconditions() {
     assert_eq!(patched.content_type, "text/plain");
     assert_eq!(patched.updated, t(1));
 
-    // Data replacement bumps the generation, resets the metageneration, keeps tokens.
+    // Data replacement bumps the generation and resets the metageneration; the previous
+    // generation's download tokens die with it (a new upload carries its own).
     let second = s
         .put(
             &b,
@@ -191,19 +196,21 @@ fn listing_uses_the_namespace_with_prefix_and_delimiter() {
         )
         .unwrap();
     }
-    let root = s.list(&b, "", Some("/"), None, 0);
+    let root = s.list(&b, "", Some("/"), None, None);
     let items: Vec<&str> = root.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(items, vec!["a.txt", "dirty.txt"]);
     assert_eq!(root.prefixes, vec!["dir/", "日本/"]);
-    let dir = s.list(&b, "dir/", Some("/"), None, 0);
+    let dir = s.list(&b, "dir/", Some("/"), None, None);
     let items: Vec<&str> = dir.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(items, vec!["dir/x.txt", "dir/z.txt"]);
     assert_eq!(dir.prefixes, vec!["dir/sub/"]);
     // No delimiter: flat listing, paged.
-    let page1 = s.list(&b, "dir", None, None, 2);
+    let page1 = s.list(&b, "dir", None, None, Some(2));
     assert_eq!(page1.items.len(), 2);
+    // The token names the first item of the next page, which that page includes.
     let token = page1.next_page_token.clone().unwrap();
-    let page2 = s.list(&b, "dir", None, Some(&token), 2);
+    assert_eq!(token, "dir/z.txt");
+    let page2 = s.list(&b, "dir", None, Some(&token), Some(2));
     let names: Vec<&str> = page2.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, vec!["dir/z.txt", "dirty.txt"]);
     assert!(page2.next_page_token.is_none());
@@ -282,10 +289,10 @@ fn resumable_uploads_are_an_explicit_state_machine() {
 }
 
 #[test]
-fn delimiter_pagination_resumes_after_the_last_consumed_object() {
+fn pagination_pages_items_only_and_repeats_every_prefix() {
     let mut s = StorageState::new(1);
     let b = bucket();
-    for n in ["dir/a", "dir/b", "other/x", "root"] {
+    for n in ["dir/a", "dir/b", "other/x", "root", "root2"] {
         s.put(
             &b,
             &name(n),
@@ -296,18 +303,26 @@ fn delimiter_pagination_resumes_after_the_last_consumed_object() {
         )
         .unwrap();
     }
-    let mut token: Option<String> = None;
-    let mut seen: Vec<String> = Vec::new();
-    for _ in 0..10 {
-        let page = s.list(&b, "", Some("/"), token.as_deref(), 1);
-        seen.extend(page.prefixes.iter().cloned());
-        seen.extend(page.items.iter().map(|m| m.name.as_str().to_owned()));
-        token = page.next_page_token;
-        if token.is_none() {
-            break;
-        }
-    }
-    assert_eq!(seen, vec!["dir/", "other/", "root"]);
+    // Folded prefixes are not paged: every page carries all of them; only items count
+    // against max_results, and the token names the first item of the next page.
+    let page1 = s.list(&b, "", Some("/"), None, Some(1));
+    assert_eq!(page1.prefixes, vec!["dir/", "other/"]);
+    assert_eq!(page1.items.len(), 1);
+    assert_eq!(page1.items[0].name.as_str(), "root");
+    assert_eq!(page1.next_page_token.as_deref(), Some("root2"));
+    let page2 = s.list(&b, "", Some("/"), page1.next_page_token.as_deref(), Some(1));
+    assert_eq!(page2.prefixes, vec!["dir/", "other/"]);
+    assert_eq!(page2.items[0].name.as_str(), "root2");
+    assert!(page2.next_page_token.is_none());
+    // A token that names no item restarts from the beginning, as the official emulator's
+    // `findIndex` fallback does.
+    let restarted = s.list(&b, "", Some("/"), Some("no-such-item"), None);
+    assert_eq!(restarted.items.len(), 2);
+    // An explicit max_results of 0 is an empty page whose token names the first item.
+    let empty = s.list(&b, "", Some("/"), None, Some(0));
+    assert!(empty.items.is_empty());
+    assert_eq!(empty.prefixes, vec!["dir/", "other/"]);
+    assert_eq!(empty.next_page_token.as_deref(), Some("root"));
 }
 
 #[test]
@@ -447,11 +462,11 @@ fn custom_metadata_budget_is_exact_on_put_update_and_upload_start() {
     let custom = |value_len: usize| BTreeMap::from([("k".to_owned(), "v".repeat(value_len))]);
     // 1 byte of key + 8191 bytes of value = exactly the budget.
     let ok = NewMetadata {
-        custom: custom(8191),
+        custom: Some(custom(8191)),
         ..NewMetadata::default()
     };
     let over = NewMetadata {
-        custom: custom(8192),
+        custom: Some(custom(8192)),
         ..NewMetadata::default()
     };
     assert!(s
@@ -483,7 +498,9 @@ fn custom_metadata_budget_is_exact_on_put_update_and_upload_start() {
         .begin_upload(&b, &n, ok, Precondition::default(), None, t(1))
         .is_ok());
     let patch = MetadataPatch {
-        custom: Some(BTreeMap::from([("k2".to_owned(), Some("v".to_owned()))])),
+        custom: Some(fireemu_core_storage::store::CustomMetadataPatch::Merge(
+            BTreeMap::from([("k2".to_owned(), Some("v".to_owned()))]),
+        )),
         ..MetadataPatch::default()
     };
     assert_eq!(
@@ -491,7 +508,9 @@ fn custom_metadata_budget_is_exact_on_put_update_and_upload_start() {
         Err(StorageError::MetadataTooLarge)
     );
     let shrink = MetadataPatch {
-        custom: Some(BTreeMap::from([("k".to_owned(), None)])),
+        custom: Some(fireemu_core_storage::store::CustomMetadataPatch::Merge(
+            BTreeMap::from([("k".to_owned(), None)]),
+        )),
         ..MetadataPatch::default()
     };
     let m = s
@@ -518,23 +537,76 @@ fn hashes_etag_tokens_and_bucket_scans() {
     assert_eq!(m.md5_base64(), "kAFQmDzST7DWlj99KOF/cg==");
     assert_eq!(m.crc32c_base64(), "Nks/tw==");
     assert_eq!(m.etag(), format!("\"{}-1\"", m.generation));
-    assert_eq!(m.download_tokens.len(), 1);
-    assert_eq!(m.download_tokens[0].len(), 32, "128-bit hex token");
-    let token = s.add_download_token(&b, &name("h")).unwrap();
-    assert_eq!(token.len(), 32);
-    assert_ne!(token, m.download_tokens[0], "tokens are distinct");
-    assert_eq!(s.get(&b, &name("h")).unwrap().download_tokens.len(), 2);
-    s.remove_download_token(&b, &name("h"), &token).unwrap();
+    assert_eq!(m.download_tokens.len(), 0, "the store mints nothing on put");
+    let _ = s.drain_events();
+    // A token is a metadata change: the metageneration bumps and a MetadataUpdated event
+    // is recorded, as the official emulator's addDownloadToken behaves.
+    let with_token = s.add_download_token(&b, &name("h"), t(2)).unwrap();
+    let token = with_token.download_tokens[0].clone();
+    assert_eq!(token.len(), 36, "UUID-shaped token");
+    assert_eq!(token.as_bytes()[14], b'4', "UUID version 4");
+    assert_eq!(with_token.metageneration, 2);
+    assert_eq!(with_token.updated, t(2));
+    let second = s.add_download_token(&b, &name("h"), t(3)).unwrap();
+    assert_eq!(second.download_tokens.len(), 2);
+    assert_ne!(second.download_tokens[1], token, "tokens are distinct");
+    // Removing the last token mints a replacement; every change bumps the metageneration.
+    let removed = s
+        .remove_download_token(&b, &name("h"), &token, t(4))
+        .unwrap();
     assert_eq!(
-        s.get(&b, &name("h")).unwrap().download_tokens,
-        m.download_tokens
+        removed.download_tokens,
+        vec![second.download_tokens[1].clone()]
+    );
+    let replaced = s
+        .remove_download_token(&b, &name("h"), &removed.download_tokens[0], t(5))
+        .unwrap();
+    assert_eq!(
+        replaced.download_tokens.len(),
+        1,
+        "the last removal mints a new one"
+    );
+    assert_ne!(replaced.download_tokens[0], removed.download_tokens[0]);
+    // The replacement mint is upstream's own silent update, so removing the last token
+    // moves the metageneration by two (measured against the pinned suite).
+    assert_eq!(replaced.metageneration, 6);
+    let events = s.drain_events();
+    assert_eq!(
+        events.len(),
+        4,
+        "each token change is one MetadataUpdated event"
+    );
+    assert!(events
+        .iter()
+        .all(|e| matches!(e, StorageEvent::MetadataUpdated(_))));
+    // Tokens ride in and out through the firebaseStorageDownloadTokens custom key.
+    let seeded = s
+        .put(
+            &b,
+            &name("seeded"),
+            b"s".to_vec(),
+            NewMetadata {
+                custom: Some(BTreeMap::from([(
+                    "firebaseStorageDownloadTokens".to_owned(),
+                    "tok-a,tok-b,tok-a".to_owned(),
+                )])),
+                ..NewMetadata::default()
+            },
+            Precondition::default(),
+            t(6),
+        )
+        .unwrap();
+    assert_eq!(seeded.download_tokens, vec!["tok-a", "tok-b"]);
+    assert!(
+        seeded.custom.is_empty(),
+        "the key never stays custom metadata"
     );
     assert_eq!(
-        s.add_download_token(&b, &name("missing")),
+        s.add_download_token(&b, &name("missing"), t(7)),
         Err(StorageError::NotFound)
     );
     assert_eq!(
-        s.remove_download_token(&b, &name("missing"), "x"),
+        s.remove_download_token(&b, &name("missing"), "x", t(7)),
         Err(StorageError::NotFound)
     );
     s.put(
@@ -546,7 +618,7 @@ fn hashes_etag_tokens_and_bucket_scans() {
         t(1),
     )
     .unwrap();
-    assert_eq!(s.objects(&b).len(), 1);
+    assert_eq!(s.objects(&b).len(), 2, "h and the token-seeded object");
     assert_eq!(s.objects(&other)[0].name.as_str(), "o");
     assert!(
         s.get(&other, &name("h")).is_none(),
@@ -698,7 +770,7 @@ fn upload_sessions_expire_are_capped_and_reject_oversized_totals() {
             t(0),
         )
         .unwrap();
-    assert_eq!(id.as_str().len(), "upload-00000001-".len() + 32);
+    assert_eq!(id.as_str().len(), "upload-00000001-".len() + 36);
     assert_eq!(
         s.set_upload_total(&id, MAX_OBJECT_BYTES + 1, t(0)),
         Err(StorageError::TooLarge)
@@ -955,4 +1027,219 @@ fn an_owned_chunk_is_adopted_by_an_empty_session_and_follows_every_append_rule()
         Err(StorageError::UploadFinalized),
         "a size mismatch ends the session"
     );
+}
+
+#[test]
+fn download_tokens_are_capped_and_do_not_escape_the_metadata_budget() {
+    use fireemu_core_storage::store::{
+        CustomMetadataPatch, MAX_DOWNLOAD_TOKENS, MAX_DOWNLOAD_TOKEN_LEN,
+    };
+    let mut s = StorageState::new(7);
+    let b = bucket();
+    let n = name("t");
+
+    // The per-token length cap: an over-long single token is dropped, not stored, and never
+    // stashes unbounded state under this one key (S-1). Non-token custom metadata is what the
+    // 8 KiB budget still guards, so a short list rides through and the budget is unaffected.
+    let long_token = "b".repeat(MAX_DOWNLOAD_TOKEN_LEN + 1);
+    let with_long = NewMetadata {
+        custom: Some(BTreeMap::from([(
+            "firebaseStorageDownloadTokens".to_owned(),
+            format!("keep,{long_token}"),
+        )])),
+        ..NewMetadata::default()
+    };
+    let m = s
+        .put(
+            &b,
+            &n,
+            b"x".to_vec(),
+            with_long,
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    assert_eq!(
+        m.download_tokens,
+        vec!["keep"],
+        "the over-long token is dropped"
+    );
+
+    // The count cap: a list far past MAX_DOWNLOAD_TOKENS keeps only the cap, so the joined
+    // value can never grow without bound (cap x length stays well under the 8 KiB budget).
+    let many: Vec<String> = (0..MAX_DOWNLOAD_TOKENS + 200)
+        .map(|i| format!("t{i}"))
+        .collect();
+    let over = NewMetadata {
+        custom: Some(BTreeMap::from([(
+            "firebaseStorageDownloadTokens".to_owned(),
+            many.join(","),
+        )])),
+        ..NewMetadata::default()
+    };
+    let m = s
+        .put(&b, &n, b"y".to_vec(), over, Precondition::default(), t(2))
+        .unwrap();
+    assert_eq!(
+        m.download_tokens.len(),
+        MAX_DOWNLOAD_TOKENS,
+        "the count is capped on put"
+    );
+
+    // update_metadata caps the same way when it merges the key.
+    let patch = MetadataPatch {
+        custom: Some(CustomMetadataPatch::Merge(BTreeMap::from([(
+            "firebaseStorageDownloadTokens".to_owned(),
+            Some(many.join(",")),
+        )]))),
+        ..MetadataPatch::default()
+    };
+    let m = s
+        .update_metadata(&b, &n, &patch, Precondition::default(), t(3))
+        .unwrap();
+    assert_eq!(
+        m.download_tokens.len(),
+        MAX_DOWNLOAD_TOKENS,
+        "the count is capped on update"
+    );
+
+    // ?create_token=true (add_download_token) refuses to grow past the cap one at a time.
+    for k in 0..1000 {
+        if s.add_download_token(&b, &n, t(4 + k)).is_err() {
+            break;
+        }
+    }
+    assert_eq!(
+        s.get(&b, &n).unwrap().download_tokens.len(),
+        MAX_DOWNLOAD_TOKENS,
+        "minting one token at a time never exceeds the cap"
+    );
+
+    // The plain (non-token) custom budget is unchanged: a 9 KiB ordinary value is refused.
+    let fat = NewMetadata {
+        custom: Some(BTreeMap::from([("k".to_owned(), "v".repeat(9 * 1024))])),
+        ..NewMetadata::default()
+    };
+    assert_eq!(
+        s.put(
+            &b,
+            &name("fat"),
+            b"x".to_vec(),
+            fat,
+            Precondition::default(),
+            t(2000)
+        ),
+        Err(StorageError::MetadataTooLarge)
+    );
+}
+
+#[test]
+fn copying_an_object_keeps_metadata_within_the_budget() {
+    let mut s = StorageState::new(9);
+    let b = bucket();
+    s.put(
+        &b,
+        &name("src"),
+        b"data".to_vec(),
+        NewMetadata {
+            custom: Some(BTreeMap::from([("k".to_owned(), "v".to_owned())])),
+            ..NewMetadata::default()
+        },
+        Precondition::default(),
+        t(0),
+    )
+    .unwrap();
+    // A copy with no override inherits the source's ordinary custom metadata (the adapter is
+    // what carries download tokens across a copy; the storage-probe pins that path).
+    let copied = s
+        .copy(
+            (&b, &name("src")),
+            (&b, &name("dst")),
+            None,
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    assert_eq!(copied.custom.get("k").map(String::as_str), Some("v"));
+    // A copy whose override metadata carries an oversized ordinary value is refused on the
+    // budget, so the S-1 changes did not open a copy-shaped bypass.
+    let over = NewMetadata {
+        custom: Some(BTreeMap::from([("k".to_owned(), "v".repeat(9 * 1024))])),
+        ..NewMetadata::default()
+    };
+    assert_eq!(
+        s.copy(
+            (&b, &name("src")),
+            (&b, &name("dst2")),
+            Some(over),
+            Precondition::default(),
+            t(2)
+        ),
+        Err(StorageError::MetadataTooLarge)
+    );
+}
+
+#[test]
+fn a_denied_upload_releases_its_bytes_but_keeps_its_count() {
+    use fireemu_core_storage::store::UploadPhase;
+    let mut s = StorageState::new(11);
+    let b = bucket();
+    let id = s
+        .begin_upload(
+            &b,
+            &name("big.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    let chunk = vec![7u8; 1024 * 1024];
+    s.append_upload_owned(&id, 0, chunk, t(0)).unwrap();
+    // Rules refused the finalization: the session is terminal, the byte count stays
+    // observable, and the bytes themselves are released (S-2).
+    s.mark_upload_denied(&id, t(0)).unwrap();
+    assert_eq!(
+        s.upload_phase(&id, t(0)).unwrap(),
+        UploadPhase::Denied(1024 * 1024)
+    );
+    let (received, committed) = s.upload_status(&id, t(0)).unwrap();
+    assert_eq!((received, committed.is_none()), (1024 * 1024, true));
+}
+
+#[test]
+fn a_denied_upload_can_never_be_revived() {
+    let mut s = StorageState::new(13);
+    let b = bucket();
+    let id = s
+        .begin_upload(
+            &b,
+            &name("x.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    s.append_upload_owned(&id, 0, vec![1u8; 8], t(0)).unwrap();
+    s.mark_upload_denied(&id, t(0)).unwrap();
+    // Every mutating path refuses a denied session, so no object is ever published.
+    assert_eq!(
+        s.append_upload(&id, 8, b"more", t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert_eq!(
+        s.append_upload_owned(&id, 8, b"more".to_vec(), t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert_eq!(
+        s.finalize_upload(&id, t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert_eq!(
+        s.cancel_upload(&id, t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert!(s.pending_upload(&id, t(0)).is_err());
+    assert!(s.get(&b, &name("x.bin")).is_none(), "nothing was published");
 }

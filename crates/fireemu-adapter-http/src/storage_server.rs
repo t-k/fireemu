@@ -212,26 +212,28 @@ const FORWARDED_HEADERS: &[&str] = &[
     "x-goog-upload-protocol",
     "x-goog-upload-command",
     "x-goog-upload-offset",
+    "x-http-method-override",
     "x-goog-upload-header-content-type",
     "x-goog-upload-header-content-length",
     "x-upload-content-type",
     "x-upload-content-length",
 ];
 
+/// The header set the official emulator's `cors` middleware exposes, verbatim.
+const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
+
+/// The CORS headers of an ordinary (non-preflight) response, as the official emulator's
+/// `cors({origin: true, exposedHeaders})` middleware stamps them: the origin reflected when
+/// one was sent, the exposed-header list always, and `Vary: Origin`.
 fn cors(
     builder: hyper::http::response::Builder,
     origin: Option<&str>,
 ) -> hyper::http::response::Builder {
     let mut b = builder
-        .header("access-control-allow-origin", origin.unwrap_or("*"))
-        .header("access-control-allow-credentials", "true")
-        .header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-        .header(
-            "access-control-expose-headers",
-            "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
-        );
-    if origin.is_some() {
-        b = b.header("vary", "origin");
+        .header("access-control-expose-headers", EXPOSED_HEADERS)
+        .header("vary", "Origin");
+    if let Some(origin) = origin {
+        b = b.header("access-control-allow-origin", origin);
     }
     b
 }
@@ -270,15 +272,27 @@ async fn respond(
             .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
     }
     if req.method() == hyper::Method::OPTIONS {
-        let requested = req
+        // The preflight the official emulator's `cors` middleware answers: the requested
+        // headers reflected, the express method list, and both Vary members.
+        let mut builder = Response::builder()
+            .status(204)
+            .header(
+                "access-control-allow-methods",
+                "GET,HEAD,PUT,PATCH,POST,DELETE",
+            )
+            .header("access-control-expose-headers", EXPOSED_HEADERS)
+            .header("vary", "Origin, Access-Control-Request-Headers");
+        if let Some(origin) = origin.as_deref() {
+            builder = builder.header("access-control-allow-origin", origin);
+        }
+        if let Some(requested) = req
             .headers()
             .get("access-control-request-headers")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("authorization, content-type, x-goog-upload-protocol, x-goog-upload-command, x-goog-upload-offset, x-goog-upload-header-content-type, x-goog-upload-header-content-length, x-firebase-storage-version, x-firebase-gmpid, x-firebase-appcheck")
-            .to_owned();
-        return Ok(cors(Response::builder().status(204), origin.as_deref())
-            .header("access-control-allow-headers", requested)
-            .header("access-control-max-age", "3600")
+        {
+            builder = builder.header("access-control-allow-headers", requested.to_owned());
+        }
+        return Ok(builder
             .body(Full::new(Bytes::new()))
             .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
     }
@@ -354,17 +368,36 @@ async fn respond(
         return Err(std::io::Error::other("fault plan: connection dropped"));
     }
     let mut builder = cors(
-        Response::builder().status(
-            StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        ),
+        Response::builder()
+            .status(
+                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            )
+            // Defence in depth: a body typed text/plain that happens to look like markup is
+            // never sniffed as HTML on this origin. It does not change how an explicit
+            // text/html content-type renders, so it is not a substitute for typing
+            // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
+            .header("x-content-type-options", "nosniff"),
         origin.as_deref(),
     );
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
-    Ok(builder
-        .body(Full::new(Bytes::from(response.body)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
+    match builder.body(Full::new(Bytes::from(response.body))) {
+        Ok(response) => Ok(response),
+        // A header value the handler built is not a valid HTTP header (a metadata string with
+        // a control character reached `Builder::header`). The input boundary rejects those, so
+        // this is unreachable in practice; if it ever fires, answer 500 rather than the silent
+        // "200 with an empty body and no CORS headers" the default builder would produce, which
+        // is far harder to diagnose (S-4).
+        Err(_) => Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("content-type", "text/plain; charset=utf-8")
+            .header("x-content-type-options", "nosniff")
+            .body(Full::new(Bytes::from_static(
+                b"internal error building response",
+            )))
+            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))),
+    }
 }
 
 /// Serves the Storage surface on `listener` until the task is aborted. Request bodies are

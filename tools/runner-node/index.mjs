@@ -434,7 +434,13 @@ function v1Context(msg) {
           "google.cloud.storage.object.v1.metadataUpdated": "google.storage.object.metadataUpdate",
           "google.cloud.storage.object.v1.archived": "google.storage.object.archive",
         }[event.type],
-        resource: { service: "storage.googleapis.com", name: `projects/_/buckets/${o.bucket}/objects/${o.name}#${o.generation}` },
+        // The official emulator's legacy storage event resource: no generation suffix, and
+        // a `type` member (its createLegacyEventRequestBody).
+        resource: {
+          service: "storage.googleapis.com",
+          name: `projects/_/buckets/${o.bucket}/objects/${o.name}`,
+          type: "storage#object",
+        },
         params: {},
       };
     }

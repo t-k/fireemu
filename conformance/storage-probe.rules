@@ -1,0 +1,69 @@
+// Storage Rules for the storage probe (conformance/src/storage-probe). Every block exercises
+// one part of the request model the official emulator hands its Rules runtime: the request
+// resource of an upload, the stored resource of an update or delete, the caller's token, and
+// Firestore access from Storage rules. Both sides evaluate this exact text.
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /open/{file=**} { allow read, write: if true; }
+    match /closed/{file=**} { allow read, write: if false; }
+    match /listable/{file=**} { allow list: if true; allow get: if false; allow write: if true; }
+
+    // request.resource of an upload; a delete carries no request.resource at all.
+    match /gated/size/{file} {
+      allow read: if true;
+      allow write: if request.resource == null || request.resource.size < 100;
+    }
+    match /gated/type/{file} {
+      allow read: if true;
+      allow write: if request.resource == null || request.resource.contentType.matches('image/.*');
+    }
+    match /gated/meta/{file} {
+      allow read: if true;
+      allow write: if request.resource == null || request.resource.metadata.owner == 'probe';
+    }
+    match /gated/hash/{file} {
+      allow read: if true;
+      allow write: if request.resource.md5Hash.size() == 24 && request.resource.crc32c.size() == 8;
+    }
+
+    // resource (the stored object) on update and delete.
+    match /locked/{file} {
+      allow read, create: if true;
+      allow update, delete: if resource.metadata.locked == 'false';
+    }
+
+    // Path-derived fields on both sides of a request.
+    match /fields/{file} {
+      allow read: if resource.name == 'fields/' + file && resource.bucket == bucket
+        && resource.size >= 0 && resource.generation > 0 && resource.metageneration > 0;
+      allow write: if request.resource.name == 'fields/' + file && request.resource.bucket == bucket;
+    }
+
+    // cacheControl and contentLanguage are production resource fields; whether an emulator
+    // passes them to the runtime is measured, not assumed.
+    match /cache/{file} {
+      allow write: if true;
+      allow read: if resource.cacheControl == 'no-cache';
+    }
+    match /language/{file} {
+      allow write: if true;
+      allow read: if resource.contentLanguage == 'ja';
+    }
+
+    // The caller's ID token.
+    match /users/{uid}/{file=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+    match /claims/{file} {
+      allow write: if true;
+      allow read: if request.auth.token.email == 'probe@example.com';
+    }
+
+    // Firestore access from Storage rules.
+    match /fs/{file} {
+      allow read: if firestore.exists(/databases/(default)/documents/allow/$(file));
+      allow write: if firestore.get(/databases/(default)/documents/allow/$(file)).data.write == true;
+    }
+  }
+}

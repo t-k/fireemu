@@ -160,12 +160,22 @@ pub struct RuntimeConfig {
     pub functions_source: Option<String>,
     /// Every codebase `firebase.json` declares, in file order.
     pub functions_codebases: Vec<FunctionsCodebase>,
+    /// The codebases this run actually loads, one runner process each. Empty when the
+    /// codebase came from `functions.source` or `--functions <dir>` instead.
+    pub functions_loaded: Vec<FunctionsCodebase>,
     /// Runner command (`functions.runner`); default: the bundled Node runner.
     pub functions_runner: Option<Vec<String>>,
     /// Explicit manifest path (`functions.manifest`); default: runner discovery.
     pub functions_manifest: Option<String>,
     /// Maximum invocations running at once (`functions.maxGlobalConcurrency`).
     pub functions_max_running: usize,
+    /// What to do with an exported trigger that belongs to a product fireemu does not serve
+    /// (`functions.unservedTriggers`): `refuse` (default) or `report`.
+    pub functions_unserved_triggers: String,
+    /// The `.firebaserc` alias `--project` resolved through, when the project was named by an
+    /// alias. It is the only reason a codebase may carry a `.env.<alias>` file, and having
+    /// both that and `.env.<projectId>` is refused, as `loadUserEnvs` refuses it.
+    pub functions_project_alias: Option<String>,
     /// Attempts per event for functions declared with `retry` (`events.maxAttempts`).
     pub events_max_attempts: u32,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
@@ -337,9 +347,12 @@ impl Default for RuntimeConfig {
             single_project_mode: false,
             functions_source: None,
             functions_codebases: Vec::new(),
+            functions_loaded: Vec::new(),
             functions_runner: None,
             functions_manifest: None,
             functions_max_running: 8,
+            functions_unserved_triggers: "refuse".to_owned(),
+            functions_project_alias: None,
             events_max_attempts: 4,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
@@ -956,50 +969,100 @@ impl RuntimeConfig {
         if !only.functions {
             return Ok(());
         }
-        let chosen = match &only.functions_codebase {
-            Some(name) => {
-                let found = self
-                    .functions_codebases
-                    .iter()
-                    .find(|c| &c.codebase == name)
-                    .ok_or_else(|| {
-                        ConfigError(format!(
-                            "--only functions:{name}: firebase.json declares no such codebase ({})",
-                            self.functions_codebases
-                                .iter()
-                                .map(|c| c.codebase.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ))
-                    })?;
-                Some(found)
-            }
-            None if self.functions_codebases.len() > 1 => {
-                return Err(ConfigError(format!(
-                    "firebase.json declares {} Functions codebases ({}); fireemu runs one runner per daemon, so name the one to load with --only functions:<codebase>",
-                    self.functions_codebases.len(),
-                    self.functions_codebases
-                        .iter()
-                        .map(|c| c.codebase.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )))
-            }
-            None => self.functions_codebases.first(),
+        // `--only functions:<codebase>` picks one out of a multi-codebase project, as the
+        // official CLI spells it; without it every declared codebase is loaded, each on its
+        // own runner process.
+        let chosen: Vec<FunctionsCodebase> = match &only.functions_codebase {
+            Some(name) => vec![self
+                .functions_codebases
+                .iter()
+                .find(|c| &c.codebase == name)
+                .ok_or_else(|| {
+                    ConfigError(format!(
+                        "--only functions:{name}: firebase.json declares no such codebase ({})",
+                        self.functions_codebases
+                            .iter()
+                            .map(|c| c.codebase.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?
+                .clone()],
+            None => self.functions_codebases.clone(),
         };
-        if let Some(c) = chosen {
-            if let Some(runtime) = &c.runtime {
-                if !runtime.starts_with("nodejs") {
-                    report.notices.push(format!(
-                        "functions codebase {}: runtime {runtime} is declared, but the bundled runner is Node; the codebase runs on the host's node",
-                        c.codebase
-                    ));
-                }
-            }
-            self.functions_source = Some(c.source.clone());
+        for c in &chosen {
+            check_codebase_runtime(c)?;
         }
+        // `functions.source` stays the first codebase's directory, which is what every
+        // single-codebase project has and what the banner prints.
+        self.functions_source = chosen.first().map(|c| c.source.clone());
+        if chosen.len() > 1 {
+            report.notices.push(format!(
+                "functions: {} codebases are loaded ({}), one runner process each",
+                chosen.len(),
+                chosen
+                    .iter()
+                    .map(|c| c.codebase.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        self.functions_loaded = chosen;
         Ok(())
     }
+}
+
+impl RuntimeConfig {
+    /// The codebases this run loads, one runner process each.
+    ///
+    /// A `firebase.json` `functions` array gives them all directly; `functions.source` and
+    /// `--functions <dir>` give one, named `default`. `--functions` wins over the file, so a
+    /// command-line override of a multi-codebase project loads exactly the directory it named.
+    #[must_use]
+    pub fn functions_to_load(&self) -> Vec<FunctionsCodebase> {
+        if !self.functions_loaded.is_empty() {
+            return self.functions_loaded.clone();
+        }
+        self.functions_source
+            .iter()
+            .map(|source| FunctionsCodebase {
+                codebase: "default".to_owned(),
+                source: source.clone(),
+                runtime: None,
+                ignore: Vec::new(),
+            })
+            .collect()
+    }
+}
+
+/// Refuses a codebase whose declared `runtime` is not one the bundled runner can execute.
+///
+/// The official emulator has three loader paths -- Node, Python (`functions-framework` in a
+/// virtual environment) and an experimental Dart one -- and picks by this field. fireemu ships
+/// the Node runner and nothing else, so a Python or Dart codebase is refused by name rather
+/// than handed to `node`, which would fail later with a syntax error from a file the project
+/// never meant Node to read.
+fn check_codebase_runtime(c: &FunctionsCodebase) -> Result<(), ConfigError> {
+    let Some(runtime) = &c.runtime else {
+        return Ok(());
+    };
+    if runtime.starts_with("nodejs") {
+        return Ok(());
+    }
+    let language = if runtime.starts_with("python") {
+        "Python"
+    } else if runtime.starts_with("dart") {
+        "Dart"
+    } else {
+        "that"
+    };
+    Err(ConfigError(format!(
+        "firebase.json: the Functions codebase {:?} declares runtime {runtime}; fireemu ships \
+         one loader, the bundled Node runner, and does not execute {language} functions. \
+         Remove the codebase from the emulator run (--only functions:<another codebase>) or \
+         run it under the Firebase CLI",
+        c.codebase
+    )))
 }
 
 /// Whether `--only` named `service`.
@@ -1241,7 +1304,15 @@ impl RuntimeConfig {
         cfg: &mut Self,
     ) -> Result<(), ConfigError> {
         for key in f.keys() {
-            if !["manifest", "source", "runner", "maxGlobalConcurrency"].contains(&key.as_str()) {
+            if ![
+                "manifest",
+                "source",
+                "runner",
+                "maxGlobalConcurrency",
+                "unservedTriggers",
+            ]
+            .contains(&key.as_str())
+            {
                 return Err(ConfigError(format!("unknown config key functions.{key}")));
             }
         }
@@ -1268,6 +1339,15 @@ impl RuntimeConfig {
         }
         if let Some(n) = f.get("maxGlobalConcurrency").and_then(Value::as_u64) {
             cfg.functions_max_running = usize::try_from(n).unwrap_or(8).max(1);
+        }
+        if let Some(v) = f.get("unservedTriggers") {
+            let text = v.as_str().unwrap_or_default();
+            if !["refuse", "report"].contains(&text) {
+                return Err(ConfigError(
+                    "functions.unservedTriggers must be \"refuse\" or \"report\"".into(),
+                ));
+            }
+            text.clone_into(&mut cfg.functions_unserved_triggers);
         }
         Ok(())
     }
@@ -2114,7 +2194,7 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_codebase_section_is_ambiguous_until_a_codebase_is_named() {
+    fn every_declared_codebase_is_loaded_and_only_functions_picks_one() {
         let json = json!({
             "functions": [
                 {"source": "fn/api", "codebase": "api", "runtime": "nodejs20"},
@@ -2124,11 +2204,9 @@ mod tests {
         let base = std::path::Path::new("/proj");
 
         let mut cfg = RuntimeConfig::default();
-        let refusal = cfg.apply_firebase_json(&json, base, &Selection::default());
-        let message = refusal.unwrap_err().0;
-        assert!(message.contains("api, workers"), "{message}");
-        assert!(message.contains("--only functions:<codebase>"), "{message}");
-        // Every codebase was still parsed, so the daemon can name them.
+        let report = cfg
+            .apply_firebase_json(&json, base, &Selection::default())
+            .expect("a multi-codebase project loads every codebase");
         assert_eq!(cfg.functions_codebases.len(), 2);
         assert_eq!(cfg.functions_codebases[0].codebase, "api");
         assert_eq!(cfg.functions_codebases[0].source, "/proj/fn/api");
@@ -2137,12 +2215,29 @@ mod tests {
             Some("nodejs20")
         );
         assert_eq!(cfg.functions_codebases[1].ignore, vec!["node_modules"]);
+        // Both are loaded, one runner process each, and the run says so.
+        assert_eq!(
+            cfg.functions_to_load()
+                .iter()
+                .map(|c| c.codebase.clone())
+                .collect::<Vec<_>>(),
+            vec!["api".to_owned(), "workers".to_owned()]
+        );
+        assert!(
+            report
+                .notices
+                .iter()
+                .any(|n| n.contains("2 codebases are loaded (api, workers)")),
+            "{:?}",
+            report.notices
+        );
 
         // Naming one loads it and nothing else.
         let mut cfg = RuntimeConfig::default();
         let only = Selection::parse("functions:workers").unwrap();
         cfg.apply_firebase_json(&json, base, &only).unwrap();
         assert_eq!(cfg.functions_source.as_deref(), Some("/proj/fn/workers"));
+        assert_eq!(cfg.functions_to_load().len(), 1);
 
         // A single codebase needs no name at all, in either spelling.
         for section in [
@@ -2153,7 +2248,18 @@ mod tests {
             cfg.apply_firebase_json(&section, base, &Selection::default())
                 .unwrap();
             assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+            assert_eq!(cfg.functions_to_load().len(), 1);
         }
+
+        // A runtime the bundled Node runner cannot execute is refused by name.
+        let mut cfg = RuntimeConfig::default();
+        let python = json!({"functions": [{"source": "fn", "runtime": "python312"}]});
+        let message = cfg
+            .apply_firebase_json(&python, base, &Selection::default())
+            .unwrap_err()
+            .0;
+        assert!(message.contains("python312"), "{message}");
+        assert!(message.contains("Python"), "{message}");
     }
 
     #[test]

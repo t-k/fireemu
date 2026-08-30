@@ -12,7 +12,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - **documented divergence** -- a difference that is intended and written down. These are listed
   for completeness; `check` does gate them, against the recorded fireemu value.
 
-## Debt (17)
+## Debt (16)
 
 ### `firestore/rules-decisions#anonymous-read-of-a-closed-document`
 
@@ -94,11 +94,6 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - oracle: `{"thrown":true,"code":"404","message":"No such object: demo-conformance.appspot.com/conf_public/definitely-missing.txt"}`
 - fireemu: `{"thrown":true,"code":"404","message":"{\"error\":{\"code\":404,\"errors\":[{\"domain\":\"global\",\"message\":\"Not Found. Could not get object\",\"reason\":\"notFound\"}],\"message\":\"Not Found. Could not get object\"}}"}`
 
-### `functions/callable-error-envelope#unknown-callable`
-
-- oracle: `{"bodyLength":216,"status":404}`
-- fireemu: `{"bodyLength":70,"status":404}`
-
 
 ## Pending: needs a real project (6)
 
@@ -133,7 +128,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - what a real project would settle: Whether a public Storage download URL keeps serving while App Check is enforced is listed in section 23 as unresolved debt and needs a real bucket to settle.
 
 
-## Documented divergences (36)
+## Documented divergences (38)
 
 - `firestore/missing-composite-index#admin-two-equality-filters` -- Under firestore.indexValidationPolicy = firebase, a query whose composite index is not in the index file is refused with FAILED_PRECONDITION and the fragment production would need. The official Firestore emulator serves the query as if the index existed; fireemu offers that as the `emulator` policy instead of as the default.  
   documented in: README.md, "Composite indexes"
@@ -149,6 +144,10 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
 - `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity.  
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
+- `functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin` -- The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={"skipTokenVerification":true,"enableCors":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 "forbidden origin" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend.  
+  documented in: README.md, "Functions"
+- `functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable` -- The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected.  
+  documented in: README.md, "Functions"
 - `appcheck/exchange-and-jwks#exchange-a-registered-debug-secret` -- The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. fireemu issues a locally signed token for a registered debug secret.  
   documented in: capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.1
 - `appcheck/exchange-and-jwks#exchange-an-unknown-secret` -- No route on the oracle (404) against the specified 403 PERMISSION_DENIED "App attestation failed." that fireemu returns for an unknown project, app, disabled app or secret alike.  

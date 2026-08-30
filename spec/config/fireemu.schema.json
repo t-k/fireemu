@@ -247,7 +247,8 @@
         "manifest": { "type": "string" },
         "source": { "type": "string", "description": "Functions codebase directory loaded by the runner (discovery)." },
         "runner": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Runner command; default: node tools/runner-node/index.mjs" },
-        "maxGlobalConcurrency": { "type": "integer", "minimum": 1 }
+        "maxGlobalConcurrency": { "type": "integer", "minimum": 1 },
+        "unservedTriggers": { "enum": ["refuse", "report"], "description": "An exported trigger whose product fireemu does not serve: refuse discovery (default) or report each one and carry on." }
       }
     },
     "trace": {

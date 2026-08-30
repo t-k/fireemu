@@ -209,10 +209,20 @@ impl Runner {
             .stderr
             .take()
             .ok_or_else(|| "functions runner: no stderr".to_owned())?;
-        let label = format!(
-            "[functions:{}]",
-            program.rsplit('/').next().unwrap_or(program)
-        );
+        // The codebase, when the command names one, so a multi-codebase project can tell
+        // which runner a line came from.
+        let codebase = command
+            .iter()
+            .position(|a| a == "--codebase")
+            .and_then(|i| command.get(i + 1))
+            .filter(|name| name.as_str() != "default");
+        let label = match codebase {
+            Some(name) => format!("[functions:{name}]"),
+            None => format!(
+                "[functions:{}]",
+                program.rsplit('/').next().unwrap_or(program)
+            ),
+        };
         let logs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         {
             let label = label.clone();

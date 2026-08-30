@@ -196,6 +196,95 @@ impl Trigger {
     }
 }
 
+/// A task queue's retry policy.
+///
+/// The defaults are `RETRY_CONFIG_DEFAULTS` (`tasksEmulator.js:11`), and they are applied the
+/// way the emulator applies them -- with `??`, so both an absent value and the explicit
+/// `null` the discovered manifest carries fall through to the default.
+///
+/// Durations are milliseconds rather than the official seconds because the default
+/// `minBackoffSeconds` is `0.1`: a whole-second type would lose it, and a floating-point one
+/// would cost the manifest its `Eq`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskRetryConfig {
+    /// Attempts before a task is given up on.
+    pub max_attempts: u32,
+    /// A wall-clock budget that lets retries continue past `max_attempts`; `None` (the
+    /// default) leaves `max_attempts` in sole charge.
+    pub max_retry_millis: Option<u64>,
+    /// Backoff ceiling.
+    pub max_backoff_millis: u64,
+    /// How many times the backoff may double before it grows linearly.
+    pub max_doublings: u32,
+    /// Backoff unit.
+    pub min_backoff_millis: u64,
+}
+
+impl Default for TaskRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            max_retry_millis: None,
+            max_backoff_millis: 60 * 60 * 1000,
+            max_doublings: 16,
+            min_backoff_millis: 100,
+        }
+    }
+}
+
+impl TaskRetryConfig {
+    /// The backoff before attempt `attempt` (1-based), by the official formula
+    /// (`taskQueue.js:263`).
+    #[must_use]
+    pub fn backoff_millis(&self, attempt: u32) -> u64 {
+        let doublings = f64::from(self.max_doublings);
+        let multiplier = 2f64.powf(f64::from(attempt.saturating_sub(1)).min(doublings))
+            + f64::from(attempt.saturating_sub(self.max_doublings + 1)).max(0.0)
+                * 2f64.powf(doublings);
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation
+        )]
+        let scaled = (multiplier * self.min_backoff_millis as f64).min(u64::MAX as f64) as u64;
+        self.max_backoff_millis.min(scaled)
+    }
+
+    /// Whether a task on its `attempt`-th delivery, `elapsed_millis` after it was first
+    /// dispatched, has run out of retries (`shouldStopRetrying`, `taskQueue.js:252`).
+    ///
+    /// A positive `maxRetrySeconds` deliberately lets a task keep retrying past
+    /// `maxAttempts` until the wall clock runs out; the default does not.
+    #[must_use]
+    pub fn exhausted(&self, attempt: u32, elapsed_millis: u64) -> bool {
+        if attempt <= self.max_attempts {
+            return false;
+        }
+        match self.max_retry_millis {
+            None | Some(0) => true,
+            Some(budget) => elapsed_millis > budget,
+        }
+    }
+}
+
+/// A task queue's rate limits (`RATE_LIMITS_DEFAULT`, `tasksEmulator.js:18`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskRateLimits {
+    /// How many tasks of this queue may be in flight at once.
+    pub max_concurrent_dispatches: u32,
+    /// The token-bucket refill rate.
+    pub max_dispatches_per_second: u32,
+}
+
+impl Default for TaskRateLimits {
+    fn default() -> Self {
+        Self {
+            max_concurrent_dispatches: 1000,
+            max_dispatches_per_second: 500,
+        }
+    }
+}
+
 /// What invokes a function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
@@ -238,6 +327,28 @@ pub enum Trigger {
         /// Bucket (`None` = the project's default bucket).
         bucket: Option<String>,
     },
+    /// A Cloud Tasks queue function (`onTaskDispatched`).
+    ///
+    /// It is an HTTP function that only the queue calls: the official emulator sets both
+    /// `httpsTrigger` and `taskQueueTrigger` on the definition, gives it the ordinary
+    /// `/{project}/{region}/{name}` URL, and registers that URL as the queue's `defaultUri`.
+    TaskQueue {
+        /// The retry policy, with the official defaults filled in.
+        retry: TaskRetryConfig,
+        /// The rate limits, with the official defaults filled in.
+        rate_limits: TaskRateLimits,
+    },
+    /// A custom event published on an Eventarc channel (`onCustomEventPublished`).
+    Eventarc {
+        /// The `type` attribute the trigger listens for.
+        event_type: String,
+        /// The channel, as `firebase-functions` writes it:
+        /// `locations/<location>/channels/<channel>`. The emulator keys its trigger table on
+        /// `<eventType>-<channel>` and, when a channel is not named, on the literal `google`.
+        channel: String,
+        /// `eventFilters` beyond the type, matched against the published event's attributes.
+        filters: BTreeMap<String, String>,
+    },
     /// Scheduled run.
     Schedule {
         /// Schedule.
@@ -266,11 +377,84 @@ pub struct FunctionSpec {
     pub concurrency: u32,
 }
 
+/// Why an exported function is not served, in the daemon's product-scope vocabulary.
+///
+/// The official emulator never fails on one: it logs `Unsupported trigger` (DEBUG) or
+/// `Unsupported function type on <name>` (WARN) and records the definition with
+/// `ignored: true` (`functionsEmulator.js:488`, `:497`, `:501`). fireemu keeps the inventory
+/// for the same reason -- an export must never disappear -- but distinguishes a product it
+/// does not serve, where continuing would let a project believe a trigger runs, from a shape
+/// nobody recognises, where the official emulator's carry-on is the compatible answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IgnoredScope {
+    /// The product has an open compatibility issue and no implementation.
+    Deferred,
+    /// The product is on the active list and not implemented yet.
+    Planned,
+    /// A closed product decision: it will not be served.
+    NotPlanned,
+    /// Neither the official emulator nor this runner recognises the shape.
+    Unsupported,
+}
+
+impl IgnoredScope {
+    /// The manifest spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deferred => "deferred",
+            Self::Planned => "planned",
+            Self::NotPlanned => "notPlanned",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    /// Parses the manifest spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "deferred" => Some(Self::Deferred),
+            "planned" => Some(Self::Planned),
+            "notPlanned" => Some(Self::NotPlanned),
+            "unsupported" => Some(Self::Unsupported),
+            _ => None,
+        }
+    }
+
+    /// Whether an export of this scope is fatal to discovery.
+    ///
+    /// A product decision is: the daemon serves no such product, so the function would never
+    /// run and saying nothing would be a silently wrong answer. An unrecognised shape is not:
+    /// that is what the official emulator carries on from.
+    #[must_use]
+    pub const fn is_product_decision(self) -> bool {
+        matches!(self, Self::Deferred | Self::Planned | Self::NotPlanned)
+    }
+}
+
+/// One exported function the runner discovered and cannot serve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredFunction {
+    /// Name, as exported.
+    pub name: String,
+    /// Region.
+    pub region: String,
+    /// The trigger family, in the daemon's spelling (`database`, `eventarc`, `unknown`, ...).
+    pub trigger_type: String,
+    /// Why it is not served.
+    pub scope: IgnoredScope,
+    /// The sentence the daemon prints or refuses with.
+    pub reason: String,
+}
+
 /// The function manifest.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FunctionManifest {
     /// Functions.
     pub functions: Vec<FunctionSpec>,
+    /// Exports the runner discovered and cannot serve. Never empty by omission: an export
+    /// that is not in `functions` is in here with the reason.
+    pub ignored: Vec<IgnoredFunction>,
 }
 
 /// Manifest validation errors.
@@ -302,6 +486,16 @@ impl fmt::Display for ManifestError {
 }
 
 impl std::error::Error for ManifestError {}
+
+/// The `locations/<l>/channels/<c>` tail of a channel name, whichever of the two spellings
+/// it arrived in.
+#[must_use]
+pub fn channel_suffix(channel: &str) -> &str {
+    match channel.find("locations/") {
+        Some(i) => &channel[i..],
+        None => channel,
+    }
+}
 
 /// A Firestore trigger matched by a document change.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,6 +589,42 @@ impl FunctionManifest {
                     event: e,
                     bucket: b,
                 } => *e == event && b.as_deref().unwrap_or(default_bucket) == bucket,
+                _ => false,
+            })
+            .collect()
+    }
+
+    /// Functions whose Eventarc trigger fires for an event of `event_type` on `channel`
+    /// carrying `attributes`.
+    ///
+    /// The channel is compared after normalising the two spellings the official emulator
+    /// keys its table with: a full `projects/<p>/locations/<l>/channels/<c>` resource name
+    /// (what the Admin SDK publishes to) and the `locations/<l>/channels/<c>` form
+    /// `firebase-functions` puts in the endpoint. Filters are matched as
+    /// `EventarcEmulator.matchesAll` matches them: every declared filter must equal the
+    /// event's attribute of that name.
+    #[must_use]
+    pub fn eventarc_matches(
+        &self,
+        channel: &str,
+        event_type: &str,
+        attributes: &BTreeMap<String, String>,
+    ) -> Vec<&FunctionSpec> {
+        let wanted = channel_suffix(channel);
+        self.functions
+            .iter()
+            .filter(|f| match &f.trigger {
+                Trigger::Eventarc {
+                    event_type: t,
+                    channel: c,
+                    filters,
+                } => {
+                    t == event_type
+                        && channel_suffix(c) == wanted
+                        && filters
+                            .iter()
+                            .all(|(k, v)| attributes.get(k).is_some_and(|actual| actual == v))
+                }
                 _ => false,
             })
             .collect()

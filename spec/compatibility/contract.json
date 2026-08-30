@@ -983,7 +983,7 @@
         "useEmulator"
       ],
       "state": "claimed",
-      "decision": "Active supported surface. Parity is claimed for HTTPS and callable functions, event triggers and scheduled functions running a real firebase-functions codebase in the bundled Node runner.",
+      "decision": "Active supported surface. Parity is claimed for HTTPS and callable functions, event triggers including Eventarc custom events and Firebase alerts, Cloud Tasks queue functions, scheduled functions, discovery over one or several codebases and the environment a runtime is started with, all running a real firebase-functions codebase in the bundled Node runner.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_functions",
         "https://firebase.google.com/docs/emulator-suite"
@@ -995,13 +995,15 @@
       "gaps": [
         "blocking identity functions",
         "Remote Config triggers",
+        "Python and Dart codebases",
+        "hot reload of a codebase's source",
         "protobuf CloudEvents payloads"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
           "id": "FN-CLAIM-HTTP",
-          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function} and reproduce the official callable envelope, including every HttpsError code and the auth context of the caller.",
+          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function} and reproduce the official callable envelope, the two 404s of an unknown route, the timeout answer and the CORS a loopback origin gets.",
           "capabilities": [
             {
               "id": "FN-HTTP-1",
@@ -1024,15 +1026,21 @@
                   }
                 ]
               },
-              "functions/callable-auth-context"
+              "functions/callable-auth-context",
+              "functions/http-routing-cors-and-timeouts"
             ]
           },
           "officialLimitations": [
-            "the official Functions emulator runs the runtime with token verification skipped, so any App Check field becomes an app with a null id and Bearer owner becomes an authenticated context with a null uid"
+            "the official Functions emulator runs the runtime with token verification skipped, so any App Check field becomes an app with a null id and Bearer owner becomes an authenticated context with a null uid",
+            "the official emulator kills the runtime process of a function that overruns its timeout; it runs one process per trigger, and one fireemu runner serves a whole codebase, so fireemu answers the same 500 without taking the codebase down"
           ],
           "fireemuOnly": [
             {
               "behaviour": "the daemon proxy refuses Bearer owner, forged bearer values and duplicate or folded auth fields as callable user identities instead of admitting them",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "a non-loopback Origin is refused with 403 instead of reflected; the official emulator runs its runtime with enableCors, so any page on the internet can drive a developer's local callable and read the result",
               "precision": "conservative"
             }
           ],
@@ -1041,7 +1049,7 @@
         },
         {
           "id": "FN-CLAIM-EVENTS",
-          "statement": "Firestore document, Storage object, Pub/Sub topic and Auth user events are delivered to v1 and v2 handlers as JSON CloudEvents, with retries, dead letters and bounded diagnostic retention.",
+          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued and dispatched, all with retries, dead letters and bounded diagnostic retention.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1058,12 +1066,21 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the official emulator consumes JSON CloudEvents in the Node runtime; the protobuf payload form is not what firebase-functions reads"
+            "the official emulator consumes JSON CloudEvents in the Node runtime; the protobuf payload form is not what firebase-functions reads",
+            "the official Tasks emulator ignores a task's scheduleTime -- nothing in its dispatch loop consults it, so a scheduled task fires immediately and the value only decorates the X-CloudTasks-TaskETA header"
           ],
           "fireemuOnly": [
             {
               "behaviour": "retries run on virtual-time backoff and awaitIdle replaces sleeping, and duplicate delivery is a seeded fault rather than an accident",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the Eventarc publishEvents routes are served on the functions port rather than on the official suite's own Eventarc port, and CLOUD_EVENTARC_EMULATOR_HOST names that listener; an SDK reaches them unchanged",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a task may not name a URL of its own: only this emulator's function URL is dispatched to, where the official emulator POSTs a task to any address it is given",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [],
@@ -1093,6 +1110,69 @@
             {
               "behaviour": "scheduled runs are driven by the virtual clock, with scheduler.catchUp and scheduler.overlap deciding what a clock jump produces",
               "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        },
+        {
+          "id": "FN-CLAIM-DISCOVERY",
+          "statement": "Every export a codebase declares is accounted for: served, or named with the reason it is not, and every codebase a firebase.json declares is loaded on a runner of its own.",
+          "capabilities": [
+            {
+              "id": "FN-DISCOVERY-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu/tests/functions_discovery.rs",
+              "crates/fireemu/tests/functions_codebases.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official emulator never fails discovery on an unsupported export: it logs `Unsupported trigger` at DEBUG or `Unsupported function type on <name>` at WARN and records the definition with ignored: true, so a Realtime Database trigger in a suite without that emulator running is a line in the log and a handler that never fires"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "an export whose trigger family belongs to a product fireemu does not serve fails discovery by default, naming every such function; functions.unservedTriggers = \"report\" asks for the official carry-on",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "a codebase whose declared runtime is not nodejs* is refused with the language named rather than handed to node",
+              "precision": "conservative"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        },
+        {
+          "id": "FN-CLAIM-ENV",
+          "statement": "A codebase's .env chain, .secret.local and .runtimeconfig.json are read in the official order and dialect, and the runtime is started with the variables the official emulator sets, so defineString and its siblings resolve to the same values.",
+          "capabilities": [
+            {
+              "id": "FN-ENV-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-core-functions/src/env.rs",
+              "crates/fireemu/tests/functions_environment.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the emulator resolves no parameters and prompts for nothing: a missing defineString is the empty string, a missing defineInt is 0, a missing defineList throws, and a declared default is a deploy-time value the runtime never sees",
+            "the pinned firebase-functions@7.3.2 has removed functions.config(), so CLOUD_RUNTIME_CONFIG is set and nothing in the supported SDK surface reads it"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "a secret .secret.local does not carry stays unset; the official emulator falls back to Google Cloud Secret Manager, and fireemu holds no credentials and makes no network call",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [],

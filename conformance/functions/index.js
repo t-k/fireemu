@@ -49,6 +49,20 @@ exports.confEcho = onRequest((req, res) => {
   res.status(200).json({
     method: req.method,
     path: req.path,
+    query: req.query,
     appCheckHeaderCount: [].concat(req.headers["x-firebase-appcheck"] ?? []).length,
   });
+});
+
+// A function in another region: the URL carries the region, so this one is only reachable at
+// /{project}/europe-west1/confRegional and never at us-central1.
+exports.confRegional = onRequest({ region: "europe-west1" }, (req, res) => {
+  res.status(200).json({ region: "europe-west1", path: req.path });
+});
+
+// A function that overruns its own `timeoutSeconds`. What the caller sees when the emulator
+// gives up is the record this scenario exists for.
+exports.confSlow = onRequest({ timeoutSeconds: 1 }, async (_req, res) => {
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+  res.status(200).send("this answer arrives after the deadline");
 });

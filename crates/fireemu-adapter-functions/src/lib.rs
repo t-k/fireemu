@@ -8,10 +8,12 @@
 #![forbid(unsafe_code)]
 
 pub mod callable;
+pub mod eventarc;
 pub mod events;
 pub mod http;
 pub mod manifest_json;
 pub mod protocol;
 pub mod runner;
 pub mod runtime;
+pub mod tasks;
 pub mod zone;

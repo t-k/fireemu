@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "id": "functions/http-routing-cors-and-timeouts",
+  "product": "functions",
+  "title": "Function URLs, the 404 for an unknown function, CORS preflights and timeoutSeconds",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 10,
+    "documented-divergence": 2,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "unknown-function-names-the-key-and-lists-the-valid-ones",
+      "status": "parity",
+      "value": {
+        "body": "Function us-central1-confNotThere does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, europe-west1-confRegional",
+        "contentType": "text/html; charset=utf-8",
+        "status": 404
+      }
+    },
+    {
+      "id": "an-existing-function-in-the-wrong-region-is-a-different-key",
+      "status": "parity",
+      "value": {
+        "body": "Function europe-west1-confAdd does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, europe-west1-confRegional",
+        "contentType": "text/html; charset=utf-8",
+        "status": 404
+      }
+    },
+    {
+      "id": "a-path-under-another-project-is-not-a-function-route",
+      "status": "parity",
+      "value": {
+        "body": "Not Found",
+        "contentType": "text/plain; charset=utf-8",
+        "status": 404
+      }
+    },
+    {
+      "id": "a-path-with-too-few-segments-is-not-a-function-route",
+      "status": "parity",
+      "value": {
+        "body": "Not Found",
+        "contentType": "text/plain; charset=utf-8",
+        "status": 404
+      }
+    },
+    {
+      "id": "a-regional-function-answers-at-its-own-region",
+      "status": "parity",
+      "value": {
+        "body": "{\"region\":\"europe-west1\",\"path\":\"/\"}",
+        "contentType": "application/json; charset=utf-8",
+        "status": 200
+      }
+    },
+    {
+      "id": "a-regional-function-is-absent-from-the-default-region",
+      "status": "parity",
+      "value": {
+        "body": "Function us-central1-confRegional does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, europe-west1-confRegional",
+        "contentType": "text/html; charset=utf-8",
+        "status": 404
+      }
+    },
+    {
+      "id": "the-path-and-query-below-the-mount-point-reach-the-handler",
+      "status": "parity",
+      "value": {
+        "body": "{\"method\":\"GET\",\"path\":\"/a/b\",\"query\":{\"x\":\"1\",\"y\":\"2\"},\"appCheckHeaderCount\":0}",
+        "contentType": "application/json; charset=utf-8",
+        "status": 200
+      }
+    },
+    {
+      "id": "preflight-on-a-callable-from-a-loopback-origin",
+      "status": "parity",
+      "value": {
+        "allowHeaders": "content-type",
+        "allowMethods": "POST",
+        "allowOrigin": "http://<host>",
+        "status": 204,
+        "vary": "Origin, Access-Control-Request-Headers"
+      }
+    },
+    {
+      "id": "preflight-on-an-onrequest-from-a-loopback-origin",
+      "status": "parity",
+      "value": {
+        "allowHeaders": "content-type",
+        "allowMethods": "GET,HEAD,PUT,PATCH,POST,DELETE",
+        "allowOrigin": "http://<host>",
+        "status": 204,
+        "vary": "Origin, Access-Control-Request-Headers"
+      }
+    },
+    {
+      "id": "preflight-on-a-callable-from-a-remote-origin",
+      "status": "documented-divergence",
+      "oracle": {
+        "allowHeaders": "content-type",
+        "allowMethods": "POST",
+        "allowOrigin": "https://evil.example",
+        "status": 204,
+        "vary": "Origin, Access-Control-Request-Headers"
+      },
+      "testd": {
+        "allowHeaders": null,
+        "allowMethods": null,
+        "allowOrigin": null,
+        "status": 403,
+        "vary": null
+      },
+      "documents": "README.md, \"Functions\"",
+      "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 \"forbidden origin\" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend."
+    },
+    {
+      "id": "a-cross-origin-post-to-a-callable",
+      "status": "documented-divergence",
+      "oracle": {
+        "allowOrigin": "https://evil.example",
+        "body": "{\"result\":{\"sum\":3}}",
+        "status": 200
+      },
+      "testd": {
+        "allowOrigin": null,
+        "body": "forbidden origin",
+        "status": 403
+      },
+      "documents": "README.md, \"Functions\"",
+      "reason": "The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected."
+    },
+    {
+      "id": "a-function-that-overruns-its-timeout",
+      "status": "parity",
+      "value": {
+        "body": "{\"code\":\"ECONNRESET\"}",
+        "contentType": null,
+        "status": 500
+      }
+    }
+  ]
+}

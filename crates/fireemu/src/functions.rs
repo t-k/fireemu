@@ -24,6 +24,201 @@ use crate::config::RuntimeConfig;
 /// would change what the functions themselves answer.
 const DEBUG_FEATURES: &str = r#"{"skipTokenVerification":true}"#;
 
+/// `FIREBASE_CONFIG`, with the three members the official emulator puts in it
+/// (`functionsEmulator.js:1010-1026` with `constructDefaultAdminSdkConfig`,
+/// `adminSdkConfig.js:13`).
+///
+/// `databaseURL` is present even though fireemu serves no Realtime Database, and points where
+/// the official emulator points it when no Database emulator is running:
+/// `https://<project>.firebaseio.com`. It is not decoration. `firebase-functions/v1`
+/// `database.ref(...)` reads it while the endpoint is being described and throws
+/// `Missing expected firebase config value databaseURL` when it is absent, so omitting the
+/// key turns a codebase with one v1 Realtime Database trigger into a runner that dies with a
+/// stack trace instead of a codebase whose unserved trigger is named.
+#[must_use]
+pub fn firebase_config(project: &str) -> String {
+    serde_json::json!({
+        "storageBucket": format!("{project}.appspot.com"),
+        "databaseURL": format!("https://{project}.firebaseio.com"),
+        "projectId": project,
+    })
+    .to_string()
+}
+
+/// The user environment of one codebase: the dotenv chain, the local secret overrides and
+/// the legacy runtime configuration, with the files each came from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserEnvironment {
+    /// `.env` chain values, later files having overridden earlier ones.
+    pub values: Vec<(String, String)>,
+    /// `.secret.local` values. They override the chain, as `startRuntime` merges them
+    /// (`functionsEmulator.js:1195`).
+    pub secrets: Vec<(String, String)>,
+    /// `CLOUD_RUNTIME_CONFIG`, when the codebase carries a `.runtimeconfig.json`.
+    pub runtime_config: Option<String>,
+    /// The files that were read, in the order they were applied, for the startup line.
+    pub files: Vec<String>,
+}
+
+impl UserEnvironment {
+    /// Every value, in the order the runner must apply them: the chain, then the secrets.
+    #[must_use]
+    pub fn applied(&self) -> Vec<(String, String)> {
+        let mut out = self.values.clone();
+        out.extend(self.secrets.iter().cloned());
+        if let Some(config) = &self.runtime_config {
+            out.push(("CLOUD_RUNTIME_CONFIG".to_owned(), config.clone()));
+        }
+        out
+    }
+}
+
+/// Reads a codebase's `.env` chain, `.secret.local` and `.runtimeconfig.json`.
+///
+/// The chain and its refusals are the official ones (`fireemu_core_functions::env`); the two
+/// files that are not dotenv chains follow `functionsEmulator.js`:
+///
+/// - `.secret.local` is parsed strictly and merged over the chain, and is the *only* source of
+///   `defineSecret` values here. The official emulator falls back to Google Cloud Secret
+///   Manager for a secret the file does not carry; fireemu has no credentials and never
+///   reaches the network, so a missing secret stays missing and the parameter resolves the way
+///   an unset environment variable resolves.
+/// - `.runtimeconfig.json` becomes `CLOUD_RUNTIME_CONFIG`, as `getRuntimeConfig` makes it. An
+///   unreadable or malformed file is reported and treated as absent, which is what that
+///   function's empty `catch` does. Note that the pinned `firebase-functions@7.3.2` has
+///   *removed* `functions.config()` -- calling it throws `functions.config() has been removed
+///   in firebase-functions v7` -- so the variable is passed through for a codebase pinned to
+///   v6 or reading it itself, and no supported SDK surface consumes it.
+pub fn load_user_environment(
+    dir: &Path,
+    project_id: &str,
+    alias: Option<&str>,
+) -> Result<UserEnvironment, String> {
+    use fireemu_core_functions::env;
+    let mut out = UserEnvironment::default();
+    let present = |name: &str| dir.join(name).is_file();
+    if let Some(alias) = alias {
+        if present(&format!(".env.{project_id}")) && present(&format!(".env.{alias}")) {
+            return Err(env::both_project_files_error(project_id, alias));
+        }
+    }
+    for name in env::env_file_order(project_id, alias) {
+        let path = dir.join(&name);
+        if !path.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to load environment variables from {name}. ({e})"))?;
+        let values = env::parse_strict(&text)
+            .map_err(|e| format!("Failed to load environment variables from {name}. {e}"))?;
+        for (k, v) in values {
+            out.values.retain(|(existing, _)| existing != &k);
+            out.values.push((k, v));
+        }
+        out.files.push(name);
+    }
+    let secrets = dir.join(env::LOCAL_SECRETS_FILE);
+    if secrets.is_file() {
+        let text = std::fs::read_to_string(&secrets).map_err(|e| {
+            format!(
+                "Failed to read local secrets file {}: {e}",
+                secrets.display()
+            )
+        })?;
+        out.secrets = env::parse_strict(&text)
+            .map_err(|e| {
+                format!(
+                    "Failed to read local secrets file {}: {e}",
+                    secrets.display()
+                )
+            })?
+            .into_iter()
+            .collect();
+    }
+    let runtime_config = dir.join(env::RUNTIME_CONFIG_FILE);
+    if runtime_config.is_file() {
+        match std::fs::read_to_string(&runtime_config)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        {
+            Some(value) => out.runtime_config = Some(value.to_string()),
+            // `Found .runtimeconfig.json but the JSON format is invalid.`
+            // (`emulatorLogger.js:199`), and the runtime is started without it.
+            None => eprintln!(
+                "note: found {} but the JSON format is invalid; functions.config() will be empty",
+                runtime_config.display()
+            ),
+        }
+    }
+    Ok(out)
+}
+
+/// What to do with an export whose trigger family belongs to a product fireemu does not
+/// serve (`functions.unservedTriggers`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnservedTriggers {
+    /// Fail discovery, naming every such function. The default: a project whose Realtime
+    /// Database trigger will never run must not be told the emulator started.
+    #[default]
+    Refuse,
+    /// Print one line per function and carry on, which is what the official emulator does
+    /// with a trigger service it has no emulator for.
+    Report,
+}
+
+impl UnservedTriggers {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "refuse" => Some(Self::Refuse),
+            "report" => Some(Self::Report),
+            _ => None,
+        }
+    }
+}
+
+/// The line the daemon prints for one ignored export, in the official emulator's shape
+/// (`functions[<region>-<name>]: function ignored because ...`, `functionsEmulator.js:501`).
+#[must_use]
+pub fn ignored_line(f: &fireemu_core_functions::manifest::IgnoredFunction) -> String {
+    format!(
+        "functions[{}-{}]: function ignored ({}): {}",
+        f.region, f.name, f.trigger_type, f.reason
+    )
+}
+
+/// Applies `policy` to everything the runner discovered and could not serve.
+///
+/// Nothing is dropped in silence, in either outcome: an unrecognised shape is reported on
+/// stderr the way the official emulator reports it and stays in the manifest inventory, while
+/// a trigger family that belongs to a product fireemu does not serve fails discovery with
+/// every such function named -- unless the configuration asked for it to be reported instead.
+pub fn check_ignored(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    policy: UnservedTriggers,
+) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+    let mut fatal = Vec::new();
+    for f in &manifest.ignored {
+        if f.scope.is_product_decision() && policy == UnservedTriggers::Refuse {
+            fatal.push(format!("{} ({}): {}", f.name, f.trigger_type, f.reason));
+        } else {
+            lines.push(ignored_line(f));
+        }
+    }
+    if fatal.is_empty() {
+        return Ok(lines);
+    }
+    Err(format!(
+        "the functions codebase exports {} trigger(s) that belong to a product fireemu does \
+         not serve, so they would never run: {}. Remove them, or set \
+         functions.unservedTriggers = \"report\" to start anyway with each one named",
+        fatal.len(),
+        fatal.join("; ")
+    ))
+}
+
 /// Addresses the runner's functions need to reach the daemon. `None` means the service was
 /// not selected by `--only`: its variable is then left unset in the runner, so a handler
 /// cannot reach a product this run is not serving.
@@ -34,6 +229,12 @@ pub struct EmulatorHosts {
     pub auth: Option<String>,
     /// Storage.
     pub storage: Option<String>,
+    /// The functions port itself, which also serves the Eventarc `publishEvents` route. The
+    /// official suite gives Eventarc a port of its own; a custom event has nowhere to go
+    /// without functions, so fireemu serves it here and points the variable the Admin SDK
+    /// reads (`CLOUD_EVENTARC_EMULATOR_HOST`, which carries an `http://` prefix) at this
+    /// listener.
+    pub functions: Option<String>,
 }
 
 /// Where a located runner script came from.
@@ -149,10 +350,9 @@ pub fn default_runner() -> Result<Vec<String>, String> {
     Ok(vec!["node".to_owned(), script.path.display().to_string()])
 }
 
-/// Starts the runner and the runtime for `cfg.functions_source` and installs it as the
-/// backend's synchronous commit observer (Storage events are wired by the caller through
-/// [`storage_sink`]).
-#[allow(clippy::too_many_lines)]
+/// Starts one runner process per configured codebase and the runtime that multiplexes them,
+/// and installs it as the backend's synchronous commit observer (Storage events are wired by
+/// the caller through [`storage_sink`]).
 pub async fn start(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -161,12 +361,98 @@ pub async fn start(
     runner_secret: &str,
     callable_trusted_protocol: bool,
 ) -> Result<Arc<FunctionsRuntime>, String> {
-    let source = cfg
-        .functions_source
-        .clone()
-        .ok_or_else(|| "functions.source is not configured".to_owned())?;
+    let codebases = cfg.functions_to_load();
+    if codebases.is_empty() {
+        return Err("functions.source is not configured".to_owned());
+    }
+    if codebases.len() > 1 && cfg.functions_manifest.is_some() {
+        return Err(format!(
+            "functions.manifest replaces discovery for one codebase, and this run loads {} \
+             ({}); name the one to load with --only functions:<codebase> or drop \
+             functions.manifest",
+            codebases.len(),
+            codebases
+                .iter()
+                .map(|c| c.codebase.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let mut started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = Vec::new();
+    for codebase in &codebases {
+        match start_codebase(
+            cfg,
+            codebase,
+            hosts,
+            runner_secret,
+            callable_trusted_protocol,
+        )
+        .await
+        {
+            Ok(spec) => started.push(spec),
+            Err(e) => {
+                // A codebase that fails takes nothing with it but the runners this call
+                // already spawned; none of them may outlive the refusal.
+                for spec in &started {
+                    spec.runner.kill_now();
+                }
+                return Err(e);
+            }
+        }
+    }
+    let config = FunctionsConfig {
+        project: cfg.auth_project.clone(),
+        default_bucket: format!("{}.appspot.com", cfg.auth_project),
+        location: "nam5".to_owned(),
+        session: SessionId::new(u128::from(cfg.seed)),
+        max_running: cfg.functions_max_running,
+        retry_attempts: cfg.events_max_attempts,
+        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
+        runner_secret: runner_secret.to_owned(),
+        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
+            .unwrap_or_default(),
+        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
+            .unwrap_or_default(),
+        functions_host: hosts.functions.clone(),
+    };
+    // A function name two codebases both export is fatal here. The runners it collided
+    // between are killed rather than left behind a daemon that refuses to serve them.
+    let spawned: Vec<Arc<Runner>> = started.iter().map(|c| c.runner.clone()).collect();
+    let runtime = match FunctionsRuntime::with_codebases(started, config, clock.clone()) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            for runner in &spawned {
+                runner.kill_now();
+            }
+            return Err(e);
+        }
+    };
+    tokio::spawn(runtime.clone().dispatch_loop());
+    // Commits reach the runtime inside the database critical section: in order, never
+    // dropped, and enqueued before the write returns to its caller.
+    let sink_runtime = runtime.clone();
+    backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
+    Ok(runtime)
+}
+
+/// Starts one codebase's runner, reads its environment and validates what it discovered.
+///
+/// Every codebase gets its own process, its own dotenv chain (the files live next to its
+/// `source`) and its own HTTP server; nothing about one codebase can be observed from another.
+#[allow(clippy::too_many_lines)]
+async fn start_codebase(
+    cfg: &RuntimeConfig,
+    codebase: &crate::config::FunctionsCodebase,
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
+    let source = codebase.source.clone();
+    let label = &codebase.codebase;
     if !Path::new(&source).is_dir() {
-        return Err(format!("functions.source {source:?} is not a directory"));
+        return Err(format!(
+            "the Functions codebase {label:?}: source {source:?} is not a directory"
+        ));
     }
     let mut command = match cfg.functions_runner.clone() {
         Some(command) => command,
@@ -174,19 +460,51 @@ pub async fn start(
     };
     command.push("--source".to_owned());
     command.push(source.clone());
-    let default_bucket = format!("{}.appspot.com", cfg.auth_project);
-    let mut env = vec![
+    command.push("--codebase".to_owned());
+    command.push(label.clone());
+    // The user environment goes in first: the emulator's own variables override it, exactly as
+    // `getRuntimeEnvs` spreads `{...userEnvs, ...systemEnvs, ...emulatorEnvs, FIREBASE_CONFIG}`
+    // (`functionsEmulator.js:1027`). The dotenv dialect refuses every reserved key outright, so
+    // this ordering is a second line rather than the only one.
+    let user_env = load_user_environment(
+        Path::new(&source),
+        &cfg.auth_project,
+        cfg.functions_project_alias.as_deref(),
+    )
+    .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?;
+    if !user_env.files.is_empty() {
+        eprintln!(
+            "note: functions[{label}]: loaded environment variables from {}",
+            user_env.files.join(", ")
+        );
+    }
+    let mut env = user_env.applied();
+    env.extend([
+        // A runner must never reach a metadata server: the official emulator sets this on the
+        // child too (`functionsEmulator.js:1117`).
+        ("METADATA_SERVER_DETECTION".to_owned(), "none".to_owned()),
         ("GCLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
         ("GOOGLE_CLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
+        (
+            "GOOGLE_CLOUD_QUOTA_PROJECT".to_owned(),
+            cfg.auth_project.clone(),
+        ),
         ("FUNCTIONS_EMULATOR".to_owned(), "true".to_owned()),
         (
             "FIREBASE_CONFIG".to_owned(),
-            serde_json::json!({"projectId": cfg.auth_project, "storageBucket": default_bucket})
-                .to_string(),
+            firebase_config(&cfg.auth_project),
         ),
+        // The official emulator's process-wide Cloud Run identity fields
+        // (`functionsEmulator.js:980-987`). `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and
+        // `K_SERVICE` name one function, and the official emulator can set them at spawn
+        // because it starts one runtime process per trigger; fireemu serves a whole codebase
+        // from one runner, so the runner sets those three per invocation instead.
+        ("K_REVISION".to_owned(), "1".to_owned()),
+        ("PORT".to_owned(), "80".to_owned()),
+        ("TZ".to_owned(), "UTC".to_owned()),
         ("FIREEMU_RUNNER".to_owned(), "1".to_owned()),
         ("FIREEMU_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
-    ];
+    ]);
     if let Some(host) = &hosts.firestore {
         env.push(("FIRESTORE_EMULATOR_HOST".to_owned(), host.clone()));
         env.push((
@@ -200,6 +518,15 @@ pub async fn start(
     if let Some(host) = &hosts.storage {
         env.push(("FIREBASE_STORAGE_EMULATOR_HOST".to_owned(), host.clone()));
         env.push(("STORAGE_EMULATOR_HOST".to_owned(), format!("http://{host}")));
+    }
+    if let Some(host) = &hosts.functions {
+        env.push((
+            "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
+            format!("http://{host}"),
+        ));
+        // Cloud Tasks' variable carries no scheme, unlike Eventarc's (`env.js:34-39`).
+        env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), host.clone()));
+        env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), host.clone()));
     }
     // Debug mode is granted only when the daemon is the sole source of both callable
     // credentials. The runner inherits an allowlist that does not contain these names, and
@@ -217,7 +544,9 @@ pub async fn start(
         env,
         hello_timeout: Duration::from_secs(60),
     };
-    let runner = Runner::spawn_spec(&spec).await?;
+    let runner = Runner::spawn_spec(&spec)
+        .await
+        .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?;
     let manifest_json = match &cfg.functions_manifest {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -251,6 +580,16 @@ pub async fn start(
         }
     }
     let manifest = parse_manifest(&manifest_json)?;
+    // Before anything is served: every export the runner could not serve is either named in a
+    // refusal or printed, one line each.
+    let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
+    for line in check_ignored(&manifest, policy).inspect_err(|_| {
+        // A refusal kills the runner it just started rather than leaving it parented to a
+        // daemon that is about to exit.
+        runner.kill_now();
+    })? {
+        eprintln!("note: {line}");
+    }
     if callable_trusted_protocol && cfg.functions_manifest.is_some() {
         // A configured manifest replaces discovery outright, and the callable flag is what
         // decides whether a request goes through the trust boundary at all: a file that calls
@@ -270,33 +609,12 @@ pub async fn start(
         runner.hello().app_check.as_ref(),
         callable_trusted_protocol,
     )?;
-    let config = FunctionsConfig {
-        project: cfg.auth_project.clone(),
-        default_bucket,
-        location: "nam5".to_owned(),
-        session: SessionId::new(u128::from(cfg.seed)),
-        max_running: cfg.functions_max_running,
-        retry_attempts: cfg.events_max_attempts,
-        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
-        runner_secret: runner_secret.to_owned(),
-        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
-            .unwrap_or_default(),
-        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
-            .unwrap_or_default(),
-    };
-    let runtime = FunctionsRuntime::new(
+    Ok(fireemu_adapter_functions::runtime::CodebaseSpec {
+        name: label.clone(),
         manifest,
-        config,
-        clock.clone(),
-        Arc::new(runner),
-        Some(spec),
-    );
-    tokio::spawn(runtime.clone().dispatch_loop());
-    // Commits reach the runtime inside the database critical section: in order, never
-    // dropped, and enqueued before the write returns to its caller.
-    let sink_runtime = runtime.clone();
-    backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
-    Ok(runtime)
+        runner: Arc::new(runner),
+        spawn: Some(spec),
+    })
 }
 
 /// Refuses a configured manifest that disagrees with discovery about which HTTP functions are
@@ -743,6 +1061,63 @@ mod tests {
 
         super::check_manifest_agrees_on_callables(&discovered, &discovered)
             .expect("an agreeing manifest starts");
+    }
+
+    /// A manifest whose only ignored export is an unrecognised shape starts, with a line
+    /// naming it -- the official emulator's carry-on. A product decision does not.
+    #[test]
+    fn a_product_decision_is_fatal_and_an_unrecognised_shape_is_a_line() {
+        let manifest = parse_manifest(&json!({
+            "functions": [{"name": "api", "trigger": {"type": "http", "callable": false}}],
+            "ignored": [
+                {"name": "onRef", "region": "europe-west1", "triggerType": "database",
+                 "scope": "deferred", "reason": "deferred: no Realtime Database"},
+                {"name": "weird", "region": "us-central1", "triggerType": "unknown",
+                 "scope": "unsupported", "reason": "the endpoint declares no trigger"}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+
+        let e = super::check_ignored(&manifest, super::UnservedTriggers::Refuse)
+            .expect_err("a deferred product is fatal");
+        assert!(e.contains("onRef (database)"), "{e}");
+        assert!(!e.contains("weird"), "{e}");
+
+        let lines = super::check_ignored(&manifest, super::UnservedTriggers::Report)
+            .expect("reporting starts");
+        assert_eq!(
+            lines,
+            vec![
+                "functions[europe-west1-onRef]: function ignored (database): deferred: no \
+                 Realtime Database"
+                    .to_owned(),
+                "functions[us-central1-weird]: function ignored (unknown): the endpoint \
+                 declares no trigger"
+                    .to_owned(),
+            ]
+        );
+    }
+
+    /// Nothing is dropped in either direction: an ignored export survives the manifest's
+    /// round trip through JSON with its scope and its reason.
+    #[test]
+    fn the_ignored_inventory_round_trips_through_the_manifest_json() {
+        let json = json!({
+            "functions": [],
+            "ignored": [{"name": "onRef", "region": "us-central1", "triggerType": "database",
+                         "scope": "notPlanned", "reason": "not planned"}]
+        });
+        let manifest = parse_manifest(&json).expect("parses");
+        assert_eq!(
+            fireemu_adapter_functions::manifest_json::manifest_to_json(&manifest)["ignored"],
+            json["ignored"]
+        );
+        let bad = parse_manifest(&json!({
+            "functions": [],
+            "ignored": [{"name": "onRef", "scope": "invented", "reason": "x"}]
+        }))
+        .expect_err("an unknown scope is refused rather than guessed");
+        assert!(bad.contains("unknown scope"), "{bad}");
     }
 
     #[test]

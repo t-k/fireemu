@@ -83,6 +83,10 @@ pub struct FunctionsConfig {
     pub overlap: OverlapPolicy,
     /// What happens to schedule runs that became due while the clock moved.
     pub catch_up: CatchUpPolicy,
+    /// The functions listener's own `host:port`, when it is bound. A Cloud Tasks queue's
+    /// `defaultUri` is the function's public URL, so the runtime has to know its own address
+    /// to build one and to recognise a task that named it explicitly.
+    pub functions_host: Option<String>,
 }
 
 /// Which of the schedule runs that became due during a clock move are enqueued.
@@ -255,6 +259,16 @@ impl RecordLog {
 }
 
 struct Inner {
+    /// Cloud Tasks deliveries that have been accepted and not yet finished, including the
+    /// time they spend in backoff between attempts. They are outstanding causal work, so
+    /// `await-idle` waits for them; they are not in `running`, because a task holds its place
+    /// across attempts while `running` counts one invocation at a time.
+    tasks_in_flight: usize,
+    /// Task resource names this runtime has accepted. The official emulator never removes an
+    /// id from its set either, so a name is single-use for the life of the queue.
+    task_names: std::collections::BTreeSet<String>,
+    /// Supplies the id of a task that did not name itself.
+    next_task: u64,
     outbox: Outbox,
     payloads: BTreeMap<EventId, (String, Value)>,
     /// Invocations occupying a slot, keyed by invocation key (`<event>-<attempt>` or
@@ -329,14 +343,49 @@ struct Held {
     crash: bool,
 }
 
+/// One codebase, as it was handed to the runtime: its name, its own manifest and the runner
+/// process that serves it.
+pub struct CodebaseSpec {
+    /// `codebase` from `firebase.json`, `default` when the project names none.
+    pub name: String,
+    /// What this codebase's runner discovered.
+    pub manifest: FunctionManifest,
+    /// The runner process serving it.
+    pub runner: Arc<Runner>,
+    /// How to restart it after a reset; without it a reset only kills it.
+    pub spawn: Option<SpawnSpec>,
+}
+
+/// A loaded codebase and its live runner.
+struct Codebase {
+    name: String,
+    runner: std::sync::RwLock<Arc<Runner>>,
+    spawn: Option<SpawnSpec>,
+}
+
+/// Wall-clock milliseconds, for the one header that carries them.
+fn epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 /// The runtime.
+///
+/// A project may declare several Functions codebases (`functions` as an array in
+/// `firebase.json`). Each gets its own runner process, exactly as the official emulator gives
+/// each backend its own runtime worker pool, and one runtime multiplexes them: the manifests
+/// are unioned so that every trigger match, schedule, retry and HTTP route is decided once,
+/// and each function is invoked on the runner of the codebase that exported it.
 pub struct FunctionsRuntime {
+    /// The union of every codebase's manifest.
     manifest: FunctionManifest,
     config: FunctionsConfig,
     clock: Arc<Mutex<VirtualClock>>,
-    runner: std::sync::RwLock<Arc<Runner>>,
-    /// How to restart the runner after a reset; without it a reset only kills it.
-    spawn: Option<SpawnSpec>,
+    /// The codebases, in configuration order.
+    codebases: Vec<Codebase>,
+    /// Function name to its codebase's index in `codebases`.
+    owner: BTreeMap<String, usize>,
     inner: Mutex<Inner>,
     wake: Notify,
     idle: Arc<Notify>,
@@ -357,6 +406,9 @@ pub struct FunctionsRuntime {
     /// HTTP and callable invocations, manual `functions/{name}:run` requests and virtual
     /// clock schedule runs are unaffected: none of them is a data-change delivery.
     background_triggers: std::sync::atomic::AtomicBool,
+    /// How many times the sources have been reloaded (`triggerGeneration`). It is part of an
+    /// event trigger's key, which the 404 for an unknown function lists.
+    trigger_generation: std::sync::atomic::AtomicU64,
 }
 
 impl FunctionsRuntime {
@@ -369,6 +421,64 @@ impl FunctionsRuntime {
         clock: Arc<Mutex<VirtualClock>>,
         runner: Arc<Runner>,
         spawn: Option<SpawnSpec>,
+    ) -> Arc<Self> {
+        Self::with_codebases(
+            vec![CodebaseSpec {
+                name: "default".to_owned(),
+                manifest,
+                runner,
+                spawn,
+            }],
+            config,
+            clock,
+        )
+        .expect("a single codebase cannot collide with itself")
+    }
+
+    /// Builds the runtime around one started runner per codebase.
+    ///
+    /// A function name that two codebases both export is refused here, naming both, because
+    /// the emulator serves one function URL per region and name: whichever codebase happened
+    /// to load second would otherwise take the name, silently, and the project would find out
+    /// from the wrong handler running.
+    pub fn with_codebases(
+        codebases: Vec<CodebaseSpec>,
+        config: FunctionsConfig,
+        clock: Arc<Mutex<VirtualClock>>,
+    ) -> Result<Arc<Self>, String> {
+        let mut manifest = FunctionManifest::default();
+        let mut owner: BTreeMap<String, usize> = BTreeMap::new();
+        let mut declared_in: BTreeMap<String, String> = BTreeMap::new();
+        for (index, codebase) in codebases.iter().enumerate() {
+            for f in &codebase.manifest.functions {
+                if let Some(first) = declared_in.get(&f.name) {
+                    return Err(format!(
+                        "the function {:?} is exported by two Functions codebases ({first} and \
+                         {}); a function name is unique across the whole project, because the \
+                         emulator serves one URL per region and name",
+                        f.name, codebase.name
+                    ));
+                }
+                declared_in.insert(f.name.clone(), codebase.name.clone());
+                owner.insert(f.name.clone(), index);
+                manifest.functions.push(f.clone());
+            }
+            manifest
+                .ignored
+                .extend(codebase.manifest.ignored.iter().cloned());
+        }
+        manifest
+            .validate()
+            .map_err(|e| format!("the loaded Functions codebases: {e}"))?;
+        Ok(Self::build(manifest, owner, codebases, config, clock))
+    }
+
+    fn build(
+        manifest: FunctionManifest,
+        owner: BTreeMap<String, usize>,
+        codebases: Vec<CodebaseSpec>,
+        config: FunctionsConfig,
+        clock: Arc<Mutex<VirtualClock>>,
     ) -> Arc<Self> {
         let now = clock
             .lock()
@@ -402,9 +512,19 @@ impl FunctionsRuntime {
             manifest,
             config,
             clock,
-            runner: std::sync::RwLock::new(runner),
-            spawn,
+            codebases: codebases
+                .into_iter()
+                .map(|c| Codebase {
+                    name: c.name,
+                    runner: std::sync::RwLock::new(c.runner),
+                    spawn: c.spawn,
+                })
+                .collect(),
+            owner,
             inner: Mutex::new(Inner {
+                tasks_in_flight: 0,
+                task_names: std::collections::BTreeSet::new(),
+                next_task: 0,
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
                 running: BTreeMap::new(),
@@ -427,6 +547,7 @@ impl FunctionsRuntime {
             faults: Mutex::new(None),
             callable_trust: std::sync::RwLock::new(None),
             background_triggers: std::sync::atomic::AtomicBool::new(true),
+            trigger_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -442,13 +563,42 @@ impl FunctionsRuntime {
         &self.config.project
     }
 
-    /// The current runner.
+    /// The current runner of the first codebase.
+    ///
+    /// Kept for the single-codebase case, which is every project that does not spell
+    /// `functions` as an array. Anything that acts on behalf of one function goes through
+    /// [`Self::runner_for`] instead.
     #[must_use]
     pub fn runner(&self) -> Arc<Runner> {
-        match self.runner.read() {
+        self.runner_at(0)
+    }
+
+    fn runner_at(&self, index: usize) -> Arc<Runner> {
+        let slot = &self.codebases[index.min(self.codebases.len().saturating_sub(1))].runner;
+        match slot.read() {
             Ok(r) => r.clone(),
             Err(e) => e.into_inner().clone(),
         }
+    }
+
+    /// The runner of the codebase that exported `function`.
+    #[must_use]
+    pub fn runner_for(&self, function: &str) -> Arc<Runner> {
+        self.runner_at(self.owner.get(function).copied().unwrap_or(0))
+    }
+
+    /// The codebase names, in configuration order.
+    #[must_use]
+    pub fn codebase_names(&self) -> Vec<&str> {
+        self.codebases.iter().map(|c| c.name.as_str()).collect()
+    }
+
+    /// The codebase that exported `function`.
+    #[must_use]
+    pub fn codebase_of(&self, function: &str) -> Option<&str> {
+        self.owner
+            .get(function)
+            .map(|i| self.codebases[*i].name.as_str())
     }
 
     /// The virtual-clock instant a request is decided at.
@@ -751,6 +901,224 @@ impl FunctionsRuntime {
             self.wake.notify_one();
         }
         ids
+    }
+
+    /// Accepts one Cloud Tasks enqueue and starts delivering it.
+    ///
+    /// The queue is the function: the official emulator creates one queue per
+    /// `onTaskDispatched` function at load time, keyed by the function's name, whose
+    /// `defaultUri` is that function's own `/{project}/{region}/{name}` URL. There is nothing
+    /// to create here, so the queue exists exactly while the function does, and an enqueue
+    /// against a name that is not one answers the official `404`.
+    pub fn enqueue_task(
+        self: &Arc<Self>,
+        project: &str,
+        location: &str,
+        queue: &str,
+        body: &Value,
+    ) -> Result<Value, crate::tasks::EnqueueRefusal> {
+        use crate::tasks::EnqueueRefusal;
+        let refuse = |status: u16, body: &str| EnqueueRefusal {
+            status,
+            body: body.to_owned(),
+        };
+        if project != self.config.project {
+            return Err(refuse(
+                404,
+                "Tried to queue a task from a non-existent queue",
+            ));
+        }
+        let spec = self
+            .manifest
+            .get(queue)
+            .filter(|f| matches!(f.trigger, Trigger::TaskQueue { .. }))
+            .ok_or_else(|| refuse(404, "Tried to queue a task from a non-existent queue"))?;
+        let Trigger::TaskQueue { retry, .. } = spec.trigger else {
+            return Err(refuse(
+                404,
+                "Tried to queue a task from a non-existent queue",
+            ));
+        };
+        if spec.region != location {
+            return Err(refuse(
+                404,
+                "Tried to queue a task from a non-existent queue",
+            ));
+        }
+        let host = self.config.functions_host.as_deref().ok_or_else(|| {
+            refuse(
+                503,
+                "the functions listener is not bound, so a task queue has no default URI",
+            )
+        })?;
+        let default_uri = format!("http://{host}/{project}/{location}/{queue}");
+        let next_id = {
+            let Ok(mut inner) = self.inner.lock() else {
+                return Err(refuse(500, "runtime poisoned"));
+            };
+            inner.next_task += 1;
+            inner.next_task
+        };
+        let task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
+        // A task may name its own URL (`opts.uri`). Only this emulator's own function URLs
+        // are accepted: the official emulator will POST a task to any address, and a local
+        // emulator that makes an arbitrary outbound request on a caller's say-so is a
+        // request-forgery surface the rest of fireemu does not offer.
+        if task.url != default_uri {
+            return Err(refuse(
+                400,
+                "a task may only be dispatched to this emulator's own function URL",
+            ));
+        }
+        {
+            let Ok(mut inner) = self.inner.lock() else {
+                return Err(refuse(500, "runtime poisoned"));
+            };
+            if !inner.task_names.insert(task.name.clone()) {
+                return Err(refuse(409, "A task with the same name already exists"));
+            }
+            inner.tasks_in_flight += 1;
+        }
+        let answer = crate::tasks::accepted_response(&task);
+        let runtime = self.clone();
+        let key = crate::tasks::queue_key(project, location, queue);
+        let function = queue.to_owned();
+        let region = location.to_owned();
+        let project = project.to_owned();
+        tokio::spawn(async move {
+            runtime
+                .dispatch_task(&task, &key, &project, &region, &function, retry)
+                .await;
+            if let Ok(mut inner) = runtime.inner.lock() {
+                inner.tasks_in_flight = inner.tasks_in_flight.saturating_sub(1);
+            }
+            runtime.idle.notify_waiters();
+        });
+        Ok(answer)
+    }
+
+    /// Delivers one task, retrying on the official schedule until it succeeds or runs out.
+    ///
+    /// Backoff is real time, as it is upstream: the default unit is 100 ms, so three attempts
+    /// cost 300 ms rather than a clock advance. That is the one place in this runtime where a
+    /// wait is not on the virtual clock, and it is deliberate -- a task queue's retry policy
+    /// is a wall-clock policy in production too.
+    async fn dispatch_task(
+        self: &Arc<Self>,
+        task: &crate::tasks::Task,
+        queue_key: &str,
+        project: &str,
+        region: &str,
+        function: &str,
+        retry: fireemu_core_functions::manifest::TaskRetryConfig,
+    ) {
+        let started = std::time::Instant::now();
+        let epoch = self.inner.lock().ok().map(|i| i.epoch);
+        let mut attempt = 1u32;
+        let mut execution_count = 0u32;
+        let mut previous: Option<u16> = None;
+        let body = serde_json::to_vec(&task.body).unwrap_or_default();
+        loop {
+            // A reset supersedes every task accepted before it.
+            if self.inner.lock().ok().map(|i| i.epoch) != epoch {
+                return;
+            }
+            let Some(target) = self.http_target(project, region, function) else {
+                eprintln!(
+                    "[functions] task {}: {function} is no longer served",
+                    task.name
+                );
+                return;
+            };
+            let headers = crate::tasks::dispatch_headers(
+                task,
+                queue_key,
+                attempt,
+                execution_count,
+                previous,
+                epoch_millis(),
+            );
+            // The runner's HTTP server routes on the public path, and strips it before the
+            // handler sees the request, so the dispatch carries the function's own URL path
+            // rather than the `/` the queue would send to an arbitrary address.
+            let path = format!("/{project}/{region}/{function}");
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(task.dispatch_deadline_seconds),
+                self.invoke_http(&target, "POST", &path, &headers, &body),
+            )
+            .await;
+            let status = match outcome {
+                Ok(Ok(response)) if (200..300).contains(&response.status) => return,
+                Ok(Ok(response)) => Some(response.status),
+                // A transport failure or an overrun deadline is a retry with no previous
+                // response, exactly as the official `catch` treats an aborted fetch.
+                Ok(Err(_)) | Err(_) => None,
+            };
+            if let Some(status) = status {
+                // Only a non-5xx failure bumps the execution count upstream.
+                if !(500..600).contains(&status) {
+                    execution_count += 1;
+                }
+                previous = Some(status);
+            }
+            attempt += 1;
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            if retry.exhausted(attempt, elapsed) {
+                eprintln!(
+                    "[functions] task {} gave up after {} attempt(s)",
+                    task.name,
+                    attempt - 1
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(retry.backoff_millis(attempt))).await;
+        }
+    }
+
+    /// Delivers one custom `CloudEvent` published on `channel` to every matching
+    /// `onCustomEventPublished` function, and reports how many were reached.
+    ///
+    /// `event` is the JSON `CloudEvent` the function receives; `attributes` are the extra
+    /// attributes the publisher sent, which is what an `eventFilters` entry is matched
+    /// against (`EventarcEmulator.matchesAll`).
+    pub fn publish_custom_event(
+        &self,
+        channel: &str,
+        event_type: &str,
+        attributes: &BTreeMap<String, String>,
+        event: &Value,
+    ) -> usize {
+        if !self.background_triggers_enabled() {
+            // Accepted and dropped, like every other background delivery while the switch is
+            // off. The official emulator does the same to the events it holds.
+            return 0;
+        }
+        let time = self.now();
+        let Ok(mut inner) = self.inner.lock() else {
+            return 0;
+        };
+        let mut delivered = 0;
+        for f in self
+            .manifest
+            .eventarc_matches(channel, event_type, attributes)
+        {
+            self.enqueue_delivery(
+                &mut inner,
+                EventSource::Eventarc,
+                &f.name,
+                event_type,
+                channel,
+                time,
+                event,
+            );
+            delivered += 1;
+        }
+        drop(inner);
+        if delivered > 0 {
+            self.wake.notify_one();
+        }
+        delivered
     }
 
     /// Turns a user lifecycle event into events for every matching Auth trigger.
@@ -1062,13 +1430,21 @@ impl FunctionsRuntime {
             let epoch = inner.epoch;
             generation = Some(epoch);
             // Killed under the same lock the restart installs under: a replacement from an
-            // earlier reset cannot slip in between the bump and the kill.
-            self.runner().kill_now();
+            // earlier reset cannot slip in between the bump and the kill. Every codebase's
+            // runner goes: a handler still running in any of them must not write into the
+            // reset session.
+            for index in 0..self.codebases.len() {
+                self.runner_at(index).kill_now();
+            }
             inner.outbox.discard_stale(epoch);
             inner.payloads.clear();
             inner.running.clear();
             inner.delayed.clear();
             inner.catch_up_pending = false;
+            // A task accepted before the reset must not reach the new session's handlers.
+            // The dispatchers see the epoch change and stop.
+            inner.tasks_in_flight = 0;
+            inner.task_names.clear();
             for job in &mut inner.jobs {
                 job.cursor = now;
             }
@@ -1078,37 +1454,46 @@ impl FunctionsRuntime {
         self.wake.notify_one();
     }
 
-    /// Restarts the runner from its spec for `generation` (a later reset supersedes it).
+    /// Restarts every codebase's runner from its spec for `generation` (a later reset
+    /// supersedes it).
     fn respawn_runner(self: &Arc<Self>, generation: Option<Epoch>) {
-        if let Some(spec) = self.spawn.clone() {
-            let runtime = self.clone();
-            tokio::spawn(async move {
-                match Runner::spawn_spec(&spec).await {
-                    Ok(runner) => {
-                        // A later reset supersedes this restart: its own replacement is
-                        // the runner of record and this one must not outlive the kill.
-                        // Checked and installed under the runtime lock (the lock a reset
-                        // bumps the epoch and kills under), so the two cannot interleave.
-                        let installed = match runtime.inner.lock() {
-                            Ok(inner) if Some(inner.epoch) == generation => {
-                                if let Ok(mut slot) = runtime.runner.write() {
-                                    *slot = Arc::new(runner);
-                                }
-                                true
-                            }
-                            _ => {
-                                runner.kill_now();
-                                false
-                            }
-                        };
-                        if installed {
-                            runtime.wake.notify_one();
-                        }
-                    }
-                    Err(e) => eprintln!("[functions] runner restart failed: {e}"),
-                }
-            });
+        for index in 0..self.codebases.len() {
+            self.respawn_one(index, generation);
         }
+    }
+
+    /// Restarts the runner of one codebase.
+    fn respawn_one(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
+        let Some(spec) = self.codebases.get(index).and_then(|c| c.spawn.clone()) else {
+            return;
+        };
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            match Runner::spawn_spec(&spec).await {
+                Ok(runner) => {
+                    // A later reset supersedes this restart: its own replacement is
+                    // the runner of record and this one must not outlive the kill.
+                    // Checked and installed under the runtime lock (the lock a reset
+                    // bumps the epoch and kills under), so the two cannot interleave.
+                    let installed = match runtime.inner.lock() {
+                        Ok(inner) if Some(inner.epoch) == generation => {
+                            if let Ok(mut slot) = runtime.codebases[index].runner.write() {
+                                *slot = Arc::new(runner);
+                            }
+                            true
+                        }
+                        _ => {
+                            runner.kill_now();
+                            false
+                        }
+                    };
+                    if installed {
+                        runtime.wake.notify_one();
+                    }
+                }
+                Err(e) => eprintln!("[functions] runner restart failed: {e}"),
+            }
+        });
     }
 
     /// Notified whenever an invocation completes or the runtime resets.
@@ -1124,14 +1509,20 @@ impl FunctionsRuntime {
     pub fn is_idle(&self) -> bool {
         self.inner
             .lock()
-            .map(|i| !i.outbox.has_active() && i.running.is_empty() && !i.catch_up_pending)
+            .map(|i| {
+                !i.outbox.has_active()
+                    && i.running.is_empty()
+                    && !i.catch_up_pending
+                    && i.tasks_in_flight == 0
+            })
             .unwrap_or(true)
     }
 
-    /// Whether the runner process is alive (a dead runner leaves queued work pending).
+    /// Whether every codebase's runner process is alive (a dead runner leaves that
+    /// codebase's queued work pending).
     #[must_use]
     pub fn runner_alive(&self) -> bool {
-        self.runner().is_alive()
+        (0..self.codebases.len()).all(|i| self.runner_at(i).is_alive())
     }
 
     /// Outstanding work, for `await-idle` timeouts and status output.
@@ -1160,11 +1551,30 @@ impl FunctionsRuntime {
             "succeeded": inner.succeeded_total,
             "deadLettered": inner.dead_lettered_total,
             "catchUpPending": inner.catch_up_pending,
+            "tasksInFlight": inner.tasks_in_flight,
             "overlapRejected": inner.overlap_rejected,
             "timeZoneDatabase": crate::zone::database_version(),
-            "runnerAlive": self.runner().is_alive(),
+            "runnerAlive": self.runner_alive(),
             "epoch": inner.epoch.value(),
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
+            // One entry per loaded codebase, so a multi-codebase project can see which runner
+            // is down and which functions went with it.
+            "codebases": (0..self.codebases.len()).map(|i| json!({
+                "codebase": self.codebases[i].name,
+                "runnerAlive": self.runner_at(i).is_alive(),
+                "functions": self.manifest.functions.iter()
+                    .filter(|f| self.owner.get(&f.name).copied() == Some(i))
+                    .map(|f| f.name.clone()).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            // Every export the runners discovered and could not serve, so nothing a codebase
+            // declared is invisible from here either.
+            "ignored": self.manifest.ignored.iter().map(|f| json!({
+                "name": f.name,
+                "region": f.region,
+                "triggerType": f.trigger_type,
+                "scope": f.scope.as_str(),
+                "reason": f.reason,
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -1270,6 +1680,56 @@ impl FunctionsRuntime {
         }
     }
 
+    /// Every trigger key, in manifest order, as the official emulator spells them.
+    ///
+    /// `getTriggerKey` (`functionsEmulator.js:909`) is `<region>-<name>` for an HTTP or
+    /// callable function and `<region>-<name>-<generation>` for an event one, where the
+    /// generation counts source reloads. It is what the 404 for an unknown function lists, so
+    /// it is spelled the same way here rather than invented.
+    ///
+    /// The order is the official one too, and it is not export order: the discovered backend
+    /// is `endpoints: Record<region, Record<id, Endpoint>>`, so `emulatedFunctionsByRegion`
+    /// walks it grouped by region, and within a region in export order. Recorded against the
+    /// oracle in `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`, where
+    /// a `europe-west1` function exported before a `us-central1` one is listed after it.
+    #[must_use]
+    pub fn trigger_keys(&self) -> Vec<String> {
+        let mut regions: Vec<&str> = Vec::new();
+        for f in &self.manifest.functions {
+            if !regions.contains(&f.region.as_str()) {
+                regions.push(&f.region);
+            }
+        }
+        let mut keys = Vec::with_capacity(self.manifest.functions.len());
+        for region in regions {
+            for f in self
+                .manifest
+                .functions
+                .iter()
+                .filter(|f| f.region == region)
+            {
+                if matches!(f.trigger, Trigger::Http { .. } | Trigger::TaskQueue { .. }) {
+                    keys.push(format!("{}-{}", f.region, f.name));
+                } else {
+                    keys.push(format!(
+                        "{}-{}-{}",
+                        f.region,
+                        f.name,
+                        self.trigger_generation()
+                    ));
+                }
+            }
+        }
+        keys
+    }
+
+    /// How many times the sources have been reloaded (`triggerGeneration`).
+    #[must_use]
+    pub fn trigger_generation(&self) -> u64 {
+        self.trigger_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// The runner address for an HTTP function, if it exists.
     #[must_use]
     pub fn http_target(&self, project: &str, region: &str, function: &str) -> Option<HttpTarget> {
@@ -1277,10 +1737,17 @@ impl FunctionsRuntime {
             return None;
         }
         let f = self.manifest.get(function)?;
-        if !matches!(f.trigger, Trigger::Http { .. }) || f.region != region {
+        // A task-queue function is an HTTP function that only its queue calls, and the
+        // official emulator serves it at the same URL -- that URL *is* the queue's
+        // `defaultUri` (`functionsEmulator.js:454-459`).
+        if !matches!(f.trigger, Trigger::Http { .. } | Trigger::TaskQueue { .. })
+            || f.region != region
+        {
             return None;
         }
-        let port = self.runner().hello().http_port?;
+        // Each codebase hosts its own HTTP server, so the route resolves to the runner of the
+        // codebase that exported this function.
+        let port = self.runner_for(function).hello().http_port?;
         Some(HttpTarget {
             function: function.to_owned(),
             addr: format!("127.0.0.1:{port}"),
@@ -1377,12 +1844,31 @@ impl FunctionsRuntime {
                 outcome,
             });
         }
-        match result {
-            Ok(r) => r,
-            Err(_) => Err(format!(
-                "function {} did not answer within {timeout}s",
-                target.function
-            )),
+        if let Ok(answer) = result {
+            answer
+        } else {
+            // What the official emulator says and answers when a function overruns
+            // `timeoutSeconds` (`functionsRuntimeWorker.js:139` logs this sentence, then
+            // `proxy.destroy()` lands in the error handler at `:142`, which writes a 500).
+            //
+            // The one thing not reproduced is `this.runtime.process.kill()`: the official
+            // emulator runs one runtime process per trigger, so killing it costs that
+            // function's warm start. One fireemu runner serves a whole codebase, and taking
+            // it down would abort every other function's in-flight work.
+            eprintln!(
+                "[functions] Your function timed out after ~{timeout}s. To configure this \
+                 timeout, see\n      https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation."
+            );
+            // `{"code":"ECONNRESET"}` with no content-type is literally what the official
+            // emulator answers: `proxy.destroy()` makes Node raise a socket hang-up on the
+            // request, and the handler writes `JSON.stringify(err)` after a bare
+            // `writeHead(500)`. Recorded in
+            // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
+            Ok(ProxiedResponse {
+                status: 500,
+                headers: Vec::new(),
+                body: br#"{"code":"ECONNRESET"}"#.to_vec(),
+            })
         }
     }
 
@@ -1416,8 +1902,9 @@ impl FunctionsRuntime {
                 }
                 FaultAction::CrashRunner => {
                     let generation = self.inner.lock().ok().map(|i| i.epoch);
-                    self.runner().kill_now();
-                    self.respawn_runner(generation);
+                    let index = self.owner.get(function).copied().unwrap_or(0);
+                    self.runner_at(index).kill_now();
+                    self.respawn_one(index, generation);
                     answer = Some(Err(format!(
                         "fault plan: the runner crashed while serving {function}"
                     )));
@@ -1444,10 +1931,14 @@ impl FunctionsRuntime {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch_ready(self: &Arc<Self>) {
-        // The runner checked here is the one every invocation of this pass goes to: an event
-        // leased before a reset must not reach the runner spawned after it.
-        let runner = self.runner();
-        if !runner.is_alive() {
+        // The runners snapshotted here are the ones every invocation of this pass goes to: an
+        // event leased before a reset must not reach a runner spawned after it. One per
+        // codebase, and a codebase whose runner is down holds only its own queued work: the
+        // rest of the project keeps dispatching.
+        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
+            .map(|i| self.runner_at(i))
+            .collect();
+        if runners.iter().all(|r| !r.is_alive()) {
             // Queued work stays pending and visible in the status; nothing is retried
             // against a dead process.
             return;
@@ -1467,6 +1958,12 @@ impl FunctionsRuntime {
             };
             let function_name = function_name.clone();
             let Some(spec) = self.manifest.get(&function_name) else {
+                continue;
+            };
+            let index = self.owner.get(&function_name).copied().unwrap_or(0);
+            let Some(runner) = runners.get(index).filter(|r| r.is_alive()) else {
+                // This codebase's runner is down: its work stays pending, and the other
+                // codebases keep going.
                 continue;
             };
             let running_here = inner
@@ -1526,7 +2023,7 @@ impl FunctionsRuntime {
                 // a fresh runner takes over, as after a crashed instance.
                 runner.kill_now();
                 let generation = Some(inner.epoch);
-                self.respawn_runner(generation);
+                self.respawn_one(index, generation);
             }
             tokio::spawn(async move {
                 let Invocation { outcome, late } = match fault_outcome {
@@ -1580,6 +2077,8 @@ impl FunctionsRuntime {
             Trigger::Http { .. } => "http",
             Trigger::PubSub { .. } => "pubsub",
             Trigger::Auth { .. } => "auth",
+            Trigger::Eventarc { .. } => "eventarc",
+            Trigger::TaskQueue { .. } => "tasks",
         };
         json!({
             "invocationId": format!("{}-{attempt}", id.value()),

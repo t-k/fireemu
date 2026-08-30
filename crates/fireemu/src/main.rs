@@ -564,10 +564,19 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         }
     }
     if let Some(project) = resolve_project(&project_root, raw.project.as_deref())? {
+        // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
+        // keyed by (`findEnvfiles`). A `--project` value that is already a project ID is not
+        // an alias, and neither is one that resolves to itself.
+        cfg.functions_project_alias = raw
+            .project
+            .as_deref()
+            .filter(|requested| *requested != project)
+            .map(str::to_owned);
         cfg.auth_project = project;
     }
     if !only.functions {
         cfg.functions_source = None;
+        cfg.functions_loaded.clear();
     }
     if let Some(p) = raw.firestore_port {
         cfg.firestore_addr = with_port(&cfg.firestore_addr, p);
@@ -591,7 +600,9 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         cfg.ui_addr_explicit = true;
     }
     if let Some(dir) = raw.functions_source {
+        // `--functions <dir>` names exactly one codebase, whatever `firebase.json` declares.
         cfg.functions_source = Some(dir);
+        cfg.functions_loaded.clear();
     }
     if let Some(port) = raw.inspect_functions {
         apply_inspect_functions(&mut cfg, port)?;
@@ -767,6 +778,15 @@ fn child_environment(
     }
     if let Some(addr) = addrs.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), addr.to_string()));
+        // Eventarc's publishEvents route is served on the functions port. The variable
+        // carries the scheme, as `setEnvVarsForEmulators` gives it one; without it the Admin
+        // SDK publishes to production, which is a network call a local run must never make.
+        env.push((
+            "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
+            format!("http://{addr}"),
+        ));
+        // Cloud Tasks' variable carries no scheme, unlike Eventarc's.
+        env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), addr.to_string()));
     }
     if let Some(addr) = addrs.hub {
         env.push(("FIREBASE_EMULATOR_HUB".to_owned(), addr.to_string()));
@@ -787,12 +807,7 @@ fn child_environment(
     if std::env::var_os("FIREBASE_CONFIG").is_none() {
         env.push((
             "FIREBASE_CONFIG".to_owned(),
-            serde_json::json!({
-                "projectId": cfg.auth_project,
-                "storageBucket": format!("{}.appspot.com", cfg.auth_project),
-                "databaseURL": format!("https://{}.firebaseio.com", cfg.auth_project),
-            })
-            .to_string(),
+            functions::firebase_config(&cfg.auth_project),
         ));
     }
     env
@@ -802,7 +817,7 @@ fn child_environment(
 /// command's environment, so a shell configured for other emulators cannot leak into it.
 /// `FIREBASE_DATABASE_EMULATOR_HOST` is on the list although fireemu never sets it: an
 /// inherited one would point a Realtime Database client at something fireemu does not serve.
-const OWNED_VARIABLES: [&str; 10] = [
+const OWNED_VARIABLES: [&str; 12] = [
     "FIRESTORE_EMULATOR_HOST",
     "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
     "FIREBASE_AUTH_EMULATOR_HOST",
@@ -811,6 +826,8 @@ const OWNED_VARIABLES: [&str; 10] = [
     "FIREBASE_DATABASE_EMULATOR_HOST",
     "FIREBASE_EMULATOR_HUB",
     "FIREEMU_FUNCTIONS_HOST",
+    "CLOUD_EVENTARC_EMULATOR_HOST",
+    "CLOUD_TASKS_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_JWKS_URL",
 ];
@@ -1504,6 +1521,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         firestore: grpc_addr.map(|a| a.to_string()),
                         auth: addrs.auth.map(|a| a.to_string()),
                         storage: storage_addr.map(|a| a.to_string()),
+                        functions: functions_addr.map(|a| a.to_string()),
                     },
                     &runner_secret,
                     callable_trusted_protocol,

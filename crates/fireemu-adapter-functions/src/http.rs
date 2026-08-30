@@ -24,9 +24,19 @@ pub const MAX_FUNCTION_BODY_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
 fn simple(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
+    typed(status, "text/plain; charset=utf-8", text)
+}
+
+/// A plain body with an explicit content type.
+///
+/// The two 404s the functions port answers carry different ones, because the official
+/// emulator produces them two different ways: `res.sendStatus(404)` sends the status text as
+/// `text/plain`, and `res.status(404).send("Function ... does not exist ...")` sends a string,
+/// which express types as `text/html`.
+fn typed(status: StatusCode, content_type: &str, text: &str) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
-        .header("content-type", "text/plain; charset=utf-8")
+        .header("content-type", content_type)
         .body(Full::new(Bytes::from(text.to_owned())))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
@@ -193,37 +203,285 @@ fn decode_chunked(mut rest: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Answers `POST .../channels/{channel}:publishEvents`.
+///
+/// The official emulator refuses a `400` for an event with no `type` and otherwise answers a
+/// bare `200` -- `res.sendStatus(200)`, so `OK` as text -- whether or not anything was
+/// subscribed, because delivery is fire-and-forget from the publisher's point of view
+/// (`eventarcEmulator.js` `publishEventsHandler`). A conversion this emulator cannot make is
+/// reported the same way an unpublishable event is, with the official sentence, rather than
+/// accepted and dropped.
+fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Response<Full<Bytes>> {
+    let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return simple(StatusCode::BAD_REQUEST, "Bad Request");
+    };
+    let Some(events) = parsed.get("events").and_then(serde_json::Value::as_array) else {
+        return simple(StatusCode::BAD_REQUEST, "Bad Request");
+    };
+    let google = channel == crate::eventarc::GOOGLE_CHANNEL;
+    for event in events {
+        // The sentinel `google` channel forwards verbatim; a custom channel converts the
+        // proto form the Admin SDK publishes. That branch is the official one, and it is why
+        // Firebase alerts -- which have no channel and are indexed under `<type>-google` --
+        // arrive as the plain CloudEvent their handlers expect.
+        let converted = if google {
+            crate::eventarc::accept_verbatim(event)
+        } else {
+            crate::eventarc::convert(event)
+        };
+        match converted {
+            Ok(published) => {
+                let delivered = runtime.publish_custom_event(
+                    channel,
+                    &published.event_type,
+                    &published.attributes,
+                    &published.event,
+                );
+                eprintln!(
+                    "[functions] eventarc: {} on {channel} reached {delivered} function(s)",
+                    published.event_type
+                );
+            }
+            Err(why) => return simple(StatusCode::BAD_REQUEST, &why),
+        }
+    }
+    simple(StatusCode::OK, "OK")
+}
+
+/// An answer produced instead of proxying: a 404, a denial, a refused origin.
+type Refusal = Box<Response<Full<Bytes>>>;
+
+/// The route a request resolved to: its region, its function name and the runner to reach.
+type Route<'a> = (&'a str, &'a str, crate::runtime::HttpTarget);
+
+/// Resolves `/{project}/{region}/{function}` against the manifest, or the 404 the official
+/// emulator answers instead.
+///
+/// There are two of those and they are not the same: a path that is not a function route at
+/// all falls through to `hub.all("*")` and gets express's `res.sendStatus(404)` -- the status
+/// text as `text/plain` -- while a route whose function does not exist gets
+/// `handleHttpsTrigger`'s sentence naming the key it looked for and every key it holds
+/// (`functionsEmulator.js:145`, `:1244`).
+fn resolve_route<'a>(runtime: &FunctionsRuntime, path: &'a str) -> Result<Route<'a>, Refusal> {
+    let segments: Vec<&str> = path.trim_start_matches('/').splitn(4, '/').collect();
+    let [project, region, function, ..] = segments.as_slice() else {
+        return Err(Box::new(simple(StatusCode::NOT_FOUND, "Not Found")));
+    };
+    if project.is_empty()
+        || region.is_empty()
+        || function.is_empty()
+        || *project != runtime.project()
+    {
+        return Err(Box::new(simple(StatusCode::NOT_FOUND, "Not Found")));
+    }
+    match runtime.http_target(project, region, function) {
+        Some(target) => Ok((region, function, target)),
+        None => Err(Box::new(typed(
+            StatusCode::NOT_FOUND,
+            "text/html; charset=utf-8",
+            &format!(
+                "Function {region}-{function} does not exist, valid functions are: {}",
+                runtime.trigger_keys().join(", ")
+            ),
+        ))),
+    }
+}
+
+/// Puts a callable's credentials through the trust boundary, or answers the denial.
+///
+/// An `onRequest` function keeps receiving the raw field list, because application code owns
+/// custom-backend verification there (specification section 7.3); a callable only reaches the
+/// runner once the daemon has verified and re-inserted both credentials.
+fn sanitize_credentials(
+    runtime: &FunctionsRuntime,
+    function: &str,
+    raw: &hyper::HeaderMap,
+    headers: Vec<(String, String)>,
+) -> Result<Vec<(String, String)>, Refusal> {
+    let (Some(trust), Some(enforce_app_check)) = (
+        runtime.callable_trust(),
+        runtime.callable_enforces_app_check(function),
+    ) else {
+        return Ok(headers);
+    };
+    // The credential fields are collected separately and lossily: a value that is not
+    // renderable as text must still count as an instance, or a second copy could hide behind
+    // one byte the general collection dropped (spec 7.3).
+    let presented_app_check = field_values(raw, fireemu_core_app_check::header::APP_CHECK_HEADER);
+    let presented_auth = field_values(raw, "authorization");
+    match trust.sanitize(&crate::callable::CallableRequest {
+        function,
+        enforce_app_check,
+        headers: &headers,
+        app_check: &presented_app_check,
+        authorization: &presented_auth,
+        now: runtime.now(),
+    }) {
+        crate::callable::CallableDecision::Forward { headers, .. } => Ok(headers),
+        crate::callable::CallableDecision::Unauthenticated { .. } => {
+            let denial = crate::callable::unauthenticated_response();
+            let mut builder = Response::builder().status(denial.status);
+            for (k, v) in denial.headers {
+                builder = builder.header(k, v);
+            }
+            Err(Box::new(
+                builder
+                    .body(Full::new(Bytes::from(denial.body)))
+                    .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))),
+            ))
+        }
+    }
+}
+
+/// Answers the three Cloud Tasks routes.
+///
+/// There is no queue to create: the official emulator creates one per `onTaskDispatched`
+/// function at load time and fireemu's queue *is* the function, so the create route reports
+/// what the queue already is rather than storing a second copy of it. Deleting a task is
+/// refused rather than silently accepted, because a task is dispatched as soon as it is
+/// accepted here and there is no window in which a delete could still take effect.
+fn task_route(
+    runtime: &Arc<FunctionsRuntime>,
+    route: &crate::tasks::Route,
+    method: &hyper::Method,
+    body: &[u8],
+) -> Response<Full<Bytes>> {
+    use crate::tasks::Route;
+    match route {
+        Route::CreateQueue {
+            project,
+            location,
+            queue,
+        } => {
+            if method != hyper::Method::POST {
+                return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
+            }
+            let served = runtime.manifest().get(queue).is_some_and(|f| {
+                matches!(
+                    f.trigger,
+                    fireemu_core_functions::manifest::Trigger::TaskQueue { .. }
+                ) && &f.region == location
+            });
+            if !served || project != runtime.project() {
+                return typed(
+                    StatusCode::NOT_FOUND,
+                    "application/json",
+                    &serde_json::json!({"error": format!(
+                        "no onTaskDispatched function named {queue} in {project}/{location}"
+                    )})
+                    .to_string(),
+                );
+            }
+            typed(
+                StatusCode::OK,
+                "application/json",
+                &serde_json::json!({"taskQueueConfig": {"queue": queue}}).to_string(),
+            )
+        }
+        Route::Enqueue {
+            project,
+            location,
+            queue,
+        } => {
+            if method != hyper::Method::POST {
+                return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
+            }
+            let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
+                return simple(StatusCode::BAD_REQUEST, "the request body is not JSON");
+            };
+            match runtime.enqueue_task(project, location, queue, &parsed) {
+                Ok(answer) => typed(StatusCode::OK, "application/json", &answer.to_string()),
+                Err(refusal) => typed(
+                    StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::BAD_REQUEST),
+                    "text/plain; charset=utf-8",
+                    &refusal.body,
+                ),
+            }
+        }
+        Route::DeleteTask { .. } => simple(
+            StatusCode::NOT_FOUND,
+            "Tried to remove a task that doesn't exist",
+        ),
+    }
+}
+
+/// Reads a request body up to the forwarding limit, or the 413 that replaces it.
+async fn collect_body(body: Incoming) -> Result<Bytes, Refusal> {
+    match Limited::new(body, MAX_FUNCTION_BODY_BYTES).collect().await {
+        Ok(collected) => Ok(collected.to_bytes()),
+        Err(_) => Err(Box::new(simple(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request body too large",
+        ))),
+    }
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
-    // Like the other ports: a page on another site must not drive this loopback runtime.
-    // Preflights and CORS answers belong to the function's own handler (onRequest / onCall
-    // implement their configured policy), so they are forwarded, not fabricated.
-    if let Some(origin) = req.headers().get("origin").and_then(|v| v.to_str().ok()) {
+    // Like the other ports: a page on another site must not drive this loopback runtime. The
+    // official emulator does let it -- its runtime runs with `enableCors: true`, which wraps
+    // every handler in `cors({origin: true})` and reflects any origin, so a page anywhere on
+    // the internet can POST to a developer's callable and read the result. That is the one
+    // documented divergence of this port, recorded in
+    // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
+    let origin = req
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    if let Some(origin) = &origin {
         if !origin_is_local(origin) {
             return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
         }
     }
-    let segments: Vec<&str> = path.trim_start_matches('/').splitn(4, '/').collect();
-    let (project, region, function) = match segments.as_slice() {
-        [p, r, f, ..] if !p.is_empty() && !r.is_empty() && !f.is_empty() => (*p, *r, *f),
-        _ => {
-            return Ok(simple(
-                StatusCode::NOT_FOUND,
-                "functions are served at /{project}/{region}/{function}",
-            ))
+    // Eventarc's `publishEvents` shares this port. The official suite gives Eventarc a port
+    // of its own; a custom event has nowhere to go without functions, so fireemu serves the
+    // route here and points `CLOUD_EVENTARC_EMULATOR_HOST` at this listener. The path forms
+    // cannot collide with a function route: both are rooted at a literal segment no project
+    // ID reaches, and both end in a literal the function route does not have.
+    if req.method() == hyper::Method::POST {
+        if let Some(channel) = crate::eventarc::publish_channel(&path) {
+            return Ok(match collect_body(req.into_body()).await {
+                Ok(body) => publish_events(&runtime, &channel, &body),
+                Err(answer) => *answer,
+            });
         }
-    };
-    let Some(target) = runtime.http_target(project, region, function) else {
-        return Ok(simple(
-            StatusCode::NOT_FOUND,
-            &format!("no HTTP function {function} in {project}/{region}"),
-        ));
+    }
+    // Cloud Tasks shares this port for the same reason Eventarc does.
+    if let Some(route) = crate::tasks::route(&path) {
+        let method = req.method().clone();
+        return Ok(match collect_body(req.into_body()).await {
+            Ok(body) => task_route(&runtime, &route, &method, &body),
+            Err(answer) => *answer,
+        });
+    }
+    let (_region, function, target) = match resolve_route(&runtime, &path) {
+        Ok(resolved) => resolved,
+        Err(answer) => return Ok(*answer),
     };
     let method = req.method().as_str().to_owned();
+    // The CORS the official emulator's `enableCors` gives an `onRequest` function, for the
+    // loopback origins this port serves. A callable answers its own preflight (v2 `onCall`
+    // enables CORS itself, and the recorded oracle shows `POST` where an `onRequest` shows the
+    // whole method list), so a callable's request is forwarded untouched.
+    let plain_http = matches!(
+        runtime.manifest().get(function).map(|f| &f.trigger),
+        Some(fireemu_core_functions::manifest::Trigger::Http {
+            callable: false,
+            ..
+        })
+    );
+    if plain_http && method == "OPTIONS" {
+        if let Some(origin) = &origin {
+            if req.headers().contains_key("access-control-request-method") {
+                return Ok(preflight_answer(origin, req.headers()));
+            }
+        }
+    }
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
@@ -233,56 +491,13 @@ async fn respond(
                 .map(|v| (k.as_str().to_owned(), v.to_owned()))
         })
         .collect();
-    // The credential fields are collected separately and lossily: a value that is not
-    // renderable as text must still count as an instance, or a second copy could hide behind
-    // one byte the general collection above drops (spec 7.3).
-    let presented_app_check = field_values(
-        req.headers(),
-        fireemu_core_app_check::header::APP_CHECK_HEADER,
-    );
-    let presented_auth = field_values(req.headers(), "authorization");
-    // The callable trusted protocol, when it is active and this is a callable: an `onRequest`
-    // function keeps receiving the raw field list, because application code owns
-    // custom-backend verification there (specification section 7.3).
-    let headers = match (
-        runtime.callable_trust(),
-        runtime.callable_enforces_app_check(function),
-    ) {
-        (Some(trust), Some(enforce_app_check)) => {
-            match trust.sanitize(&crate::callable::CallableRequest {
-                function,
-                enforce_app_check,
-                headers: &headers,
-                app_check: &presented_app_check,
-                authorization: &presented_auth,
-                now: runtime.now(),
-            }) {
-                crate::callable::CallableDecision::Forward { headers, .. } => headers,
-                crate::callable::CallableDecision::Unauthenticated { .. } => {
-                    let denial = crate::callable::unauthenticated_response();
-                    let mut builder = Response::builder().status(denial.status);
-                    for (k, v) in denial.headers {
-                        builder = builder.header(k, v);
-                    }
-                    return Ok(builder
-                        .body(Full::new(Bytes::from(denial.body)))
-                        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
-                }
-            }
-        }
-        _ => headers,
+    let headers = match sanitize_credentials(&runtime, function, req.headers(), headers) {
+        Ok(headers) => headers,
+        Err(denial) => return Ok(*denial),
     };
-    let body = match Limited::new(req.into_body(), MAX_FUNCTION_BODY_BYTES)
-        .collect()
-        .await
-    {
-        Ok(c) => c.to_bytes(),
-        Err(_) => {
-            return Ok(simple(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "request body too large",
-            ))
-        }
+    let body = match collect_body(req.into_body()).await {
+        Ok(body) => body,
+        Err(answer) => return Ok(*answer),
     };
     let path_and_query = match query {
         Some(q) => format!("{path}?{q}"),
@@ -294,8 +509,21 @@ async fn respond(
     match proxied {
         Ok(r) => {
             let mut builder = Response::builder().status(r.status);
+            let answered_cors = r
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("access-control-allow-origin"));
             for (k, v) in r.headers {
                 builder = builder.header(k, v);
+            }
+            // `cors({origin: true})` also marks the ordinary answer, not only the preflight.
+            // A handler that sets its own header keeps it.
+            if plain_http && !answered_cors {
+                if let Some(origin) = &origin {
+                    builder = builder
+                        .header("access-control-allow-origin", origin.as_str())
+                        .header("vary", "Origin");
+                }
             }
             Ok(builder
                 .body(Full::new(Bytes::from(r.body)))
@@ -318,6 +546,33 @@ fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
         .iter()
         .map(|v| v.to_str().map_or_else(|_| String::new(), str::to_owned))
         .collect()
+}
+
+/// The preflight answer `cors({origin: true})` produces, which is what the official
+/// emulator's `enableCors` debug feature puts in front of every handler.
+///
+/// Recorded from the oracle: `204`, the origin reflected, the full default method list, the
+/// requested headers echoed, and `Vary: Origin, Access-Control-Request-Headers`. The handler
+/// is not invoked.
+fn preflight_answer(origin: &str, headers: &hyper::HeaderMap) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header("access-control-allow-origin", origin)
+        .header(
+            "access-control-allow-methods",
+            "GET,HEAD,PUT,PATCH,POST,DELETE",
+        )
+        .header("vary", "Origin, Access-Control-Request-Headers")
+        .header("content-length", "0");
+    if let Some(requested) = headers
+        .get("access-control-request-headers")
+        .and_then(|v| v.to_str().ok())
+    {
+        builder = builder.header("access-control-allow-headers", requested);
+    }
+    builder
+        .body(Full::new(Bytes::new()))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 /// Whether a browser `Origin` is a loopback origin.

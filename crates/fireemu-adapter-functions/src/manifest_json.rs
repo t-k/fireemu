@@ -18,11 +18,33 @@
 
 use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
-    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent,
-    Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec,
+    IgnoredFunction, IgnoredScope, ObjectEvent, TaskRateLimits, TaskRetryConfig, Trigger,
+    DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::PathPattern;
 use serde_json::{json, Value};
+
+/// The manifest spells task-queue durations in (fractional) seconds and the runtime keeps
+/// milliseconds; a negative or absurd value is clamped rather than wrapped.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn seconds_to_millis(seconds: f64) -> u64 {
+    (seconds * 1000.0).max(0.0).min(u64::MAX as f64).round() as u64
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn millis_to_seconds(millis: u64) -> f64 {
+    millis as f64 / 1000.0
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn non_negative_u32(n: f64) -> u32 {
+    n.max(0.0).min(f64::from(u32::MAX)) as u32
+}
 
 /// Parses the canonical manifest JSON.
 pub fn parse_manifest(v: &Value) -> Result<FunctionManifest, String> {
@@ -34,9 +56,38 @@ pub fn parse_manifest(v: &Value) -> Result<FunctionManifest, String> {
     for f in functions {
         out.push(parse_function(f)?);
     }
-    let manifest = FunctionManifest { functions: out };
+    let mut ignored = Vec::new();
+    for entry in v
+        .get("ignored")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+    {
+        ignored.push(parse_ignored(entry)?);
+    }
+    let manifest = FunctionManifest {
+        functions: out,
+        ignored,
+    };
     manifest.validate().map_err(|e| format!("manifest: {e}"))?;
     Ok(manifest)
+}
+
+fn parse_ignored(v: &Value) -> Result<IgnoredFunction, String> {
+    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let name = text("name").ok_or_else(|| "manifest: ignored entry without a name".to_owned())?;
+    let scope_text = text("scope")
+        .ok_or_else(|| format!("manifest: ignored function {name:?}: scope is required"))?;
+    let scope = IgnoredScope::parse(&scope_text).ok_or_else(|| {
+        format!("manifest: ignored function {name:?}: unknown scope {scope_text:?}")
+    })?;
+    Ok(IgnoredFunction {
+        region: text("region").unwrap_or_else(|| DEFAULT_REGION.to_owned()),
+        trigger_type: text("triggerType").unwrap_or_else(|| "unknown".to_owned()),
+        reason: text("reason")
+            .ok_or_else(|| format!("manifest: ignored function {name:?}: reason is required"))?,
+        scope,
+        name,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -138,6 +189,59 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 bucket: s(trigger, "bucket").filter(|b| !b.is_empty()),
             }
         }
+        "tasks" => {
+            // Both an absent value and the explicit `null` the discovered manifest carries
+            // fall through to the default, as the emulator's `??` does.
+            let number = |section: &str, key: &str| -> Option<f64> {
+                trigger.get(section)?.get(key)?.as_f64()
+            };
+            let millis = |section: &str, key: &str| number(section, key).map(seconds_to_millis);
+            let count = |section: &str, key: &str| number(section, key).map(non_negative_u32);
+            let defaults = TaskRetryConfig::default();
+            let limits = TaskRateLimits::default();
+            Trigger::TaskQueue {
+                retry: TaskRetryConfig {
+                    max_attempts: count("retryConfig", "maxAttempts")
+                        .unwrap_or(defaults.max_attempts),
+                    max_retry_millis: millis("retryConfig", "maxRetrySeconds"),
+                    max_backoff_millis: millis("retryConfig", "maxBackoffSeconds")
+                        .unwrap_or(defaults.max_backoff_millis),
+                    max_doublings: count("retryConfig", "maxDoublings")
+                        .unwrap_or(defaults.max_doublings),
+                    min_backoff_millis: millis("retryConfig", "minBackoffSeconds")
+                        .unwrap_or(defaults.min_backoff_millis),
+                },
+                rate_limits: TaskRateLimits {
+                    max_concurrent_dispatches: count("rateLimits", "maxConcurrentDispatches")
+                        .unwrap_or(limits.max_concurrent_dispatches),
+                    max_dispatches_per_second: count("rateLimits", "maxDispatchesPerSecond")
+                        .unwrap_or(limits.max_dispatches_per_second),
+                },
+            }
+        }
+        "eventarc" => {
+            let event_type = s(trigger, "eventType")
+                .ok_or_else(|| format!("manifest: function {name:?}: eventType is required"))?;
+            if event_type.is_empty() {
+                return Err(format!("manifest: function {name:?}: eventType is empty"));
+            }
+            let channel = s(trigger, "channel")
+                .unwrap_or_else(|| "locations/us-central1/channels/firebase".to_owned());
+            let mut filters = std::collections::BTreeMap::new();
+            if let Some(map) = trigger.get("filters").and_then(Value::as_object) {
+                for (k, v) in map {
+                    let v = v.as_str().ok_or_else(|| {
+                        format!("manifest: function {name:?}: filters.{k} must be a string")
+                    })?;
+                    filters.insert(k.clone(), v.to_owned());
+                }
+            }
+            Trigger::Eventarc {
+                event_type,
+                channel,
+                filters,
+            }
+        }
         "schedule" => {
             let text = s(trigger, "schedule")
                 .ok_or_else(|| format!("manifest: function {name:?}: schedule is required"))?;
@@ -202,6 +306,30 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                     with_auth_context,
                 } => json!({"type": "firestore", "eventType": format!("{}{}", event.event_type(), if *with_auth_context { ".withAuthContext" } else { "" }), "database": database, "document": document.as_str()}),
                 Trigger::PubSub { topic } => json!({"type": "pubsub", "topic": topic}),
+                Trigger::TaskQueue { retry, rate_limits } => json!({
+                    "type": "tasks",
+                    "retryConfig": {
+                        "maxAttempts": retry.max_attempts,
+                        "maxRetrySeconds": retry.max_retry_millis.map(millis_to_seconds),
+                        "maxBackoffSeconds": millis_to_seconds(retry.max_backoff_millis),
+                        "maxDoublings": retry.max_doublings,
+                        "minBackoffSeconds": millis_to_seconds(retry.min_backoff_millis),
+                    },
+                    "rateLimits": {
+                        "maxConcurrentDispatches": rate_limits.max_concurrent_dispatches,
+                        "maxDispatchesPerSecond": rate_limits.max_dispatches_per_second,
+                    },
+                }),
+                Trigger::Eventarc {
+                    event_type,
+                    channel,
+                    filters,
+                } => json!({
+                    "type": "eventarc",
+                    "eventType": event_type,
+                    "channel": channel,
+                    "filters": filters,
+                }),
                 Trigger::Auth { event } => {
                     json!({"type": "auth", "eventType": event.event_type()})
                 }
@@ -224,5 +352,18 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
             })
         })
         .collect();
-    json!({"functions": functions})
+    let ignored: Vec<Value> = m
+        .ignored
+        .iter()
+        .map(|i| {
+            json!({
+                "name": i.name,
+                "region": i.region,
+                "triggerType": i.trigger_type,
+                "scope": i.scope.as_str(),
+                "reason": i.reason,
+            })
+        })
+        .collect();
+    json!({"functions": functions, "ignored": ignored})
 }

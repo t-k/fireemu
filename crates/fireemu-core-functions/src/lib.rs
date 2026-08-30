@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cron;
+pub mod env;
 pub mod event;
 pub mod manifest;
 pub mod pattern;

@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-env",
+  "private": true,
+  "main": "index.js",
+  "description": "A codebase that reports the environment and parameters the runtime resolved (dotenv chain fixture). Its .env files are written by the test, never committed."
+}

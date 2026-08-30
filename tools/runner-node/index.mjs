@@ -30,9 +30,10 @@ function log(level, message, invocationId) {
 }
 
 function parseArgs(argv) {
-  const out = { source: process.cwd() };
+  const out = { source: process.cwd(), codebase: "default" };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--source" && argv[i + 1]) out.source = argv[++i];
+    else if (argv[i] === "--codebase" && argv[i + 1]) out.codebase = argv[++i];
   }
   return out;
 }
@@ -42,6 +43,27 @@ const sourceDir = resolve(args.source);
 process.env.FUNCTIONS_EMULATOR = process.env.FUNCTIONS_EMULATOR || "true";
 process.env.FUNCTION_TARGET = process.env.FUNCTION_TARGET || "";
 process.env.FUNCTION_SIGNATURE_TYPE = process.env.FUNCTION_SIGNATURE_TYPE || "";
+process.env.K_SERVICE = process.env.K_SERVICE || "";
+
+// `getSignatureType` (functionsEmulatorShared.js:292): what the runtime is being asked to
+// speak for one function.
+function signatureType(spec) {
+  if (spec.trigger?.type === "http") return "http";
+  if (spec.trigger?.type === "schedule") return spec.v1 ? "event" : "http";
+  return spec.v1 ? "event" : "cloudevent";
+}
+
+// The official emulator starts one runtime process per trigger, so it can set these three at
+// spawn and they stay true for the life of the process (functionsEmulator.js:983-988). One
+// fireemu runner serves a whole codebase, so they are set synchronously just before a handler
+// is entered and name the invocation that started most recently. Under concurrency that is
+// not the same guarantee, and it is the honest one a shared process can make; it is written
+// down in the Functions section of README.md.
+function setFunctionIdentity(spec) {
+  process.env.FUNCTION_TARGET = spec?.entryPoint ?? "";
+  process.env.FUNCTION_SIGNATURE_TYPE = spec ? signatureType(spec) : "";
+  process.env.K_SERVICE = spec?.name ?? "";
+}
 
 async function loadCodebase() {
   const pkgPath = join(sourceDir, "package.json");
@@ -57,8 +79,15 @@ async function loadCodebase() {
   const entry = resolve(sourceDir, main);
   if (!existsSync(entry)) throw new Error(`functions entry point ${entry} does not exist`);
   const mod = await import(pathToFileURL(entry).href);
-  const ns = { ...mod };
+  // Export order matters: it is the order the emulator lists functions in, and the official
+  // emulator reads a CommonJS codebase's `module.exports` object, which keeps it. An ES
+  // module namespace object sorts its keys, so `module.exports` -- which Node hands over as
+  // `default` -- goes in first and the namespace only fills in what it did not carry.
+  const ns = {};
   if (mod.default && typeof mod.default === "object") Object.assign(ns, mod.default);
+  for (const [key, value] of Object.entries(mod)) {
+    if (!(key in ns)) ns[key] = value;
+  }
   // Node exposes CommonJS exports as `default` and (22+) as "module.exports".
   delete ns.default;
   delete ns["module.exports"];
@@ -66,14 +95,26 @@ async function loadCodebase() {
 }
 
 // Flattens nested export groups: exports.api = { users: fn } -> "api-users".
-function collectFunctions(ns, prefix, out) {
+//
+// `__endpoint` and `__trigger` are getters on the v1 SDK's cloud functions and can throw
+// while they describe themselves (`database.ref(...)` throws when FIREBASE_CONFIG carries no
+// databaseURL). A throwing export is recorded as malformed and named, never allowed to take
+// the whole runner down: the daemon's inventory must be able to say what happened to it.
+function collectFunctions(ns, prefix, out, broken) {
   for (const [key, value] of Object.entries(ns)) {
     if (!value) continue;
     const name = prefix ? `${prefix}-${key}` : key;
-    if (typeof value === "function" && (value.__endpoint || value.__trigger)) {
-      out.set(name, value);
+    if (typeof value === "function") {
+      let marked = false;
+      try {
+        marked = Boolean(value.__endpoint || value.__trigger);
+      } catch (e) {
+        broken.set(name, e?.message ? String(e.message).split("\n")[0] : String(e));
+        continue;
+      }
+      if (marked) out.set(name, value);
     } else if (typeof value === "object" && !Array.isArray(value)) {
-      collectFunctions(value, name, out);
+      collectFunctions(value, name, out, broken);
     }
   }
   return out;
@@ -83,6 +124,51 @@ function firstRegion(ep) {
   const r = ep.region;
   if (Array.isArray(r)) return r[0];
   return r || undefined;
+}
+
+// Every export the runner cannot serve is reported, never dropped. `scope` says why, in the
+// daemon's product-scope vocabulary: a product decision (`deferred`, `planned`, `notPlanned`)
+// is fatal to discovery, while `unsupported` -- a shape neither the official emulator nor
+// this runner recognises -- is reported and skipped, which is what the official emulator does
+// (`functionsEmulator.js:488` logs `Unsupported trigger`, `:497` logs `Unsupported function
+// type on <name>`, and both leave the definition in the inventory with `ignored: true`).
+function ignored(base, triggerType, scope, reason) {
+  return { ...base, ignored: { triggerType, scope, reason } };
+}
+
+// Products the official emulator has a trigger service for and fireemu does not serve.
+// The event-type substring is matched the way `getServiceFromEventType` matches it.
+const DEFERRED_TRIGGER_PRODUCTS = [
+  {
+    match: (type) => type.includes("firebase.database") || type.includes("google.firebase.database"),
+    triggerType: "database",
+    scope: "deferred",
+    reason: "deferred: the Realtime Database emulator is not in the active supported surface",
+  },
+  {
+    match: (type) => type.includes("remoteconfig"),
+    triggerType: "remoteConfig",
+    scope: "deferred",
+    reason: "deferred: Remote Config has no emulator in the active supported surface",
+  },
+  {
+    match: (type) => type.includes("analytics"),
+    triggerType: "analytics",
+    scope: "notPlanned",
+    reason: "not planned: Google Analytics triggers have no local emulator",
+  },
+  {
+    match: (type) => type.includes("testing"),
+    triggerType: "testLab",
+    scope: "notPlanned",
+    reason: "not planned: Test Lab triggers have no local emulator",
+  },
+];
+
+// The product scope of an event type fireemu does not serve, or null when the type is simply
+// unrecognised.
+function deferredProduct(type) {
+  return DEFERRED_TRIGGER_PRODUCTS.find((p) => p.match(type)) || null;
 }
 
 // firebase-functions v1 triggers: legacy event types and a resource pattern.
@@ -144,7 +230,11 @@ function describeV1Event(base, type, resource, schedule, retry) {
       trigger: { type: "pubsub", topic: topicMatch ? topicMatch[1] : resource },
     };
   }
-  return { ...base, unsupported: `v1 event type ${type}` };
+  const product = deferredProduct(type);
+  if (product) {
+    return ignored(base, product.triggerType, product.scope, product.reason);
+  }
+  return ignored(base, "unknown", "unsupported", `v1 event type ${type} is not recognised`);
 }
 
 function isV1(fn) {
@@ -220,12 +310,64 @@ function describe(name, fn, instrumentation) {
         const topic = String((et.eventFilters || {}).topic || "");
         return { ...base, trigger: { type: "pubsub", topic: topic.replace(/^.*\/topics\//, "") } };
       }
-      return { ...base, unsupported: `event type ${type}` };
+      if (et.channel) {
+        // `onCustomEventPublished`: the channel is `locations/<l>/channels/<c>` and every
+        // eventFilter beyond the type is matched against the published event's attributes.
+        return {
+          ...base,
+          trigger: {
+            type: "eventarc",
+            eventType: type,
+            channel: et.channel,
+            filters: et.eventFilters || {},
+          },
+        };
+      }
+      if (type.includes("firebasealerts")) {
+        // Every `onAlertPublished` family member registers an ordinary event trigger with no
+        // channel and `eventFilters: {alerttype, appid?}`. The official emulator hands it to
+        // its Eventarc emulator, which indexes it under `<eventType>-google` and delivers to
+        // it verbatim from `POST /google/publishEvents`. It is an Eventarc trigger on the
+        // sentinel channel, and modelling it as anything else would need a second mechanism
+        // for the same wire path.
+        return {
+          ...base,
+          trigger: {
+            type: "eventarc",
+            eventType: type,
+            channel: "google",
+            filters: et.eventFilters || {},
+          },
+        };
+      }
+      const product = deferredProduct(type);
+      if (product) return ignored(base, product.triggerType, product.scope, product.reason);
+      return ignored(base, "unknown", "unsupported", `event type ${type} is not recognised`);
     }
     if (ep.blockingTrigger) {
-      return { ...base, unsupported: "blocking identity functions (beforeUserCreated / beforeUserSignedIn) are not modelled" };
+      return ignored(
+        base,
+        "blocking",
+        "planned",
+        `planned: blocking identity functions (${ep.blockingTrigger.eventType}) are not served yet`,
+      );
     }
-    return { ...base, unsupported: "unknown endpoint shape" };
+    if (ep.taskQueueTrigger) {
+      // An `onTaskDispatched` function is an HTTP function that only its queue calls: the
+      // official emulator sets both `httpsTrigger` and `taskQueueTrigger` on the definition
+      // and gives it the ordinary /{project}/{region}/{name} URL, which becomes the queue's
+      // defaultUri. The nulls the manifest carries mean "the default", as the emulator's `??`
+      // reads them.
+      return {
+        ...base,
+        trigger: {
+          type: "tasks",
+          retryConfig: ep.taskQueueTrigger.retryConfig || {},
+          rateLimits: ep.taskQueueTrigger.rateLimits || {},
+        },
+      };
+    }
+    return ignored(base, "unknown", "unsupported", "the endpoint declares no trigger this runner recognises");
   }
   const t = fn.__trigger;
   if (t) {
@@ -239,9 +381,24 @@ function describe(name, fn, instrumentation) {
     }
     const et = t.eventTrigger;
     if (et) return describeV1Event(base, String(et.eventType || ""), String(et.resource || ""), t.schedule, !!et.failurePolicy || !!t.failurePolicy);
-    return { ...base, unsupported: "unknown v1 trigger shape" };
+    if (t.blockingTrigger) {
+      return ignored(
+        base,
+        "blocking",
+        "planned",
+        `planned: blocking identity functions (${t.blockingTrigger.eventType}) are not served yet`,
+      );
+    }
+    return ignored(base, "unknown", "unsupported", "the v1 trigger declares no shape this runner recognises");
   }
-  return { ...base, unsupported: "not a Firebase function" };
+  // The official emulator's `Unsupported function type on <name>. Expected either an
+  // httpsTrigger, eventTrigger, or blockingTrigger.` (functionsEmulator.js:497).
+  return ignored(
+    base,
+    "unknown",
+    "unsupported",
+    "unsupported function type: expected either an httpsTrigger, eventTrigger, or blockingTrigger",
+  );
 }
 
 // v1 functions are called as (data, context) with the legacy event shapes.
@@ -360,7 +517,9 @@ function makeHttpServer(functions, manifest) {
     }
     // The secret is not part of the request the function sees.
     delete req.headers["x-fireemu-runner-secret"];
-    const spec = manifest.functions.find((f) => f.name === req.params.name && f.trigger?.type === "http");
+    const spec = manifest.functions.find(
+      (f) => f.name === req.params.name && (f.trigger?.type === "http" || f.trigger?.type === "tasks"),
+    );
     const fn = spec && functions.get(spec.entryPoint);
     const region = spec?.region || "us-central1";
     if (!fn || (project && req.params.project !== project) || req.params.region !== region) {
@@ -374,6 +533,7 @@ function makeHttpServer(functions, manifest) {
     const query = queryAt >= 0 ? original.slice(queryAt) : "";
     const rest = pathPart.split("/").slice(4).join("/");
     req.url = `/${rest}${query}`;
+    setFunctionIdentity(spec);
     Promise.resolve()
       .then(() => fn(req, res))
       .catch((e) => {
@@ -389,9 +549,10 @@ function makeHttpServer(functions, manifest) {
   });
 }
 
-async function invoke(functions, msg) {
+async function invoke(functions, manifest, msg) {
   const fn = functions.get(msg.entryPoint) || functions.get(msg.function);
   if (!fn) throw new Error(`unknown function ${msg.function}`);
+  setFunctionIdentity(manifest.functions.find((f) => f.name === msg.function));
   if (isV1(fn)) {
     const context = v1Context(msg);
     let data = msg.event.data;
@@ -410,6 +571,9 @@ async function invoke(functions, msg) {
     case "firestore":
     case "storage":
     case "pubsub":
+    // A custom event reaches the handler as the CloudEvent itself, exactly as the official
+    // Eventarc emulator POSTs it to the functions emulator.
+    case "eventarc":
       await fn(msg.event);
       return;
     case "auth":
@@ -455,14 +619,42 @@ async function main() {
     log("error", `cannot load functions from ${sourceDir}: ${e?.stack || e}`);
     process.exit(1);
   }
-  const functions = collectFunctions(ns, "", new Map());
-  const described = [...functions.entries()].map(([name, fn]) => describe(name, fn, instrumentation));
-  for (const d of described.filter((d) => d.unsupported)) {
-    log("warn", `function ${d.name} skipped: ${d.unsupported}`);
+  const broken = new Map();
+  const functions = collectFunctions(ns, "", new Map(), broken);
+  const described = [...functions.entries()].map(([name, fn]) => {
+    try {
+      return describe(name, fn, instrumentation);
+    } catch (e) {
+      return ignored(
+        { name, entryPoint: name },
+        "unknown",
+        "unsupported",
+        `the export could not be described: ${e?.message || e}`,
+      );
+    }
+  });
+  for (const [name, reason] of broken) {
+    described.push(
+      ignored({ name, entryPoint: name }, "unknown", "unsupported", `the export could not be described: ${reason}`),
+    );
   }
-  const manifest = { functions: described.filter((d) => !d.unsupported) };
+  // Nothing is dropped: an export this runner cannot serve travels in the manifest's
+  // `ignored` array with its region, its trigger type and its product scope, and the daemon
+  // decides what to do with it.
+  const manifest = {
+    functions: described.filter((d) => !d.ignored),
+    ignored: described
+      .filter((d) => d.ignored)
+      .map((d) => ({
+        name: d.name,
+        region: d.region || "us-central1",
+        triggerType: d.ignored.triggerType,
+        scope: d.ignored.scope,
+        reason: d.ignored.reason,
+      })),
+  };
   let httpPort;
-  if (manifest.functions.some((f) => f.trigger.type === "http")) {
+  if (manifest.functions.some((f) => f.trigger.type === "http" || f.trigger.type === "tasks")) {
     try {
       const server = await makeHttpServer(functions, manifest);
       if (server) httpPort = server.address().port;
@@ -474,6 +666,7 @@ async function main() {
   send({
     type: "hello",
     runner: "node",
+    codebase: args.codebase,
     version: process.version,
     httpPort,
     manifest,
@@ -489,7 +682,7 @@ async function main() {
     (msg) => {
       if (msg.type === "shutdown") process.exit(0);
       if (msg.type !== "invoke") return;
-      invoke(functions, msg)
+      invoke(functions, manifest, msg)
         .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
         .catch((e) => {
           log("error", `${msg.function}: ${e?.stack || e}`, msg.invocationId);

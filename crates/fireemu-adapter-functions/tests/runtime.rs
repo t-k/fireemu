@@ -92,6 +92,7 @@ async fn start_with_policies(
             runner_secret: "s".into(),
             overlap,
             catch_up,
+            functions_host: None,
         },
         clock.clone(),
         Arc::new(runner),

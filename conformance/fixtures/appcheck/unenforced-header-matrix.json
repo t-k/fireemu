@@ -361,7 +361,8 @@
         "body": {
           "appCheckHeaderCount": 0,
           "method": "GET",
-          "path": "/"
+          "path": "/",
+          "query": {}
         },
         "status": 200
       }
@@ -373,7 +374,8 @@
         "body": {
           "appCheckHeaderCount": 0,
           "method": "GET",
-          "path": "/"
+          "path": "/",
+          "query": {}
         },
         "noTokenIssuedBySide": true,
         "status": 200
@@ -382,7 +384,8 @@
         "body": {
           "appCheckHeaderCount": 1,
           "method": "GET",
-          "path": "/"
+          "path": "/",
+          "query": {}
         },
         "status": 200
       },
@@ -396,7 +399,8 @@
         "body": {
           "appCheckHeaderCount": 1,
           "method": "GET",
-          "path": "/"
+          "path": "/",
+          "query": {}
         },
         "status": 200
       }
@@ -408,7 +412,8 @@
         "body": {
           "appCheckHeaderCount": 1,
           "method": "GET",
-          "path": "/"
+          "path": "/",
+          "query": {}
         },
         "status": 200
       }

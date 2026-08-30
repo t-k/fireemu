@@ -716,6 +716,7 @@ async fn state_with_functions() -> (
             runner_secret: "s".into(),
             overlap: OverlapPolicy::Allow,
             catch_up: CatchUpPolicy::All,
+            functions_host: None,
         },
         clock,
         Arc::new(runner),

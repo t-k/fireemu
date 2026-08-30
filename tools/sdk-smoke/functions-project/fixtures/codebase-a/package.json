@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-codebase-a",
+  "private": true,
+  "main": "index.js",
+  "description": "Multi-codebase discovery fixture: the alpha codebase."
+}

@@ -7,6 +7,8 @@ import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getStorage } from "firebase-admin/storage";
+import { getEventarc } from "firebase-admin/eventarc";
+import { getFunctions } from "firebase-admin/functions";
 
 const project = process.env.GOOGLE_CLOUD_PROJECT || "demo-app";
 const control = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`;
@@ -168,6 +170,117 @@ try {
   await awaitIdle();
   const audited = (await db.doc("auditedBy/a1").get()).data();
   check("withAuthContext carries the Admin SDK principal", audited?.authType === "service_account" && audited?.type === "google.cloud.firestore.document.v1.created.withAuthContext", audited);
+  // Eventarc custom events, through the Admin SDK's own client: it reads
+  // CLOUD_EVENTARC_EMULATOR_HOST, so nothing here names a port.
+  await getEventarc(app)
+    .channel("locations/us-central1/channels/firebase")
+    .publish({
+      type: "com.example.thing.done",
+      source: "https://example.com/things",
+      subject: "things/e1",
+      data: { id: "e1", n: 3 },
+    });
+  await awaitIdle();
+  const custom = (await db.doc("customEvents/e1").get()).data();
+  check(
+    "onCustomEventPublished receives the converted CloudEvent",
+    custom?.type === "com.example.thing.done" &&
+      custom?.source === "https://example.com/things" &&
+      custom?.subject === "things/e1" &&
+      custom?.specversion === "1.0" &&
+      custom?.datacontenttype === "application/json" &&
+      custom?.hasTime === true &&
+      custom?.data?.n === 3,
+    custom,
+  );
+
+  // A filtered trigger only sees the events whose attribute matches.
+  const channel = getEventarc(app).channel("locations/us-central1/channels/firebase");
+  await channel.publish({
+    type: "com.example.thing.done",
+    source: "https://example.com/things",
+    data: { id: "e2" },
+    region: "apac",
+  });
+  await channel.publish({
+    type: "com.example.thing.done",
+    source: "https://example.com/things",
+    data: { id: "e3" },
+    region: "emea",
+  });
+  await awaitIdle();
+  check(
+    "an eventFilter selects only the matching events",
+    !(await db.doc("customEventsEmea/e2").get()).exists &&
+      (await db.doc("customEventsEmea/e3").get()).data()?.region === "emea",
+    { unfiltered: (await db.collection("customEvents").get()).size },
+  );
+
+  // A Firebase alert, through the one door the official emulator has for them: the Eventarc
+  // `google` channel, which forwards the CloudEvent verbatim.
+  const alert = await fetch(`http://${functionsHost}/google/publishEvents`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      events: [
+        {
+          alerttype: "crashlytics.newFatalIssue",
+          appid: "1:1234567890:web:abcdef",
+          id: "8391027465",
+          source: "//firebasealerts.googleapis.com/projects/1234567890",
+          specversion: "1.0",
+          type: "google.firebase.firebasealerts.alerts.v1.published",
+          time: "2026-08-31T12:00:00.000Z",
+          data: {
+            "@type": "type.googleapis.com/google.events.firebase.firebasealerts.v1.AlertData",
+            createTime: "2026-08-31T12:00:00.000Z",
+            endTime: "2026-08-31T12:00:00.000Z",
+            payload: {
+              "@type":
+                "type.googleapis.com/google.events.firebase.firebasealerts.v1.CrashlyticsNewFatalIssuePayload",
+              issue: { id: "iss1", title: "TestApp.main", subtitle: "Runtime Error", appVersion: "1 (1.0.0)" },
+            },
+          },
+        },
+      ],
+    }),
+  });
+  await awaitIdle();
+  const fired = (await db.doc("alerts/iss1").get()).data();
+  check(
+    "onAlertPublished receives the alert through the google channel",
+    alert.status === 200 &&
+      fired?.alertType === "crashlytics.newFatalIssue" &&
+      fired?.alerttype === "crashlytics.newFatalIssue" &&
+      fired?.appId === "1:1234567890:web:abcdef" &&
+      fired?.title === "TestApp.main",
+    fired,
+  );
+
+  // Cloud Tasks, through the Admin SDK: it reads CLOUD_TASKS_EMULATOR_HOST, so nothing here
+  // names a port either.
+  await getFunctions(app).taskQueue("countJob").enqueue({ id: "t1", n: 5 });
+  await awaitIdle();
+  const task = (await db.doc("tasks/t1").get()).data();
+  check(
+    "onTaskDispatched receives the payload and the queue context",
+    task?.n === 5 &&
+      task?.queueName === `queue:${project}-us-central1-countJob` &&
+      task?.retryCount === 0 &&
+      task?.executionCount === 0 &&
+      task?.hasScheduledTime === true,
+    task,
+  );
+
+  await getFunctions(app).taskQueue("flakyJob").enqueue({ go: true });
+  await awaitIdle();
+  const flakyTask = (await db.doc("tasks/flaky").get()).data();
+  check(
+    "a task queue retries on the official backoff until the handler succeeds",
+    flakyTask?.attempts === 3 && flakyTask?.retryCount === 2,
+    flakyTask,
+  );
+
   const status = await (await fetch(`${control}/v1/sessions/default/functions`)).json();
   check("functions status lists the codebase", Array.isArray(status.functions) && status.functions.includes("mirrorTodo"), status);
 } catch (e) {

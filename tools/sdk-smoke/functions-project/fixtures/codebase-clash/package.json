@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-codebase-clash",
+  "private": true,
+  "main": "index.js",
+  "description": "Multi-codebase discovery fixture: a codebase that re-exports another's name."
+}

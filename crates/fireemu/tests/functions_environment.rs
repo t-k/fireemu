@@ -1,0 +1,208 @@
+//! Environment and configuration parity (FN-04): the dotenv chain, `.secret.local`, the
+//! legacy runtime configuration and the variables the runtime is started with.
+//!
+//! The order and the dialect are `firebase-tools@15.28.2` `lib/functions/env.js`
+//! (`findEnvfiles`, `loadUserEnvs`, `parseStrict`); the variables are
+//! `lib/emulator/functionsEmulator.js` `getRuntimeEnvs` -- the user environment first, then
+//! the system and emulator variables over it, then `FIREBASE_CONFIG`, then `.secret.local`
+//! over everything (`startRuntime`, `:1195`).
+//!
+//! The dotenv files are written into a scratch codebase rather than committed: a repository
+//! that carries a file called `.secret.local` is a repository whose secret scanners cry wolf.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+fn sdk_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke")
+}
+
+fn have_sdk() -> bool {
+    sdk_root().join("node_modules/firebase-functions").exists()
+}
+
+/// A codebase in a scratch directory, with `node_modules` linked to the smoke's so that Node
+/// resolves `firebase-functions` from it.
+fn scratch_codebase(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("fireemu-env-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = sdk_root().join("functions-project/fixtures/env-params");
+    for file in ["index.js", "package.json"] {
+        std::fs::copy(source.join(file), dir.join(file)).unwrap();
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        std::fs::canonicalize(sdk_root().join("node_modules")).unwrap(),
+        dir.join("node_modules"),
+    )
+    .unwrap();
+    dir
+}
+
+fn write(dir: &Path, name: &str, body: &str) {
+    std::fs::write(dir.join(name), body).unwrap();
+}
+
+fn exec(source: &Path, project: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args([
+            "exec",
+            "--firestore-port",
+            "0",
+            "--http-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--functions-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--project",
+            project,
+            "--functions",
+            &source.display().to_string(),
+            "--",
+            "true",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+/// The one line the fixture prints at load, parsed.
+fn observed(out: &Output) -> serde_json::Value {
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    let line = err
+        .lines()
+        .find_map(|l| l.split_once("FIXTURE_ENV "))
+        .unwrap_or_else(|| panic!("the fixture printed no environment:\n{err}"))
+        .1;
+    serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}"))
+}
+
+/// Functions scenario 4: the chain is applied in the official order, the emulator-only file
+/// wins, and `.secret.local` and `.runtimeconfig.json` reach the runtime the way they do
+/// under the Firebase CLI.
+#[test]
+fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
+    if !have_sdk() {
+        return;
+    }
+    let dir = scratch_codebase("chain");
+    write(
+        &dir,
+        ".env",
+        "# every file in the chain sets these; the last one to set a key wins\n\
+         FX_FROM_DOTENV=from .env\n\
+         FX_OVERRIDDEN_BY_PROJECT=from .env\n\
+         FX_OVERRIDDEN_BY_LOCAL=from .env\n\
+         FX_QUOTED=\"first\\nsecond\"\n\
+         FX_INT=41\n\
+         FX_BOOL=false\n\
+         FX_LIST=[\"a\",\"b\"]\n",
+    );
+    write(
+        &dir,
+        ".env.demo-envchain",
+        "FX_OVERRIDDEN_BY_PROJECT=from .env.<projectId>\n\
+         FX_OVERRIDDEN_BY_LOCAL=from .env.<projectId>\n\
+         FX_INT=42\n",
+    );
+    write(
+        &dir,
+        ".env.local",
+        "FX_OVERRIDDEN_BY_LOCAL=from .env.local\nFX_BOOL=true\n",
+    );
+    write(&dir, ".secret.local", "FX_SECRET=a local secret value\n");
+    write(
+        &dir,
+        ".runtimeconfig.json",
+        r#"{"someservice": {"key": "legacy"}}"#,
+    );
+
+    let out = exec(&dir, "demo-envchain");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    let seen = observed(&out);
+
+    assert_eq!(seen["fromDotEnv"], "from .env");
+    assert_eq!(seen["overriddenByProject"], "from .env.<projectId>");
+    assert_eq!(seen["overriddenByLocal"], "from .env.local");
+    // A double-quoted value expands its escapes; a single-quoted one would not.
+    assert_eq!(seen["quoted"], "first\nsecond");
+
+    // Parameters read the same variables, with the types the SDK gives them.
+    assert_eq!(seen["paramString"], "from .env");
+    assert_eq!(seen["paramInt"], 42);
+    assert_eq!(seen["paramBoolean"], true);
+    assert_eq!(seen["paramList"], serde_json::json!(["a", "b"]));
+    // The official missing-parameter behaviour: an empty string, and a `default` is a
+    // deploy-time value the runtime never sees. Neither prompts and neither fails.
+    assert_eq!(seen["paramMissing"], "");
+    assert_eq!(seen["paramMissingWithDefault"], "");
+    assert_eq!(seen["paramSecret"], "a local secret value");
+    // Legacy functions.config(), through CLOUD_RUNTIME_CONFIG.
+    assert_eq!(seen["legacyConfig"], serde_json::json!({"key": "legacy"}));
+
+    // The system and emulator variables the official emulator sets.
+    assert_eq!(seen["kRevision"], "1");
+    assert_eq!(seen["tz"], "UTC");
+    assert_eq!(seen["quotaProject"], "demo-envchain");
+    assert_eq!(seen["functionsEmulator"], "true");
+    assert_eq!(
+        seen["firebaseConfigKeys"],
+        serde_json::json!(["databaseURL", "projectId", "storageBucket"])
+    );
+
+    assert!(
+        err.contains("loaded environment variables from .env, .env.demo-envchain, .env.local"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dotenv file the official CLI refuses is refused here with the same sentence, before
+/// anything starts: a reserved key would otherwise be silently overwritten by the emulator's
+/// own value, and a malformed line silently lose an assignment.
+#[test]
+fn a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message() {
+    if !have_sdk() {
+        return;
+    }
+    for (body, expected) in [
+        (
+            "FUNCTION_TARGET=mine\n",
+            "Key FUNCTION_TARGET is reserved for internal use.",
+        ),
+        (
+            "lower_case=1\n",
+            "Failed to validate key lower_case: Key lower_case must start with an uppercase",
+        ),
+        (
+            "FIREBASE_THING=1\n",
+            "starts with a reserved prefix (X_GOOGLE_ FIREBASE_ EXT_ KIT_)",
+        ),
+        (
+            "GOOD=1\nthis is not an assignment\n",
+            "Invalid dotenv file, error on lines: this is not an assignment",
+        ),
+    ] {
+        let dir = scratch_codebase("refuse");
+        write(&dir, ".env", body);
+        let out = exec(&dir, "demo-envrefuse");
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(1), "{body}\n{err}");
+        assert!(
+            err.contains(expected),
+            "{body}\nwanted {expected}\ngot {err}"
+        );
+        assert!(
+            err.contains("Failed to load environment variables from .env."),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

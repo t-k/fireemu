@@ -245,6 +245,7 @@ async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
             runner_secret: "runner-secret".into(),
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: None,
         },
         clock.clone(),
         Arc::new(runner),

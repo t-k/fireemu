@@ -156,3 +156,75 @@ exports.auditedCreate = onDocumentCreatedWithAuthContext("audited/{id}", async (
     type: event.type,
   });
 });
+
+// Eventarc custom events: `getEventarc().channel().publish()` reaches this handler through
+// the emulator's publishEvents route. The whole CloudEvent is written down so the smoke can
+// check the conversion from the proto form the Admin SDK sends.
+const { onCustomEventPublished } = require("firebase-functions/v2/eventarc");
+exports.onThingDone = onCustomEventPublished("com.example.thing.done", async (event) => {
+  await db.doc(`customEvents/${event.data.id}`).set({
+    type: event.type,
+    source: event.source,
+    subject: event.subject ?? null,
+    specversion: event.specversion,
+    datacontenttype: event.datacontenttype,
+    hasTime: typeof event.time === "string" && event.time.length > 0,
+    data: event.data,
+  });
+});
+
+// The same event type with a filter: only events whose `region` attribute is `emea` arrive.
+exports.onThingDoneInEmea = onCustomEventPublished(
+  { eventType: "com.example.thing.done", filters: { region: "emea" } },
+  async (event) => {
+    await db.doc(`customEventsEmea/${event.data.id}`).set({ region: event.region });
+  },
+);
+
+// Firebase alerts. The official emulator has no alert-injection route of its own: the alert
+// providers register an ordinary event trigger with no channel, its Eventarc emulator indexes
+// them under `<eventType>-google`, and its UI fires one by POSTing the CloudEvent to
+// /google/publishEvents. fireemu serves that same route on the functions port.
+const { onNewFatalIssuePublished } = require("firebase-functions/v2/alerts/crashlytics");
+exports.onFatalIssue = onNewFatalIssuePublished(async (event) => {
+  await db.doc(`alerts/${event.data.payload.issue.id}`).set({
+    // `convertAlertAndApp` adds the camelCase aliases and keeps the lowercase originals.
+    alertType: event.alertType,
+    alerttype: event.alerttype,
+    appId: event.appId ?? null,
+    title: event.data.payload.issue.title,
+    createTime: event.data.createTime,
+  });
+});
+
+
+// Cloud Tasks. `getFunctions().taskQueue("countJob").enqueue(payload)` reaches the queue
+// through CLOUD_TASKS_EMULATOR_HOST, and the queue dispatches to this handler with the
+// X-CloudTasks-* headers a task carries.
+const { onTaskDispatched } = require("firebase-functions/v2/tasks");
+exports.countJob = onTaskDispatched(
+  { retryConfig: { maxAttempts: 3, minBackoffSeconds: 0.1 } },
+  async (request) => {
+    await db.doc(`tasks/${request.data.id}`).set({
+      n: request.data.n,
+      queueName: request.queueName,
+      retryCount: request.retryCount,
+      executionCount: request.executionCount,
+      hasScheduledTime: typeof request.scheduledTime === "string",
+    });
+  },
+);
+
+// A task-queue function that fails until its third attempt: the retry schedule is the thing
+// under test, not the handler.
+let taskAttempts = 0;
+exports.flakyJob = onTaskDispatched(
+  { retryConfig: { maxAttempts: 5, minBackoffSeconds: 0.05 } },
+  async (request) => {
+    taskAttempts += 1;
+    if (taskAttempts < 3) {
+      throw new Error(`attempt ${taskAttempts} fails on purpose`);
+    }
+    await db.doc("tasks/flaky").set({ attempts: taskAttempts, retryCount: request.retryCount });
+  },
+);

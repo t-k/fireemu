@@ -41,6 +41,13 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore 
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 
+### ID tokens
+
+`auth.idTokenSigning` picks the token format:
+
+- `unsigned-emulator` (default): `alg: none`, the Firebase Auth Emulator format. The Admin SDK accepts these tokens whenever `FIREBASE_AUTH_EMULATOR_HOST` is set, and it accepts nothing else in that mode.
+- `session-rsa`: RS256 with a 2048-bit RSA key derived deterministically from the session seed (`kid` is the SHA-256 prefix of the modulus). The JWKS is served at `/.well-known/jwks.json` and at `/www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com` on the HTTP port, for backends that verify tokens with a JOSE library against a configurable JWKS URL. Once the signer is installed, every surface (Identity Toolkit, Firestore rules, Storage rules) refuses unsigned and foreign-signed tokens. Keep the default when the Admin SDK's `verifyIdToken` is on the path: `firebase-admin` skips key fetching in emulator mode and only accepts `alg: none`.
+
 ### Functions
 
 `--functions <dir>` (or `functions.source` in the config) starts `tools/runner-node/index.mjs` (Node, needs the codebase's own `node_modules` with `firebase-functions` and `firebase-admin`; `express` comes with `firebase-functions`). The runner discovers the exported v2 functions and reports them; the daemon then delivers Firestore document events (`onDocumentCreated` / `Updated` / `Deleted` / `Written` with path parameters), Storage object events (`onObjectFinalized` / `Deleted` / `MetadataUpdated`) and `onSchedule` runs as JSON CloudEvents, and serves `onRequest` / `onCall` at `http://127.0.0.1:5001/{project}/{region}/{function}`. Functions declared with `retry: true` are retried with exponential backoff in virtual time; other failures are dead-lettered.
@@ -68,12 +75,12 @@ Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, 
 | `ftd-core-events` | event state machine, retry policy, outbox | none |
 | `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator, local execution store (MVCC, transactions, queries, aggregations) | none |
 | `ftd-core-rules` | Security Rules parser, static limit linter (`RULES-LINT-1`) and evaluator subset with runtime budgets | none |
-| `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens, TOTP second factor (RFC 6238) | none |
+| `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens and the `IdTokenSigner` contract for signed ones, TOTP second factor (RFC 6238) | none |
 | `ftd-core-storage` | Cloud Storage objects: opaque UTF-8 names, generations, metadata, listing, resumable uploads, MD5 / CRC32C | none |
 | `ftd-core-functions` | function manifest, document path patterns, cron / App Engine schedules, CloudEvents attributes | none |
 | `ftd-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
 | `ftd-adapter-grpc` | Firestore v1 service: strict gateway, local backend, `Write` / `Listen` streams, Rules enforcement, optional upstream proxy | tonic, tokio |
-| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts), the Storage surface and the control API (clock, rules, capabilities, await-idle) | hyper, tokio, serde_json |
+| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts), RS256 session signing + JWKS, the Storage surface and the control API (clock, rules, capabilities, await-idle) | hyper, tokio, serde_json, rsa, sha2 |
 | `ftd-adapter-functions` | runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy | tokio, hyper, serde_json |
 | `firebase-testd` | the daemon binary (`up`, `doctor`, `capabilities`) | tokio, serde_json |
 

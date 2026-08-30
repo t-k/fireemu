@@ -400,6 +400,7 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
                 signer.kid(),
                 cfg.http_addr
             );
+            println!("  note: the Firebase Admin SDK verifies only unsigned tokens while FIREBASE_AUTH_EMULATOR_HOST is set; keep auth.idTokenSigning = \"unsigned-emulator\" when the Admin SDK calls verifyIdToken");
             if let Ok(mut store) = auth_store.lock() {
                 store.set_signer(signer);
             }

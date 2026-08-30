@@ -115,7 +115,7 @@ pub fn capabilities_manifest() -> Value {
             "FS-PIPE-RPC-1": {"status": "unimplemented"},
             "FS-TEXT-VAL-1": {"status": "unimplemented"},
             "AUTH-CORE-1": {"status": "implemented", "implemented": ["accounts:signUp (email, anonymous)", "accounts:signInWithPassword", "accounts:signInWithCustomToken", "accounts:lookup", "accounts:update", "securetoken token (JSON and form)", "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet"], "unimplemented": ["federated providers", "email actions (oob codes)", "phone sign-in"]},
-            "AUTH-TOKEN-1": {"status": "partial", "implemented": ["unsigned-emulator"], "unimplemented": ["session-rsa"]},
+            "AUTH-TOKEN-1": {"status": "implemented", "implemented": ["unsigned-emulator (alg none, the Firebase Auth Emulator format)", "session-rsa (RS256 with a 2048-bit key derived from the session seed; JWKS at /.well-known/jwks.json and the securetoken@system.gserviceaccount.com path)"], "notes": ["with session-rsa every surface (Identity Toolkit, Firestore rules, Storage rules) refuses unsigned or foreign-signed tokens", "the Firebase Admin SDK accepts only alg none while FIREBASE_AUTH_EMULATOR_HOST is set, so verifyIdToken through the Admin SDK needs unsigned-emulator"]},
             "AUTH-MFA-TOTP-1": {"status": "implemented", "precision": "boundary-conformance", "notes": ["window and enrollment TTL are local policies"]},
             "AUTH-RULES-1": {"status": "implemented", "notes": ["request.auth from verified ID tokens on every Firestore surface; Bearer owner bypasses"]},
             "AUTH-MFA-SMS-0": {"status": "unsupported"},

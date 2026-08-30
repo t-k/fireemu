@@ -17,7 +17,7 @@ Exercise a running `firebase-testd` with the real Firebase SDKs.
 - `functions.mjs`: the functions in `functions-project/` (firebase-functions v2: Firestore
   and Storage triggers, `onSchedule`, `onRequest`, `onCall`, retries) driven through
   `awaitIdle` and the virtual clock; start the daemon with
-  `--functions tools/sdk-smoke/functions-project --functions-port 5001` and set
+  `--config tools/sdk-smoke/firebase-testd.smoke.json --functions tools/sdk-smoke/functions-project --functions-port 5001` (the config pins the virtual clock; schedule counts depend on it) and set
   `FTD_FUNCTIONS_HOST=127.0.0.1:5001`. Run it on a fresh daemon (it fills the database).
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) and open

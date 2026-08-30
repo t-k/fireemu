@@ -5,6 +5,7 @@
 //   FTD_FUNCTIONS_HOST=127.0.0.1:5001 node functions.mjs
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import { getStorage } from "firebase-admin/storage";
 
 const project = process.env.GOOGLE_CLOUD_PROJECT || "demo-app";
@@ -135,6 +136,38 @@ try {
   });
   const badBody = await bad.json();
   check("onCall maps HttpsError to the callable error envelope", bad.status === 400 && badBody.error?.status === "INVALID_ARGUMENT", badBody);
+  // Pub/Sub through the control API (v2 and v1 subscribers), Auth user events (v1), and a
+  // withAuthContext trigger seeing the Admin SDK as the principal.
+  const published = await fetch(`${control}/v1/sessions/default/pubsub/topics/jobs:publish`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ messages: [{ json: { task: "index" }, attributes: { priority: "high" }, orderingKey: "k1" }] }),
+  });
+  const publishedBody = await published.json();
+  await awaitIdle();
+  const messageId = publishedBody.messageIds?.[0];
+  const job = messageId ? (await db.doc(`jobs/${messageId}`).get()).data() : undefined;
+  check("v2 onMessagePublished receives the message", published.status === 200 && job?.json?.task === "index" && job?.attributes?.priority === "high" && job?.orderingKey === "k1", { publishedBody, job });
+  const v1jobs = await db.collection("v1jobs").get();
+  check("v1 pubsub.topic().onPublish receives the message", v1jobs.size === 1 && v1jobs.docs[0].data().json?.task === "index", v1jobs.docs.map((d) => d.data()));
+  const restPublish = await fetch(`${control}/v1/projects/${project}/topics/jobs:publish`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ messages: [{ data: Buffer.from(JSON.stringify({ task: "rest" })).toString("base64") }] }),
+  });
+  await awaitIdle();
+  check("the Pub/Sub REST shape publishes too", restPublish.status === 200 && (await db.collection("v1jobs").get()).size === 2, await restPublish.json());
+  const created = await getAuth(app).createUser({ email: "fn-user@example.com", password: "hunter22" });
+  await awaitIdle();
+  const profile = (await db.doc(`profiles/${created.uid}`).get()).data();
+  check("v1 auth.user().onCreate receives the user record", profile?.email === "fn-user@example.com" && profile?.eventType === "google.firebase.auth.user.create" && profile?.providers?.includes("password"), profile);
+  await getAuth(app).deleteUser(created.uid);
+  await awaitIdle();
+  check("v1 auth.user().onDelete removed the profile", !(await db.doc(`profiles/${created.uid}`).get()).exists);
+  await db.doc("audited/a1").set({ v: 1 });
+  await awaitIdle();
+  const audited = (await db.doc("auditedBy/a1").get()).data();
+  check("withAuthContext carries the Admin SDK principal", audited?.authType === "service_account" && audited?.type === "google.cloud.firestore.document.v1.created.withAuthContext", audited);
   const status = await (await fetch(`${control}/v1/sessions/default/functions`)).json();
   check("functions status lists the codebase", Array.isArray(status.functions) && status.functions.includes("mirrorTodo"), status);
 } catch (e) {

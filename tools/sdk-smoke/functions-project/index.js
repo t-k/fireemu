@@ -103,3 +103,45 @@ exports.add = onCall((request) => {
   }
   return { sum: a + b, uid: request.auth?.uid ?? null };
 });
+
+// Pub/Sub (v2): messages published through the control API land here.
+const { onMessagePublished } = require("firebase-functions/v2/pubsub");
+exports.onJob = onMessagePublished("jobs", async (event) => {
+  const message = event.data.message;
+  await db.doc(`jobs/${message.messageId}`).set({
+    json: message.json,
+    attributes: message.attributes,
+    orderingKey: message.orderingKey || null,
+    publishTime: message.publishTime,
+    subscription: event.data.subscription,
+  });
+});
+
+// Pub/Sub (v1): the same topic through the legacy API.
+exports.v1Job = functionsV1.pubsub.topic("jobs").onPublish(async (message, context) => {
+  await db.doc(`v1jobs/${context.eventId}`).set({ json: message.json, eventType: context.eventType });
+});
+
+// Auth user events (v1): every created user gets a profile.
+exports.onUserCreated = functionsV1.auth.user().onCreate(async (user, context) => {
+  await db.doc(`profiles/${user.uid}`).set({
+    email: user.email || null,
+    eventType: context.eventType,
+    creationTime: user.metadata.creationTime,
+    providers: user.providerData.map((p) => p.providerId),
+  });
+});
+
+exports.onUserDeleted = functionsV1.auth.user().onDelete(async (user) => {
+  await db.doc(`profiles/${user.uid}`).delete();
+});
+
+// withAuthContext: the principal that made the change travels with the event.
+const { onDocumentCreatedWithAuthContext } = require("firebase-functions/v2/firestore");
+exports.auditedCreate = onDocumentCreatedWithAuthContext("audited/{id}", async (event) => {
+  await db.doc(`auditedBy/${event.params.id}`).set({
+    authType: event.authType,
+    authId: event.authId || null,
+    type: event.type,
+  });
+});

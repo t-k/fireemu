@@ -46,7 +46,12 @@ curl -X PUT http://127.0.0.1:9099/v1/rules -H 'content-type: application/json' \
   -d "$(jq -n --rawfile s firestore.rules '{source: $s}')"
 curl -X POST http://127.0.0.1:9099/v1/sessions/default/clock:advance -d '{"seconds": 60}'
 curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore + Auth state
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/snapshots -d '{"name": "seeded"}'          # capture everything
+curl -X POST http://127.0.0.1:9099/v1/sessions/default/snapshots/seeded:restore                  # put it back, atomically
+curl -X PUT  http://127.0.0.1:9099/v1/sessions/default/faultPlan -d '{"rules": [{"match": {"operation": "firestore.commit", "nth": 2}, "action": {"type": "returnError", "code": "ABORTED"}}]}'
 ```
+
+Snapshots copy the Firestore databases, Storage objects, Auth users, the clock and both rulesets in one exclusive section (a restore is a new epoch: streams end, the functions runtime resets); they live in memory. Fault plans (spec 18) name an operation (`firestore.commit` / `read` / `beginTransaction`, `storage.upload` / `read` / `delete` / `list`, `functions.invoke` / `deliver`), optionally the nth occurrence and a function, and an action (`returnError` with a gRPC name or HTTP code, `delay` seconds, `duplicate` count, `crashRunner`, `timeout`, `deadLetter`, `transactionConflict`, `dropConnection`); `GET .../faultPlan` shows what fired.
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 

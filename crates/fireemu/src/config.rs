@@ -1717,6 +1717,65 @@ mod tests {
     }
 
     #[test]
+    fn the_contract_sets_exactly_what_the_profile_derives() {
+        // spec/compatibility/contract.json lists under each profile's `sets` the keys the
+        // daemon derives from it and nothing else (every other key is `declared`, with a
+        // status). This test is the drift gate between that list and `set_profile`: a key
+        // derived here and not written there, or written there and not derived here, fails.
+        let contract: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../spec/compatibility/contract.json"),
+            )
+            .expect("the compatibility contract is in the repository"),
+        )
+        .expect("the contract is JSON");
+        let profiles = contract["profiles"]
+            .as_object()
+            .expect("the contract declares profiles");
+        assert_eq!(profiles.len(), 2, "two profiles are declared");
+        for (name, profile) in profiles {
+            let parsed = CompatibilityProfile::parse_config(name)
+                .unwrap_or_else(|| panic!("profile {name} is not one the loader accepts"));
+            let sets = profile["sets"].as_object().expect("a profile has sets");
+            let mut keys: Vec<&str> = sets.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                ["firestore.enforceLimits", "firestore.indexValidationPolicy"],
+                "profile {name} sets a key the loader does not derive, or misses one it does"
+            );
+            let policy = match parsed.index_policy() {
+                IndexValidationPolicy::Firebase => "firebase",
+                IndexValidationPolicy::Conservative => "conservative",
+                IndexValidationPolicy::Emulator => "emulator",
+            };
+            assert_eq!(
+                sets["firestore.indexValidationPolicy"],
+                json!(policy),
+                "profile {name}: firestore.indexValidationPolicy"
+            );
+            assert_eq!(
+                sets["firestore.enforceLimits"],
+                json!(parsed.enforce_limits()),
+                "profile {name}: firestore.enforceLimits"
+            );
+            // A declared key is one the loader does not derive: none of them may be one of the
+            // derived fields under another spelling.
+            for key in profile["declared"]
+                .as_object()
+                .expect("a profile declares its hand-written keys")
+                .keys()
+            {
+                assert!(
+                    !sets.contains_key(key),
+                    "profile {name} both sets and declares {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn an_explicit_key_wins_over_the_profile_whichever_order_it_is_written_in() {
         // The profile only moves defaults, so a key that names a value keeps it. Both keys
         // sit in sections parsed after the profile and one (firestore) is parsed before the

@@ -13,7 +13,7 @@
 //! | `CC-05` | a README that does not carry the version-qualified claim sentence verbatim |
 //! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest or the README |
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
-//! | `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow, and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
+//! | `CC-08` | a compatibility profile that sets or declares a configuration key the canonical schema does not define, or a value it does not allow; a declared key without a `hand-written` / `not-implemented` status and a note, or one that is also set; and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
 //! | `CC-09` | a conformance fixture cited as evidence that records unresolved `debt`, unless the claim excludes that step by name with the issue that owns it; a fixture with no `parity` or `documented-divergence` step (so nothing the local oracle answered); a stale exclusion, and a step status the suite does not define |
 //!
 //! Artifact names resolve the way `tools/traceability-check` resolves them, so the two gates
@@ -764,25 +764,69 @@ fn check_profiles(root: &Path, contract: &Value, problems: &mut Vec<String>) {
             problems.push(format!("CC-08: profile {name} sets no configuration key"));
         }
         for (key, value) in sets {
-            let Some(node) = schema_node(&schema, key) else {
+            check_profile_value(&schema, name, key, value, problems);
+        }
+        // `declared` keys are statements of intent the profile does not switch: each says
+        // whether the loader reads it by hand or refuses it, and may not also be under `sets`.
+        let declared = profile
+            .get("declared")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for (key, entry) in &declared {
+            if sets.contains_key(key) {
                 problems.push(format!(
-                    "CC-08: profile {name} sets {key}, which {CONFIG_SCHEMA_PATH} does not define"
+                    "CC-08: profile {name} both sets and declares {key}; a key is derived from the profile or it is not"
+                ));
+            }
+            let Some(value) = entry.get("value") else {
+                problems.push(format!(
+                    "CC-08: profile {name} declares {key} without a value"
                 ));
                 continue;
             };
-            if let Some(allowed) = node.get("enum").and_then(Value::as_array) {
-                if !allowed.contains(value) {
-                    problems.push(format!(
-                        "CC-08: profile {name} sets {key} = {value}, which is not one of {allowed:?}"
-                    ));
-                }
+            check_profile_value(&schema, name, key, value, problems);
+            match str_field(entry, "status") {
+                Some("hand-written" | "not-implemented") => {}
+                other => problems.push(format!(
+                    "CC-08: profile {name} declares {key} with status {other:?}; it must be \"hand-written\" (the loader reads the key but does not derive it) or \"not-implemented\" (the loader refuses the value or reads nothing)"
+                )),
             }
-            if node.get("type").and_then(Value::as_str) == Some("boolean") && !value.is_boolean() {
+            if str_field(entry, "note").is_none_or(str::is_empty) {
                 problems.push(format!(
-                    "CC-08: profile {name} sets {key} = {value}, but the schema declares a boolean"
+                    "CC-08: profile {name} declares {key} without a note saying why it is not derived"
                 ));
             }
         }
+    }
+}
+
+/// One profile value against the canonical schema: the key must exist, an enum must allow the
+/// value, and a boolean key takes a boolean.
+fn check_profile_value(
+    schema: &Value,
+    name: &str,
+    key: &str,
+    value: &Value,
+    problems: &mut Vec<String>,
+) {
+    let Some(node) = schema_node(schema, key) else {
+        problems.push(format!(
+            "CC-08: profile {name} sets {key}, which {CONFIG_SCHEMA_PATH} does not define"
+        ));
+        return;
+    };
+    if let Some(allowed) = node.get("enum").and_then(Value::as_array) {
+        if !allowed.contains(value) {
+            problems.push(format!(
+                "CC-08: profile {name} sets {key} = {value}, which is not one of {allowed:?}"
+            ));
+        }
+    }
+    if node.get("type").and_then(Value::as_str) == Some("boolean") && !value.is_boolean() {
+        problems.push(format!(
+            "CC-08: profile {name} sets {key} = {value}, but the schema declares a boolean"
+        ));
     }
 }
 

@@ -145,17 +145,59 @@
       "intent": "Reproduce the behaviour the pinned Local Emulator Suite ships and Firebase documents, including its documented limitations. fireemu may not add a rejection in this profile: extra strictness belongs to the strict profile.",
       "sets": {
         "firestore.indexValidationPolicy": "emulator",
-        "firestore.enforceLimits": false,
-        "limits.enforcement": "observe",
-        "limits.quotaAccounting": "off",
-        "limits.warningsAsErrors": [],
-        "rules.staticLimitChecks": false,
-        "rules.runtimeBudgets": false,
-        "auth.idTokenSigning": "unsigned-emulator",
-        "appCheck.enabled": false,
-        "events.delivery": "at-least-once",
-        "scheduler.clock": "wall",
-        "projects.requireDemoPrefix": false
+        "firestore.enforceLimits": false
+      },
+      "declared": {
+        "limits.enforcement": {
+          "value": "observe",
+          "status": "not-implemented",
+          "note": "the limits section is accepted by the loader and read by nothing; the Standard query limits are switched by firestore.enforceLimits, which the profile derives"
+        },
+        "limits.quotaAccounting": {
+          "value": "off",
+          "status": "not-implemented",
+          "note": "accepted by the loader and read by nothing; no quota is accounted"
+        },
+        "limits.warningsAsErrors": {
+          "value": [],
+          "status": "not-implemented",
+          "note": "accepted by the loader and read by nothing"
+        },
+        "rules.staticLimitChecks": {
+          "value": false,
+          "status": "not-implemented",
+          "note": "accepted by the loader and read by nothing; the compile-time call-graph limits are official behaviour (RULES-PARITY-03) and are always on"
+        },
+        "rules.runtimeBudgets": {
+          "value": false,
+          "status": "not-implemented",
+          "note": "accepted by the loader and read by nothing; the document-access budgets are official behaviour (RULES-PARITY-03) and are always on"
+        },
+        "auth.idTokenSigning": {
+          "value": "unsigned-emulator",
+          "status": "hand-written",
+          "note": "read by the loader, defaulting to unsigned-emulator whatever the profile; strict has to name session-rsa itself"
+        },
+        "appCheck.enabled": {
+          "value": false,
+          "status": "hand-written",
+          "note": "read by the loader, defaulting to false whatever the profile; enabling App Check needs the apps registered next to it, so a profile could not switch it on alone"
+        },
+        "events.delivery": {
+          "value": "at-least-once",
+          "status": "not-implemented",
+          "note": "the loader refuses every value but exactly-once-test"
+        },
+        "scheduler.clock": {
+          "value": "wall",
+          "status": "not-implemented",
+          "note": "the loader refuses every value but virtual"
+        },
+        "projects.requireDemoPrefix": {
+          "value": false,
+          "status": "hand-written",
+          "note": "read by the loader; the runtime default stays true in both profiles on purpose, because that guard is what stops a run from reaching a real project by accident -- the firebase profile declares false only to record what the official CLI does"
+        }
       },
       "officialEmulatorDivergences": [
         {
@@ -176,20 +218,58 @@
       "intent": "Add fireemu's stricter validation on top of the firebase profile. Every key here may only refuse more than the official emulator, never less, and every refusal it adds must be published as a capability precision or a documented divergence.",
       "sets": {
         "firestore.indexValidationPolicy": "conservative",
-        "firestore.enforceLimits": true,
-        "limits.enforcement": "strict",
-        "limits.quotaAccounting": "observe",
-        "rules.staticLimitChecks": true,
-        "rules.runtimeBudgets": true,
-        "auth.idTokenSigning": "session-rsa",
-        "appCheck.enabled": true,
-        "events.delivery": "exactly-once-test",
-        "scheduler.clock": "virtual",
-        "projects.requireDemoPrefix": true
+        "firestore.enforceLimits": true
+      },
+      "declared": {
+        "limits.enforcement": {
+          "value": "strict",
+          "status": "not-implemented",
+          "note": "the limits section is accepted by the loader and read by nothing; the Standard query limits are switched by firestore.enforceLimits, which the profile derives"
+        },
+        "limits.quotaAccounting": {
+          "value": "observe",
+          "status": "not-implemented",
+          "note": "accepted by the loader and read by nothing; no quota is accounted"
+        },
+        "rules.staticLimitChecks": {
+          "value": true,
+          "status": "not-implemented",
+          "note": "accepted by the loader and read by nothing; the compile-time call-graph limits are official behaviour (RULES-PARITY-03) and are always on"
+        },
+        "rules.runtimeBudgets": {
+          "value": true,
+          "status": "not-implemented",
+          "note": "accepted by the loader and read by nothing; the document-access budgets are official behaviour (RULES-PARITY-03) and are always on"
+        },
+        "auth.idTokenSigning": {
+          "value": "session-rsa",
+          "status": "hand-written",
+          "note": "read by the loader, defaulting to unsigned-emulator whatever the profile; strict has to name session-rsa itself"
+        },
+        "appCheck.enabled": {
+          "value": true,
+          "status": "hand-written",
+          "note": "read by the loader, defaulting to false whatever the profile; enabling App Check needs the apps registered next to it, so a profile could not switch it on alone"
+        },
+        "events.delivery": {
+          "value": "exactly-once-test",
+          "status": "hand-written",
+          "note": "the only value the loader accepts, so the default already"
+        },
+        "scheduler.clock": {
+          "value": "virtual",
+          "status": "hand-written",
+          "note": "the only value the loader accepts, so the default already"
+        },
+        "projects.requireDemoPrefix": {
+          "value": true,
+          "status": "hand-written",
+          "note": "read by the loader; the runtime default stays true in both profiles on purpose, because that guard is what stops a run from reaching a real project by accident -- the firebase profile declares false only to record what the official CLI does"
+        }
       }
     }
   },
-  "profileStatus": "The profile is a runtime switch. The canonical schema's top-level profile key takes exactly the two names declared here, firebase is its default, and the daemon derives three settings from it: firestore.indexValidationPolicy (emulator / conservative), firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query), and how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands). An explicit configuration key always wins over the profile's default for it. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. The remaining keys each profile sets are declared and not yet derived from it -- limits.enforcement, limits.quotaAccounting, limits.warningsAsErrors, rules.staticLimitChecks, rules.runtimeBudgets, auth.idTokenSigning, appCheck.enabled, events.delivery, scheduler.clock and projects.requireDemoPrefix are still written into a configuration file by hand -- so the switch is real but not yet total. tools/compat-check CC-08 checks every key and value a profile names against spec/config/fireemu.schema.json, and checks that the profile names declared here are exactly the values that schema's profile key accepts, so neither the sets nor the names can drift from the configuration surface.",
+  "profileStatus": "The profile is a runtime switch, and its sets list exactly what the daemon derives from it: firestore.indexValidationPolicy (emulator / conservative) and firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query); the third derived setting, how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands), has no configuration key of its own and is recorded under officialEmulatorDivergences. An explicit configuration key always wins over the profile's default for it. A unit test in crates/fireemu/src/config.rs reads this file and fails when a profile's sets and what set_profile derives disagree. Every other key a profile names is under declared, with a status: hand-written means the loader reads the key but does not derive it from the profile, not-implemented means the loader refuses the value or reads nothing of the section, so the value is a statement of intent and not a switch. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. tools/compat-check CC-08 checks every key and value under sets and declared against spec/config/fireemu.schema.json, requires a status and a note on each declared key, refuses a key that is both set and declared, and checks that the profile names declared here are exactly the values that schema's profile key accepts.",
   "vocabulary": {
     "scopes": {
       "active": "In the supported-surface milestone. Either parity is claimed with evidence, the surface is a fireemu addition, or it is an open gap that blocks the complete-suite claim.",

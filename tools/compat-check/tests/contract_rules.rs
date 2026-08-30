@@ -1,4 +1,4 @@
-//! Table-driven fixtures for the compatibility gate (CC-01..CC-08).
+//! Table-driven fixtures for the compatibility gate (CC-01..CC-09).
 //!
 //! Each case builds a throw-away repository root that passes every rule, mutates exactly one
 //! thing, runs the checker over it and asserts on the reported problems. The last test runs the
@@ -460,6 +460,54 @@ fn cases() -> Vec<Case> {
                 set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": "yes"}));
             },
             expect: Some("but the schema declares a boolean"),
+        },
+        // CC-08: a declared key is a statement of intent and must say why it is not a switch.
+        Case {
+            name: "profile-declared-without-status",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "profiles/firebase/declared",
+                    json!({"firestore.enforceLimits": {"value": false, "note": "by hand"}}),
+                );
+            },
+            expect: Some("both sets and declares firestore.enforceLimits"),
+        },
+        Case {
+            name: "profile-declared-bad-status",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "profiles/firebase/declared",
+                    json!({"firestore.indexValidationPolicy": {"value": "firebase", "status": "someday", "note": "x"}}),
+                );
+                set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": false}));
+            },
+            expect: Some("declares firestore.indexValidationPolicy with status Some(\"someday\")"),
+        },
+        Case {
+            name: "profile-declared-value-the-schema-refuses",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "profiles/firebase/declared",
+                    json!({"firestore.indexValidationPolicy": {"value": "lenient", "status": "hand-written", "note": "x"}}),
+                );
+                set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": false}));
+            },
+            expect: Some("sets firestore.indexValidationPolicy = \"lenient\", which is not one of"),
+        },
+        Case {
+            name: "profile-declared-is-accepted",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "profiles/firebase/declared",
+                    json!({"firestore.indexValidationPolicy": {"value": "firebase", "status": "hand-written", "note": "read by the loader"}}),
+                );
+                set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": false}));
+            },
+            expect: None,
         },
         // CC-08: a profile no run can select, because the schema's profile key does not
         // accept its name. A declared profile that is not a runtime switch is a document.

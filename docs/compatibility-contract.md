@@ -105,13 +105,18 @@ Two profiles are declared as configuration key sets, and the canonical schema's 
   official emulator, and every refusal it adds must be published as a capability precision or as
   a documented divergence in `conformance/divergences.json`.
 
-The daemon derives three settings from the profile — `firestore.indexValidationPolicy`,
-`firestore.enforceLimits`, and how a caller's ID token is verified on the Firestore and Storage
-Security Rules surfaces — and an explicit configuration key always wins over the profile's
-default for it. `fireemu capabilities` and `GET /v1/capabilities` publish the active profile and
-the start banner prints it. The remaining keys a profile names are declared and not yet derived
-from it; `profileStatus` in the contract lists exactly which, so the gap between the declaration
-and the switch is written down rather than assumed.
+A profile's `sets` lists exactly what the daemon derives from it — `firestore.indexValidationPolicy`
+and `firestore.enforceLimits`; the third derived setting, how a caller's ID token is verified on
+the Firestore and Storage Security Rules surfaces, has no key of its own — and an explicit
+configuration key always wins over the profile's default for it. A unit test in
+`crates/fireemu/src/config.rs` reads the contract and fails when `sets` and what `set_profile`
+derives disagree. Every other key a profile names is under `declared`, each with a `status`:
+`hand-written` means the loader reads the key but does not derive it from the profile, and
+`not-implemented` means the loader refuses the value or reads nothing of the section, so the
+value is a statement of intent and not a switch (`events.delivery = at-least-once` and
+`scheduler.clock = wall` of the `firebase` profile are of that kind, as are the `limits.*` and
+`rules.staticLimitChecks` / `rules.runtimeBudgets` keys of both). `fireemu capabilities` and
+`GET /v1/capabilities` publish the active profile and the start banner prints it.
 
 Where the `firebase` profile cannot reproduce the official emulator exactly, the difference is
 recorded in that profile's `officialEmulatorDivergences`, whose `key` names either a
@@ -155,7 +160,7 @@ malformed file fails the test suite as well.
 | `CC-05` | a README that does not carry the version-qualified claim sentence of the contract |
 | `CC-06` | a deferred or not-planned product that reads as supported: named in a manifest `implemented` list, named on a README line with no scope disclaimer, carrying a parity claim, or declaring no prohibited terms at all |
 | `CC-07` | contradictory public statements (below) |
-| `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow; a profile name the schema's `profile` key does not accept (a profile no run can select is a document, not a switch), and a name that key accepts which the contract does not declare |
+| `CC-08` | a compatibility profile that sets or declares a configuration key the canonical schema does not define, or a value it does not allow; a `declared` key without a `hand-written` / `not-implemented` status and a note, or one that is also under `sets`; a profile name the schema's `profile` key does not accept (a profile no run can select is a document, not a switch), and a name that key accepts which the contract does not declare |
 | `CC-09` | a conformance fixture cited as evidence that carries an unresolved `debt` step the claim does not exclude by name with its owning issue; an exclusion without an issue or a reason, or one whose step is no longer debt (stale); a fixture with no `parity` or `documented-divergence` step, which nothing local answered and which is therefore not evidence; and a step status the conformance suite does not define |
 
 Evidence names resolve the way `tools/traceability-check` resolves them, so the two gates agree

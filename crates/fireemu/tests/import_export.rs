@@ -540,6 +540,39 @@ fn an_export_on_exit_reimports_into_the_same_state() {
 }
 
 #[test]
+fn an_export_covers_exactly_the_products_only_selected() {
+    let dir = scratch("only-export");
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(fixture("official-multiproduct"))
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    let written = files(&out);
+    assert!(
+        written.iter().any(|f| f == "auth_export/accounts.json"),
+        "{written:?}"
+    );
+    assert!(
+        !written.iter().any(|f| f.starts_with("firestore_export")),
+        "an unselected product gets no section: {written:?}"
+    );
+    assert!(
+        !written.iter().any(|f| f.starts_with("storage_export")),
+        "an unselected product gets no section: {written:?}"
+    );
+    let manifest = std::fs::read_to_string(out.join("firebase-export-metadata.json")).unwrap();
+    assert!(manifest.contains("\"auth\""), "{manifest}");
+    assert!(!manifest.contains("\"firestore\""), "{manifest}");
+    assert!(!manifest.contains("\"storage\""), "{manifest}");
+}
+
+#[test]
 fn the_export_runs_when_the_command_fails() {
     let dir = scratch("child-failure");
     let out = dir.join("out");

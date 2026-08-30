@@ -344,6 +344,7 @@ dependencies = [
  "ftd-adapter-functions",
  "ftd-adapter-grpc",
  "ftd-adapter-http",
+ "ftd-adapter-ui",
  "ftd-core-auth",
  "ftd-core-firestore",
  "ftd-core-functions",

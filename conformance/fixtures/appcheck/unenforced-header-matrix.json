@@ -1,0 +1,429 @@
+{
+  "schemaVersion": 1,
+  "id": "appcheck/unenforced-header-matrix",
+  "product": "appcheck",
+  "title": "Every product under a baseline where App Check is present but not enforced",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 16,
+    "documented-divergence": 10,
+    "debt": 0,
+    "pending": 2
+  },
+  "steps": [
+    {
+      "id": "seed-through-the-owner-credential",
+      "status": "parity",
+      "value": {
+        "status": 200
+      }
+    },
+    {
+      "id": "seed-a-storage-object-through-the-json-api",
+      "status": "parity",
+      "value": {
+        "status": 200
+      }
+    },
+    {
+      "id": "firestore-rest-no-app-check-field",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "firestore-rest-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
+      "reason": "The oracle issues no App Check token, so it cannot run the valid-token column at all; the row records the same request without the field and marks itself `noTokenIssuedBySide`."
+    },
+    {
+      "id": "firestore-rest-unverifiable-token",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "firestore-rest-duplicate-fields",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "auth-signup-no-app-check-field",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "auth-signup-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
+      "reason": "The oracle issues no App Check token; see the Firestore row."
+    },
+    {
+      "id": "auth-signup-unverifiable-token",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "auth-signup-duplicate-fields",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "storage-metadata-no-app-check-field",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "storage-metadata-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
+      "reason": "The oracle issues no App Check token; see the Firestore row."
+    },
+    {
+      "id": "storage-metadata-unverifiable-token",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "storage-metadata-duplicate-fields",
+      "status": "parity",
+      "value": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      }
+    },
+    {
+      "id": "callable-unenforcing-no-app-check-field",
+      "status": "parity",
+      "value": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "callable-unenforcing-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "result": {
+            "appId": "1:1234567890:web:conformance",
+            "email": null,
+            "hasApp": true,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
+      "reason": "The oracle issues no token, so its callable sees no app. firebase-testd forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable."
+    },
+    {
+      "id": "callable-unenforcing-unverifiable-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": true,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
+      "reason": "The official Functions emulator runs the runtime with token verification skipped, so any value in the field becomes an app with a null id. firebase-testd removes an unverifiable field before the runner can decode it, so the callable sees no app: strictly safer, and deliberately different."
+    },
+    {
+      "id": "callable-unenforcing-duplicate-fields",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": true,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Two App Check fields are ambiguous. The official emulator accepts the folded value as an app; firebase-testd classifies it as malformed and removes it."
+    },
+    {
+      "id": "callable-enforcing-no-app-check-field",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "status": 401
+      }
+    },
+    {
+      "id": "callable-enforcing-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "noTokenIssuedBySide": true,
+        "status": 401
+      },
+      "testd": {
+        "body": {
+          "result": {
+            "appId": "1:1234567890:web:conformance",
+            "hasApp": true
+          }
+        },
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs)",
+      "reason": "The oracle issues no token, so its enforcing callable answers 401. firebase-testd presents a verified token and the callable runs with request.app populated."
+    },
+    {
+      "id": "callable-enforcing-unverifiable-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "hasApp": true
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "status": 401
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
+      "reason": "With verification skipped, the official emulator admits an unverifiable token into an enforceAppCheck callable. firebase-testd refuses it with the callable 401 UNAUTHENTICATED envelope before the handler runs."
+    },
+    {
+      "id": "callable-enforcing-duplicate-fields",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "hasApp": true
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "status": 401
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Duplicate App Check fields are admitted by the official emulator and refused by firebase-testd, for the same reason as the unenforcing row."
+    },
+    {
+      "id": "on-request-no-app-check-field",
+      "status": "parity",
+      "value": {
+        "body": {
+          "appCheckHeaderCount": 0,
+          "method": "GET",
+          "path": "/"
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "on-request-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "appCheckHeaderCount": 0,
+          "method": "GET",
+          "path": "/"
+        },
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "appCheckHeaderCount": 1,
+          "method": "GET",
+          "path": "/"
+        },
+        "status": 200
+      },
+      "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
+      "reason": "The oracle issues no token, so it sends no field and its onRequest handler counts zero. Both sides pass the raw field list through unclassified, which is what the row is about."
+    },
+    {
+      "id": "on-request-unverifiable-token",
+      "status": "parity",
+      "value": {
+        "body": {
+          "appCheckHeaderCount": 1,
+          "method": "GET",
+          "path": "/"
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "on-request-duplicate-fields",
+      "status": "parity",
+      "value": {
+        "body": {
+          "appCheckHeaderCount": 1,
+          "method": "GET",
+          "path": "/"
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "production-enforcement-denials",
+      "status": "pending",
+      "reason": "needs a real project",
+      "production": "With enforcement enabled in the console, production denies a missing or invalid token on each of these surfaces. The official emulators never enforce App Check, so the exact production status, code and message of each denial cannot be recorded locally."
+    },
+    {
+      "id": "production-protected-identity-toolkit-methods",
+      "status": "pending",
+      "reason": "needs a real project",
+      "production": "Section 23 lists the exact set of Identity Toolkit and Secure Token methods App Check protects as unresolved debt; the official Auth emulator inspects no App Check field at all, so it cannot enumerate that set."
+    }
+  ]
+}

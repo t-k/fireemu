@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "id": "functions/callable-error-envelope",
+  "product": "functions",
+  "title": "The callable protocol envelope for a result and for every HttpsError code",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 12,
+    "documented-divergence": 0,
+    "debt": 1,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "result-envelope",
+      "status": "parity",
+      "value": {
+        "body": {
+          "result": {
+            "sum": 5
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "invalid-argument-from-the-handler",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "details": {
+              "got": "string"
+            },
+            "message": "a and b must be numbers",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "https-error-permission-denied",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "details": {
+              "detail": "conformance"
+            },
+            "message": "deliberate permission-denied",
+            "status": "PERMISSION_DENIED"
+          }
+        },
+        "status": 403
+      }
+    },
+    {
+      "id": "https-error-unauthenticated",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "details": {
+              "detail": "conformance"
+            },
+            "message": "deliberate unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "status": 401
+      }
+    },
+    {
+      "id": "https-error-not-found",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "details": {
+              "detail": "conformance"
+            },
+            "message": "deliberate not-found",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "id": "https-error-failed-precondition",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "details": {
+              "detail": "conformance"
+            },
+            "message": "deliberate failed-precondition",
+            "status": "FAILED_PRECONDITION"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "https-error-resource-exhausted",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "details": {
+              "detail": "conformance"
+            },
+            "message": "deliberate resource-exhausted",
+            "status": "RESOURCE_EXHAUSTED"
+          }
+        },
+        "status": 429
+      }
+    },
+    {
+      "id": "https-error-unavailable",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "details": {
+              "detail": "conformance"
+            },
+            "message": "deliberate unavailable",
+            "status": "UNAVAILABLE"
+          }
+        },
+        "status": 503
+      }
+    },
+    {
+      "id": "uncaught-error-collapses-to-internal",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "message": "INTERNAL",
+            "status": "INTERNAL"
+          }
+        },
+        "status": 500
+      }
+    },
+    {
+      "id": "missing-data-envelope",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "message": "Bad Request",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "wrong-content-type",
+      "status": "parity",
+      "value": {
+        "bodyLength": 63,
+        "status": 400
+      }
+    },
+    {
+      "id": "get-instead-of-post",
+      "status": "parity",
+      "value": {
+        "bodyLength": 63,
+        "status": 400
+      }
+    },
+    {
+      "id": "unknown-callable",
+      "status": "debt",
+      "oracle": {
+        "bodyLength": 216,
+        "status": 404
+      },
+      "testd": {
+        "bodyLength": 70,
+        "status": 404
+      }
+    }
+  ]
+}

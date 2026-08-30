@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "id": "firestore/rules-decisions",
+  "product": "firestore",
+  "title": "Security Rules decisions and the PERMISSION_DENIED shape each transport reports",
+  "sdks": [
+    "firebase/firestore"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 3,
+    "documented-divergence": 0,
+    "debt": 4,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "anonymous-read-of-a-closed-document",
+      "status": "debt",
+      "oracle": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "\nfalse for 'get' @ L20"
+      },
+      "testd": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "get on conf_rules_closed/x denied by Security Rules: no allow statement evaluated to true"
+      }
+    },
+    {
+      "id": "anonymous-read-of-a-public-collection",
+      "status": "parity",
+      "value": {
+        "size": 0
+      }
+    },
+    {
+      "id": "anonymous-write-to-an-owner-document",
+      "status": "debt",
+      "oracle": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "7 PERMISSION_DENIED: \nfalse for 'create' @ L17, false for 'update' @ L17"
+      },
+      "testd": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "7 PERMISSION_DENIED: create on conf_rules_owner/nobody denied by Security Rules: no allow statement evaluated to true"
+      }
+    },
+    {
+      "id": "sign-up",
+      "status": "parity",
+      "value": {
+        "hasUid": true
+      }
+    },
+    {
+      "id": "owner-writes-own-document",
+      "status": "parity",
+      "value": {
+        "v": 1
+      }
+    },
+    {
+      "id": "owner-cannot-write-another-document",
+      "status": "debt",
+      "oracle": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "7 PERMISSION_DENIED: \nfalse for 'create' @ L17, false for 'update' @ L17"
+      },
+      "testd": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "7 PERMISSION_DENIED: create on conf_rules_owner/someone-else denied by Security Rules: no allow statement evaluated to true"
+      }
+    },
+    {
+      "id": "after-sign-out-the-document-is-protected-again",
+      "status": "debt",
+      "oracle": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "\nfalse for 'get' @ L17"
+      },
+      "testd": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "get on conf_rules_owner/<uid> denied by Security Rules: no allow statement evaluated to true"
+      }
+    }
+  ]
+}

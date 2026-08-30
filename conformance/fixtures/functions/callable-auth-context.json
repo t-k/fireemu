@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "id": "functions/callable-auth-context",
+  "product": "functions",
+  "title": "The Auth context a callable receives for anonymous, signed-in and forged credentials",
+  "sdks": [
+    "rest",
+    "firebase/auth"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 4,
+    "documented-divergence": 2,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "anonymous-caller-has-no-auth-context",
+      "status": "parity",
+      "value": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "create-and-sign-in-a-caller",
+      "status": "parity",
+      "value": {
+        "signUpStatus": 200,
+        "signedIn": true
+      }
+    },
+    {
+      "id": "signed-in-caller-populates-auth-context",
+      "status": "parity",
+      "value": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": "conf-functions-auth-caller@example.com",
+            "hasApp": false,
+            "hasAuth": true,
+            "uid": "<uid>"
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "a-forged-bearer-token-is-not-an-identity",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": true,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
+      "reason": "The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. firebase-testd verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all."
+    },
+    {
+      "id": "bearer-owner-is-not-a-callable-identity",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": true,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "result": {
+            "appId": null,
+            "email": null,
+            "hasApp": false,
+            "hasAuth": false,
+            "uid": null
+          }
+        },
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
+      "reason": "`Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; firebase-testd never treats it as a callable user identity."
+    },
+    {
+      "id": "an-http-function-sees-the-raw-request",
+      "status": "parity",
+      "value": {
+        "body": {
+          "appCheckHeaderCount": 0,
+          "method": "GET",
+          "path": "/some/path"
+        },
+        "status": 200
+      }
+    }
+  ]
+}

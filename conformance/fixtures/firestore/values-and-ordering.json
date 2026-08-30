@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "id": "firestore/values-and-ordering",
+  "product": "firestore",
+  "title": "Every Firestore value type round-trips and the documented type ordering holds",
+  "sdks": [
+    "firebase-admin"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 7,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "write-every-value-type",
+      "status": "parity",
+      "value": "written"
+    },
+    {
+      "id": "read-back-every-value-type",
+      "status": "parity",
+      "value": {
+        "data": {
+          "aBytes": {
+            "bytesLength": 4
+          },
+          "aDouble": 1.5,
+          "aFalse": false,
+          "aGeoPoint": {
+            "geoPoint": [
+              35.68,
+              139.76
+            ]
+          },
+          "aMap": {
+            "nested": {
+              "deeper": [
+                true
+              ]
+            }
+          },
+          "aNaN": "NaN",
+          "aNull": null,
+          "aReference": {
+            "ref": "conf_values/all-types"
+          },
+          "aString": "hello é 日本語",
+          "aTimestamp": "<timestamp>",
+          "aTrue": true,
+          "anArray": [
+            1,
+            "two",
+            null,
+            {
+              "three": 3
+            }
+          ],
+          "anInteger": -42
+        },
+        "exists": true
+      }
+    },
+    {
+      "id": "type-ordering",
+      "status": "parity",
+      "value": [
+        "a-null",
+        "b-false",
+        "c-true",
+        "d-nan",
+        "e-number",
+        "f-timestamp",
+        "g-string",
+        "h-bytes",
+        "i-reference",
+        "j-geopoint",
+        "k-array",
+        "l-map"
+      ]
+    },
+    {
+      "id": "server-transforms",
+      "status": "parity",
+      "value": {
+        "at": "<timestamp>",
+        "n": 5,
+        "tags": [
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "query-order-limit-and-count",
+      "status": "parity",
+      "value": {
+        "count": 2,
+        "ids": [
+          "all-types",
+          "transforms"
+        ]
+      }
+    },
+    {
+      "id": "list-collections-sorted",
+      "status": "parity",
+      "value": [
+        "conf_values",
+        "conf_values_order"
+      ]
+    },
+    {
+      "id": "auto-id-shape",
+      "status": "parity",
+      "value": {
+        "id": "<auto-id>",
+        "length": 20
+      }
+    }
+  ]
+}

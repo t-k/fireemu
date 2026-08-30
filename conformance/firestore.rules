@@ -1,0 +1,22 @@
+// Security Rules for the conformance corpus. The official emulator reads this file through
+// firebase.json; firebase-testd receives the same text through its control API (PUT /v1/rules),
+// so both sides evaluate byte-identical rules.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Open collections: the corpus drives value, ordering, index and transaction rows here
+    // without Rules taking part in the outcome.
+    match /conf_values/{id} { allow read, write: if true; }
+    match /conf_index/{id} { allow read, write: if true; }
+    match /conf_txn/{id} { allow read, write: if true; }
+    match /conf_listen/{id} { allow read, write: if true; }
+    match /conf_appcheck/{id} { allow read, write: if true; }
+
+    // Rules-decision rows.
+    match /conf_rules_owner/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+    match /conf_rules_public/{id} { allow read: if true; }
+    match /conf_rules_closed/{id} { allow read, write: if false; }
+  }
+}

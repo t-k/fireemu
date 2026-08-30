@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "id": "firestore/listen-sequence-with-resume",
+  "product": "firestore",
+  "title": "A gRPC Listen stream reports the documented snapshot sequence and resumes cleanly",
+  "sdks": [
+    "firebase/firestore"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 4,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "initial-snapshot-of-a-missing-document",
+      "status": "parity",
+      "value": {
+        "data": null,
+        "exists": false,
+        "fromCache": false,
+        "hasPendingWrites": false
+      }
+    },
+    {
+      "id": "create-update-delete-sequence",
+      "status": "parity",
+      "value": [
+        {
+          "data": null,
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false
+        },
+        {
+          "data": {
+            "v": 1
+          },
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false
+        },
+        {
+          "data": {
+            "v": 2
+          },
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false
+        },
+        {
+          "data": null,
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false
+        }
+      ]
+    },
+    {
+      "id": "resume-sees-current-state-not-the-history",
+      "status": "parity",
+      "value": {
+        "data": null,
+        "exists": false,
+        "fromCache": true,
+        "hasPendingWrites": false
+      }
+    },
+    {
+      "id": "query-listener-sequence",
+      "status": "parity",
+      "value": [
+        {
+          "changes": [],
+          "size": 0
+        },
+        {
+          "changes": [
+            {
+              "id": "w1",
+              "type": "added"
+            }
+          ],
+          "size": 1
+        },
+        {
+          "changes": [
+            {
+              "id": "w1",
+              "type": "removed"
+            }
+          ],
+          "size": 0
+        }
+      ]
+    }
+  ]
+}

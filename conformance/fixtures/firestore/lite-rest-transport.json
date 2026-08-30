@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "id": "firestore/lite-rest-transport",
+  "product": "firestore",
+  "title": "Firestore Lite (REST only): writes, queries, aggregations, transactions and denials",
+  "sdks": [
+    "firebase/firestore/lite"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 7,
+    "documented-divergence": 1,
+    "debt": 1,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "set-and-get",
+      "status": "parity",
+      "value": {
+        "data": {
+          "at": "<timestamp>",
+          "n": 1,
+          "nested": {
+            "k": [
+              1,
+              "two",
+              null
+            ]
+          },
+          "s": "x"
+        },
+        "exists": true
+      }
+    },
+    {
+      "id": "update-with-a-transform-and-a-nested-path",
+      "status": "parity",
+      "value": {
+        "at": "<timestamp>",
+        "n": 5,
+        "nested": {
+          "k": [
+            9
+          ]
+        },
+        "s": "x"
+      }
+    },
+    {
+      "id": "query-with-filter-order-and-limit",
+      "status": "parity",
+      "value": [
+        "lite-b",
+        "transforms"
+      ]
+    },
+    {
+      "id": "count-aggregation",
+      "status": "parity",
+      "value": 6
+    },
+    {
+      "id": "batch-write",
+      "status": "parity",
+      "value": {
+        "deletedStillExists": false
+      }
+    },
+    {
+      "id": "transaction",
+      "status": "parity",
+      "value": {
+        "after": 2,
+        "before": 1
+      }
+    },
+    {
+      "id": "delete",
+      "status": "parity",
+      "value": {
+        "exists": false
+      }
+    },
+    {
+      "id": "write-into-a-rules-closed-collection-is-denied",
+      "status": "debt",
+      "oracle": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "Request failed with error: \nfalse for 'create' @ L20, false for 'update' @ L20"
+      },
+      "testd": {
+        "thrown": true,
+        "code": "permission-denied",
+        "message": "Request failed with error: create on conf_rules_closed/lite denied by Security Rules: no allow statement evaluated to true"
+      }
+    },
+    {
+      "id": "query-needing-a-composite-index",
+      "status": "documented-divergence",
+      "oracle": {
+        "ids": [
+          "one"
+        ],
+        "size": 1
+      },
+      "testd": {
+        "thrown": true,
+        "code": "failed-precondition",
+        "message": "Request failed with error: The query requires an index. missing index (age Ascending, name Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"name\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}"
+      },
+      "documents": "README.md, \"Composite indexes\"",
+      "reason": "The same policy difference over the REST transport, where the SDK surfaces it as `failed-precondition`."
+    }
+  ]
+}

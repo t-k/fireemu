@@ -1,0 +1,9 @@
+// Storage Rules for the conformance corpus. The official emulator reads this file through
+// firebase.json; firebase-testd receives the same text through PUT /v1/storage/rules.
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /conf_public/{file=**} { allow read, write: if true; }
+    match /conf_closed/{file=**} { allow read, write: if false; }
+  }
+}

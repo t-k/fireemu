@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["unicorn", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "rules": {
+    "no-unused-vars": "error",
+    "no-console": "off",
+    "no-underscore-dangle": "off",
+    "no-await-in-loop": "off",
+    "unicorn/consistent-function-scoping": "off"
+  },
+  "ignorePatterns": ["node_modules", "fixtures", ".runs"]
+}

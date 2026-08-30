@@ -1,0 +1,12 @@
+{
+  "printWidth": 100,
+  "ignorePatterns": [
+    "node_modules",
+    "fixtures",
+    ".runs",
+    "pnpm-lock.yaml",
+    "**/*.md",
+    "ORACLE.md",
+    "DEBT.md"
+  ]
+}

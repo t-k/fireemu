@@ -166,9 +166,12 @@ fn storage(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
             headers.insert(name.to_owned(), v.to_owned());
         }
     }
+    // The Storage handler takes the request by value and moves the body into the object
+    // store. This front only borrows its own request, so it still copies once here; the
+    // copy ends at this boundary.
     let response = ftd_adapter_http::storage::handle(
         &state.storage,
-        &StorageRequest {
+        StorageRequest {
             method: req.method.clone(),
             path: format!("/{path}"),
             query: req.query.clone(),

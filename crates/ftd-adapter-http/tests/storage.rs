@@ -5,10 +5,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_adapter_http::storage::{handle, StorageRequest, StorageState};
+use ftd_adapter_http::storage_server::{
+    serve_storage_with_budget, BodyBudget, MAX_STORAGE_BODY_BYTES,
+};
 use ftd_core_auth::mfa::TotpPolicy;
 use ftd_core_auth::store::{AuthStore, NewUser};
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
+use ftd_core_storage::name::{BucketName, ObjectName};
 use ftd_core_storage::store::StorageState as ObjectStore;
 use ftd_core_types::determinism::SplitMix64;
 use ftd_core_types::time::LogicalInstant;
@@ -48,6 +52,16 @@ fn req(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> StorageRequest {
+    owned_req(method, path_and_query, headers, body.to_vec())
+}
+
+/// [`req`] with a body the caller owns (buffer identity is observable).
+fn owned_req(
+    method: &str,
+    path_and_query: &str,
+    headers: &[(&str, &str)],
+    body: Vec<u8>,
+) -> StorageRequest {
     let (path, query) = path_and_query
         .split_once('?')
         .map_or((path_and_query, ""), |(p, q)| (p, q));
@@ -60,7 +74,7 @@ fn req(
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect::<BTreeMap<_, _>>(),
-        body: body.to_vec(),
+        body,
     }
 }
 
@@ -94,7 +108,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
         "image/png",
         b"PNGDATA",
     );
-    let r = handle(&s, &req("POST", &format!("/v0/b/{BUCKET}/o?name=photos%2F%E8%AB%8B%E6%B1%82%E6%9B%B8.png&uploadType=multipart"), &[("authorization", "Bearer owner"), ("content-type", &ct), ("x-goog-upload-protocol", "multipart")], &body));
+    let r = handle(&s, req("POST", &format!("/v0/b/{BUCKET}/o?name=photos%2F%E8%AB%8B%E6%B1%82%E6%9B%B8.png&uploadType=multipart"), &[("authorization", "Bearer owner"), ("content-type", &ct), ("x-goog-upload-protocol", "multipart")], &body));
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     let meta = json_body(&r);
     assert_eq!(meta["name"], "photos/請求書.png");
@@ -108,12 +122,12 @@ fn firebase_protocol_upload_download_list_update_delete() {
     let enc = "photos%2F%E8%AB%8B%E6%B1%82%E6%9B%B8.png";
     let r = handle(
         &s,
-        &req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
+        req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
     assert_eq!(json_body(&r)["generation"], "1");
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/v0/b/{BUCKET}/o/{enc}?alt=media&token={token}"),
             &[],
@@ -124,7 +138,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
     assert_eq!(header(&r, "content-type"), Some("image/png"));
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/v0/b/{BUCKET}/o/{enc}?alt=media"),
             &[("authorization", "Bearer owner"), ("range", "bytes=1-3")],
@@ -137,7 +151,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
     // List with a delimiter.
     let _ = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/v0/b/{BUCKET}/o?name=root.txt&uploadType=multipart"),
             &[("authorization", "Bearer owner"), ("content-type", &ct)],
@@ -146,7 +160,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
     );
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/v0/b/{BUCKET}/o?prefix=&delimiter=%2F"),
             &owner,
@@ -160,7 +174,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
     // Metadata update bumps the metageneration only.
     let r = handle(
         &s,
-        &req(
+        req(
             "PATCH",
             &format!("/v0/b/{BUCKET}/o/{enc}"),
             &[
@@ -184,12 +198,12 @@ fn firebase_protocol_upload_download_list_update_delete() {
 
     let r = handle(
         &s,
-        &req("DELETE", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
+        req("DELETE", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
     assert_eq!(r.status, 204);
     let r = handle(
         &s,
-        &req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
+        req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
     assert_eq!(r.status, 404);
     assert_eq!(json_body(&r)["error"]["status"], "NOT_FOUND");
@@ -200,7 +214,7 @@ fn firebase_resumable_upload_protocol() {
     let s = state(None);
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/v0/b/{BUCKET}/o?name=big.bin"),
             &[
@@ -223,7 +237,7 @@ fn firebase_resumable_upload_protocol() {
         .to_owned();
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &path_and_query,
             &[
@@ -241,7 +255,7 @@ fn firebase_resumable_upload_protocol() {
     assert_eq!(header(&r, "x-goog-upload-size-received"), Some("3"));
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &path_and_query,
             &[
@@ -254,7 +268,7 @@ fn firebase_resumable_upload_protocol() {
     assert_eq!(header(&r, "x-goog-upload-size-received"), Some("3"));
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &path_and_query,
             &[
@@ -276,7 +290,7 @@ fn firebase_resumable_upload_protocol() {
     );
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/v0/b/{BUCKET}/o/big.bin?alt=media"),
             &[("authorization", "Bearer owner")],
@@ -295,7 +309,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert_eq!(
         handle(
             &s,
-            &req("GET", &format!("/storage/v1/b/{BUCKET}"), &owner, b"")
+            req("GET", &format!("/storage/v1/b/{BUCKET}"), &owner, b"")
         )
         .status,
         200
@@ -307,7 +321,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     );
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
             &[("authorization", "Bearer owner"), ("content-type", &ct)],
@@ -324,7 +338,7 @@ fn json_api_dialect_for_the_admin_sdk() {
         .contains("/download/storage/v1/b/"));
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=raw.bin"),
             &[
@@ -339,7 +353,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     // Resumable with Content-Range.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=res.bin"),
             &[
@@ -358,7 +372,7 @@ fn json_api_dialect_for_the_admin_sdk() {
         .to_owned();
     let r = handle(
         &s,
-        &req(
+        req(
             "PUT",
             &location,
             &[
@@ -371,7 +385,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert_eq!((r.status, header(&r, "range")), (308, Some("bytes=0-2")));
     let r = handle(
         &s,
-        &req(
+        req(
             "PUT",
             &location,
             &[
@@ -384,7 +398,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert_eq!((r.status, header(&r, "range")), (308, Some("bytes=0-2")));
     let r = handle(
         &s,
-        &req(
+        req(
             "PUT",
             &location,
             &[
@@ -400,7 +414,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     // Download with hashes, listing, rewrite, preconditions, delete.
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/download/storage/v1/b/{BUCKET}/o/a%2Fb.txt?alt=media"),
             &owner,
@@ -411,7 +425,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert!(header(&r, "x-goog-hash").unwrap().starts_with("crc32c="));
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/storage/v1/b/{BUCKET}/o?prefix=a/"),
             &owner,
@@ -423,7 +437,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert_eq!(listed["items"][0]["name"], "a/b.txt");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/copy.txt"),
             &owner,
@@ -436,7 +450,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert_eq!(rewritten["resource"]["metadata"]["owner"], "x");
     let r = handle(
         &s,
-        &req(
+        req(
             "DELETE",
             &format!("/storage/v1/b/{BUCKET}/o/copy.txt?ifGenerationMatch=999"),
             &owner,
@@ -446,7 +460,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert_eq!(r.status, 412);
     let r = handle(
         &s,
-        &req(
+        req(
             "DELETE",
             &format!("/storage/v1/b/{BUCKET}/o/copy.txt"),
             &owner,
@@ -456,7 +470,7 @@ fn json_api_dialect_for_the_admin_sdk() {
     assert_eq!(r.status, 204);
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/storage/v1/b/{BUCKET}/o/copy.txt"),
             &owner,
@@ -502,7 +516,7 @@ service firebase.storage {
     let own = format!("/v0/b/{BUCKET}/o?name=users%2F{uid}%2Fnote.txt&uploadType=multipart");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &own,
             &[("authorization", &firebase_auth), ("content-type", &ct)],
@@ -513,7 +527,7 @@ service firebase.storage {
     let other = format!("/v0/b/{BUCKET}/o?name=users%2Fsomeone%2Fnote.txt&uploadType=multipart");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &other,
             &[("authorization", &firebase_auth), ("content-type", &ct)],
@@ -522,14 +536,14 @@ service firebase.storage {
     );
     assert_eq!(r.status, 403);
     assert_eq!(json_body(&r)["error"]["status"], "PERMISSION_DENIED");
-    let r = handle(&s, &req("POST", &own, &[("content-type", &ct)], &body));
+    let r = handle(&s, req("POST", &own, &[("content-type", &ct)], &body));
     assert_eq!(r.status, 403);
     // Reads: own object ok, without credentials denied, public readable, token bypass.
     let enc = format!("users%2F{uid}%2Fnote.txt");
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/{enc}?alt=media"),
                 &[("authorization", &firebase_auth)],
@@ -542,7 +556,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/{enc}?alt=media"),
                 &[],
@@ -554,7 +568,7 @@ service firebase.storage {
     );
     let meta = json_body(&handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/v0/b/{BUCKET}/o/{enc}"),
             &[("authorization", "Bearer owner")],
@@ -565,7 +579,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/{enc}?alt=media&token={dl}"),
                 &[],
@@ -578,7 +592,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req("GET", &format!("/v0/b/{BUCKET}/o/public%2Fx"), &[], b"")
+            req("GET", &format!("/v0/b/{BUCKET}/o/public%2Fx"), &[], b"")
         )
         .status,
         404,
@@ -588,7 +602,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o?prefix=users%2F{uid}%2F&delimiter=%2F"),
                 &[("authorization", &firebase_auth)],
@@ -601,7 +615,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o?prefix=&delimiter=%2F"),
                 &[("authorization", &firebase_auth)],
@@ -615,7 +629,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o?prefix=&delimiter=%2F"),
                 &[("authorization", "Bearer owner")],
@@ -628,7 +642,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/{enc}"),
                 &[("authorization", "Firebase nope")],
@@ -648,7 +662,7 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
     // unknown-size streams with `Content-Range: bytes 0-*/*`.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=stream.bin"),
             &[("content-type", "application/json")],
@@ -663,7 +677,7 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
         .to_owned();
     let r = handle(
         &s,
-        &req(
+        req(
             "PUT",
             &location,
             &[("content-range", "bytes 0-*/*")],
@@ -674,7 +688,7 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
     assert_eq!(json_body(&r)["size"], "12");
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/b/{BUCKET}/o/stream.bin?alt=media"),
             &[],
@@ -684,10 +698,10 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
     assert_eq!((r.status, r.body.as_slice()), (200, &b"whole object"[..]));
     let r = handle(
         &s,
-        &req("GET", &format!("/b/{BUCKET}/o?prefix=stream"), &owner, b""),
+        req("GET", &format!("/b/{BUCKET}/o?prefix=stream"), &owner, b""),
     );
     assert_eq!(json_body(&r)["items"][0]["name"], "stream.bin");
-    let r = handle(&s, &req("GET", &format!("/b/{BUCKET}"), &[], b""));
+    let r = handle(&s, req("GET", &format!("/b/{BUCKET}"), &[], b""));
     assert_eq!(json_body(&r)["kind"], "storage#bucket");
 }
 
@@ -716,7 +730,7 @@ fn multipart_payloads_keep_their_trailing_line_breaks() {
         let (ct, body) = multipart(&json!({"name": "t.txt"}), "text/plain", data);
         let r = handle(
             &s,
-            &req(
+            req(
                 "POST",
                 &format!("/v0/b/{BUCKET}/o?uploadType=multipart"),
                 &[("authorization", "Bearer owner"), ("content-type", &ct)],
@@ -727,7 +741,7 @@ fn multipart_payloads_keep_their_trailing_line_breaks() {
         assert_eq!(json_body(&r)["size"], data.len().to_string());
         let r = handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/t.txt?alt=media"),
                 &[("authorization", "Bearer owner")],
@@ -755,7 +769,7 @@ service firebase.storage {
     // No declared length: the received bytes decide at finalization.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/v0/b/{BUCKET}/o?name=small%2Fx.bin"),
             &[
@@ -775,7 +789,7 @@ service firebase.storage {
     // Finalizing without credentials still uses the principal that started the session.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &session,
             &[
@@ -789,7 +803,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/small%2Fx.bin"),
                 &[("authorization", "Bearer owner")],
@@ -803,7 +817,7 @@ service firebase.storage {
     // A checksum mismatch is refused before commit.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/v0/b/{BUCKET}/o?name=small%2Fy.bin"),
             &[
@@ -821,7 +835,7 @@ service firebase.storage {
         .to_owned();
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &session,
             &[
@@ -836,7 +850,7 @@ service firebase.storage {
     // The integrity failure ends the session: the same bytes cannot be committed later.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &session,
             &[
@@ -850,7 +864,7 @@ service firebase.storage {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/small%2Fy.bin"),
                 &[("authorization", "Bearer owner")],
@@ -863,7 +877,7 @@ service firebase.storage {
     // A fresh session with the right checksum commits.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/v0/b/{BUCKET}/o?name=small%2Fy.bin"),
             &[
@@ -881,7 +895,7 @@ service firebase.storage {
         .to_owned();
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &session,
             &[
@@ -904,7 +918,7 @@ service firebase.storage {
     // The session reports the committed generation afterwards.
     let r = handle(
         &s,
-        &req("POST", &session, &[("x-goog-upload-command", "query")], b""),
+        req("POST", &session, &[("x-goog-upload-command", "query")], b""),
     );
     assert_eq!(header(&r, "x-goog-upload-status"), Some("final"));
     assert_eq!(header(&r, "x-goog-upload-size-received"), Some("3"));
@@ -933,7 +947,7 @@ service firebase.storage {
     );
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/v0/b/{BUCKET}/o?name=docs%2Fa.txt&uploadType=multipart"),
             &[("authorization", &auth), ("content-type", &ct)],
@@ -944,7 +958,7 @@ service firebase.storage {
     let patch = |body: &[u8]| {
         handle(
             &s,
-            &req(
+            req(
                 "PATCH",
                 &format!("/v0/b/{BUCKET}/o/docs%2Fa.txt"),
                 &[
@@ -974,7 +988,7 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     );
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
             &[("content-type", &ct)],
@@ -987,7 +1001,7 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     // Malformed preconditions are errors, not ignored.
     let r = handle(
         &s,
-        &req(
+        req(
             "DELETE",
             &format!("{object}?ifGenerationMatch=garbage"),
             &[],
@@ -999,14 +1013,14 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     // A stale generation selector never targets the live object.
     let r = handle(
         &s,
-        &req("DELETE", &format!("{object}?generation=99999"), &[], b""),
+        req("DELETE", &format!("{object}?generation=99999"), &[], b""),
     );
     assert_eq!(r.status, 404);
     assert_eq!(json_body(&r)["error"]["errors"][0]["reason"], "notFound");
     assert_eq!(
         handle(
             &s,
-            &req("GET", &format!("{object}?generation=99999"), &[], b"")
+            req("GET", &format!("{object}?generation=99999"), &[], b"")
         )
         .status,
         404
@@ -1014,7 +1028,7 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("{object}?generation={generation}"),
                 &[],
@@ -1027,7 +1041,7 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     // Not-match preconditions and the core error shape (single JSON envelope).
     let r = handle(
         &s,
-        &req(
+        req(
             "DELETE",
             &format!("{object}?ifGenerationNotMatch={generation}"),
             &[],
@@ -1045,7 +1059,7 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     let get = |range: &str| {
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("{object}?alt=media"),
                 &[("range", range)],
@@ -1067,7 +1081,7 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     // Resumable JSON API: the declared span must match the body and the total.
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=r.bin"),
             &[("content-type", "application/json")],
@@ -1081,7 +1095,7 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
         .to_owned();
     let r = handle(
         &s,
-        &req(
+        req(
             "PUT",
             &session,
             &[("content-range", "bytes 0-99/100")],
@@ -1091,17 +1105,17 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
     let r = handle(
         &s,
-        &req("PUT", &session, &[("content-range", "bytes 0-2/6")], b"abc"),
+        req("PUT", &session, &[("content-range", "bytes 0-2/6")], b"abc"),
     );
     assert_eq!(r.status, 308, "{}", String::from_utf8_lossy(&r.body));
     let r = handle(
         &s,
-        &req("PUT", &session, &[("content-range", "bytes 3-5/7")], b"def"),
+        req("PUT", &session, &[("content-range", "bytes 3-5/7")], b"def"),
     );
     assert_eq!(r.status, 400, "a different total is a size mismatch");
     let r = handle(
         &s,
-        &req("PUT", &session, &[("content-range", "bytes 3-5/6")], b"def"),
+        req("PUT", &session, &[("content-range", "bytes 3-5/6")], b"def"),
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     assert_eq!(json_body(&r)["size"], "6");
@@ -1120,7 +1134,7 @@ fn v1_rulesets_never_grant_lists() {
     assert_eq!(
         handle(
             &s,
-            &req(
+            req(
                 "GET",
                 &format!("/v0/b/{BUCKET}/o/x"),
                 &[("authorization", &auth)],
@@ -1133,7 +1147,7 @@ fn v1_rulesets_never_grant_lists() {
     );
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("/v0/b/{BUCKET}/o"),
             &[("authorization", &auth)],
@@ -1157,7 +1171,7 @@ service firebase.storage {
     let (ct, body) = multipart(&json!({"name": "open/src"}), "text/plain", b"src");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
             &[("content-type", &ct)],
@@ -1168,9 +1182,7 @@ service firebase.storage {
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
     // A denied caller sees 403 whether or not the source exists.
     for src in ["closed%2Fmissing", "closed%2Fother"] {
-        let r = handle(
-            &s,
-            &req(
+        let r = handle(&s, req(
                 "POST",
                 &format!("/storage/v1/b/{BUCKET}/o/{src}/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=1"),
                 &[("authorization", &auth)],
@@ -1179,9 +1191,7 @@ service firebase.storage {
         );
         assert_eq!(r.status, 403, "{src}");
     }
-    let r = handle(
-        &s,
-        &req(
+    let r = handle(&s, req(
             "POST",
             &format!("/storage/v1/b/{BUCKET}/o/open%2Fsrc/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=999"),
             &[("authorization", &auth)],
@@ -1193,7 +1203,7 @@ service firebase.storage {
     let object = format!("/storage/v1/b/{BUCKET}/o/open%2Fsrc");
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("{object}?ifGenerationNotMatch={generation}"),
             &[],
@@ -1204,12 +1214,12 @@ service firebase.storage {
     assert!(r.body.is_empty());
     let r = handle(
         &s,
-        &req("GET", &format!("{object}?ifGenerationMatch=999"), &[], b""),
+        req("GET", &format!("{object}?ifGenerationMatch=999"), &[], b""),
     );
     assert_eq!(r.status, 412);
     let r = handle(
         &s,
-        &req(
+        req(
             "GET",
             &format!("{object}?ifGenerationMatch=1&ifGenerationNotMatch=2"),
             &[],
@@ -1222,7 +1232,7 @@ service firebase.storage {
     let (ct, body) = multipart(&json!({"name": "open/tail"}), "text/plain", data);
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
             &[("content-type", &ct)],
@@ -1268,7 +1278,7 @@ service firebase.storage {
     let upload = format!("/v0/b/{BUCKET}/o?name=gated%2Fa.txt&uploadType=multipart");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &upload,
             &[("authorization", "Bearer owner"), ("content-type", &ct)],
@@ -1278,14 +1288,14 @@ service firebase.storage {
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     let read = format!("/v0/b/{BUCKET}/o/gated%2Fa.txt?alt=media");
     // No Firestore access: the rule fails closed.
-    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 403);
+    assert_eq!(handle(&s, req("GET", &read, &[], b"")).status, 403);
     // The flag is absent: denied; present: allowed.
     s.firestore = Some(Arc::new(Flags(vec![])));
-    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 403);
+    assert_eq!(handle(&s, req("GET", &read, &[], b"")).status, 403);
     s.firestore = Some(Arc::new(Flags(vec![
         "databases/(default)/documents/flags/open".to_owned(),
     ])));
-    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 200);
+    assert_eq!(handle(&s, req("GET", &read, &[], b"")).status, 200);
 }
 
 #[test]
@@ -1313,7 +1323,7 @@ fn fault_plans_fail_storage_operations() {
     let upload = format!("/v0/b/{BUCKET}/o?name=f.txt&uploadType=multipart");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &upload,
             &[("authorization", "Bearer owner"), ("content-type", &ct)],
@@ -1323,7 +1333,7 @@ fn fault_plans_fail_storage_operations() {
     assert_eq!(r.status, 503, "{}", String::from_utf8_lossy(&r.body));
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &upload,
             &[("authorization", "Bearer owner"), ("content-type", &ct)],
@@ -1360,7 +1370,7 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
     for (bucket, token) in [(BUCKET, &token_b), ("demo-b.appspot.com", &token_a)] {
         let r = handle(
             &s,
-            &req(
+            req(
                 "POST",
                 &upload(bucket),
                 &[("authorization", token), ("content-type", &ct)],
@@ -1374,7 +1384,7 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
     for (bucket, token) in [(BUCKET, &token_a), ("demo-b.appspot.com", &token_b)] {
         let r = handle(
             &s,
-            &req(
+            req(
                 "POST",
                 &upload(bucket),
                 &[("authorization", token), ("content-type", &ct)],
@@ -1406,7 +1416,7 @@ fn drop_connection_faults_mark_the_response_for_the_server_to_close() {
     let path = format!("/v0/b/{BUCKET}/o/f.txt?alt=media");
     let r = handle(
         &s,
-        &req("GET", &path, &[("authorization", "Bearer owner")], b""),
+        req("GET", &path, &[("authorization", "Bearer owner")], b""),
     );
     assert!(r
         .headers
@@ -1414,7 +1424,7 @@ fn drop_connection_faults_mark_the_response_for_the_server_to_close() {
         .any(|(k, v)| k == ftd_adapter_http::storage::DROP_CONNECTION_HEADER && v == "1"));
     let r = handle(
         &s,
-        &req("GET", &path, &[("authorization", "Bearer owner")], b""),
+        req("GET", &path, &[("authorization", "Bearer owner")], b""),
     );
     assert_eq!(r.status, 404);
     assert!(!r
@@ -1443,7 +1453,7 @@ fn json_api_uploads_count_as_uploads_for_fault_plans() {
     s.faults = Some(registry.clone());
     let (ct, body) = multipart(&json!({"name": "j.txt"}), "text/plain", b"x");
     let path = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart");
-    let r = handle(&s, &req("POST", &path, &[("content-type", &ct)], &body));
+    let r = handle(&s, req("POST", &path, &[("content-type", &ct)], &body));
     assert_eq!(r.status, 504, "{}", String::from_utf8_lossy(&r.body));
     assert_eq!(
         registry.default_state().lock().unwrap().counters()["storage.upload"],
@@ -1457,7 +1467,7 @@ fn resumable_uploads_answer_only_under_their_own_bucket() {
     let start = format!("/v0/b/{BUCKET}/o?name=r.txt&uploadType=resumable");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &start,
             &[
@@ -1482,7 +1492,7 @@ fn resumable_uploads_answer_only_under_their_own_bucket() {
     let elsewhere = format!("/v0/b/other-bucket/o?name=r.txt&upload_id={upload_id}");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &elsewhere,
             &[
@@ -1498,7 +1508,7 @@ fn resumable_uploads_answer_only_under_their_own_bucket() {
     let own = format!("/v0/b/{BUCKET}/o?name=r.txt&upload_id={upload_id}");
     let r = handle(
         &s,
-        &req(
+        req(
             "POST",
             &own,
             &[
@@ -1511,4 +1521,315 @@ fn resumable_uploads_answer_only_under_their_own_bucket() {
         ),
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+}
+
+// ------------------------------------------------------------------------------------------
+// Upload buffer ownership and the in-flight body budget (STG-MEM-01..04)
+//
+// Copy elimination is proven by buffer identity: the address of the blob the store keeps is
+// the address of the buffer the request arrived in. A payload-sized clone anywhere on the
+// path would move the bytes to a different allocation and fail these assertions.
+// ------------------------------------------------------------------------------------------
+
+/// Address of the bytes the store holds for `name`, and their length.
+fn stored_buffer(s: &StorageState, name: &str) -> (*const u8, usize) {
+    let store = s.store.lock().unwrap();
+    let meta = store
+        .get(
+            &BucketName::try_new(BUCKET).unwrap(),
+            &ObjectName::try_new(name).unwrap(),
+        )
+        .unwrap_or_else(|| panic!("{name} was not stored"));
+    let bytes = store.bytes(meta);
+    (bytes.as_ptr(), bytes.len())
+}
+
+const PAYLOAD_BYTES: usize = 1 << 20;
+
+fn payload() -> Vec<u8> {
+    (0..PAYLOAD_BYTES)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_media_upload_hands_its_request_buffer_to_the_store() {
+    let s = state(None);
+    let body = payload();
+    let (arrived_at, len) = (body.as_ptr(), body.len());
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=media.bin"),
+            &[("content-type", "application/octet-stream")],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        stored_buffer(&s, "media.bin"),
+        (arrived_at, len),
+        "the stored blob is the buffer the request arrived in"
+    );
+}
+
+#[test]
+fn a_multipart_upload_carves_the_data_part_out_of_its_request_buffer() {
+    let s = state(None);
+    let data = payload();
+    let (ct, body) = multipart(
+        &json!({"name": "multipart.bin"}),
+        "application/octet-stream",
+        &data,
+    );
+    let arrived_at = body.as_ptr();
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        stored_buffer(&s, "multipart.bin"),
+        (arrived_at, data.len()),
+        "the data part is carved out of the request buffer, not copied out of it"
+    );
+    let store = s.store.lock().unwrap();
+    let meta = store
+        .get(
+            &BucketName::try_new(BUCKET).unwrap(),
+            &ObjectName::try_new("multipart.bin").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        store.bytes(meta),
+        data.as_slice(),
+        "the exact bytes survive"
+    );
+}
+
+#[test]
+fn a_resumable_upload_adopts_the_request_buffer_of_its_only_chunk() {
+    let s = state(None);
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=resumable.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+                (
+                    "x-goog-upload-header-content-length",
+                    &PAYLOAD_BYTES.to_string(),
+                ),
+            ],
+            b"",
+        ),
+    );
+    assert_eq!(start.status, 200);
+    let session = header(&start, "x-goog-upload-url").unwrap().to_owned();
+    let (_, query) = session.split_once("/o?").unwrap();
+    let body = payload();
+    let (arrived_at, len) = (body.as_ptr(), body.len());
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?{query}"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        stored_buffer(&s, "resumable.bin"),
+        (arrived_at, len),
+        "the session adopts the chunk buffer instead of copying it"
+    );
+}
+
+#[test]
+fn a_rejected_checksum_stores_nothing() {
+    let s = state(None);
+    let body = payload();
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=bad.bin"),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("x-goog-hash", "crc32c=AAAAAA=="),
+            ],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    let store = s.store.lock().unwrap();
+    assert!(store
+        .get(
+            &BucketName::try_new(BUCKET).unwrap(),
+            &ObjectName::try_new("bad.bin").unwrap()
+        )
+        .is_none());
+}
+
+// ------------------------------------------------------------------------------------------
+// The in-flight body budget over a real socket (STG-MEM-03).
+// ------------------------------------------------------------------------------------------
+
+const CHUNK: usize = 1 << 20;
+
+fn upload_head(name: &str, len: usize) -> String {
+    format!(
+        "POST /upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={name} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+    )
+}
+
+/// Waits until `budget` holds exactly `bytes` (the server charges a body before it reads it).
+async fn await_in_flight(budget: &BodyBudget, bytes: usize) {
+    for _ in 0..1_000_000 {
+        if budget.in_flight() == bytes {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!(
+        "in-flight budget stayed at {} bytes, expected {bytes}",
+        budget.in_flight()
+    );
+}
+
+async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+#[tokio::test]
+async fn the_body_budget_rejects_an_upload_that_does_not_fit_and_admits_it_once_released() {
+    use tokio::io::AsyncWriteExt;
+    /// 1.5 MiB: one 1 MiB body is admitted, two are not.
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
+    assert_eq!(BUDGET.in_flight(), 0);
+
+    // One upload in flight: its declared size is charged before the body is read.
+    let mut first = tokio::net::TcpStream::connect(addr).await.unwrap();
+    first
+        .write_all(upload_head("first.bin", CHUNK).as_bytes())
+        .await
+        .unwrap();
+    first.write_all(&[7u8; 4096]).await.unwrap();
+    await_in_flight(&BUDGET, CHUNK).await;
+
+    // A second one no longer fits and is refused before it allocates anything.
+    let mut second = tokio::net::TcpStream::connect(addr).await.unwrap();
+    second
+        .write_all(upload_head("second.bin", CHUNK).as_bytes())
+        .await
+        .unwrap();
+    let rejected = read_response(&mut second).await;
+    assert!(
+        rejected.starts_with("HTTP/1.1 503"),
+        "over-budget upload: {rejected}"
+    );
+    assert!(
+        rejected.to_lowercase().contains("retry-after: 1"),
+        "{rejected}"
+    );
+    assert_eq!(
+        BUDGET.in_flight(),
+        CHUNK,
+        "the refused upload charged nothing"
+    );
+
+    // The admitted upload finishes and gives its charge back.
+    first.write_all(&vec![7u8; CHUNK - 4096]).await.unwrap();
+    let accepted = read_response(&mut first).await;
+    assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+    await_in_flight(&BUDGET, 0).await;
+
+    // With the budget free again the same upload is admitted.
+    let mut third = tokio::net::TcpStream::connect(addr).await.unwrap();
+    third
+        .write_all(upload_head("third.bin", CHUNK).as_bytes())
+        .await
+        .unwrap();
+    third.write_all(&vec![7u8; CHUNK]).await.unwrap();
+    let again = read_response(&mut third).await;
+    assert!(again.starts_with("HTTP/1.1 200"), "{again}");
+    await_in_flight(&BUDGET, 0).await;
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_body_over_the_object_boundary_is_refused_without_buffering_it() {
+    use tokio::io::AsyncWriteExt;
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(upload_head("over.bin", MAX_STORAGE_BODY_BYTES + 1).as_bytes())
+        .await
+        .unwrap();
+    let response = read_response(&mut stream).await;
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+    assert_eq!(BUDGET.in_flight(), 0, "nothing was charged");
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_failed_upload_releases_its_buffer() {
+    use tokio::io::AsyncWriteExt;
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!(
+        "POST /upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=failed.bin HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nX-Goog-Hash: crc32c=AAAAAA==\r\nContent-Length: {CHUNK}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&vec![7u8; CHUNK]).await.unwrap();
+    let response = read_response(&mut stream).await;
+    assert!(
+        response.starts_with("HTTP/1.1 400"),
+        "checksum mismatch: {response}"
+    );
+    await_in_flight(&BUDGET, 0).await;
+    let store = shared.store.lock().unwrap();
+    assert!(
+        store
+            .get(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new("failed.bin").unwrap()
+            )
+            .is_none(),
+        "a failed upload publishes no object"
+    );
+    server.abort();
 }

@@ -942,6 +942,42 @@ impl StorageState {
         Ok(u.received.len() as u64)
     }
 
+    /// [`Self::append_upload`] with an owned chunk: a session that has not received
+    /// anything yet adopts the buffer instead of copying it, so an upload that arrives in
+    /// one request never holds two copies of its payload. Every limit, offset and state
+    /// rule of [`Self::append_upload`] applies unchanged.
+    pub fn append_upload_owned(
+        &mut self,
+        id: &UploadId,
+        offset: u64,
+        chunk: Vec<u8>,
+        now: LogicalInstant,
+    ) -> Result<u64, StorageError> {
+        let u = self.upload_mut(id, now)?;
+        match u.state {
+            UploadState::Committed(_) | UploadState::Aborted => {
+                return Err(StorageError::UploadFinalized)
+            }
+            UploadState::Receiving => {}
+        }
+        if offset == 0 && u.received.is_empty() && !chunk.is_empty() {
+            let end = chunk.len() as u64;
+            if end > MAX_OBJECT_BYTES || u.total.is_some_and(|t| end > t) {
+                let too_large = u.total.is_some_and(|t| end > t);
+                u.state = UploadState::Aborted;
+                u.received = Vec::new();
+                return Err(if too_large {
+                    StorageError::UploadSizeMismatch
+                } else {
+                    StorageError::TooLarge
+                });
+            }
+            u.received = chunk;
+            return Ok(u.received.len() as u64);
+        }
+        self.append_upload(id, offset, &chunk, now)
+    }
+
     /// What an upload would commit right now (for authorization before finalization).
     pub fn pending_upload(
         &mut self,

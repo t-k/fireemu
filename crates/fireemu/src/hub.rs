@@ -307,6 +307,9 @@ async fn respond(
 /// The body is the official one (`hub.ts`): `{"path": "<absolute directory>", "initiatedBy":
 /// "<who asked>"}`. A request that carries an `Origin` header is refused exactly as upstream
 /// refuses it -- a page must not be able to make the suite write its state to disk.
+/// The largest `POST /_admin/export` body the Hub collects.
+const MAX_EXPORT_BODY: u64 = 64 * 1024;
+
 async fn run_export(
     state: &Arc<HubState>,
     req: Request<Incoming>,
@@ -326,6 +329,18 @@ async fn run_export(
             origin,
         );
     };
+    // The body holds a path and a label; anything larger is not an export request, and
+    // collecting it would be an unbounded allocation on a route that needs no credential.
+    if hyper::body::Body::size_hint(req.body())
+        .upper()
+        .is_none_or(|upper| upper > MAX_EXPORT_BODY)
+    {
+        return json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &json!({"message": format!("the export request body must be at most {MAX_EXPORT_BODY} bytes")}),
+            origin,
+        );
+    }
     let body = match http_body_util::BodyExt::collect(req.into_body()).await {
         Ok(collected) => collected.to_bytes(),
         Err(e) => {

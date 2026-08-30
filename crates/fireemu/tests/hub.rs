@@ -402,3 +402,54 @@ fn turning_the_hub_off_leaves_no_listener_and_no_variable() {
     );
     assert!(!std::env::temp_dir().join("hub-demo-hub-off.json").exists());
 }
+
+/// The export route is the one Hub route that writes to disk. Its CSRF wall is the refusal of
+/// every request carrying an `Origin`: the official CLI drives it without one, a page in a
+/// browser cannot avoid sending one.
+#[test]
+fn the_export_route_refuses_browser_origins_and_serves_plain_clients() {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    use std::time::Duration;
+    let dir = std::env::temp_dir().join(format!("fireemu-hub-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let port = free_port();
+    let daemon = Daemon::start("demo-hub-export", port, &[]);
+    let send = |origin: Option<&str>| -> u16 {
+        let body = format!(
+            "{{\"path\": {:?}, \"initiatedBy\": \"test\"}}",
+            dir.display().to_string()
+        );
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the Hub accepts");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        let origin_line = origin
+            .map(|o| format!("Origin: {o}\r\n"))
+            .unwrap_or_default();
+        write!(
+            stream,
+            "POST /_admin/export HTTP/1.1\r\nHost: 127.0.0.1\r\n{origin_line}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).unwrap();
+        raw.lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(0)
+    };
+    // A page (any Origin, loopback included) is refused and writes nothing.
+    assert_eq!(send(Some("http://127.0.0.1:4000")), 403);
+    assert!(
+        !dir.exists(),
+        "a refused export must not create the directory"
+    );
+    // The plain client the CLI is: served.
+    assert_eq!(send(None), 200);
+    assert!(dir.join("firebase-export-metadata.json").is_file());
+    drop(daemon);
+    let _ = std::fs::remove_dir_all(&dir);
+}

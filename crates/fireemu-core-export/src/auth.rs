@@ -517,6 +517,11 @@ pub mod fake_hash {
     pub fn decode(hash: &str) -> Option<(String, String)> {
         let rest = hash.strip_prefix(HASH_PREFIX)?;
         let (salt, password) = rest.split_once(":password=")?;
+        // The convention has no escaping: a salt holding a colon is ambiguous, so it is
+        // refused rather than split at a guessed place.
+        if salt.contains(':') {
+            return None;
+        }
         Some((salt.to_owned(), password.to_owned()))
     }
 }

@@ -366,6 +366,42 @@ pub fn apply(prepared: &Prepared, endpoints: &Endpoints) -> Result<(), ArtifactE
     Ok(())
 }
 
+/// Bytes of Firestore output files one import may hold in memory at once.
+const IMPORT_FIRESTORE_BYTES_BUDGET: u64 = 1024 * 1024 * 1024;
+
+/// Reads a file the artifact names, refusing anything that resolves outside the export
+/// directory: a symlink inside a crafted export must never make an import read an arbitrary
+/// file on the host (and then serve it as an object).
+fn read_inside(root: &Path, path: &Path) -> Result<Vec<u8>, String> {
+    let root = std::fs::canonicalize(root).map_err(|e| format!("cannot resolve it: {e}"))?;
+    let real = std::fs::canonicalize(path).map_err(|e| format!("cannot read it: {e}"))?;
+    if !real.starts_with(&root) {
+        return Err(
+            "it resolves outside the export directory (a symlink?), which an import never follows"
+                .to_owned(),
+        );
+    }
+    std::fs::read(&real).map_err(|e| format!("cannot read it: {e}"))
+}
+
+fn read_text_inside(root: &Path, path: &Path) -> Result<String, String> {
+    let bytes = read_inside(root, path)?;
+    String::from_utf8(bytes).map_err(|_| "it is not UTF-8".to_owned())
+}
+
+/// A directory entry an import may look at: never a symlink.
+fn refuse_symlink(product: &'static str, entry: &std::fs::DirEntry) -> Result<(), ArtifactError> {
+    let is_symlink = entry.file_type().is_ok_and(|t| t.is_symlink());
+    if is_symlink {
+        return Err(ArtifactError::new(
+            product,
+            entry.path(),
+            "it is a symlink, which an import never follows",
+        ));
+    }
+    Ok(())
+}
+
 fn read_firestore_section(
     dir: &Path,
     section: &Section,
@@ -375,17 +411,15 @@ fn read_firestore_section(
         .clone()
         .unwrap_or_else(|| format!("{}/{FIRESTORE_OVERALL_METADATA}", section.path));
     let overall_path = dir.join(&metadata_file);
-    let bytes = std::fs::read(&overall_path).map_err(|e| {
-        ArtifactError::new("firestore", &overall_path, format!("cannot read it: {e}"))
-    })?;
+    let bytes = read_inside(dir, &overall_path)
+        .map_err(|e| ArtifactError::new("firestore", &overall_path, e))?;
     let overall = OverallMetadata::parse(&bytes)
         .map_err(|e| ArtifactError::new("firestore", &overall_path, e.to_string()))?;
 
     let section_dir = dir.join(&section.path);
     let partition_path = section_dir.join(&overall.metadata_file);
-    let bytes = std::fs::read(&partition_path).map_err(|e| {
-        ArtifactError::new("firestore", &partition_path, format!("cannot read it: {e}"))
-    })?;
+    let bytes = read_inside(dir, &partition_path)
+        .map_err(|e| ArtifactError::new("firestore", &partition_path, e))?;
     let partition = PartitionMetadata::parse(&bytes)
         .map_err(|e| ArtifactError::new("firestore", &partition_path, e.to_string()))?;
 
@@ -393,11 +427,19 @@ fn read_firestore_section(
         .parent()
         .map_or_else(|| section_dir.clone(), Path::to_path_buf);
     let mut documents = Vec::new();
+    let mut read_so_far: u64 = 0;
     for output in &partition.output_files {
         let output_path = partition_dir.join(output);
-        let bytes = std::fs::read(&output_path).map_err(|e| {
-            ArtifactError::new("firestore", &output_path, format!("cannot read it: {e}"))
-        })?;
+        let bytes = read_inside(dir, &output_path)
+            .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
+        read_so_far = read_so_far.saturating_add(bytes.len() as u64);
+        if read_so_far > IMPORT_FIRESTORE_BYTES_BUDGET {
+            return Err(ArtifactError::new(
+                "firestore",
+                &output_path,
+                format!("the output files exceed the {IMPORT_FIRESTORE_BYTES_BUDGET} byte import budget"),
+            ));
+        }
         documents.extend(
             read_output(&bytes)
                 .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?,
@@ -464,7 +506,10 @@ fn collect_documents(
 fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
     let config_path = section_dir.join(CONFIG_FILE);
-    let config = match std::fs::read_to_string(&config_path) {
+    let config = match std::fs::symlink_metadata(&config_path)
+        .map_err(|e| e.to_string())
+        .and_then(|_| read_text_inside(dir, &config_path))
+    {
         Ok(text) => {
             let parsed = AuthConfig::parse(&text)
                 .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
@@ -481,6 +526,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     let entries = std::fs::read_dir(&section_dir)
         .map_err(|e| ArtifactError::new("auth", &section_dir, format!("cannot read it: {e}")))?;
     for entry in entries.flatten() {
+        refuse_symlink("auth", &entry)?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with("accounts-") && name.to_ascii_lowercase().ends_with(".json") {
             return Err(ArtifactError::new(
@@ -492,8 +538,8 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     }
 
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
-    let text = std::fs::read_to_string(&accounts_path)
-        .map_err(|e| ArtifactError::new("auth", &accounts_path, format!("cannot read it: {e}")))?;
+    let text = read_text_inside(dir, &accounts_path)
+        .map_err(|e| ArtifactError::new("auth", &accounts_path, e))?;
     let accounts = AccountsFile::parse(&text)
         .map_err(|e| ArtifactError::new("auth", &accounts_path, e.to_string()))?;
     let mut users = Vec::with_capacity(accounts.users.len());
@@ -544,15 +590,26 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         };
         let enrolled_at = rfc3339_instant(enrollment.enrolled_at.as_deref()).unwrap_or(created_at);
         if let Some(secret) = &enrollment.totp_shared_secret_key {
+            let bytes = decode_base32(secret).ok_or_else(|| {
+                refuse(format!(
+                    "account {}: the TOTP shared secret is not base32",
+                    record.local_id
+                ))
+            })?;
+            // RFC 4226 asks for at least 128 bits of shared secret; a shorter one lets anyone
+            // derive codes, an empty one lets everyone. The upper bound keeps an artifact
+            // from installing an unbounded string.
+            if !(16..=64).contains(&bytes.len()) {
+                return Err(refuse(format!(
+                    "account {}: the TOTP shared secret is {} bytes; it must be between 16 and 64",
+                    record.local_id,
+                    bytes.len()
+                )));
+            }
             totp_factors.push(TotpFactor {
                 mfa_enrollment_id: id,
                 display_name: enrollment.display_name.clone(),
-                secret: TotpSecret::new(decode_base32(secret).ok_or_else(|| {
-                    refuse(format!(
-                        "account {}: the TOTP shared secret is not base32",
-                        record.local_id
-                    ))
-                })?),
+                secret: TotpSecret::new(bytes),
                 enrolled_at,
                 last_accepted_step: None,
             });
@@ -663,9 +720,8 @@ fn decode_base32(text: &str) -> Option<Vec<u8>> {
 fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
     let section_dir = dir.join(&section.path);
     let buckets_path = section_dir.join(BUCKETS_FILE);
-    let text = std::fs::read_to_string(&buckets_path).map_err(|e| {
-        ArtifactError::new("storage", &buckets_path, format!("cannot read it: {e}"))
-    })?;
+    let text = read_text_inside(dir, &buckets_path)
+        .map_err(|e| ArtifactError::new("storage", &buckets_path, e))?;
     let buckets = BucketsFile::parse(&text)
         .map_err(|e| ArtifactError::new("storage", &buckets_path, e.to_string()))?;
 
@@ -684,15 +740,18 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
             ))
         }
     };
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        refuse_symlink("storage", &entry)?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            paths.push(path);
+        }
+    }
     paths.sort();
     for path in paths {
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| ArtifactError::new("storage", &path, format!("cannot read it: {e}")))?;
+        let text =
+            read_text_inside(dir, &path).map_err(|e| ArtifactError::new("storage", &path, e))?;
         let meta = ExportedObject::parse(&text)
             .map_err(|e| ArtifactError::new("storage", &path, e.to_string()))?;
         let id = path
@@ -700,7 +759,39 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let blob_path = blobs_dir.join(&id);
-        let bytes = std::fs::read(&blob_path).map_err(|e| {
+        // The size is checked from the file's own metadata before a byte is read, so a
+        // blob larger than any object can be (or than its metadata says) never lands in
+        // memory, and the message never tells a probing caller how large a file is.
+        let blob_meta = std::fs::symlink_metadata(&blob_path).map_err(|e| {
+            ArtifactError::new(
+                "storage",
+                &blob_path,
+                format!(
+                    "the object {} names a blob that cannot be read: {e}",
+                    meta.name
+                ),
+            )
+        })?;
+        if blob_meta.file_type().is_symlink() {
+            return Err(ArtifactError::new(
+                "storage",
+                &blob_path,
+                "it is a symlink, which an import never follows",
+            ));
+        }
+        if blob_meta.len() > fireemu_core_storage::store::MAX_OBJECT_BYTES
+            || blob_meta.len() != meta.size
+        {
+            return Err(ArtifactError::new(
+                "storage",
+                &blob_path,
+                format!(
+                    "the blob of object {} does not have the size its metadata records (or exceeds the object limit)",
+                    meta.name
+                ),
+            ));
+        }
+        let bytes = read_inside(dir, &blob_path).map_err(|e| {
             ArtifactError::new(
                 "storage",
                 &blob_path,
@@ -1254,18 +1345,22 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
+    // A file that is already there (or a symlink left in a reused directory) is removed
+    // first and the new one created exclusively, so the write never follows a link.
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("cannot replace it: {e}")),
+    }
     let mut file = std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
         .open(path)
         .map_err(|e| format!("cannot write it: {e}"))?;
     file.write_all(bytes)
         .map_err(|e| format!("cannot write it: {e}"))?;
-    // `mode` only applies to a file this call created; one that was already there keeps its
-    // own permissions until they are set.
-    set_mode(path, 0o600)
+    Ok(())
 }
 
 #[cfg(not(unix))]
@@ -1283,8 +1378,21 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
         .map_err(|e| format!("cannot restrict its permissions: {e}"))
 }
 
-/// Removes an existing export directory's contents before a new export replaces it, so a
-/// document that no longer exists does not survive in the directory.
+/// The entries an export owns inside its directory: the metadata file and the product
+/// sections (the official names plus the deferred products' sections).
+const EXPORT_OWNED_ENTRIES: &[&str] = &[
+    METADATA_FILE_NAME,
+    "firestore_export",
+    "auth_export",
+    "storage_export",
+    "database_export",
+    "dataconnect_export",
+];
+
+/// Removes an existing export's own entries before a new export replaces it, so a document
+/// that no longer exists does not survive in the directory. Only the entries an export
+/// owns go: a README or a fixture script next to them stays (the official CLI exports over
+/// the `--import` directory by default, and that directory is often a checked-in fixture).
 pub fn clear_export_dir(dir: &Path) -> Result<(), String> {
     if !dir.exists() {
         return Ok(());
@@ -1294,6 +1402,12 @@ pub fn clear_export_dir(dir: &Path) -> Result<(), String> {
         .flatten()
     {
         let path = entry.path();
+        let owned = entry.file_name().to_str().is_some_and(|n| {
+            EXPORT_OWNED_ENTRIES.contains(&n) || n.ends_with(".overall_export_metadata")
+        });
+        if !owned {
+            continue;
+        }
         // `symlink_metadata` rather than `is_dir`: a symlink that points at a directory must
         // be unlinked, never descended into. Descending would delete whatever it aims at.
         let kind = std::fs::symlink_metadata(&path)

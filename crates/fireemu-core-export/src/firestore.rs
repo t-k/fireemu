@@ -273,6 +273,9 @@ pub struct PartitionMetadata {
     pub output_files: Vec<String>,
 }
 
+/// Output files one partition may name (a bound on what an import reads).
+pub const MAX_OUTPUT_FILES: usize = 10_000;
+
 impl PartitionMetadata {
     /// Encodes the file.
     #[must_use]
@@ -321,6 +324,16 @@ impl PartitionMetadata {
                             if name.starts_with('/') || name.split('/').any(|p| p == "..") {
                                 return shape(format!(
                                     "the partition metadata names the output file {name:?}, which is not inside the export directory"
+                                ));
+                            }
+                            if output_files.contains(&name) {
+                                return shape(format!(
+                                    "the partition metadata names the output file {name:?} twice"
+                                ));
+                            }
+                            if output_files.len() >= MAX_OUTPUT_FILES {
+                                return shape(format!(
+                                    "the partition metadata names more than {MAX_OUTPUT_FILES} output files"
                                 ));
                             }
                             output_files.push(name);

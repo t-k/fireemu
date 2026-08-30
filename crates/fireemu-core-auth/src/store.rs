@@ -726,6 +726,32 @@ impl AuthStore {
         if let Some(phone) = &user.phone_number {
             Self::validate_phone_number(phone).map_err(ImportUserError::Account)?;
         }
+        // The same checks a sign-up gets: a well-formed email without control characters,
+        // unique unless the project allows duplicates, and bounded custom claims.
+        if let Some(email) = &user.email {
+            if !email.contains('@') || email.chars().any(char::is_control) {
+                return Err(ImportUserError::Account(AuthError::InvalidEmail));
+            }
+            if !self.config.allow_duplicate_emails
+                && self
+                    .users
+                    .values()
+                    .any(|u| u.email.as_deref() == Some(email))
+            {
+                return Err(ImportUserError::Account(AuthError::EmailExists));
+            }
+        }
+        for text in [&user.display_name, &user.photo_url] {
+            if text
+                .as_deref()
+                .is_some_and(|t| t.chars().any(char::is_control))
+            {
+                return Err(ImportUserError::Account(AuthError::InvalidLocalId));
+            }
+        }
+        user.custom_claims
+            .check_size()
+            .map_err(|e| ImportUserError::Account(AuthError::LimitExceeded(e)))?;
         let password = match user.password {
             Some((salt, plaintext)) => {
                 Self::validate_password(&plaintext).map_err(ImportUserError::Account)?;

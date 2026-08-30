@@ -160,6 +160,14 @@ Artifacts that are decided but not written yet are written as `pending:<name>`; 
 is printed on every run and never counts as evidence. See
 [docs/verification-ledger.md](docs/verification-ledger.md) for the schema and the gate.
 
+The `pr` and `ci` profiles fail a run in which a process started by a test still holds the test's
+captured stdout or stderr 30 seconds after the test process exited (`leak-timeout` in
+`.config/nextest.toml`, which records how the period was measured). That signal cannot see a
+process that closed or redirected those handles, so tests that start daemons or shells also assert
+a process census (`crates/firebase-testd/tests/census/mod.rs`);
+`crates/firebase-testd/tests/leak_fixture.rs` proves both, by running intentional-leak fixtures
+through a nested nextest in their own process group and reaping them unconditionally.
+
 TLC needs Java 21 and TLA+ Tools 1.8.0
 (`sha256 eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a`).
 Kani harnesses live in `verification/kani` and run with `cargo kani`. Harnesses that allocate

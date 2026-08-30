@@ -331,12 +331,16 @@ fn a_multi_codebase_functions_section_names_the_codebase_to_load() {
     );
     let firebase = firebase.to_str().unwrap();
 
-    // Ambiguous: fireemu runs one runner, so it asks which codebase rather than guessing.
+    // Every declared codebase is loaded, one runner process each, and the run says so. The
+    // two directories here are empty, so the runners fail on the codebases themselves --
+    // which is the point: both were loaded rather than one of them silently skipped.
     let out = exec_with(&["--firebase-json", firebase], &["true"]);
     assert_eq!(out.status.code(), Some(1));
     let text = stderr(&out);
-    assert!(text.contains("alpha") && text.contains("beta"), "{text}");
-    assert!(text.contains("--only functions:<codebase>"), "{text}");
+    assert!(
+        text.contains("2 codebases are loaded (alpha, beta)"),
+        "{text}"
+    );
 
     // Naming one selects it; the directory is empty, so the runner fails on the codebase
     // itself rather than on the configuration -- which is the point: it was loaded.

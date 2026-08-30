@@ -329,14 +329,42 @@ struct Held {
     crash: bool,
 }
 
+/// One codebase, as it was handed to the runtime: its name, its own manifest and the runner
+/// process that serves it.
+pub struct CodebaseSpec {
+    /// `codebase` from `firebase.json`, `default` when the project names none.
+    pub name: String,
+    /// What this codebase's runner discovered.
+    pub manifest: FunctionManifest,
+    /// The runner process serving it.
+    pub runner: Arc<Runner>,
+    /// How to restart it after a reset; without it a reset only kills it.
+    pub spawn: Option<SpawnSpec>,
+}
+
+/// A loaded codebase and its live runner.
+struct Codebase {
+    name: String,
+    runner: std::sync::RwLock<Arc<Runner>>,
+    spawn: Option<SpawnSpec>,
+}
+
 /// The runtime.
+///
+/// A project may declare several Functions codebases (`functions` as an array in
+/// `firebase.json`). Each gets its own runner process, exactly as the official emulator gives
+/// each backend its own runtime worker pool, and one runtime multiplexes them: the manifests
+/// are unioned so that every trigger match, schedule, retry and HTTP route is decided once,
+/// and each function is invoked on the runner of the codebase that exported it.
 pub struct FunctionsRuntime {
+    /// The union of every codebase's manifest.
     manifest: FunctionManifest,
     config: FunctionsConfig,
     clock: Arc<Mutex<VirtualClock>>,
-    runner: std::sync::RwLock<Arc<Runner>>,
-    /// How to restart the runner after a reset; without it a reset only kills it.
-    spawn: Option<SpawnSpec>,
+    /// The codebases, in configuration order.
+    codebases: Vec<Codebase>,
+    /// Function name to its codebase's index in `codebases`.
+    owner: BTreeMap<String, usize>,
     inner: Mutex<Inner>,
     wake: Notify,
     idle: Arc<Notify>,
@@ -370,6 +398,64 @@ impl FunctionsRuntime {
         runner: Arc<Runner>,
         spawn: Option<SpawnSpec>,
     ) -> Arc<Self> {
+        Self::with_codebases(
+            vec![CodebaseSpec {
+                name: "default".to_owned(),
+                manifest,
+                runner,
+                spawn,
+            }],
+            config,
+            clock,
+        )
+        .expect("a single codebase cannot collide with itself")
+    }
+
+    /// Builds the runtime around one started runner per codebase.
+    ///
+    /// A function name that two codebases both export is refused here, naming both, because
+    /// the emulator serves one function URL per region and name: whichever codebase happened
+    /// to load second would otherwise take the name, silently, and the project would find out
+    /// from the wrong handler running.
+    pub fn with_codebases(
+        codebases: Vec<CodebaseSpec>,
+        config: FunctionsConfig,
+        clock: Arc<Mutex<VirtualClock>>,
+    ) -> Result<Arc<Self>, String> {
+        let mut manifest = FunctionManifest::default();
+        let mut owner: BTreeMap<String, usize> = BTreeMap::new();
+        let mut declared_in: BTreeMap<String, String> = BTreeMap::new();
+        for (index, codebase) in codebases.iter().enumerate() {
+            for f in &codebase.manifest.functions {
+                if let Some(first) = declared_in.get(&f.name) {
+                    return Err(format!(
+                        "the function {:?} is exported by two Functions codebases ({first} and \
+                         {}); a function name is unique across the whole project, because the \
+                         emulator serves one URL per region and name",
+                        f.name, codebase.name
+                    ));
+                }
+                declared_in.insert(f.name.clone(), codebase.name.clone());
+                owner.insert(f.name.clone(), index);
+                manifest.functions.push(f.clone());
+            }
+            manifest
+                .ignored
+                .extend(codebase.manifest.ignored.iter().cloned());
+        }
+        manifest
+            .validate()
+            .map_err(|e| format!("the loaded Functions codebases: {e}"))?;
+        Ok(Self::build(manifest, owner, codebases, config, clock))
+    }
+
+    fn build(
+        manifest: FunctionManifest,
+        owner: BTreeMap<String, usize>,
+        codebases: Vec<CodebaseSpec>,
+        config: FunctionsConfig,
+        clock: Arc<Mutex<VirtualClock>>,
+    ) -> Arc<Self> {
         let now = clock
             .lock()
             .map(|c| c.now())
@@ -402,8 +488,15 @@ impl FunctionsRuntime {
             manifest,
             config,
             clock,
-            runner: std::sync::RwLock::new(runner),
-            spawn,
+            codebases: codebases
+                .into_iter()
+                .map(|c| Codebase {
+                    name: c.name,
+                    runner: std::sync::RwLock::new(c.runner),
+                    spawn: c.spawn,
+                })
+                .collect(),
+            owner,
             inner: Mutex::new(Inner {
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
@@ -442,13 +535,42 @@ impl FunctionsRuntime {
         &self.config.project
     }
 
-    /// The current runner.
+    /// The current runner of the first codebase.
+    ///
+    /// Kept for the single-codebase case, which is every project that does not spell
+    /// `functions` as an array. Anything that acts on behalf of one function goes through
+    /// [`Self::runner_for`] instead.
     #[must_use]
     pub fn runner(&self) -> Arc<Runner> {
-        match self.runner.read() {
+        self.runner_at(0)
+    }
+
+    fn runner_at(&self, index: usize) -> Arc<Runner> {
+        let slot = &self.codebases[index.min(self.codebases.len().saturating_sub(1))].runner;
+        match slot.read() {
             Ok(r) => r.clone(),
             Err(e) => e.into_inner().clone(),
         }
+    }
+
+    /// The runner of the codebase that exported `function`.
+    #[must_use]
+    pub fn runner_for(&self, function: &str) -> Arc<Runner> {
+        self.runner_at(self.owner.get(function).copied().unwrap_or(0))
+    }
+
+    /// The codebase names, in configuration order.
+    #[must_use]
+    pub fn codebase_names(&self) -> Vec<&str> {
+        self.codebases.iter().map(|c| c.name.as_str()).collect()
+    }
+
+    /// The codebase that exported `function`.
+    #[must_use]
+    pub fn codebase_of(&self, function: &str) -> Option<&str> {
+        self.owner
+            .get(function)
+            .map(|i| self.codebases[*i].name.as_str())
     }
 
     /// The virtual-clock instant a request is decided at.
@@ -1062,8 +1184,12 @@ impl FunctionsRuntime {
             let epoch = inner.epoch;
             generation = Some(epoch);
             // Killed under the same lock the restart installs under: a replacement from an
-            // earlier reset cannot slip in between the bump and the kill.
-            self.runner().kill_now();
+            // earlier reset cannot slip in between the bump and the kill. Every codebase's
+            // runner goes: a handler still running in any of them must not write into the
+            // reset session.
+            for index in 0..self.codebases.len() {
+                self.runner_at(index).kill_now();
+            }
             inner.outbox.discard_stale(epoch);
             inner.payloads.clear();
             inner.running.clear();
@@ -1078,37 +1204,46 @@ impl FunctionsRuntime {
         self.wake.notify_one();
     }
 
-    /// Restarts the runner from its spec for `generation` (a later reset supersedes it).
+    /// Restarts every codebase's runner from its spec for `generation` (a later reset
+    /// supersedes it).
     fn respawn_runner(self: &Arc<Self>, generation: Option<Epoch>) {
-        if let Some(spec) = self.spawn.clone() {
-            let runtime = self.clone();
-            tokio::spawn(async move {
-                match Runner::spawn_spec(&spec).await {
-                    Ok(runner) => {
-                        // A later reset supersedes this restart: its own replacement is
-                        // the runner of record and this one must not outlive the kill.
-                        // Checked and installed under the runtime lock (the lock a reset
-                        // bumps the epoch and kills under), so the two cannot interleave.
-                        let installed = match runtime.inner.lock() {
-                            Ok(inner) if Some(inner.epoch) == generation => {
-                                if let Ok(mut slot) = runtime.runner.write() {
-                                    *slot = Arc::new(runner);
-                                }
-                                true
-                            }
-                            _ => {
-                                runner.kill_now();
-                                false
-                            }
-                        };
-                        if installed {
-                            runtime.wake.notify_one();
-                        }
-                    }
-                    Err(e) => eprintln!("[functions] runner restart failed: {e}"),
-                }
-            });
+        for index in 0..self.codebases.len() {
+            self.respawn_one(index, generation);
         }
+    }
+
+    /// Restarts the runner of one codebase.
+    fn respawn_one(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
+        let Some(spec) = self.codebases.get(index).and_then(|c| c.spawn.clone()) else {
+            return;
+        };
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            match Runner::spawn_spec(&spec).await {
+                Ok(runner) => {
+                    // A later reset supersedes this restart: its own replacement is
+                    // the runner of record and this one must not outlive the kill.
+                    // Checked and installed under the runtime lock (the lock a reset
+                    // bumps the epoch and kills under), so the two cannot interleave.
+                    let installed = match runtime.inner.lock() {
+                        Ok(inner) if Some(inner.epoch) == generation => {
+                            if let Ok(mut slot) = runtime.codebases[index].runner.write() {
+                                *slot = Arc::new(runner);
+                            }
+                            true
+                        }
+                        _ => {
+                            runner.kill_now();
+                            false
+                        }
+                    };
+                    if installed {
+                        runtime.wake.notify_one();
+                    }
+                }
+                Err(e) => eprintln!("[functions] runner restart failed: {e}"),
+            }
+        });
     }
 
     /// Notified whenever an invocation completes or the runtime resets.
@@ -1128,10 +1263,11 @@ impl FunctionsRuntime {
             .unwrap_or(true)
     }
 
-    /// Whether the runner process is alive (a dead runner leaves queued work pending).
+    /// Whether every codebase's runner process is alive (a dead runner leaves that
+    /// codebase's queued work pending).
     #[must_use]
     pub fn runner_alive(&self) -> bool {
-        self.runner().is_alive()
+        (0..self.codebases.len()).all(|i| self.runner_at(i).is_alive())
     }
 
     /// Outstanding work, for `await-idle` timeouts and status output.
@@ -1162,9 +1298,27 @@ impl FunctionsRuntime {
             "catchUpPending": inner.catch_up_pending,
             "overlapRejected": inner.overlap_rejected,
             "timeZoneDatabase": crate::zone::database_version(),
-            "runnerAlive": self.runner().is_alive(),
+            "runnerAlive": self.runner_alive(),
             "epoch": inner.epoch.value(),
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
+            // One entry per loaded codebase, so a multi-codebase project can see which runner
+            // is down and which functions went with it.
+            "codebases": (0..self.codebases.len()).map(|i| json!({
+                "codebase": self.codebases[i].name,
+                "runnerAlive": self.runner_at(i).is_alive(),
+                "functions": self.manifest.functions.iter()
+                    .filter(|f| self.owner.get(&f.name).copied() == Some(i))
+                    .map(|f| f.name.clone()).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            // Every export the runners discovered and could not serve, so nothing a codebase
+            // declared is invisible from here either.
+            "ignored": self.manifest.ignored.iter().map(|f| json!({
+                "name": f.name,
+                "region": f.region,
+                "triggerType": f.trigger_type,
+                "scope": f.scope.as_str(),
+                "reason": f.reason,
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -1280,7 +1434,9 @@ impl FunctionsRuntime {
         if !matches!(f.trigger, Trigger::Http { .. }) || f.region != region {
             return None;
         }
-        let port = self.runner().hello().http_port?;
+        // Each codebase hosts its own HTTP server, so the route resolves to the runner of the
+        // codebase that exported this function.
+        let port = self.runner_for(function).hello().http_port?;
         Some(HttpTarget {
             function: function.to_owned(),
             addr: format!("127.0.0.1:{port}"),
@@ -1416,8 +1572,9 @@ impl FunctionsRuntime {
                 }
                 FaultAction::CrashRunner => {
                     let generation = self.inner.lock().ok().map(|i| i.epoch);
-                    self.runner().kill_now();
-                    self.respawn_runner(generation);
+                    let index = self.owner.get(function).copied().unwrap_or(0);
+                    self.runner_at(index).kill_now();
+                    self.respawn_one(index, generation);
                     answer = Some(Err(format!(
                         "fault plan: the runner crashed while serving {function}"
                     )));
@@ -1444,10 +1601,14 @@ impl FunctionsRuntime {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch_ready(self: &Arc<Self>) {
-        // The runner checked here is the one every invocation of this pass goes to: an event
-        // leased before a reset must not reach the runner spawned after it.
-        let runner = self.runner();
-        if !runner.is_alive() {
+        // The runners snapshotted here are the ones every invocation of this pass goes to: an
+        // event leased before a reset must not reach a runner spawned after it. One per
+        // codebase, and a codebase whose runner is down holds only its own queued work: the
+        // rest of the project keeps dispatching.
+        let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
+            .map(|i| self.runner_at(i))
+            .collect();
+        if runners.iter().all(|r| !r.is_alive()) {
             // Queued work stays pending and visible in the status; nothing is retried
             // against a dead process.
             return;
@@ -1467,6 +1628,12 @@ impl FunctionsRuntime {
             };
             let function_name = function_name.clone();
             let Some(spec) = self.manifest.get(&function_name) else {
+                continue;
+            };
+            let index = self.owner.get(&function_name).copied().unwrap_or(0);
+            let Some(runner) = runners.get(index).filter(|r| r.is_alive()) else {
+                // This codebase's runner is down: its work stays pending, and the other
+                // codebases keep going.
                 continue;
             };
             let running_here = inner
@@ -1526,7 +1693,7 @@ impl FunctionsRuntime {
                 // a fresh runner takes over, as after a crashed instance.
                 runner.kill_now();
                 let generation = Some(inner.epoch);
-                self.respawn_runner(generation);
+                self.respawn_one(index, generation);
             }
             tokio::spawn(async move {
                 let Invocation { outcome, late } = match fault_outcome {

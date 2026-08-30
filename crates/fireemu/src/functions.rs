@@ -344,10 +344,9 @@ pub fn default_runner() -> Result<Vec<String>, String> {
     Ok(vec!["node".to_owned(), script.path.display().to_string()])
 }
 
-/// Starts the runner and the runtime for `cfg.functions_source` and installs it as the
-/// backend's synchronous commit observer (Storage events are wired by the caller through
-/// [`storage_sink`]).
-#[allow(clippy::too_many_lines)]
+/// Starts one runner process per configured codebase and the runtime that multiplexes them,
+/// and installs it as the backend's synchronous commit observer (Storage events are wired by
+/// the caller through [`storage_sink`]).
 pub async fn start(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -356,12 +355,97 @@ pub async fn start(
     runner_secret: &str,
     callable_trusted_protocol: bool,
 ) -> Result<Arc<FunctionsRuntime>, String> {
-    let source = cfg
-        .functions_source
-        .clone()
-        .ok_or_else(|| "functions.source is not configured".to_owned())?;
+    let codebases = cfg.functions_to_load();
+    if codebases.is_empty() {
+        return Err("functions.source is not configured".to_owned());
+    }
+    if codebases.len() > 1 && cfg.functions_manifest.is_some() {
+        return Err(format!(
+            "functions.manifest replaces discovery for one codebase, and this run loads {} \
+             ({}); name the one to load with --only functions:<codebase> or drop \
+             functions.manifest",
+            codebases.len(),
+            codebases
+                .iter()
+                .map(|c| c.codebase.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let mut started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = Vec::new();
+    for codebase in &codebases {
+        match start_codebase(
+            cfg,
+            codebase,
+            hosts,
+            runner_secret,
+            callable_trusted_protocol,
+        )
+        .await
+        {
+            Ok(spec) => started.push(spec),
+            Err(e) => {
+                // A codebase that fails takes nothing with it but the runners this call
+                // already spawned; none of them may outlive the refusal.
+                for spec in &started {
+                    spec.runner.kill_now();
+                }
+                return Err(e);
+            }
+        }
+    }
+    let config = FunctionsConfig {
+        project: cfg.auth_project.clone(),
+        default_bucket: format!("{}.appspot.com", cfg.auth_project),
+        location: "nam5".to_owned(),
+        session: SessionId::new(u128::from(cfg.seed)),
+        max_running: cfg.functions_max_running,
+        retry_attempts: cfg.events_max_attempts,
+        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
+        runner_secret: runner_secret.to_owned(),
+        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
+            .unwrap_or_default(),
+        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
+            .unwrap_or_default(),
+    };
+    // A function name two codebases both export is fatal here. The runners it collided
+    // between are killed rather than left behind a daemon that refuses to serve them.
+    let spawned: Vec<Arc<Runner>> = started.iter().map(|c| c.runner.clone()).collect();
+    let runtime = match FunctionsRuntime::with_codebases(started, config, clock.clone()) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            for runner in &spawned {
+                runner.kill_now();
+            }
+            return Err(e);
+        }
+    };
+    tokio::spawn(runtime.clone().dispatch_loop());
+    // Commits reach the runtime inside the database critical section: in order, never
+    // dropped, and enqueued before the write returns to its caller.
+    let sink_runtime = runtime.clone();
+    backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
+    Ok(runtime)
+}
+
+/// Starts one codebase's runner, reads its environment and validates what it discovered.
+///
+/// Every codebase gets its own process, its own dotenv chain (the files live next to its
+/// `source`) and its own HTTP server; nothing about one codebase can be observed from another.
+#[allow(clippy::too_many_lines)]
+async fn start_codebase(
+    cfg: &RuntimeConfig,
+    codebase: &crate::config::FunctionsCodebase,
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
+    let source = codebase.source.clone();
+    let label = &codebase.codebase;
     if !Path::new(&source).is_dir() {
-        return Err(format!("functions.source {source:?} is not a directory"));
+        return Err(format!(
+            "the Functions codebase {label:?}: source {source:?} is not a directory"
+        ));
     }
     let mut command = match cfg.functions_runner.clone() {
         Some(command) => command,
@@ -369,7 +453,8 @@ pub async fn start(
     };
     command.push("--source".to_owned());
     command.push(source.clone());
-    let default_bucket = format!("{}.appspot.com", cfg.auth_project);
+    command.push("--codebase".to_owned());
+    command.push(label.clone());
     // The user environment goes in first: the emulator's own variables override it, exactly as
     // `getRuntimeEnvs` spreads `{...userEnvs, ...systemEnvs, ...emulatorEnvs, FIREBASE_CONFIG}`
     // (`functionsEmulator.js:1027`). The dotenv dialect refuses every reserved key outright, so
@@ -378,10 +463,11 @@ pub async fn start(
         Path::new(&source),
         &cfg.auth_project,
         cfg.functions_project_alias.as_deref(),
-    )?;
+    )
+    .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?;
     if !user_env.files.is_empty() {
         eprintln!(
-            "note: functions: loaded environment variables from {}",
+            "note: functions[{label}]: loaded environment variables from {}",
             user_env.files.join(", ")
         );
     }
@@ -442,7 +528,9 @@ pub async fn start(
         env,
         hello_timeout: Duration::from_secs(60),
     };
-    let runner = Runner::spawn_spec(&spec).await?;
+    let runner = Runner::spawn_spec(&spec)
+        .await
+        .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?;
     let manifest_json = match &cfg.functions_manifest {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -505,33 +593,12 @@ pub async fn start(
         runner.hello().app_check.as_ref(),
         callable_trusted_protocol,
     )?;
-    let config = FunctionsConfig {
-        project: cfg.auth_project.clone(),
-        default_bucket,
-        location: "nam5".to_owned(),
-        session: SessionId::new(u128::from(cfg.seed)),
-        max_running: cfg.functions_max_running,
-        retry_attempts: cfg.events_max_attempts,
-        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
-        runner_secret: runner_secret.to_owned(),
-        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
-            .unwrap_or_default(),
-        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
-            .unwrap_or_default(),
-    };
-    let runtime = FunctionsRuntime::new(
+    Ok(fireemu_adapter_functions::runtime::CodebaseSpec {
+        name: label.clone(),
         manifest,
-        config,
-        clock.clone(),
-        Arc::new(runner),
-        Some(spec),
-    );
-    tokio::spawn(runtime.clone().dispatch_loop());
-    // Commits reach the runtime inside the database critical section: in order, never
-    // dropped, and enqueued before the write returns to its caller.
-    let sink_runtime = runtime.clone();
-    backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
-    Ok(runtime)
+        runner: Arc::new(runner),
+        spawn: Some(spec),
+    })
 }
 
 /// Refuses a configured manifest that disagrees with discovery about which HTTP functions are

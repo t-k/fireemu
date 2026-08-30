@@ -30,9 +30,10 @@ function log(level, message, invocationId) {
 }
 
 function parseArgs(argv) {
-  const out = { source: process.cwd() };
+  const out = { source: process.cwd(), codebase: "default" };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--source" && argv[i + 1]) out.source = argv[++i];
+    else if (argv[i] === "--codebase" && argv[i + 1]) out.codebase = argv[++i];
   }
   return out;
 }
@@ -622,6 +623,7 @@ async function main() {
   send({
     type: "hello",
     runner: "node",
+    codebase: args.codebase,
     version: process.version,
     httpPort,
     manifest,

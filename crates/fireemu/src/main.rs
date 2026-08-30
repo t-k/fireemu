@@ -451,6 +451,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
     }
     if !only.functions {
         cfg.functions_source = None;
+        cfg.functions_loaded.clear();
     }
     if let Some(p) = raw.firestore_port {
         cfg.firestore_addr = with_port(&cfg.firestore_addr, p);
@@ -474,7 +475,9 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         cfg.ui_addr_explicit = true;
     }
     if let Some(dir) = raw.functions_source {
+        // `--functions <dir>` names exactly one codebase, whatever `firebase.json` declares.
         cfg.functions_source = Some(dir);
+        cfg.functions_loaded.clear();
     }
     if let Some(port) = raw.inspect_functions {
         apply_inspect_functions(&mut cfg, port)?;

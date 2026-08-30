@@ -566,10 +566,20 @@ async fn with_auth_context_triggers_see_the_committing_principal() {
 #[tokio::test]
 async fn catch_up_policies_keep_all_the_latest_or_no_due_runs() {
     use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
-    for (policy, expected_runs, expected_skips) in [
-        (CatchUpPolicy::All, 3, 0),
-        (CatchUpPolicy::Latest, 1, 2),
-        (CatchUpPolicy::None, 0, 3),
+    // Fifteen minutes hold three runs of the "every 5 minutes" schedule. What a policy drops
+    // is one summary record per job and clock change, carrying the exact count.
+    for (policy, expected_runs, expected_skipped) in [
+        (CatchUpPolicy::All, 3, None),
+        (
+            CatchUpPolicy::Latest,
+            1,
+            Some("skipped: catch-up latest (2 runs)"),
+        ),
+        (
+            CatchUpPolicy::None,
+            0,
+            Some("skipped: catch-up none (3 runs)"),
+        ),
     ] {
         let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
         clock
@@ -584,11 +594,17 @@ async fn catch_up_policies_keep_all_the_latest_or_no_due_runs() {
             .iter()
             .filter(|r| r.function == "tick" && r.outcome == "ok")
             .count();
-        let skips = history
+        let skips: Vec<&str> = history
             .iter()
             .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
-            .count();
-        assert_eq!((runs, skips), (expected_runs, expected_skips), "{policy:?}");
+            .map(|r| r.outcome.as_str())
+            .collect();
+        assert_eq!(runs, expected_runs, "{policy:?}");
+        assert_eq!(
+            skips,
+            expected_skipped.into_iter().collect::<Vec<_>>(),
+            "{policy:?}"
+        );
     }
 }
 
@@ -721,14 +737,27 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
 #[tokio::test]
 async fn catch_up_latest_and_none_stay_idle_beyond_the_cap() {
     use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
-    for (policy, expected_runs) in [(CatchUpPolicy::Latest, 1), (CatchUpPolicy::None, 0)] {
+    // FN-CATCHUP-01 / 02: ten years of an "every 5 minutes" schedule is more than a million
+    // occurrences. Neither policy keeps more than one of them, and neither enumerates them:
+    // the deterministic work counter stays in the hundreds and the retained history gains one
+    // summary record, not one record per missed run.
+    for (policy, expected_runs, expected_skipped) in [
+        (
+            CatchUpPolicy::Latest,
+            1,
+            "skipped: catch-up latest (1051775 runs)",
+        ),
+        (
+            CatchUpPolicy::None,
+            0,
+            "skipped: catch-up none (1051776 runs)",
+        ),
+    ] {
         let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
-        // A day: 288 "every 5 minutes" runs, far beyond a small cap of the test config
-        // (1000) only in principle; use a week to exceed it: 2016 runs.
         clock
             .lock()
             .unwrap()
-            .advance(LogicalDuration::from_seconds(7 * 24 * 3600))
+            .advance(LogicalDuration::from_seconds(3_652 * 24 * 3600))
             .unwrap();
         runtime.on_clock_changed();
         assert!(
@@ -742,16 +771,33 @@ async fn catch_up_latest_and_none_stay_idle_beyond_the_cap() {
             .filter(|r| r.function == "tick" && r.outcome == "ok")
             .count();
         assert_eq!(runs, expected_runs, "{policy:?}");
-        let skipped = history
+        let skipped: Vec<&str> = history
             .iter()
             .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
-            .count();
-        assert!(skipped >= 1000, "{policy:?}: {skipped}");
-        assert!(
-            history
-                .iter()
-                .any(|r| r.function == "tick" && r.outcome.contains("more)")),
+            .map(|r| r.outcome.as_str())
+            .collect();
+        assert_eq!(skipped, vec![expected_skipped], "{policy:?}");
+        // The cron job in the manifest ("0 3 * * *") has 3652 runs in the same window. A cron
+        // schedule is counted forward, so the count stops at the catch-up cap and the summary
+        // says so rather than paying for the rest.
+        let nightly: Vec<&str> = history
+            .iter()
+            .filter(|r| r.function == "nightly" && r.outcome.starts_with("skipped: catch-up"))
+            .map(|r| r.outcome.as_str())
+            .collect();
+        assert_eq!(
+            nightly,
+            vec![match policy {
+                CatchUpPolicy::Latest => "skipped: catch-up latest (at least 999 runs)",
+                _ => "skipped: catch-up none (at least 1000 runs)",
+            }],
             "{policy:?}"
+        );
+        // Both jobs together: 1.05 million occurrences answered in a few thousand steps.
+        assert!(
+            runtime.catch_up_steps() <= 20_000,
+            "{policy:?}: {} steps for 1055428 occurrences",
+            runtime.catch_up_steps()
         );
         assert_eq!(runtime.status()["catchUpPending"], false);
     }
@@ -936,4 +982,54 @@ async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
         runtime.history()
     );
     runtime.runner().shutdown().await;
+}
+
+#[test]
+fn the_bounded_run_window_matches_enumeration_in_iana_zones() {
+    // FN-CATCHUP-03 / 04: the direct computation the `latest` and `none` catch-up policies
+    // use agrees with the enumerating one against the real daylight-saving rules, across the
+    // 2026 spring gap and fall fold and over a year of a southern-hemisphere zone.
+    use ftd_adapter_functions::zone::resolve;
+    use ftd_core_functions::cron::{RunCount, Schedule};
+    let t = |s: &str| LogicalInstant::parse_rfc3339(s).unwrap();
+    let zones = [
+        "America/New_York",
+        "Europe/Berlin",
+        "Australia/Lord_Howe",
+        "Pacific/Chatham",
+        "Asia/Tokyo",
+    ];
+    let schedules = [
+        "* * * * *",
+        "30 2 * * *",
+        "30 1 * * *",
+        "0 9 * * *",
+        "*/15 9-17 * * mon-fri",
+        "0 0 1 * *",
+    ];
+    let ranges = [
+        ("2026-03-07T00:00:00Z", "2026-03-09T12:00:00Z"),
+        ("2026-10-03T00:00:00Z", "2026-10-05T12:00:00Z"),
+        ("2026-11-01T00:00:00Z", "2026-11-02T12:00:00Z"),
+        ("2026-11-01T05:00:00Z", "2026-11-01T06:20:00Z"),
+        ("2026-04-04T00:00:00Z", "2026-04-06T00:00:00Z"),
+    ];
+    for name in zones {
+        let zone = resolve(Some(name)).unwrap();
+        for source in schedules {
+            let s = Schedule::parse(source).unwrap();
+            for (from, to) in ranges {
+                let (from, to) = (t(from), t(to));
+                let expected = s.runs_between_in(from, to, &*zone, 100_000);
+                let window = s.window_in(from, to, &*zone, 100_000);
+                let label = format!("{name} {source} {from:?}..{to:?}");
+                assert_eq!(window.latest, expected.last().copied(), "latest: {label}");
+                assert_eq!(
+                    window.count,
+                    RunCount::Exact(expected.len() as u64),
+                    "count: {label}"
+                );
+            }
+        }
+    }
 }

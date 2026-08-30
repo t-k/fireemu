@@ -17,7 +17,7 @@ use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
 use ftd_core_events::outbox::Outbox;
 use ftd_core_events::retry::RetryPolicy;
 use ftd_core_events::state::{EventState, FailureOutcome};
-use ftd_core_functions::cron::Schedule;
+use ftd_core_functions::cron::{RunCount, Schedule};
 use ftd_core_functions::manifest::{
     AuthEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger,
 };
@@ -169,6 +169,9 @@ struct Inner {
     dead_letters: Vec<InvocationRecord>,
     /// Schedule runs became due beyond the catch-up cap and still have to be enqueued.
     catch_up_pending: bool,
+    /// Schedule search steps taken by the `latest` / `none` catch-up policies since the
+    /// runtime started; the deterministic work counter the complexity bound is asserted with.
+    catch_up_steps: u64,
     /// Schedule runs refused by the `reject` overlap policy.
     overlap_rejected: u64,
     /// Events held back by a `delay` fault until the virtual clock reaches the instant,
@@ -257,6 +260,7 @@ impl FunctionsRuntime {
                 history: Vec::new(),
                 dead_letters: Vec::new(),
                 catch_up_pending: false,
+                catch_up_steps: 0,
                 overlap_rejected: 0,
                 delayed: BTreeMap::new(),
             }),
@@ -563,8 +567,13 @@ impl FunctionsRuntime {
     /// Enqueues the schedule runs that became due up to the current virtual time according
     /// to the catch-up policy and releases due retries. `all` enqueues every run into the
     /// vacant catch-up capacity (the remainder stays due and keeps the session busy);
-    /// `latest` enqueues one run per job, the most recent; `none` enqueues nothing. Runs
-    /// the policy drops are recorded as skipped (at most the cap of them, then a summary).
+    /// `latest` enqueues one run per job, the most recent; `none` enqueues nothing.
+    ///
+    /// `latest` and `none` answer the due window directly (a reverse search for the run they
+    /// would keep and a count that stops at the catch-up cap) instead of enumerating every
+    /// missed occurrence, so the time this holds the runtime lock does not grow with the size
+    /// of the clock jump. What they drop is recorded as one skipped record per job and clock
+    /// change, carrying a count that is exact up to the cap and "at least" beyond it.
     #[allow(clippy::too_many_lines)]
     pub fn on_clock_changed(&self) {
         let now = self.now();
@@ -580,8 +589,9 @@ impl FunctionsRuntime {
         }
         let chunk = room.max(1);
         let mut pending = false;
+        let mut steps = 0u64;
         let mut runs: Vec<(String, String, LogicalInstant)> = Vec::new();
-        let mut skipped: Vec<(String, u64)> = Vec::new();
+        let mut skipped: Vec<(String, RunCount)> = Vec::new();
         for job in &mut inner.jobs {
             match policy {
                 CatchUpPolicy::All => {
@@ -612,70 +622,47 @@ impl FunctionsRuntime {
                     }
                 }
                 CatchUpPolicy::Latest | CatchUpPolicy::None => {
-                    // Walk the due runs in bounded chunks; keep the last one under `latest`.
-                    let mut last: Option<LogicalInstant> = None;
-                    let mut dropped: u64 = 0;
-                    loop {
-                        let due = job.schedule.runs_between_in(
-                            job.cursor,
-                            now,
-                            &*job.zone,
-                            cap.saturating_add(1),
-                        );
-                        if due.is_empty() {
-                            break;
-                        }
-                        let more = due.len() > cap;
-                        let taken: Vec<LogicalInstant> = due.into_iter().take(cap).collect();
-                        job.cursor = taken.last().copied().unwrap_or(job.cursor);
-                        if last.take().is_some() {
-                            dropped += 1;
-                        }
-                        dropped += (taken.len() as u64).saturating_sub(1);
-                        last = taken.last().copied();
-                        if !more {
-                            break;
-                        }
-                    }
+                    // Neither policy keeps more than one run, so the due window is answered
+                    // directly instead of enumerated: a reverse search for the run `latest`
+                    // would keep, and a count that stops at the cap. The work no longer grows
+                    // with the number of occurrences the clock jumped over.
+                    let window = job
+                        .schedule
+                        .window_in(job.cursor, now, &*job.zone, cap as u64);
+                    steps = steps.saturating_add(window.steps);
                     if now.as_nanos() > job.cursor.as_nanos() {
                         job.cursor = now;
                     }
-                    match (policy, last) {
+                    let dropped = match (policy, window.latest) {
                         (CatchUpPolicy::Latest, Some(t)) => {
                             runs.push((job.function.clone(), job.region.clone(), t));
+                            window.count.saturating_sub(1)
                         }
-                        (CatchUpPolicy::None, Some(_)) => dropped += 1,
-                        _ => {}
-                    }
-                    if dropped > 0 {
+                        (CatchUpPolicy::None, Some(_)) => window.count,
+                        _ => RunCount::Exact(0),
+                    };
+                    if !dropped.is_zero() {
                         skipped.push((job.function.clone(), dropped));
                     }
                 }
             }
         }
         inner.catch_up_pending = pending;
+        inner.catch_up_steps = inner.catch_up_steps.saturating_add(steps);
         let label = match policy {
             CatchUpPolicy::Latest => "latest",
             _ => "none",
         };
+        // One record per job and clock change summarises what the policy dropped: the count
+        // is exact up to the catch-up cap and "at least" beyond it, so neither the work nor
+        // the retained history grows with the size of the jump.
         for (function, count) in skipped {
-            let listed = count.min(cap as u64);
-            for _ in 0..listed {
-                inner.history.push(InvocationRecord {
-                    event_id: 0,
-                    function: function.clone(),
-                    attempt: 0,
-                    outcome: format!("skipped: catch-up {label}"),
-                });
-            }
-            if count > listed {
-                inner.history.push(InvocationRecord {
-                    event_id: 0,
-                    function,
-                    attempt: 0,
-                    outcome: format!("skipped: catch-up {label} (+{} more)", count - listed),
-                });
-            }
+            inner.history.push(InvocationRecord {
+                event_id: 0,
+                function,
+                attempt: 0,
+                outcome: format!("skipped: catch-up {label} ({count})"),
+            });
         }
         for (function, region, at) in runs {
             if !self.admit_scheduled_run(&mut inner, &function) {
@@ -984,6 +971,14 @@ impl FunctionsRuntime {
                 return Err(self.status());
             }
         }
+    }
+
+    /// Schedule search steps the `latest` and `none` catch-up policies have taken since the
+    /// runtime started. It is bounded per clock change by the schedules and the catch-up cap,
+    /// never by the number of occurrences the clock jumped over; tests hold that bound.
+    #[must_use]
+    pub fn catch_up_steps(&self) -> u64 {
+        self.inner.lock().map(|i| i.catch_up_steps).unwrap_or(0)
     }
 
     /// Invocation history (oldest first).

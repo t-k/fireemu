@@ -613,7 +613,8 @@
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
           "M-APPCHECK-004",
-          "M-APPCHECK-006"
+          "M-APPCHECK-006",
+          "M-APPCHECK-012"
         ]
       }
     },
@@ -623,7 +624,7 @@
       "criticality": "critical",
       "owner": "adapter-http",
       "status": "implemented",
-      "note": "The published route classification is `identity_toolkit::end_user_operation`, which also bounds the observation label. The Admin bypass requires the owner credential itself, so an Admin-shaped path without it is an ordinary end-user request.",
+      "note": "The published route classification is `identity_toolkit::end_user_operation`, which also bounds the observation label. Both bypasses require their own credential: the Admin routes the owner credential, the emulator inspection routes the control token. The latter is checked by the App Check path itself because the routes' own guard only challenges browser requests, so an Origin-less caller would otherwise bypass unguarded.",
       "artifacts": {
         "integration": [
           "crates/ftd-adapter-http/tests/app_check_auth.rs"
@@ -659,7 +660,7 @@
       "criticality": "critical",
       "owner": "adapter-http",
       "status": "partial",
-      "note": "Milestone AC1 covers the non-resumable operations plus the admission of a resumable start; the download token is compared in constant time and must bind to the resolved bucket, object name and generation, and the privileged JSON API classification is shared with the Security Rules bypass so the two cannot drift apart. The per-continuation contract of specification section 13.2 is AC2.",
+      "note": "Milestone AC1 covers the non-resumable operations and admits every resumable request, initiation and continuation alike; what is still missing is binding a continuation to the app that started the upload, which is AC2. The download token is compared in constant time and must bind to the resolved bucket, object name and generation. The JSON API bypass requires the owner credential: the dialect bypasses Security Rules without one, as the official Emulator does, but a path shape is not a credential and would otherwise let a caller defeat enforcement by rewriting /v0/b/... to /storage/v1/b/...",
       "artifacts": {
         "integration": [
           "crates/ftd-adapter-http/tests/app_check_storage.rs"
@@ -677,7 +678,7 @@
       "criticality": "critical",
       "owner": "firebase-testd",
       "status": "implemented",
-      "note": "Creating, resetting and deleting a project rotates its epoch through the ProjectHooks seam; a snapshot restore replaces the scope's dynamic debug-token registrations and then rotates the epoch. The epochs are drawn from the operating system CSPRNG before any is installed, so a failing draw reports itself instead of becoming a predictable epoch, and the installation is one write under the exclusive admission barrier.",
+      "note": "Creating, resetting and deleting a project rotates its epoch through the ProjectHooks seam; a snapshot restore replaces the scope's dynamic debug-token registrations and then rotates the epoch. The epochs are drawn from the operating system CSPRNG in the probe phase, before the first store is wiped and before any registration is replaced, so a failing draw leaves the session exactly as it was rather than a wiped session still admitting its old tokens; the installation is one write under the exclusive admission barrier.",
       "artifacts": {
         "integration": [
           "crates/firebase-testd/src/sessions.rs",
@@ -697,7 +698,7 @@
       "criticality": "important",
       "owner": "adapter-http",
       "status": "partial",
-      "note": "The control API serves per-project counters by service, verified app ID, category and outcome at GET /v1/sessions/{session}/appCheck/observations; it requires the control token for every method whatever the Origin and sets Cache-Control: no-store. The Emulator UI page is not built yet, which is what keeps this partial.",
+      "note": "The control API serves per-project counters by service, verified app ID, category and outcome at GET /v1/sessions/{session}/appCheck/observations; it requires the control token for every method whatever the Origin and sets Cache-Control: no-store. Two things keep this partial: there is no Emulator UI page, and the retained observations are one bounded ring for the runtime rather than one per project, so heavy traffic to one project can evict another project's recent observations.",
       "artifacts": {
         "integration": [
           "crates/ftd-adapter-http/tests/app_check_control.rs",

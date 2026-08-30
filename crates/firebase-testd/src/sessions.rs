@@ -33,28 +33,43 @@ pub struct Projects {
     pub app_check: Option<ftd_core_app_check::AppCheckGate>,
 }
 
-/// Replaces the App Check session epoch of every project the scope owns, and drops the
-/// observations that described the state being replaced.
+/// The App Check epochs a transition will install, drawn before anything is destroyed.
 ///
-/// The epochs are drawn from the operating system CSPRNG before any of them is installed, so
-/// a failing draw reports itself instead of becoming a predictable epoch, and the installation
-/// itself is one write (`INV-APPCHECK-005`). Callers run under the exclusive admission
-/// barrier, so no request straddles the swap.
-fn rotate_app_check(
+/// This is the probe half of the probe-then-apply protocol the other stores already use: the
+/// operating system CSPRNG can fail, and a failure has to be reported while the session is
+/// still intact. A transition that has already wiped a store cannot report "no epoch", and
+/// leaving the old epoch in place would keep every pre-transition token valid
+/// (`INV-APPCHECK-007`).
+type PendingEpochs = Vec<(String, ftd_core_app_check::ProjectEpoch)>;
+
+fn draw_app_check_epochs(
     gate: Option<&ftd_core_app_check::AppCheckGate>,
-    accept: impl Fn(&str) -> bool + Copy,
-) -> Result<(), String> {
+    accept: impl Fn(&str) -> bool,
+) -> Result<PendingEpochs, String> {
     let Some(gate) = gate else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let projects = gate.projects(accept);
     let mut epochs = Vec::with_capacity(projects.len());
     for project in projects {
         epochs.push((project, crate::random_epoch()?));
     }
-    gate.set_epochs(&epochs);
+    Ok(epochs)
+}
+
+/// The apply half: installs the drawn epochs in one write (`INV-APPCHECK-005`) and drops the
+/// observations that described the state being replaced. Callers hold the exclusive admission
+/// barrier, so no request straddles the swap. This cannot fail.
+fn install_app_check_epochs(
+    gate: Option<&ftd_core_app_check::AppCheckGate>,
+    accept: impl Fn(&str) -> bool,
+    epochs: &PendingEpochs,
+) {
+    let Some(gate) = gate else {
+        return;
+    };
+    gate.set_epochs(epochs);
     gate.clear_observations(accept);
-    Ok(())
 }
 
 impl Projects {
@@ -97,16 +112,25 @@ impl ProjectHooks for Projects {
         {
             store.set_signer(signer);
         }
+        // A statically registered project may be reused by a new session; it starts with a
+        // fresh epoch, so a token of the previous session never authorizes this one. The
+        // epoch is drawn before the store is registered, so a failing draw leaves nothing
+        // half-created.
+        let epochs = draw_app_check_epochs(self.app_check.as_ref(), |p| p == project)?;
         if !self.registry.register(project, store) {
             return Err(format!("project {project:?} already has an Auth store"));
         }
-        // A statically registered project may be reused by a new session; it starts with a
-        // fresh epoch, so a token of the previous session never authorizes this one.
-        rotate_app_check(self.app_check.as_ref(), |p| p == project)
+        install_app_check_epochs(self.app_check.as_ref(), |p| p == project, &epochs);
+        Ok(())
     }
 
     fn reset_scope(&self, scope: &Scope) -> Result<(), TransitionFailure> {
         let auth = self.prepare(scope)?;
+        // Part of the probe: the epochs the reset will install are drawn before the first
+        // store is wiped, so a failing CSPRNG read leaves the session exactly as it was
+        // instead of a wiped session that still admits its old App Check tokens.
+        let epochs = draw_app_check_epochs(self.app_check.as_ref(), |p| scope.owns_project(p))
+            .map_err(|e| TransitionFailure::new("app check", e))?;
         // Apply: Firestore first (it publishes the new epoch for the default scope), then
         // the stores the probe above proved writable.
         self.backend.reset_scope(scope);
@@ -124,8 +148,7 @@ impl ProjectHooks for Projects {
                 .map_err(|_| TransitionFailure::new("auth", "the Auth store is poisoned"))?
                 .clear();
         }
-        rotate_app_check(self.app_check.as_ref(), |p| scope.owns_project(p))
-            .map_err(|e| TransitionFailure::new("app check", e))?;
+        install_app_check_epochs(self.app_check.as_ref(), |p| scope.owns_project(p), &epochs);
         Ok(())
     }
 

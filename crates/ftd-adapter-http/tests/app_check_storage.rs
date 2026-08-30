@@ -306,24 +306,175 @@ fn a_download_token_that_does_not_bind_to_the_object_does_not_bypass() {
 fn privileged_json_api_traffic_follows_the_explicit_bypass() {
     let h = harness(BaselineMode::Enforced);
     h.seed_object("listed.txt");
-    for (name, headers) in [
-        ("an unauthenticated JSON API request", Vec::new()),
-        ("a Bearer-credential JSON API request", vec![OWNER]),
-    ] {
-        let listed = h.call(
-            "GET",
-            &format!("/storage/v1/b/{BUCKET}/o"),
-            &headers,
-            &[],
-            b"",
-        );
-        assert_eq!(
-            listed.status,
-            200,
-            "{name}: {}",
-            String::from_utf8_lossy(&listed.body)
-        );
+    let listed = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o"),
+        &[OWNER],
+        &[],
+        b"",
+    );
+    assert_eq!(
+        listed.status,
+        200,
+        "the owner credential on the JSON API dialect bypasses: {}",
+        String::from_utf8_lossy(&listed.body)
+    );
+}
+
+/// The bypass is the credential, not the path. A JSON API path bypasses Security Rules
+/// without one, as the official Emulator does, but specification section 12.2 grants the App
+/// Check bypass to the *authenticated* dialect only: otherwise an enforced Storage service
+/// would be defeated by rewriting `/v0/b/...` to `/storage/v1/b/...`.
+#[test]
+fn an_unauthenticated_json_api_path_never_bypasses_app_check() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("guarded-json.txt");
+    let paths = [
+        format!("/storage/v1/b/{BUCKET}/o"),
+        format!("/storage/v1/b/{BUCKET}/o/guarded-json.txt"),
+        format!("/b/{BUCKET}/o/guarded-json.txt"),
+        format!("/download/storage/v1/b/{BUCKET}/o/guarded-json.txt?alt=media"),
+        format!("/storage/v1/b/{BUCKET}"),
+    ];
+    for path in &paths {
+        for (name, headers) in [
+            ("no credential at all", Vec::new()),
+            (
+                "an unverified bearer credential",
+                vec![("authorization", "Bearer garbage")],
+            ),
+        ] {
+            let denied = h.call("GET", path, &headers, &[], b"");
+            assert_eq!(
+                denied.status,
+                403,
+                "{path} with {name}: {}",
+                String::from_utf8_lossy(&denied.body)
+            );
+            assert_eq!(body_of(&denied)["error"]["reason"], "APP_CHECK_REQUIRED");
+        }
     }
+    // A mutating JSON API route is refused before it creates anything.
+    let upload = h.call(
+        "POST",
+        &format!("/upload/storage/v1/b/{BUCKET}/o?name=json-api.txt&uploadType=media"),
+        &[("content-type", "text/plain")],
+        &[],
+        b"hello",
+    );
+    assert_eq!(
+        upload.status,
+        403,
+        "{}",
+        String::from_utf8_lossy(&upload.body)
+    );
+    let read = h.call(
+        "GET",
+        &format!("/v0/b/{BUCKET}/o/json-api.txt"),
+        &[OWNER],
+        &[&h.token()],
+        b"",
+    );
+    assert_eq!(read.status, 404, "no object was created");
+}
+
+/// The same object, through either dialect, reaches the same admission decision when neither
+/// carries the dialect's privileged credential.
+#[test]
+fn both_dialects_enforce_app_check_identically_without_a_privileged_credential() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("both.txt");
+    let firebase = h.call("GET", &format!("/v0/b/{BUCKET}/o/both.txt"), &[], &[], b"");
+    let json_api = h.call(
+        "GET",
+        &format!("/storage/v1/b/{BUCKET}/o/both.txt"),
+        &[],
+        &[],
+        b"",
+    );
+    assert_eq!(firebase.status, json_api.status);
+    assert_eq!(
+        body_of(&firebase)["error"]["reason"],
+        body_of(&json_api)["error"]["reason"]
+    );
+    assert_eq!(firebase.status, 403);
+}
+
+/// Section 13.2: every mutating resumable request is checked, not only the initiation. AC1
+/// admits each continuation on its own token; binding the continuation to the *app* that
+/// started the upload is AC2.
+#[test]
+fn a_resumable_continuation_without_app_check_does_not_advance_the_offset() {
+    let h = harness(BaselineMode::Enforced);
+    let token = h.token();
+    let start = h.call(
+        "POST",
+        &format!("/v0/b/{BUCKET}/o?name=resume.bin"),
+        &[
+            OWNER,
+            ("x-goog-upload-protocol", "resumable"),
+            ("x-goog-upload-command", "start"),
+            ("x-goog-upload-header-content-type", "application/zip"),
+            ("x-goog-upload-header-content-length", "6"),
+            ("content-type", "application/json; charset=utf-8"),
+        ],
+        &[&token],
+        b"{}",
+    );
+    assert_eq!(
+        start.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&start.body)
+    );
+    let session = header(&start, "x-goog-upload-url")
+        .expect("a session URL")
+        .strip_prefix("http://127.0.0.1:9199")
+        .expect("the session URL names this host")
+        .to_owned();
+
+    let denied = h.call(
+        "POST",
+        &session,
+        &[
+            OWNER,
+            ("x-goog-upload-command", "upload"),
+            ("x-goog-upload-offset", "0"),
+        ],
+        &[],
+        b"abc",
+    );
+    assert_eq!(
+        denied.status,
+        403,
+        "{}",
+        String::from_utf8_lossy(&denied.body)
+    );
+
+    let queried = h.call(
+        "POST",
+        &session,
+        &[OWNER, ("x-goog-upload-command", "query")],
+        &[&token],
+        b"",
+    );
+    assert_eq!(
+        header(&queried, "x-goog-upload-size-received"),
+        Some("0"),
+        "the denied continuation advanced nothing"
+    );
+    let resumed = h.call(
+        "POST",
+        &session,
+        &[
+            OWNER,
+            ("x-goog-upload-command", "upload"),
+            ("x-goog-upload-offset", "0"),
+        ],
+        &[&token],
+        b"abc",
+    );
+    assert_eq!(resumed.status, 200, "the session survived the denial");
 }
 
 /// Dialect confusion: a JSON-API-shaped path with an end-user `Firebase <token>` credential is

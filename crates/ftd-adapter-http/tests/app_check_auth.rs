@@ -261,18 +261,71 @@ fn an_admin_path_without_the_owner_credential_does_not_bypass_app_check() {
     assert_eq!(h.user_count(), 0);
 }
 
-/// The emulator inspection routes configure the runtime and carry their own control-token
-/// guard, so they are outside end-user enforcement (section 13.3).
+/// The emulator inspection routes are privileged local administration, so they are outside
+/// end-user enforcement (section 13.3) -- for a caller that presents the control token.
 #[test]
 fn emulator_inspection_routes_follow_the_explicit_bypass() {
     let h = harness(BaselineMode::Enforced);
-    let listed = h.call(
+    let listed = handle_with(
+        &h.auth,
         "GET",
         "/emulator/v1/projects/demo-app/oobCodes",
+        &RequestHeaders {
+            authorization: Some(format!("Bearer {}", fixture::CONTROL_TOKEN)),
+            ..RequestHeaders::default()
+        },
         &json!({}),
-        &[],
     );
     assert_eq!(listed.status, 200, "{}", listed.body);
+}
+
+/// Section 12.2 grants the emulator-route bypass because those routes have "a separate
+/// control-token guard", and that guard only challenges browser requests. A command-line
+/// caller therefore has to present the control token to the App Check path itself, or the
+/// route is an ordinary end-user request -- otherwise an enforced Auth service would let an
+/// unauthenticated `Origin`-less request read action codes or wipe every account.
+#[test]
+fn emulator_inspection_routes_without_the_control_token_do_not_bypass() {
+    let h = harness(BaselineMode::Enforced);
+    let token = h.valid_token();
+    let signed_up = h.post(
+        &format!("{V1}/accounts:signUp"),
+        &sign_up_body("victim@example.com"),
+        &[&token],
+    );
+    assert_eq!(signed_up.status, 200, "{}", signed_up.body);
+
+    for (method, path) in [
+        ("GET", "/emulator/v1/projects/demo-app/oobCodes"),
+        ("GET", "/emulator/v1/projects/demo-app/verificationCodes"),
+        ("DELETE", "/emulator/v1/projects/demo-app/accounts"),
+    ] {
+        for (name, authorization) in [
+            ("no credential at all", None),
+            (
+                "a wrong control token",
+                Some("Bearer not-the-control-token"),
+            ),
+        ] {
+            let denied = handle_with(
+                &h.auth,
+                method,
+                path,
+                &RequestHeaders {
+                    authorization: authorization.map(str::to_owned),
+                    ..RequestHeaders::default()
+                },
+                &json!({}),
+            );
+            assert_eq!(
+                denied.status, 403,
+                "{method} {path} with {name}: {}",
+                denied.body
+            );
+            assert_eq!(denied.body["error"]["reason"], "APP_CHECK_REQUIRED");
+        }
+    }
+    assert_eq!(h.user_count(), 1, "no denied request wiped the accounts");
 }
 
 /// The Auth JWKS is public-key discovery, not an end-user operation.

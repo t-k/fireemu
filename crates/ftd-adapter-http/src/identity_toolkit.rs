@@ -365,18 +365,41 @@ pub fn end_user_operation(path: &str) -> &'static str {
 /// Which privileged credential, if any, an Identity Toolkit route already authenticated
 /// (specification sections 12.2 and 13.3).
 ///
-/// Only two surfaces bypass: the emulator inspection routes, which are privileged local
-/// administration with their own control-token guard, and the Admin SDK routes, and those
-/// only once the caller actually presented the owner credential. A request to an Admin path
-/// *without* the owner credential is an ordinary end-user request as far as App Check is
-/// concerned, so a missing token is refused before `admin_guard` reports anything.
-fn app_check_bypass(path: &str, headers: &RequestHeaders) -> PrivilegedBypass {
+/// Three surfaces bypass, and each one has to present its own credential first:
+///
+/// - the Auth JWKS, which is public-key discovery and carries no state at all;
+/// - the emulator inspection routes, but only for a caller that presented the control token.
+///   Section 12.2 grants that bypass because those routes have "a separate control-token
+///   guard", and their own guard only challenges browser requests (those carrying an
+///   `Origin`), so the App Check path checks the token itself rather than inheriting a guard
+///   that does not run for a command-line caller;
+/// - the Admin SDK routes, but only once the caller actually presented the owner credential.
+///
+/// A request to one of those paths without the matching credential is an ordinary end-user
+/// request as far as App Check is concerned, so under `enforced` a missing App Check token is
+/// refused before `admin_guard` or the emulator-route guard reports anything.
+fn app_check_bypass(
+    path: &str,
+    headers: &RequestHeaders,
+    control_token: Option<&str>,
+) -> PrivilegedBypass {
+    if JWKS_PATHS.contains(&path) {
+        return PrivilegedBypass::ControlApi;
+    }
+    let presented = headers
+        .authorization
+        .as_deref()
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .map(str::trim);
+    if path.starts_with("/emulator/v1/projects/")
+        && control_token.is_some()
+        && presented == control_token
+    {
+        return PrivilegedBypass::ControlApi;
+    }
     let is_admin = path
         .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
         .is_some_and(|rest| rest.contains('/'));
-    if JWKS_PATHS.contains(&path) || path.starts_with("/emulator/v1/projects/") {
-        return PrivilegedBypass::ControlApi;
-    }
     if is_admin && headers.authorization.as_deref() == Some(OWNER_CREDENTIAL) {
         return PrivilegedBypass::IdentityToolkitAdmin;
     }
@@ -402,7 +425,7 @@ fn app_check_denial(
         project_id,
         transport: "http",
         operation: end_user_operation(path),
-        bypass: app_check_bypass(path, headers),
+        bypass: app_check_bypass(path, headers, state.control_token.as_deref()),
         header: &header,
         now: at,
     });

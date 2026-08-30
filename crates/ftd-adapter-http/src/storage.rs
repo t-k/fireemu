@@ -1157,18 +1157,20 @@ fn base64_decode(text: &str) -> Result<Vec<u8>, ()> {
 /// Which privileged credential a Storage route already authenticated (section 12.2).
 ///
 /// Two surfaces bypass. The JSON API dialect is the privileged server surface the Admin SDK
-/// and `gcloud` use, and it bypasses exactly when it would also bypass Security Rules, so the
-/// two classifications cannot drift apart. A Firebase download URL bypasses only when it
-/// carries a download token bound, in constant time, to the object the request resolved.
+/// and `gcloud` use, but only once the caller presented the emulator's owner credential: the
+/// path shape alone is not a credential, and an unauthenticated request to a JSON API path is
+/// an ordinary request as far as App Check is concerned. A Firebase download URL bypasses only
+/// when it carries a download token bound, in constant time, to the object the request
+/// resolved.
 fn storage_bypass(
     state: &StorageState,
     dialect: Dialect,
     route: &Route,
     method: &str,
     params: &BTreeMap<String, String>,
-    json_api_privileged: bool,
+    json_api_authenticated: bool,
 ) -> PrivilegedBypass {
-    if json_api_privileged {
+    if json_api_authenticated {
         return PrivilegedBypass::StorageJsonApi;
     }
     let Route::Object {
@@ -1288,10 +1290,15 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let bucket_project = state.project_of_bucket(&bucket_of_route);
     let authorization = req.header("authorization");
-    // The privileged JSON API classification is spelled once and drives both the Security
-    // Rules bypass below and the App Check bypass, so the two cannot drift apart.
+    // The JSON API dialect bypasses Security Rules without a credential, as the official
+    // Emulator does. That is deliberately *not* the App Check bypass: specification section
+    // 12.2 grants it to the "authenticated JSON API privileged/Admin dialect" and says a
+    // dialect-like path is never sufficient on its own, so the App Check bypass requires the
+    // emulator's exact owner credential, exactly as Firestore and Identity Toolkit do.
     let json_api_privileged =
         matches!(dialect, Dialect::Gcs) && authorization.is_none_or(|a| a.starts_with("Bearer "));
+    let json_api_authenticated = matches!(dialect, Dialect::Gcs)
+        && authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL);
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
     if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it
@@ -1302,7 +1309,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
             &route,
             &req.method,
             &params,
-            json_api_privileged,
+            json_api_authenticated,
         );
         if let Some(denial) = app_check_denial(
             state,

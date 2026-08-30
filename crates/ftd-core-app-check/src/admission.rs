@@ -129,47 +129,15 @@ impl AppCheckGate {
         &self.signer
     }
 
-    /// Replaces the session epoch of every project `accept` returns true for, and returns how
-    /// many were rotated (`AC-LIFE-001`).
-    ///
-    /// Every token issued under the previous epoch then fails with
-    /// [`crate::verify::AppCheckFailure::WrongEpoch`] at its next verification, and the
-    /// project's non-secret policy generation is bumped. Callers hold the session admission
-    /// barrier exclusively while they call this, so a request sees either the whole old epoch
-    /// or the whole new one (`INV-APPCHECK-005`).
-    pub fn rotate_epochs<A, E>(&self, accept: A, mut epoch: E) -> usize
-    where
-        A: Fn(&str) -> bool,
-        E: FnMut() -> ProjectEpoch,
-    {
-        let mut registry = self
-            .registry
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        let projects: Vec<String> = registry
-            .apps()
-            .map(|app| app.project_id().to_owned())
-            .filter(|project| accept(project))
-            .collect();
-        let mut rotated = 0;
-        let mut seen: Vec<&str> = Vec::new();
-        for project in &projects {
-            if seen.contains(&project.as_str()) {
-                continue;
-            }
-            seen.push(project);
-            registry.set_project_epoch(project, epoch());
-            rotated += 1;
-        }
-        rotated
-    }
-
     /// The registered projects `accept` admits, each named once.
     ///
-    /// A caller whose epoch source is fallible (the daemon draws from the operating system
-    /// CSPRNG) asks for the projects first, generates one epoch per project, and installs them
-    /// with [`Self::set_epochs`]; that way a failure is reported instead of turning into a
-    /// predictable epoch.
+    /// Rotating an epoch is deliberately two calls rather than one. The daemon's epoch source
+    /// is the operating system CSPRNG and can fail, so a caller asks for the projects first,
+    /// draws one epoch per project while the session is still intact, and only then installs
+    /// them with [`Self::set_epochs`]. A single call taking an infallible closure would invite
+    /// exactly the failure this ordering prevents: a half-torn-down session left running on
+    /// its old epoch, still admitting every token issued before the transition
+    /// (`INV-APPCHECK-007`).
     #[must_use]
     pub fn projects<A: Fn(&str) -> bool>(&self, accept: A) -> Vec<String> {
         let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
@@ -185,6 +153,11 @@ impl AppCheckGate {
 
     /// Installs one epoch per named project under a single write, so a request sees either the
     /// whole old set or the whole new one (`INV-APPCHECK-005`).
+    ///
+    /// Every token issued under a replaced epoch then fails with
+    /// [`crate::verify::AppCheckFailure::WrongEpoch`] at its next verification, and each
+    /// rotated project's non-secret policy generation is bumped. Callers hold the session
+    /// admission barrier exclusively, so no request straddles the swap.
     pub fn set_epochs(&self, epochs: &[(String, ProjectEpoch)]) {
         let mut registry = self
             .registry

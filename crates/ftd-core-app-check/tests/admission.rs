@@ -225,15 +225,14 @@ fn rotating_an_epoch_invalidates_the_tokens_of_that_project_only() {
         ftd_core_app_check::jwt::encode(&claims, gate.signer().as_ref())
     };
 
-    let mut next = 100u64;
-    let rotated = gate.rotate_epochs(
-        |project| project == "demo-app",
-        || {
-            next += 1;
-            seeded_epoch(next)
-        },
-    );
-    assert_eq!(rotated, 1);
+    let rotated: Vec<(String, _)> = gate
+        .projects(|project| project == "demo-app")
+        .into_iter()
+        .enumerate()
+        .map(|(i, project)| (project, seeded_epoch(100 + i as u64)))
+        .collect();
+    assert_eq!(rotated.len(), 1);
+    gate.set_epochs(&rotated);
 
     let firestore =
         ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Enforced).expect("mode");
@@ -267,7 +266,7 @@ fn a_rotation_bumps_the_policy_generation_of_the_rotated_project() {
         .read()
         .expect("readable")
         .policy_generation("demo-app");
-    gate.rotate_epochs(|p| p == "demo-app", || seeded_epoch(9));
+    gate.set_epochs(&[("demo-app".to_owned(), seeded_epoch(9))]);
     let after = gate
         .registry()
         .read()

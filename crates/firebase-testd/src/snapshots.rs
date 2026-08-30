@@ -331,7 +331,8 @@ impl SnapshotHook for AppCheck {
             .downcast_ref::<ftd_core_app_check::DynamicDebugTokens>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         let accept = |p: &str| scope.owns_project(p);
-        self.0.restore_dynamic_debug_tokens(accept, captured);
+        // Drawn before anything is replaced: a failing CSPRNG read must not leave the scope
+        // with restored registrations and a live pre-restore epoch (`INV-APPCHECK-007`).
         let projects = self.0.projects(accept);
         let mut epochs = Vec::with_capacity(projects.len());
         for project in projects {
@@ -340,6 +341,7 @@ impl SnapshotHook for AppCheck {
                 crate::random_epoch().map_err(|e| TransitionFailure::new(self.name(), e))?,
             ));
         }
+        self.0.restore_dynamic_debug_tokens(accept, captured);
         self.0.set_epochs(&epochs);
         self.0.clear_observations(accept);
         Ok(())

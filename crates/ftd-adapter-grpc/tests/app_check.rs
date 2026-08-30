@@ -705,11 +705,10 @@ async fn rotating_the_project_epoch_invalidates_an_issued_token_on_the_wire() {
     // The daemon's lifecycle hooks do this under the exclusive admission barrier.
     let barrier = h.backend.barrier();
     let exclusive = barrier.exclusive();
-    let rotated = h.gate.rotate_epochs(
-        |project| project == "demo-app",
-        || ProjectEpoch::new(0xABCD),
-    );
-    assert_eq!(rotated, 1);
+    let rotated = h.gate.projects(|project| project == "demo-app");
+    assert_eq!(rotated.len(), 1);
+    h.gate
+        .set_epochs(&[("demo-app".to_owned(), ProjectEpoch::new(0xABCD))]);
     drop(exclusive);
 
     let denied = h

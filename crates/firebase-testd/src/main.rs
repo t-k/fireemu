@@ -327,11 +327,10 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::proce
         .map_err(|e| format!("cannot start {program}: {e}"))
 }
 
-/// Sends `signal` to the command: to its process group when it leads one, else to it.
-fn signal_child(child: &tokio::process::Child, signal: &str) {
-    let Some(pid) = child.id() else {
-        return;
-    };
+/// Sends `signal` to the command (`pid` as spawned: `Child::id` is gone once the child was
+/// reaped, but its group may still hold a background job): to its process group when it
+/// leads one, else to it.
+fn signal_child(pid: u32, signal: &str) {
     let target = if own_process_group() {
         format!("-{pid}")
     } else {
@@ -357,18 +356,18 @@ async fn wait_child(
 /// is forwarded with its identity (through `kill(1)`; the crate forbids unsafe code) unless
 /// the terminal already delivered it to the command's own group, then SIGKILL to the whole
 /// group after ten seconds. Returns the status the command reported.
-async fn stop_child(child: &mut tokio::process::Child, signal: &str) -> i32 {
+async fn stop_child(child: &mut tokio::process::Child, pid: u32, signal: &str) -> i32 {
     let terminal_delivered = signal == "-INT" && !own_process_group();
     if !terminal_delivered {
-        signal_child(child, signal);
+        signal_child(pid, signal);
     }
     if let Ok(Ok(status)) =
         tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await
     {
-        signal_child(child, "-KILL");
+        signal_child(pid, "-KILL");
         exit_code(status)
     } else {
-        signal_child(child, "-KILL");
+        signal_child(pid, "-KILL");
         let _ = child.kill().await;
         137
     }
@@ -765,6 +764,7 @@ fn run(cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             }
             None => None,
         };
+        let child_pid = child.as_ref().and_then(tokio::process::Child::id);
         let mut terminated = false;
         let outcome = tokio::select! {
             r = grpc => Err(format!("gRPC server stopped: {r:?}")),
@@ -787,16 +787,16 @@ fn run(cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
         };
         // The command stops before the services it uses. When it exited by itself its
         // group is still swept (a background job it left behind must not keep running).
-        let code = match (&outcome, child.as_mut()) {
-            (Ok(Some(code)), Some(child)) => {
-                signal_child(child, "-KILL");
+        let code = match (&outcome, child.as_mut(), child_pid) {
+            (Ok(Some(code)), _, Some(pid)) => {
+                signal_child(pid, "-KILL");
                 *code
             }
-            (Ok(Some(code)), None) => *code,
-            (_, Some(child)) => {
-                stop_child(child, if terminated { "-TERM" } else { "-INT" }).await
+            (Ok(Some(code)), _, None) => *code,
+            (_, Some(child), Some(pid)) => {
+                stop_child(child, pid, if terminated { "-TERM" } else { "-INT" }).await
             }
-            (_, None) => 0,
+            _ => 0,
         };
         if let Some(runtime) = functions_runtime {
             runtime.runner().shutdown().await;

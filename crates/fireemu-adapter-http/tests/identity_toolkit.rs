@@ -643,7 +643,8 @@ fn admin_password_change_revokes_sessions_and_update_is_atomic() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": uid}),
     );
-    assert_eq!(looked["users"][0]["customAttributes"], "{}");
+    // No claims is an absent customAttributes, as the official record has it.
+    assert!(looked["users"][0]["customAttributes"].is_null());
     let (status, _) = admin(
         &s,
         "POST",
@@ -884,7 +885,9 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
         u["validSince"].as_str().is_some(),
         "tokensValidAfterTime source"
     );
-    assert_eq!(u["providerUserInfo"].as_array().map(Vec::len), Some(2));
+    // An address without a password credential lists no `password` provider (the official
+    // record's rule), so only the phone entry remains.
+    assert_eq!(u["providerUserInfo"].as_array().map(Vec::len), Some(1));
     // deleteProvider phone clears the number; federated lookups match nobody; an admin
     // lookup without identifiers is an error rather than an ID-token lookup.
     assert_eq!(

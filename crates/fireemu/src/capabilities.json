@@ -161,34 +161,44 @@
     "implemented": [
       "accounts:signUp (email, anonymous)",
       "accounts:signInWithPassword",
-      "accounts:signInWithCustomToken",
+      "accounts:signInWithCustomToken (unsigned JWT or strict JSON fake token, uid or user_id)",
       "accounts:lookup",
-      "accounts:update",
+      "accounts:update (profile, email, password, phone, deleteAttribute DISPLAY_NAME / PHOTO_URL / EMAIL / PASSWORD, deleteProvider phone / password / federated, linkProviderUserInfo; a credential change re-issues tokens in the response)",
+      "accounts:delete (the session's own account)",
       "accounts:sendOobCode / resetPassword / signInWithEmailLink (PASSWORD_RESET, VERIFY_EMAIL, EMAIL_SIGNIN, VERIFY_AND_CHANGE_EMAIL; applyActionCode through accounts:update)",
       "accounts:sendVerificationCode / signInWithPhoneNumber",
       "accounts:createAuthUri",
+      "GET /v1/projects and /v1/recaptchaParams (the fixed documents the official emulator serves)",
       "securetoken token (JSON and form)",
-      "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet, mfaInfo / mfa.enrollments (phone), linkProviderUserInfo / deleteProvider",
-      "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), config"
+      "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet/batchCreate/batchDelete/query/sendOobCode and projects/{p}:createSessionCookie; mfaInfo / mfa.enrollments (phone), linkProviderUserInfo / deleteProvider",
+      "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), config (GET and PATCH: signIn.allowDuplicateEmails is recorded for export, emailPrivacyConfig.enableImprovedEmailPrivacy changes what signInWithPassword, sendOobCode PASSWORD_RESET and createAuthUri reveal)"
     ],
     "notes": [
       "nothing is mailed or texted: codes are read from the emulator routes and are deterministic from the session seed",
       "reCAPTCHA tokens are accepted unchecked",
-      "conformance: auth/sign-up-and-sign-in-errors, auth/identity-toolkit-error-shapes, auth/oob-code-shapes (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
+      "error envelopes measured against firebase-tools 15.28.2: EMAIL_NOT_FOUND / INVALID_PASSWORD by default and INVALID_LOGIN_CREDENTIALS under improved email privacy, MISSING_EMAIL before MISSING_PASSWORD, the Not Found envelope with status NOT_FOUND for an unknown path, kind fields on every response, absent rather than null optional fields, 28-character generated local ids",
+      "one route table (crates/fireemu-adapter-http/src/identity_toolkit/routes.rs) drives dispatch, the App Check bypass classification and the bounded operation labels; a route cannot be dispatched without a label",
+      "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; expired entries are swept before every request and never observable; refresh tokens are not swept",
+      "Admin batchCreate (importUsers) verifies a rawPassword or the emulator's fakeHash form; any other passwordHash is kept out and the account is created without a password credential, which is observably what the official emulator does with a hash it cannot compare",
+      "conformance: auth/sign-up-and-sign-in-errors, auth/identity-toolkit-error-shapes, auth/oob-code-shapes, auth/admin-account-lifecycle, auth/client-account-flows (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "status": "implemented"
   },
   "AUTH-MFA-SMS-0": {
     "notes": [
       "phone second factors: mfaEnrollment:start/finalize/withdraw with phoneEnrollmentInfo / phoneVerificationInfo, mfaSignIn:start/finalize with phoneSignInInfo; codes come from /emulator/v1/projects/{p}/verificationCodes; up to five factors per user",
-      "the spec declared SMS out of scope; the user asked for Identity Platform parity"
+      "measured against firebase-tools 15.28.2: enrollment is refused with UNSUPPORTED_FIRST_FACTOR for an anonymous, phone, custom-token or Game Center session, with UNVERIFIED_EMAIL for an unverified email and with SECOND_FACTOR_EXISTS for a number already enrolled, on both the start and the finalize step and without creating or consuming a verification code; a pending-credential response obfuscates the number to its last four digits",
+      "the spec declared SMS out of scope; the user asked for Identity Platform parity",
+      "conformance: auth/mfa-error-shapes, auth/mfa-enrollment-eligibility (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "precision": "emulator-parity",
     "status": "implemented"
   },
   "AUTH-MFA-TOTP-1": {
     "notes": [
-      "window and enrollment TTL are local policies",
+      "window and enrollment TTL are local policies; an expired enrollment session answers SESSION_EXPIRED for one further session lifetime and is then reaped",
+      "the verified-email requirement of phone enrollment is not applied to TOTP enrollment: the official emulator has no TOTP route to measure it against, and production behaviour is not inferred from the SMS result",
+      "default snapshots carry no shared secret (INV-AUTH-003, ADR-034 amendment): an enrolled factor is captured with a detached secret and rebound on restore to the secret the live store still holds; a factor withdrawn in between is dropped from the restored account and reported on stderr, never restored unusable",
       "conformance: auth/mfa-error-shapes (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "precision": "boundary-conformance",

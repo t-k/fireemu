@@ -25,8 +25,8 @@
     },
     {
       "id": "start-enrolment-without-a-verified-email",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "body": {
           "error": {
             "code": 400,
@@ -41,14 +41,6 @@
           }
         },
         "status": 400
-      },
-      "testd": {
-        "body": {
-          "phoneSessionInfo": {
-            "sessionInfo": "sms-3235199f792bbcf70012"
-          }
-        },
-        "status": 200
       }
     },
     {
@@ -73,8 +65,8 @@
     },
     {
       "id": "finalize-enrolment-with-an-unknown-session",
-      "status": "parity",
-      "value": {
+      "status": "debt",
+      "oracle": {
         "body": {
           "error": {
             "code": 400,
@@ -86,6 +78,22 @@
               }
             ],
             "message": "INVALID_SESSION_INFO"
+          }
+        },
+        "status": 400
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors.",
+                "reason": "invalid"
+              }
+            ],
+            "message": "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors."
           }
         },
         "status": 400

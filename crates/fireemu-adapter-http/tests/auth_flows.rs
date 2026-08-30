@@ -538,17 +538,15 @@ fn phone_enrollment_needs_a_verified_eligible_first_factor_and_refuses_without_s
     );
     let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
     assert_eq!(codes["verificationCodes"].as_array().map(Vec::len), Some(0));
-    // The finalize step is refused the same way, and consumes no code.
+    // The finalize step checks the session before anything about the account (measured:
+    // auth/mfa-error-shapes#finalize-enrolment-with-an-unknown-session), and consumes no code.
     let (status, refused) = post(
         &s,
         &format!("{V2}/accounts/mfaEnrollment:finalize"),
         &json!({"idToken": id_token, "phoneVerificationInfo": {"sessionInfo": "x", "code": "000000"}}),
     );
     assert_eq!(status, 400, "{refused}");
-    assert!(refused["error"]["message"]
-        .as_str()
-        .unwrap()
-        .starts_with("UNVERIFIED_EMAIL"));
+    assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
     // An anonymous first factor cannot carry a second factor at all.
     let (_, anonymous) = post(&s, &format!("{V1}/accounts:signUp"), &json!({}));
     let (status, refused) = enrol(anonymous["idToken"].as_str().unwrap());

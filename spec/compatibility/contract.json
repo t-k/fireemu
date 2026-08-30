@@ -632,13 +632,14 @@
       "notes": [],
       "gaps": [
         "blocking identity functions (beforeUserCreated / beforeUserSignedIn)",
-        "import and export of the official Auth emulator account files"
+        "tenants, SAML / OIDC provider configuration, passkeys, Game Center and the IdP widget pages (/emulator/auth/*)",
+        "signIn.allowDuplicateEmails is recorded and exported but does not yet admit duplicate accounts"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
           "id": "AUTH-CLAIM-IDENTITY-TOOLKIT",
-          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced, including the emulator-only routes that read out-of-band codes and verification codes.",
+          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration.",
           "capabilities": [
             {
               "id": "AUTH-CORE-1",
@@ -658,17 +659,29 @@
             "conformance": [
               "auth/sign-up-and-sign-in-errors",
               "auth/identity-toolkit-error-shapes",
-              "auth/oob-code-shapes"
+              "auth/oob-code-shapes",
+              "auth/admin-account-lifecycle",
+              "auth/client-account-flows"
             ]
           },
           "officialLimitations": [
             "the official Auth emulator mails and texts nothing: codes are read from /emulator/v1/projects/{p}/oobCodes and verificationCodes",
             "the official Auth emulator accepts reCAPTCHA tokens unchecked",
-            "the official Auth emulator performs no OAuth round trip: accounts:signInWithIdp trusts the assertion in postBody"
+            "the official Auth emulator performs no OAuth round trip: accounts:signInWithIdp trusts the assertion in postBody",
+            "the official Auth emulator's passwords are reversible (fakeHash:salt=...:password=...): an imported hash of any other algorithm never verifies, so such an account cannot sign in on either side",
+            "the official Auth emulator distinguishes EMAIL_NOT_FOUND from INVALID_PASSWORD unless emailPrivacyConfig.enableImprovedEmailPrivacy is set through its config route, which production no longer does by default"
           ],
           "fireemuOnly": [
             {
               "behaviour": "codes are deterministic from the session seed rather than random",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; the official emulator keeps every code until it is consumed and its pending credential is stateless (firebase-tools/lib/emulator/auth/state.js)",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "an admin batchCreate row whose passwordHash is not the emulator's fakeHash form creates the account without a password credential instead of storing an unverifiable hash; sign-in fails the same way on both sides",
               "precision": "exact-for-local-semantics"
             }
           ],
@@ -710,7 +723,7 @@
         },
         {
           "id": "AUTH-CLAIM-MFA",
-          "statement": "TOTP and SMS second factors are enrolled, signed in with and withdrawn through the Identity Platform routes the official emulator serves.",
+          "statement": "TOTP and SMS second factors are enrolled, signed in with and withdrawn through the Identity Platform routes the official emulator serves, with the official eligibility refusals (first factor, verified email, duplicate number) and pending-credential shape.",
           "capabilities": [
             {
               "id": "AUTH-MFA-TOTP-1",
@@ -728,16 +741,26 @@
               "crates/fireemu-core-auth/tests/mfa.rs"
             ],
             "conformance": [
-              "auth/mfa-error-shapes"
+              "auth/mfa-error-shapes",
+              "auth/mfa-enrollment-eligibility"
             ]
           },
           "officialLimitations": [
-            "the official emulator sends no SMS: phone codes come from the emulator verificationCodes route"
+            "the official emulator sends no SMS: phone codes come from the emulator verificationCodes route",
+            "the official emulator refuses second-factor enrollment for an anonymous, phone, custom-token or Game Center first factor and for an unverified email"
           ],
           "fireemuOnly": [
             {
               "behaviour": "the TOTP acceptance window and the enrolment session TTL are local policies driven by the virtual clock",
               "precision": "boundary-conformance"
+            },
+            {
+              "behaviour": "TOTP enrollment does not require a verified email: the official emulator has no TOTP route to measure it against and production behaviour is not inferred from the SMS result",
+              "precision": "boundary-conformance"
+            },
+            {
+              "behaviour": "default session snapshots carry no TOTP shared secret; a restore rebinds an enrolled factor to the secret the live store still holds and drops a factor whose secret is gone",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [],

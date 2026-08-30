@@ -781,7 +781,10 @@ fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
     }
     let email = str_field(body, "email");
     let password = str_field(body, "password");
-    let new_user = if email.is_some() || password.is_some() {
+    // With an `idToken` the request upgrades that session's account (the client SDK's
+    // `linkWithCredential` for an email credential) instead of creating one.
+    let has_session = body.get("idToken").is_some_and(|t| !t.is_null());
+    let new_user = if has_session || email.is_some() || password.is_some() {
         let Some(email) = email.filter(|e| !e.is_empty()) else {
             return error(400, "MISSING_EMAIL");
         };
@@ -798,9 +801,33 @@ fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
             return auth_error(&e);
         }
     }
-    let uid = match store.create_user(new_user, at) {
-        Ok(uid) => uid,
-        Err(e) => return auth_error(&e),
+    let uid = if has_session {
+        let uid = match verify(store, body, at) {
+            Ok(uid) => uid,
+            Err(r) => return r,
+        };
+        let Some(email) = new_user.email.as_deref() else {
+            return error(400, "MISSING_EMAIL");
+        };
+        if store
+            .user_by_email(email)
+            .is_some_and(|u| u.local_id != uid)
+        {
+            return error(400, "EMAIL_EXISTS");
+        }
+        if let Err(e) = store.set_email(&uid, email) {
+            return auth_error(&e);
+        }
+        if let Some(u) = store.user_mut(&uid) {
+            u.email_verified = false;
+            u.provider = fireemu_core_auth::store::Provider::Password;
+        }
+        uid
+    } else {
+        match store.create_user(new_user, at) {
+            Ok(uid) => uid,
+            Err(e) => return auth_error(&e),
+        }
     };
     if let Some(password) = password {
         if let Err(e) = store.set_password(&uid, password) {
@@ -1010,13 +1037,12 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     };
     let mfa = mfa_info(store, uid, false);
     let mut providers: Vec<Value> = Vec::new();
+    // The official record lists a `password` provider for an email with a password or an
+    // email-link sign-in, and nothing for an address that has neither.
     if let Some(email) = &u.email {
-        let provider_id = if store.has_password(uid) {
-            "password"
-        } else {
-            "emailLink"
-        };
-        providers.push(json!({"providerId": provider_id, "rawId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
+        if store.has_password(uid) || u.provider == fireemu_core_auth::store::Provider::EmailLink {
+            providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
+        }
     }
     if let Some(phone) = &u.phone_number {
         providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
@@ -1032,7 +1058,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "phoneNumber": u.phone_number,
         "emailVerified": u.email_verified,
         "disabled": u.disabled,
-        "customAttributes": u.custom_claims.canonical_json(),
+        // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
+        "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
         "providerUserInfo": providers,
         "mfaInfo": mfa,
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
@@ -1592,12 +1619,20 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
         }
     }
     // A password change, an email change, an explicit `validSince` and a disablement all
-    // end every existing session; a request that changed its own credentials gets fresh
-    // tokens in the response, so the client SDK's `updatePassword` / `updateEmail` keep the
-    // user signed in (what the official emulator does).
+    // move `validSince`, so ID tokens issued before this second are refused (what the
+    // official emulator does). Refresh tokens: a privileged revocation, a disablement and a
+    // privileged credential change end every session (fireemu keeps production's refresh
+    // token revocation there, where the official emulator lets an old refresh token keep
+    // minting); a self-service credential change through the session's own ID token keeps
+    // that session's refresh tokens, because the client SDK continues on whichever refresh
+    // token it holds -- its response tokens when they differ, its previous ones when the ID
+    // token is byte-identical (same second, same claims), which a pinned clock makes certain.
     let credentials_changed = plan.password.is_some() || email_changed || plan.revoke;
     if credentials_changed || plan.disable == Some(true) {
         let _ = store.revoke_tokens(&uid, at);
+    }
+    let self_service = local_id.is_none();
+    if plan.revoke || plan.disable == Some(true) || (credentials_changed && !self_service) {
         store.revoke_refresh_tokens(&uid);
     }
     let mut response =
@@ -2238,12 +2273,14 @@ const MFA_INELIGIBLE_PROVIDERS: &[&str] = &["anonymous", "phone", "custom", "gc.
 
 /// The refusals the official emulator makes before a phone factor is enrolled (measured:
 /// `auth/mfa-error-shapes` and `auth/mfa-enrollment-eligibility`): an ineligible first
-/// factor, an unverified email, and a number already enrolled on the account. They apply to
-/// both the start and the finalize step, and none of them has a side effect.
+/// factor, an unverified email (the start step only: the finalize step checks the code
+/// first and never the flag), and a number already enrolled on the account. None of them
+/// has a side effect.
 fn phone_enrollment_refusal(
     store: &AuthStore,
     session: &Session,
     phone: Option<&str>,
+    require_verified_email: bool,
 ) -> Option<JsonResponse> {
     if MFA_INELIGIBLE_PROVIDERS.contains(&session.provider.as_str()) {
         return Some(error(
@@ -2252,7 +2289,7 @@ fn phone_enrollment_refusal(
         ));
     }
     let user = store.user(&session.uid)?;
-    if !user.email_verified {
+    if require_verified_email && !user.email_verified {
         return Some(error(
             400,
             "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors.",
@@ -2285,7 +2322,7 @@ fn mfa_enrollment_start(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     let uid = session.uid.clone();
     if let Some(phone) = body.get("phoneEnrollmentInfo") {
         let number = str_field(phone, "phoneNumber").unwrap_or("");
-        if let Some(refusal) = phone_enrollment_refusal(store, &session, Some(number)) {
+        if let Some(refusal) = phone_enrollment_refusal(store, &session, Some(number), true) {
             return refusal;
         }
         return match store.send_verification_code(
@@ -2348,7 +2385,7 @@ fn mfa_enrollment_finalize(
     };
     let uid = session.uid.clone();
     if let Some(phone) = body.get("phoneVerificationInfo") {
-        if let Some(refusal) = phone_enrollment_refusal(store, &session, None) {
+        if let Some(refusal) = phone_enrollment_refusal(store, &session, None, false) {
             return refusal;
         }
         return finalize_phone_enrollment(store, &session, phone, body, at);
@@ -3002,7 +3039,9 @@ fn finalize_phone_enrollment(
     if verified.purpose != (VerificationPurpose::Enrollment { uid: uid.clone() }) {
         return error(400, "INVALID_SESSION_INFO");
     }
-    if let Some(refusal) = phone_enrollment_refusal(store, session, Some(&verified.phone_number)) {
+    if let Some(refusal) =
+        phone_enrollment_refusal(store, session, Some(&verified.phone_number), false)
+    {
         return refusal;
     }
     store.consume_phone_code(session_info);
@@ -3057,8 +3096,18 @@ fn mfa_enrollment_withdraw(
 
 /// `mfaSignIn:start`: sends the code of the chosen phone factor (TOTP has no start step).
 fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
-    let Some(pending) = str_field(body, "mfaPendingCredential") else {
-        return error(400, "MISSING_MFA_PENDING_CREDENTIAL");
+    // The official order: both request fields first, then the credential, then the factor.
+    let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {
+        return error(
+            400,
+            "MISSING_MFA_PENDING_CREDENTIAL : Request does not have MFA pending credential.",
+        );
+    };
+    let Some(enrollment_id) = str_field(body, "mfaEnrollmentId").filter(|e| !e.is_empty()) else {
+        return error(
+            400,
+            "MISSING_MFA_ENROLLMENT_ID : No second factor identifier is provided.",
+        );
     };
     let Some(pending_id) = PendingSignInId::parse(pending) else {
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
@@ -3072,9 +3121,6 @@ fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) ->
             "INVALID_ARGUMENT : TOTP sign-in has no start step; call mfaSignIn:finalize",
         );
     }
-    let Some(enrollment_id) = str_field(body, "mfaEnrollmentId") else {
-        return error(400, "MISSING_MFA_ENROLLMENT_ID");
-    };
     let Some(phone) = store.user(&uid).and_then(|u| {
         u.mfa
             .phone_factors()

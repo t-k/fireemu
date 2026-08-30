@@ -58,7 +58,7 @@ Cached on the machine that recorded the fixtures:
 
 ## Corpus
 
-18 scenarios, 150 recorded steps.
+21 scenarios, 195 recorded steps.
 
 ## What the oracle cannot answer
 

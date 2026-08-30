@@ -140,6 +140,9 @@ pub struct OobCode {
     pub new_email: Option<String>,
     /// Creation time.
     pub created_at: LogicalInstant,
+    /// Creation order within the store (listings sort by it after `created_at`, so a
+    /// pinned clock still lists codes oldest first).
+    pub sequence: u64,
 }
 
 /// A user lifecycle event (Auth triggers).
@@ -195,6 +198,8 @@ pub struct VerificationCode {
     pub purpose: VerificationPurpose,
     /// Creation time.
     pub created_at: LogicalInstant,
+    /// Creation order within the store (see [`OobCode::sequence`]).
+    pub sequence: u64,
 }
 
 /// New user request.
@@ -1000,7 +1005,7 @@ impl AuthStore {
             mfa: MfaState::default(),
             created_at: now,
             last_sign_in_at: None,
-            tokens_valid_after: now,
+            tokens_valid_after: Self::whole_second(now),
             federated: Vec::new(),
             password: None,
         });
@@ -1034,6 +1039,7 @@ impl AuthStore {
                 uid,
                 new_email,
                 created_at: now,
+                sequence: self.counter,
             },
         );
         Ok(code)
@@ -1043,7 +1049,7 @@ impl AuthStore {
     #[must_use]
     pub fn oob_codes(&self) -> Vec<&OobCode> {
         let mut codes: Vec<&OobCode> = self.oob_codes.values().collect();
-        codes.sort_by_key(|c| c.created_at);
+        codes.sort_by_key(|c| (c.created_at, c.sequence));
         codes
     }
 
@@ -1104,6 +1110,7 @@ impl AuthStore {
             code,
             purpose,
             created_at: now,
+            sequence: self.counter,
         };
         self.verification_codes.insert(session_info, entry.clone());
         Ok(entry)
@@ -1113,7 +1120,7 @@ impl AuthStore {
     #[must_use]
     pub fn verification_codes(&self) -> Vec<&VerificationCode> {
         let mut codes: Vec<&VerificationCode> = self.verification_codes.values().collect();
-        codes.sort_by_key(|c| c.created_at);
+        codes.sort_by_key(|c| (c.created_at, c.sequence));
         codes
     }
 
@@ -1849,8 +1856,16 @@ impl AuthStore {
     /// Revokes refresh tokens: tokens issued before `now` become invalid.
     pub fn revoke_tokens(&mut self, uid: &LocalId, now: LogicalInstant) -> Result<(), AuthError> {
         let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
-        user.tokens_valid_after = now;
+        user.tokens_valid_after = Self::whole_second(now);
         Ok(())
+    }
+
+    /// `validSince` has second precision on the wire and a token's `auth_time` is a whole
+    /// second, so the revocation instant is floored: a token issued in the same second as
+    /// the revocation stays valid on both sides, as it does in the official emulator.
+    fn whole_second(at: LogicalInstant) -> LogicalInstant {
+        let seconds = at.as_nanos().div_euclid(1_000_000_000);
+        LogicalInstant::from_nanos(seconds * 1_000_000_000)
     }
 
     /// Whether a token with `auth_time` is still valid for `uid` at `now`.

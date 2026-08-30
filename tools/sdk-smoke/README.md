@@ -7,7 +7,8 @@ Exercise a running `firebase-testd` with the real Firebase SDKs.
 - `client.mjs`: the `firebase` client SDK (Auth sign-up, Firestore `Listen` / `Write`
   streams) with Security Rules loaded through the control API.
 - `lite.mjs`: `firebase/firestore/lite` (REST only) with Security Rules.
-- `auth.mjs`: email actions (password reset, verification, email link), phone sign-in,
+- `auth.mjs` (run it on an unpinned clock: `firebase-admin` checks token expiry against
+  real time): email actions (password reset, verification, email link), phone sign-in,
   fixture identity providers, phone second factors and the Admin link generators, with the
   codes read from `/emulator/v1/projects/{p}/{oobCodes,verificationCodes}` (the Node build of
   `firebase/auth` has no phone support, so those steps use the same REST calls the browser

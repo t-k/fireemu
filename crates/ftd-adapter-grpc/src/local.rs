@@ -617,7 +617,7 @@ impl LocalBackend {
         }
     }
 
-    /// [`Self::fault`] for the surfaces outside this module (Listen refreshes).
+    /// The fault plan check (`fault`) for the surfaces outside this module (Listen refreshes).
     pub fn consult_faults(&self, project: &str, operation: &str) -> Result<(), Status> {
         self.fault(project, operation)
     }

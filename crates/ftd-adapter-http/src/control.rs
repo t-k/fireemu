@@ -99,7 +99,7 @@ pub type SnapshotPart = Arc<dyn std::any::Any + Send + Sync>;
 /// users, the clock, ...). `restore` runs under the exclusive session barrier, in the
 /// order the hooks were registered.
 ///
-/// A restore is a validate / prepare / apply protocol driven by [`snapshot_route`]: every
+/// A restore is a validate / prepare / apply protocol driven by the snapshot route: every
 /// hook's [`SnapshotHook::validate`] runs first, then every hook's
 /// [`SnapshotHook::capture`] takes a pre-image, and only then does the first
 /// [`SnapshotHook::restore`] mutate anything. A hook that rejects the apply is rolled back

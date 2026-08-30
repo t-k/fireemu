@@ -729,7 +729,11 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
         let functions_addr = functions_listener
             .as_ref()
             .and_then(|l| l.local_addr().ok());
-        let ui_listener = ui::bind().await?;
+        let (ui_listener, ui_note) = match ui::bind().await? {
+            ui::Ui::Bound(listener) => (Some(listener), None),
+            ui::Ui::Disabled => (None, None),
+            ui::Ui::Unavailable(note) => (None, Some(note)),
+        };
         let ui_addr = ui_listener.as_ref().and_then(|l| l.local_addr().ok());
         // Random secrets: the control token browsers must present, and the secret that ties
         // the runner's HTTP server to this daemon's proxy.
@@ -798,6 +802,9 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
         println!("  control token:    FTD_CONTROL_TOKEN={control_token}   (browser requests to privileged control routes must send Authorization: Bearer <token>)");
         if let Some(addr) = ui_addr {
             println!("  ui:               http://{addr}/ui");
+        }
+        if let Some(note) = ui_note {
+            println!("{note}");
         }
         print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
         if let Some(runtime) = &functions_runtime {

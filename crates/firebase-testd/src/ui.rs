@@ -23,22 +23,30 @@ pub fn set_port(port: u16) {
     let _ = UI_PORT.set(port);
 }
 
+/// The outcome of binding the UI listener.
+pub enum Ui {
+    /// Bound; serve it.
+    Bound(tokio::net::TcpListener),
+    /// `--ui-port 0`.
+    Disabled,
+    /// The default port is busy: the UI is off, with the note to print after the banner.
+    Unavailable(String),
+}
+
 /// Binds the UI listener. Without `--ui-port` the default port is tried and a busy port
-/// only disables the UI (a note is printed); an explicit port that cannot be bound is an
-/// error.
-pub async fn bind() -> Result<Option<tokio::net::TcpListener>, String> {
+/// only disables the UI; an explicit port that cannot be bound is an error.
+pub async fn bind() -> Result<Ui, String> {
     let (port, explicit) = UI_PORT.get().map_or((DEFAULT_PORT, false), |p| (*p, true));
     if port == 0 {
-        return Ok(None);
+        return Ok(Ui::Disabled);
     }
     let addr = format!("127.0.0.1:{port}");
     match tokio::net::TcpListener::bind(&addr).await {
-        Ok(listener) => Ok(Some(listener)),
+        Ok(listener) => Ok(Ui::Bound(listener)),
         Err(e) if explicit => Err(format!("bind {addr}: {e}")),
-        Err(e) => {
-            println!("  ui:               disabled (cannot bind {addr}: {e}; choose one with --ui-port <n>)");
-            Ok(None)
-        }
+        Err(e) => Ok(Ui::Unavailable(format!(
+            "  ui:               disabled (cannot bind {addr}: {e}; choose one with --ui-port <n>)"
+        ))),
     }
 }
 

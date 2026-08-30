@@ -41,6 +41,12 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore 
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 
+### Storage
+
+An object is at most 256 MiB; a request body is at most 260 MiB (the object boundary plus multipart framing) and is refused with `413` beyond that. Upload bytes are never duplicated on the way in: the request buffer is handed to the object store as it is, and a multipart data part is carved out of the same allocation, so a near-limit upload costs one payload-sized buffer, not two or three.
+
+The request bodies buffered at the same time are admitted against a process-wide budget of 1 GiB (`ftd_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES`, about four near-limit uploads). An upload that does not fit is refused with `503` and `Retry-After: 1` before its buffer is allocated; a body without a `Content-Length` is charged as it grows. Every charge is released as soon as the request ends, including when the upload fails on rules, a checksum or a precondition. A failed upload publishes no object.
+
 ### Functions
 
 `--functions <dir>` (or `functions.source` in the config) starts `tools/runner-node/index.mjs` (Node, needs the codebase's own `node_modules` with `firebase-functions` and `firebase-admin`; `express` comes with `firebase-functions`). The runner discovers the exported v2 functions and reports them; the daemon then delivers Firestore document events (`onDocumentCreated` / `Updated` / `Deleted` / `Written` with path parameters), Storage object events (`onObjectFinalized` / `Deleted` / `MetadataUpdated`) and `onSchedule` runs as JSON CloudEvents, and serves `onRequest` / `onCall` at `http://127.0.0.1:5001/{project}/{region}/{function}`. Functions declared with `retry: true` are retried with exponential backoff in virtual time; other failures are dead-lettered.

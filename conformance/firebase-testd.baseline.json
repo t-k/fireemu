@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "indexValidationPolicy": "firebase"
+  },
+  "daemon": { "clockStart": "2026-01-02T03:04:05Z" },
+  "appCheck": {
+    "enabled": true,
+    "tokenSigning": "instance-rsa",
+    "tokenTtlSeconds": 3600,
+    "apps": [
+      {
+        "projectId": "demo-conformance",
+        "projectNumber": "1234567890",
+        "appId": "1:1234567890:web:conformance",
+        "enabled": true,
+        "debugTokenSha256": ["05f74b7cc5a65141f960e5bceb0291194480025a6579fe21b0d051979d47ce57"]
+      }
+    ],
+    "services": {
+      "auth": "unenforced",
+      "firestore": "unenforced",
+      "storage": "unenforced"
+    }
+  }
+}

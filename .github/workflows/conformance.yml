@@ -1,0 +1,87 @@
+name: conformance
+
+# Opt-in only. This is deliberately not a pull-request gate: recording downloads a 136 MB
+# Firestore emulator jar and needs Java, and even `check` starts a daemon, a Node runner and a
+# functions codebase per variant. Run it from the Actions tab when the corpus, the fixtures, the
+# pinned `firebase-tools` version or an App Check / Firestore / Auth / Storage / Functions wire
+# behaviour changed.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: >-
+          check: replay firebase-testd against the committed fixtures (no Java, no oracle).
+          record: also run the official Local Emulator Suite and report the fixture diff.
+        type: choice
+        options: [check, record]
+        default: check
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Only the oracle needs a JVM, but installing it unconditionally keeps the two modes
+      # otherwise identical, so a `record` run cannot differ from a `check` run by setup.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: install the pinned conformance toolchain
+        run: pnpm -C conformance install --frozen-lockfile
+
+      - name: the gate's own tests
+        run: pnpm -C conformance run selftest
+
+      - name: lint and format
+        run: |
+          pnpm -C conformance run lint
+          pnpm -C conformance run fmt:check
+
+      - name: build firebase-testd
+        run: cargo build --release -p firebase-testd
+
+      - name: replay against the committed fixtures
+        env:
+          FTD_BIN: ${{ github.workspace }}/target/release/firebase-testd
+        run: pnpm -C conformance run check
+
+      # `record` re-derives the fixtures from the official emulators. It never commits: a
+      # difference is reported as a diff so that an upstream change becomes an explicit review
+      # rather than a silently updated baseline.
+      - name: re-record against the official Local Emulator Suite
+        if: inputs.mode == 'record'
+        env:
+          FTD_BIN: ${{ github.workspace }}/target/release/firebase-testd
+        run: pnpm -C conformance run oracle
+
+      - name: report the fixture diff
+        if: inputs.mode == 'record'
+        run: |
+          if git diff --quiet -- conformance/fixtures conformance/ORACLE.md conformance/DEBT.md; then
+            echo "The committed fixtures still describe the pinned oracle."
+          else
+            echo "::warning::Re-recording changed the fixtures; review the diff below."
+            git --no-pager diff -- conformance/fixtures conformance/ORACLE.md conformance/DEBT.md
+          fi
+
+      - name: upload the raw runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-runs
+          path: conformance/.runs/
+          if-no-files-found: ignore

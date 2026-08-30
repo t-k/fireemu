@@ -1,0 +1,326 @@
+{
+  "schemaVersion": 1,
+  "id": "appcheck/enforced-header-matrix",
+  "product": "appcheck",
+  "title": "The same matrix with firebase-testd enforcing Firestore, Storage and Auth; the official suite cannot enforce",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "appCheckEnforced",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 3,
+    "documented-divergence": 15,
+    "debt": 0,
+    "pending": 2
+  },
+  "steps": [
+    {
+      "id": "seed-through-the-owner-credential",
+      "status": "parity",
+      "value": {
+        "status": 200
+      }
+    },
+    {
+      "id": "seed-a-storage-object-through-the-json-api",
+      "status": "parity",
+      "value": {
+        "status": 200
+      }
+    },
+    {
+      "id": "firestore-rest-no-app-check-field",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17",
+      "reason": "The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: firebase-testd denies with 403 PERMISSION_DENIED before Security Rules and before any side effect."
+    },
+    {
+      "id": "firestore-rest-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
+      "reason": "Both sides admit, but the oracle admits because it never looked and cannot present a token; the row is marked `noTokenIssuedBySide` so the agreement is not read as parity."
+    },
+    {
+      "id": "firestore-rest-unverifiable-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17",
+      "reason": "Same: no enforcement on the oracle; 403 PERMISSION_DENIED on firebase-testd."
+    },
+    {
+      "id": "firestore-rest-duplicate-fields",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Same: no enforcement on the oracle; firebase-testd treats duplicate fields as malformed and denies."
+    },
+    {
+      "id": "auth-signup-no-app-check-field",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.3",
+      "reason": "No enforcement on the oracle; firebase-testd denies the end-user Identity Toolkit route with 403 and consumes no credential."
+    },
+    {
+      "id": "auth-signup-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
+      "reason": "Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`."
+    },
+    {
+      "id": "auth-signup-unverifiable-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.3",
+      "reason": "Same as the missing-field row."
+    },
+    {
+      "id": "auth-signup-duplicate-fields",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Same as the missing-field row, for an ambiguous duplicate field."
+    },
+    {
+      "id": "storage-metadata-no-app-check-field",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.2",
+      "reason": "No enforcement on the oracle; firebase-testd denies the Firebase Storage dialect with the 403 Storage JSON error envelope."
+    },
+    {
+      "id": "storage-metadata-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "noTokenIssuedBySide": true,
+        "status": 200
+      },
+      "testd": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
+      "reason": "Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`."
+    },
+    {
+      "id": "storage-metadata-unverifiable-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.2",
+      "reason": "Same as the missing-field row."
+    },
+    {
+      "id": "storage-metadata-duplicate-fields",
+      "status": "documented-divergence",
+      "oracle": {
+        "admitted": true,
+        "code": null,
+        "status": 200
+      },
+      "testd": {
+        "admitted": false,
+        "code": "PERMISSION_DENIED",
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Same as the missing-field row, for an ambiguous duplicate field."
+    },
+    {
+      "id": "callable-enforcing-no-app-check-field",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "status": 401
+      }
+    },
+    {
+      "id": "callable-enforcing-valid-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "noTokenIssuedBySide": true,
+        "status": 401
+      },
+      "testd": {
+        "body": {
+          "result": {
+            "appId": "1:1234567890:web:conformance",
+            "hasApp": true
+          }
+        },
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs)",
+      "reason": "The oracle issues no token, so its enforcing callable answers 401; firebase-testd presents a verified token and the handler runs with request.app."
+    },
+    {
+      "id": "callable-enforcing-unverifiable-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "hasApp": true
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "status": 401
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
+      "reason": "The official Functions emulator skips token verification and admits an unverifiable token; firebase-testd refuses it with the callable 401 envelope before the handler runs."
+    },
+    {
+      "id": "callable-enforcing-duplicate-fields",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "result": {
+            "appId": null,
+            "hasApp": true
+          }
+        },
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "message": "Unauthenticated",
+            "status": "UNAUTHENTICATED"
+          }
+        },
+        "status": 401
+      },
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Duplicate fields are admitted by the official emulator and refused by firebase-testd."
+    },
+    {
+      "id": "production-open-stream-when-a-token-expires",
+      "status": "pending",
+      "reason": "needs a real project",
+      "production": "Section 23 records the behaviour of an already open Firestore stream whose token expires, or whose enforcement changes, as unresolved debt. Neither local side can answer it: the official suite never enforces, and firebase-testd's answer is the one under test."
+    },
+    {
+      "id": "production-storage-download-token-under-enforcement",
+      "status": "pending",
+      "reason": "needs a real project",
+      "production": "Whether a public Storage download URL keeps serving while App Check is enforced is listed in section 23 as unresolved debt and needs a real bucket to settle."
+    }
+  ]
+}

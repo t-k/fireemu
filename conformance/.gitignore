@@ -1,0 +1,10 @@
+node_modules/
+# Raw per-run output of the two sides before they are folded into fixtures/.
+.runs/
+# Emulator scratch: the official suite writes these next to firebase.json.
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+database-debug.log
+pubsub-debug.log
+.firebase/

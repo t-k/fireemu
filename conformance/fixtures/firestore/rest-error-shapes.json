@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "id": "firestore/rest-error-shapes",
+  "product": "firestore",
+  "title": "The Firestore REST error envelopes for a missing index, bad input and denied access",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 0,
+    "documented-divergence": 1,
+    "debt": 2,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "runQuery-needing-a-composite-index",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": [
+          {
+            "document": {
+              "createTime": "<timestamp>",
+              "fields": {
+                "age": {
+                  "integerValue": "1"
+                },
+                "city": {
+                  "stringValue": "tokyo"
+                },
+                "name": {
+                  "stringValue": "x"
+                }
+              },
+              "name": "projects/demo-conformance/databases/(default)/documents/conf_index/one",
+              "updateTime": "<timestamp>"
+            },
+            "done": true,
+            "readTime": "<timestamp>"
+          }
+        ],
+        "status": 200
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "The query requires an index. missing index (age Ascending, name Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"name\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}",
+            "status": "FAILED_PRECONDITION"
+          }
+        },
+        "status": 400
+      },
+      "documents": "README.md, \"Composite indexes\"",
+      "reason": "The REST envelope of the same refusal: HTTP 400 FAILED_PRECONDITION with the index fragment, where the official emulator answers 200 with results."
+    },
+    {
+      "id": "runQuery-with-an-unknown-operator",
+      "status": "debt",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "Payload isn't valid for request.",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "unknown field filter operator \"NOT_A_REAL_OPERATOR\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "get-a-missing-document",
+      "status": "debt",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document (projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing) not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document not found: projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    }
+  ]
+}

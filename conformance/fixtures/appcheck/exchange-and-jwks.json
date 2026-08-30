@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "id": "appcheck/exchange-and-jwks",
+  "product": "appcheck",
+  "title": "The debug-token exchange and JWKS routes, and whether the side serves them at all",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 0,
+    "documented-divergence": 4,
+    "debt": 0,
+    "pending": 1
+  },
+  "steps": [
+    {
+      "id": "exchange-a-registered-debug-secret",
+      "status": "documented-divergence",
+      "oracle": {
+        "keys": [
+          "error"
+        ],
+        "status": 404,
+        "ttl": null
+      },
+      "testd": {
+        "keys": [
+          "token",
+          "ttl"
+        ],
+        "status": 200,
+        "ttl": "3600s"
+      },
+      "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 10.1",
+      "reason": "The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. firebase-testd issues a locally signed token for a registered debug secret."
+    },
+    {
+      "id": "exchange-an-unknown-secret",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 404,
+            "errors": [
+              {
+                "message": "Not Found",
+                "reason": "notFound"
+              }
+            ],
+            "message": "Not Found",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 403,
+            "message": "App attestation failed.",
+            "status": "PERMISSION_DENIED"
+          }
+        },
+        "status": 403
+      },
+      "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 17",
+      "reason": "No route on the oracle (404) against the specified 403 PERMISSION_DENIED \"App attestation failed.\" that firebase-testd returns for an unknown project, app, disabled app or secret alike."
+    },
+    {
+      "id": "exchange-a-limited-use-token",
+      "status": "documented-divergence",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 404,
+            "errors": [
+              {
+                "message": "Not Found",
+                "reason": "notFound"
+              }
+            ],
+            "message": "Not Found",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 501,
+            "message": "limited-use App Check tokens need replay protection (APPCHECK-REPLAY-1), which this runtime does not implement",
+            "reason": "APP_CHECK_REPLAY_UNSUPPORTED",
+            "status": "UNIMPLEMENTED"
+          }
+        },
+        "status": 501
+      },
+      "documents": "capability manifest APPCHECK-REPLAY-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23",
+      "reason": "No route on the oracle (404). firebase-testd fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request."
+    },
+    {
+      "id": "jwks",
+      "status": "documented-divergence",
+      "oracle": {
+        "keyCount": null,
+        "keyFields": null,
+        "status": 404
+      },
+      "testd": {
+        "keyCount": 1,
+        "keyFields": [
+          "alg",
+          "e",
+          "kid",
+          "kty",
+          "n",
+          "use"
+        ],
+        "status": 200
+      },
+      "documents": "capability manifest APPCHECK-JWKS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 10.2",
+      "reason": "The official suite serves no JWKS route (404). firebase-testd publishes this instance's single public App Check key as an RFC 7517 JWK Set."
+    },
+    {
+      "id": "production-limited-use-token-claims",
+      "status": "pending",
+      "reason": "needs a real project",
+      "production": "Section 23 lists the extra claims on a production limited-use token as unresolved debt. The official suite issues no App Check token at all, so nothing local can record them."
+    }
+  ]
+}

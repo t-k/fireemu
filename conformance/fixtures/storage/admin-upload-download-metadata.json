@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "id": "storage/admin-upload-download-metadata",
+  "product": "storage",
+  "title": "Admin uploads, downloads, metadata and listing over the JSON API dialect",
+  "sdks": [
+    "firebase-admin"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 5,
+    "documented-divergence": 0,
+    "debt": 1,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "save-and-download",
+      "status": "parity",
+      "value": {
+        "text": "hello conformance"
+      }
+    },
+    {
+      "id": "metadata-shape",
+      "status": "parity",
+      "value": {
+        "bucket": "demo-conformance.appspot.com",
+        "contentType": "text/plain",
+        "custom": {
+          "origin": "conformance"
+        },
+        "keys": [
+          "bucket",
+          "contentType",
+          "crc32c",
+          "etag",
+          "generation",
+          "id",
+          "kind",
+          "md5Hash",
+          "mediaLink",
+          "metadata",
+          "metageneration",
+          "name",
+          "selfLink",
+          "size",
+          "storageClass",
+          "timeCreated",
+          "timeStorageClassUpdated",
+          "updated"
+        ],
+        "name": "conf_public/hello.txt",
+        "size": "17"
+      }
+    },
+    {
+      "id": "resumable-save",
+      "status": "parity",
+      "value": {
+        "contentType": "application/octet-stream",
+        "size": "300000"
+      }
+    },
+    {
+      "id": "exists-list-copy-delete",
+      "status": "parity",
+      "value": {
+        "exists": true,
+        "gone": false,
+        "names": [
+          "conf_public/big.bin",
+          "conf_public/hello.txt"
+        ]
+      }
+    },
+    {
+      "id": "download-a-missing-object",
+      "status": "debt",
+      "oracle": {
+        "thrown": true,
+        "code": "404",
+        "message": "No such object: demo-conformance.appspot.com/conf_public/definitely-missing.txt"
+      },
+      "testd": {
+        "thrown": true,
+        "code": "404",
+        "message": "{\"error\":{\"code\":404,\"errors\":[{\"domain\":\"global\",\"message\":\"Not Found. Could not get object\",\"reason\":\"notFound\"}],\"message\":\"Not Found. Could not get object\"}}"
+      }
+    },
+    {
+      "id": "admin-writes-into-a-rules-closed-path",
+      "status": "parity",
+      "value": {
+        "text": "admin"
+      }
+    }
+  ]
+}

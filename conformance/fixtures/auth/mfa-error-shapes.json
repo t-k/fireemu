@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "id": "auth/mfa-error-shapes",
+  "product": "auth",
+  "title": "Multi-factor enrolment and sign-in error envelopes",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 4,
+    "documented-divergence": 0,
+    "debt": 1,
+    "pending": 1
+  },
+  "steps": [
+    {
+      "id": "create-a-user-to-enrol",
+      "status": "parity",
+      "value": {
+        "hasIdToken": true,
+        "status": 200
+      }
+    },
+    {
+      "id": "start-enrolment-without-a-verified-email",
+      "status": "debt",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors.",
+                "reason": "invalid"
+              }
+            ],
+            "message": "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors."
+          }
+        },
+        "status": 400
+      },
+      "testd": {
+        "body": {
+          "phoneSessionInfo": {
+            "sessionInfo": "sms-3235199f792bbcf70012"
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "start-enrolment-with-an-invalid-id-token",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_ID_TOKEN",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_ID_TOKEN"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "finalize-enrolment-with-an-unknown-session",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_SESSION_INFO",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_SESSION_INFO"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "finalize-sign-in-with-an-unknown-pending-credential",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_SESSION_INFO",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_SESSION_INFO"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "totp-enrolment-secret-shape",
+      "status": "pending",
+      "reason": "needs a real project",
+      "production": "Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor firebase-testd can produce the production shape, so no local run may stand in for it."
+    }
+  ]
+}

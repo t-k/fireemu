@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "id": "auth/oob-code-shapes",
+  "product": "auth",
+  "title": "The shape of a password-reset out-of-band code and its verification errors",
+  "sdks": [
+    "rest",
+    "firebase-admin"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 4,
+    "documented-divergence": 0,
+    "debt": 1,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "create-the-user",
+      "status": "debt",
+      "oracle": {
+        "keys": [
+          "email",
+          "expiresIn",
+          "idToken",
+          "kind",
+          "localId",
+          "refreshToken"
+        ],
+        "status": 200
+      },
+      "testd": {
+        "keys": [
+          "email",
+          "expiresIn",
+          "idToken",
+          "localId",
+          "refreshToken"
+        ],
+        "status": 200
+      }
+    },
+    {
+      "id": "request-a-password-reset",
+      "status": "parity",
+      "value": {
+        "email": "conf-auth-oob-reset@example.com",
+        "keys": [
+          "email",
+          "kind"
+        ],
+        "status": 200
+      }
+    },
+    {
+      "id": "inspect-the-generated-code",
+      "status": "parity",
+      "value": {
+        "count": 1,
+        "hasOobLink": true,
+        "keys": [
+          "email",
+          "oobCode",
+          "oobLink",
+          "requestType"
+        ],
+        "requestType": "PASSWORD_RESET",
+        "status": 200
+      }
+    },
+    {
+      "id": "reset-with-an-unknown-code",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_OOB_CODE",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_OOB_CODE"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "verify-an-unknown-code",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_OOB_CODE",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_OOB_CODE"
+          }
+        },
+        "status": 400
+      }
+    }
+  ]
+}

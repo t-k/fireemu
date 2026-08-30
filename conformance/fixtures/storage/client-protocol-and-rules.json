@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "id": "storage/client-protocol-and-rules",
+  "product": "storage",
+  "title": "The Firebase Storage protocol: uploads, resumable uploads, listing and Rules denials",
+  "sdks": [
+    "firebase/storage"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 9,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "upload-bytes-and-read-back",
+      "status": "parity",
+      "value": {
+        "bucket": "demo-conformance.appspot.com",
+        "contentType": "text/plain",
+        "custom": {
+          "mood": "good"
+        },
+        "fullPath": "conf_public/client/notes.txt",
+        "name": "notes.txt",
+        "size": 10,
+        "text": "konnichiwa"
+      }
+    },
+    {
+      "id": "update-metadata",
+      "status": "parity",
+      "value": {
+        "cacheControl": "private, max-age=0",
+        "custom": {
+          "mood": "great"
+        }
+      }
+    },
+    {
+      "id": "resumable-upload",
+      "status": "parity",
+      "value": {
+        "state": "success",
+        "totalBytes": 600000
+      }
+    },
+    {
+      "id": "list-all",
+      "status": "parity",
+      "value": {
+        "items": [
+          "conf_public/big.bin",
+          "conf_public/hello.txt"
+        ],
+        "prefixes": [
+          "conf_public/client"
+        ]
+      }
+    },
+    {
+      "id": "download-url-serves-the-object",
+      "status": "parity",
+      "value": {
+        "status": 200,
+        "text": "konnichiwa"
+      }
+    },
+    {
+      "id": "upload-into-a-rules-closed-path-is-denied",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "storage/unauthorized",
+        "message": "Firebase Storage: User does not have permission to access 'conf_closed/client.txt'. (storage/unauthorized)",
+        "status": "403",
+        "serverResponse": ""
+      }
+    },
+    {
+      "id": "read-a-rules-closed-object-is-denied",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "storage/unauthorized",
+        "message": "Firebase Storage: User does not have permission to access 'conf_closed/admin.txt'. (storage/unauthorized)",
+        "status": "403",
+        "serverResponse": ""
+      }
+    },
+    {
+      "id": "get-metadata-of-a-missing-object",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "storage/object-not-found",
+        "message": "Firebase Storage: Object 'conf_public/definitely-missing.txt' does not exist. (storage/object-not-found)",
+        "status": "0",
+        "serverResponse": ""
+      }
+    },
+    {
+      "id": "delete-and-then-read",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "storage/object-not-found",
+        "message": "Firebase Storage: Object 'conf_public/client/big.bin' does not exist. (storage/object-not-found)",
+        "status": "0",
+        "serverResponse": ""
+      }
+    }
+  ]
+}

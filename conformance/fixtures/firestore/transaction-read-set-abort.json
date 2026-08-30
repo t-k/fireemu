@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "firestore/transaction-read-set-abort",
+  "product": "firestore",
+  "title": "A transaction whose read set is written by someone else retries and then commits",
+  "sdks": [
+    "firebase-admin"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 4,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "seed",
+      "status": "parity",
+      "value": "seeded"
+    },
+    {
+      "id": "contended-transaction-retries-then-commits",
+      "status": "parity",
+      "value": {
+        "attempts": 2,
+        "value": 101
+      }
+    },
+    {
+      "id": "transaction-write-before-read-is-refused-client-side",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": null,
+        "message": "Firestore transactions require all reads to be executed before all writes."
+      }
+    },
+    {
+      "id": "readonly-transaction-cannot-write",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": null,
+        "message": "Firestore read-only transactions cannot execute writes."
+      }
+    }
+  ]
+}

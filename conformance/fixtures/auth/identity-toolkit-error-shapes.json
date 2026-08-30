@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "id": "auth/identity-toolkit-error-shapes",
+  "product": "auth",
+  "title": "The raw Identity Toolkit REST envelopes the client SDK errors are built from",
+  "sdks": [
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 2,
+    "documented-divergence": 0,
+    "debt": 3,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "signUp-without-a-password",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "MISSING_PASSWORD",
+                "reason": "invalid"
+              }
+            ],
+            "message": "MISSING_PASSWORD"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "signInWithPassword-for-an-unknown-user",
+      "status": "debt",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "EMAIL_NOT_FOUND",
+                "reason": "invalid"
+              }
+            ],
+            "message": "EMAIL_NOT_FOUND"
+          }
+        },
+        "status": 400
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_LOGIN_CREDENTIALS",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_LOGIN_CREDENTIALS"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "signInWithPassword-with-a-missing-field",
+      "status": "debt",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "MISSING_EMAIL",
+                "reason": "invalid"
+              }
+            ],
+            "message": "MISSING_EMAIL"
+          }
+        },
+        "status": 400
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "MISSING_PASSWORD",
+                "reason": "invalid"
+              }
+            ],
+            "message": "MISSING_PASSWORD"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "lookup-with-an-invalid-id-token",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_ID_TOKEN",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_ID_TOKEN"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "unknown-method",
+      "status": "debt",
+      "oracle": {
+        "body": {
+          "error": {
+            "code": 404,
+            "errors": [
+              {
+                "message": "Not Found",
+                "reason": "notFound"
+              }
+            ],
+            "message": "Not Found",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "testd": {
+        "body": {
+          "error": {
+            "code": 404,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "NOT_FOUND",
+                "reason": "invalid"
+              }
+            ],
+            "message": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    }
+  ]
+}

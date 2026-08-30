@@ -1,0 +1,15 @@
+{
+  "name": "nested/deep/path/file.json",
+  "bucket": "demo-export.appspot.com",
+  "metageneration": 1,
+  "generation": 1788105513198,
+  "contentType": "application/json",
+  "storageClass": "STANDARD",
+  "downloadTokens": [],
+  "etag": "u8myZV0l1lPUsTdVdNtIr+MYDAU",
+  "timeCreated": "2026-08-30T15:58:33.198Z",
+  "updated": "2026-08-30T15:58:33.198Z",
+  "size": 7,
+  "md5Hash": "u2y1xo30ZSlByvZSo2by2A==",
+  "crc32c": "3489125738"
+}

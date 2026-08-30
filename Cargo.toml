@@ -11,6 +11,7 @@ members = [
     "crates/fireemu-core-app-check",
     "crates/fireemu-core-storage",
     "crates/fireemu-core-functions",
+    "crates/fireemu-core-export",
     "crates/fireemu-proto-firestore",
     "crates/fireemu-adapter-grpc",
     "crates/fireemu-adapter-http",

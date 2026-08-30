@@ -494,6 +494,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fireemu-core-export"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-firestore",
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
 name = "fireemu-core-firestore"
 version = "0.1.0"
 dependencies = [

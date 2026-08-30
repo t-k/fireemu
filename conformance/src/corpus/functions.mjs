@@ -3,7 +3,7 @@
 
 import { signInWithEmailAndPassword } from "firebase/auth";
 
-import { VARIANTS } from "../config.mjs";
+import { PROJECT, VARIANTS } from "../config.mjs";
 import { emailFor } from "./context.mjs";
 
 const callable = async (ctx, name, data, headers = {}) => {
@@ -141,4 +141,99 @@ const authContext = {
   },
 };
 
-export const scenarios = [errorEnvelope, authContext];
+// The routing rows below address the functions port directly rather than through
+// `ctx.functionUrl`, because the URL under test is the point.
+const at = (ctx, path) => `http://${ctx.hosts.functions}${path}`;
+
+const text = async (response) => ({
+  status: response.status,
+  contentType: response.headers.get("content-type"),
+  body: await response.text(),
+});
+
+const httpRouting = {
+  id: "functions/http-routing-cors-and-timeouts",
+  product: "functions",
+  variant: VARIANTS.baseline,
+  sdks: ["rest"],
+  title: "Function URLs, the 404 for an unknown function, CORS preflights and timeoutSeconds",
+  async run(ctx) {
+    // The route the emulator serves, and the three ways of missing it.
+    await ctx.step("unknown-function-names-the-key-and-lists-the-valid-ones", () =>
+      fetch(at(ctx, `/${PROJECT}/us-central1/confNotThere`)).then(text),
+    );
+
+    await ctx.step("an-existing-function-in-the-wrong-region-is-a-different-key", () =>
+      fetch(at(ctx, `/${PROJECT}/europe-west1/confAdd`)).then(text),
+    );
+
+    await ctx.step("a-path-under-another-project-is-not-a-function-route", () =>
+      fetch(at(ctx, `/demo-somewhere-else/us-central1/confAdd`)).then(text),
+    );
+
+    await ctx.step("a-path-with-too-few-segments-is-not-a-function-route", () =>
+      fetch(at(ctx, `/confAdd`)).then(text),
+    );
+
+    // A function that declares its own region is reachable there, and only there.
+    await ctx.step("a-regional-function-answers-at-its-own-region", () =>
+      fetch(at(ctx, `/${PROJECT}/europe-west1/confRegional`)).then(text),
+    );
+    await ctx.step("a-regional-function-is-absent-from-the-default-region", () =>
+      fetch(at(ctx, `/${PROJECT}/us-central1/confRegional`)).then(text),
+    );
+
+    // Everything after the function name is the path the handler sees, query string included.
+    await ctx.step("the-path-and-query-below-the-mount-point-reach-the-handler", () =>
+      fetch(at(ctx, `/${PROJECT}/us-central1/confEcho/a/b?x=1&y=2`)).then(text),
+    );
+
+    // CORS. The official emulator starts its runtime with
+    // FIREBASE_DEBUG_FEATURES={"skipTokenVerification":true,"enableCors":true}, which makes
+    // firebase-functions wrap every handler in `cors({origin: true})`. What that produces for
+    // a preflight and for a cross-origin POST is what these rows record.
+    const preflight = (name, origin) =>
+      fetch(at(ctx, `/${PROJECT}/us-central1/${name}`), {
+        method: "OPTIONS",
+        headers: {
+          origin,
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type",
+        },
+      }).then(async (response) => ({
+        status: response.status,
+        allowOrigin: response.headers.get("access-control-allow-origin"),
+        allowMethods: response.headers.get("access-control-allow-methods"),
+        allowHeaders: response.headers.get("access-control-allow-headers"),
+        vary: response.headers.get("vary"),
+      }));
+
+    await ctx.step("preflight-on-a-callable-from-a-loopback-origin", () =>
+      preflight("confAdd", "http://localhost:3000"),
+    );
+    await ctx.step("preflight-on-an-onrequest-from-a-loopback-origin", () =>
+      preflight("confEcho", "http://localhost:3000"),
+    );
+    await ctx.step("preflight-on-a-callable-from-a-remote-origin", () =>
+      preflight("confAdd", "https://evil.example"),
+    );
+    await ctx.step("a-cross-origin-post-to-a-callable", () =>
+      fetch(at(ctx, `/${PROJECT}/us-central1/confAdd`), {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://evil.example" },
+        body: JSON.stringify({ data: { a: 1, b: 2 } }),
+      }).then(async (response) => ({
+        status: response.status,
+        allowOrigin: response.headers.get("access-control-allow-origin"),
+        body: await response.text(),
+      })),
+    );
+
+    // timeoutSeconds. `confSlow` declares one second and sleeps four.
+    await ctx.step("a-function-that-overruns-its-timeout", () =>
+      fetch(at(ctx, `/${PROJECT}/us-central1/confSlow`)).then(text),
+    );
+  },
+};
+
+export const scenarios = [errorEnvelope, authContext, httpRouting];

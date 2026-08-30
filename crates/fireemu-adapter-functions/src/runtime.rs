@@ -385,6 +385,9 @@ pub struct FunctionsRuntime {
     /// HTTP and callable invocations, manual `functions/{name}:run` requests and virtual
     /// clock schedule runs are unaffected: none of them is a data-change delivery.
     background_triggers: std::sync::atomic::AtomicBool,
+    /// How many times the sources have been reloaded (`triggerGeneration`). It is part of an
+    /// event trigger's key, which the 404 for an unknown function lists.
+    trigger_generation: std::sync::atomic::AtomicU64,
 }
 
 impl FunctionsRuntime {
@@ -520,6 +523,7 @@ impl FunctionsRuntime {
             faults: Mutex::new(None),
             callable_trust: std::sync::RwLock::new(None),
             background_triggers: std::sync::atomic::AtomicBool::new(true),
+            trigger_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -1424,6 +1428,56 @@ impl FunctionsRuntime {
         }
     }
 
+    /// Every trigger key, in manifest order, as the official emulator spells them.
+    ///
+    /// `getTriggerKey` (`functionsEmulator.js:909`) is `<region>-<name>` for an HTTP or
+    /// callable function and `<region>-<name>-<generation>` for an event one, where the
+    /// generation counts source reloads. It is what the 404 for an unknown function lists, so
+    /// it is spelled the same way here rather than invented.
+    ///
+    /// The order is the official one too, and it is not export order: the discovered backend
+    /// is `endpoints: Record<region, Record<id, Endpoint>>`, so `emulatedFunctionsByRegion`
+    /// walks it grouped by region, and within a region in export order. Recorded against the
+    /// oracle in `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`, where
+    /// a `europe-west1` function exported before a `us-central1` one is listed after it.
+    #[must_use]
+    pub fn trigger_keys(&self) -> Vec<String> {
+        let mut regions: Vec<&str> = Vec::new();
+        for f in &self.manifest.functions {
+            if !regions.contains(&f.region.as_str()) {
+                regions.push(&f.region);
+            }
+        }
+        let mut keys = Vec::with_capacity(self.manifest.functions.len());
+        for region in regions {
+            for f in self
+                .manifest
+                .functions
+                .iter()
+                .filter(|f| f.region == region)
+            {
+                if matches!(f.trigger, Trigger::Http { .. }) {
+                    keys.push(format!("{}-{}", f.region, f.name));
+                } else {
+                    keys.push(format!(
+                        "{}-{}-{}",
+                        f.region,
+                        f.name,
+                        self.trigger_generation()
+                    ));
+                }
+            }
+        }
+        keys
+    }
+
+    /// How many times the sources have been reloaded (`triggerGeneration`).
+    #[must_use]
+    pub fn trigger_generation(&self) -> u64 {
+        self.trigger_generation
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// The runner address for an HTTP function, if it exists.
     #[must_use]
     pub fn http_target(&self, project: &str, region: &str, function: &str) -> Option<HttpTarget> {
@@ -1533,12 +1587,31 @@ impl FunctionsRuntime {
                 outcome,
             });
         }
-        match result {
-            Ok(r) => r,
-            Err(_) => Err(format!(
-                "function {} did not answer within {timeout}s",
-                target.function
-            )),
+        if let Ok(answer) = result {
+            answer
+        } else {
+            // What the official emulator says and answers when a function overruns
+            // `timeoutSeconds` (`functionsRuntimeWorker.js:139` logs this sentence, then
+            // `proxy.destroy()` lands in the error handler at `:142`, which writes a 500).
+            //
+            // The one thing not reproduced is `this.runtime.process.kill()`: the official
+            // emulator runs one runtime process per trigger, so killing it costs that
+            // function's warm start. One fireemu runner serves a whole codebase, and taking
+            // it down would abort every other function's in-flight work.
+            eprintln!(
+                "[functions] Your function timed out after ~{timeout}s. To configure this \
+                 timeout, see\n      https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation."
+            );
+            // `{"code":"ECONNRESET"}` with no content-type is literally what the official
+            // emulator answers: `proxy.destroy()` makes Node raise a socket hang-up on the
+            // request, and the handler writes `JSON.stringify(err)` after a bare
+            // `writeHead(500)`. Recorded in
+            // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
+            Ok(ProxiedResponse {
+                status: 500,
+                headers: Vec::new(),
+                body: br#"{"code":"ECONNRESET"}"#.to_vec(),
+            })
         }
     }
 

@@ -79,8 +79,15 @@ async function loadCodebase() {
   const entry = resolve(sourceDir, main);
   if (!existsSync(entry)) throw new Error(`functions entry point ${entry} does not exist`);
   const mod = await import(pathToFileURL(entry).href);
-  const ns = { ...mod };
+  // Export order matters: it is the order the emulator lists functions in, and the official
+  // emulator reads a CommonJS codebase's `module.exports` object, which keeps it. An ES
+  // module namespace object sorts its keys, so `module.exports` -- which Node hands over as
+  // `default` -- goes in first and the namespace only fills in what it did not carry.
+  const ns = {};
   if (mod.default && typeof mod.default === "object") Object.assign(ns, mod.default);
+  for (const [key, value] of Object.entries(mod)) {
+    if (!(key in ns)) ns[key] = value;
+  }
   // Node exposes CommonJS exports as `default` and (22+) as "module.exports".
   delete ns.default;
   delete ns["module.exports"];

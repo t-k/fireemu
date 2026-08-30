@@ -9,9 +9,9 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 12,
+    "parity": 13,
     "documented-divergence": 0,
-    "debt": 1,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
@@ -183,13 +183,9 @@
     },
     {
       "id": "unknown-callable",
-      "status": "debt",
-      "oracle": {
-        "bodyLength": 216,
-        "status": 404
-      },
-      "testd": {
-        "bodyLength": 70,
+      "status": "parity",
+      "value": {
+        "bodyLength": 265,
         "status": 404
       }
     }

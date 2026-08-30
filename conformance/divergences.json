@@ -22,7 +22,6 @@
       "documents": "README.md, \"Composite indexes\"",
       "reason": "The REST envelope of the same refusal: HTTP 400 FAILED_PRECONDITION with the index fragment, where the official emulator answers 200 with results."
     },
-
     "appcheck/exchange-and-jwks#exchange-a-registered-debug-secret": {
       "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.1",
       "reason": "The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. fireemu issues a locally signed token for a registered debug secret."
@@ -39,7 +38,6 @@
       "documents": "capability manifest APPCHECK-JWKS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.2",
       "reason": "The official suite serves no JWKS route (404). fireemu publishes this instance's single public App Check key as an RFC 7517 JWK Set."
     },
-
     "appcheck/unenforced-header-matrix#firestore-rest-valid-token": {
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "The oracle issues no App Check token, so it cannot run the valid-token column at all; the row records the same request without the field and marks itself `noTokenIssuedBySide`."
@@ -80,7 +78,6 @@
       "documents": "conformance/ORACLE.md, \"What the oracle cannot answer\"",
       "reason": "The oracle issues no token, so it sends no field and its onRequest handler counts zero. Both sides pass the raw field list through unclassified, which is what the row is about."
     },
-
     "appcheck/enforced-header-matrix#firestore-rest-no-app-check-field": {
       "documents": "capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17",
       "reason": "The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect."
@@ -141,7 +138,6 @@
       "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
       "reason": "Duplicate fields are admitted by the official emulator and refused by fireemu."
     },
-
     "functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity": {
       "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
       "reason": "The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all."
@@ -149,6 +145,14 @@
     "functions/callable-auth-context#bearer-owner-is-not-a-callable-identity": {
       "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
       "reason": "`Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity."
+    },
+    "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin": {
+      "documents": "README.md, \"Functions\"",
+      "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 \"forbidden origin\" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend."
+    },
+    "functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable": {
+      "documents": "README.md, \"Functions\"",
+      "reason": "The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected."
     }
   }
 }

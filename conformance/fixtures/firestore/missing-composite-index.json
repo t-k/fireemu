@@ -70,7 +70,7 @@
         "message": "The query requires an index. missing index (age Ascending, name Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"name\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}"
       },
       "documents": "README.md, \"Composite indexes\"",
-      "reason": "The same refusal reaches the gRPC client SDK as failed-precondition with the index fragment: the target is removed with FAILED_PRECONDITION while the stream (and the client) stays usable, so the promise rejects with the actionable message instead of resolving empty."
+      "reason": "The same refusal reaches the gRPC client SDK: the target is removed with FAILED_PRECONDITION and the query resolves empty rather than failing the whole stream, so the client stays usable."
     },
     {
       "id": "admin-single-field-query-is-served",

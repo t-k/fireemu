@@ -191,7 +191,10 @@ fn a_section_of_an_unselected_product_is_skipped_with_a_notice() {
 fn assert_refused(output: &Output, product: &str, fragment: &str) {
     let log = text(output);
     assert_eq!(output.status.code(), Some(1), "{log}");
-    assert!(log.contains(product), "the failure names the product: {log}");
+    assert!(
+        log.contains(product),
+        "the failure names the product: {log}"
+    );
     assert!(log.contains(fragment), "the failure names the path: {log}");
     assert!(
         !log.contains("running: "),
@@ -207,8 +210,7 @@ fn assert_refused(output: &Output, product: &str, fragment: &str) {
 fn a_corrupt_firestore_section_refuses_the_whole_import() {
     let dir = scratch("corrupt-firestore");
     let export = copy_fixture("official-multiproduct", &dir);
-    let output_file = export
-        .join("firestore_export/all_namespaces/all_kinds/output-0");
+    let output_file = export.join("firestore_export/all_namespaces/all_kinds/output-0");
     let mut bytes = std::fs::read(&output_file).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 0xff;
@@ -227,7 +229,11 @@ fn a_corrupt_firestore_section_refuses_the_whole_import() {
 fn a_malformed_auth_section_refuses_the_whole_import() {
     let dir = scratch("corrupt-auth");
     let export = copy_fixture("official-multiproduct", &dir);
-    std::fs::write(export.join("auth_export/accounts.json"), "{\"users\": [{}]}").unwrap();
+    std::fs::write(
+        export.join("auth_export/accounts.json"),
+        "{\"users\": [{}]}",
+    )
+    .unwrap();
 
     let output = exec()
         .args(["--import"])

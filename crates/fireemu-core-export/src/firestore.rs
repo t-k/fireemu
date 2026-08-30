@@ -689,7 +689,7 @@ fn read_value(bytes: &[u8], meaning: u64) -> Result<Value, FirestoreExportError>
                 });
             }
             (VALUE_BOOLEAN, WireType::Varint) => {
-                value = Some(Value::Boolean(reader.varint()? != 0))
+                value = Some(Value::Boolean(reader.varint()? != 0));
             }
             (VALUE_DOUBLE, WireType::Fixed64) => {
                 value = Some(Value::Double(f64::from_bits(reader.fixed64()?)));

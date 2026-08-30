@@ -86,42 +86,55 @@ fn the_official_command_names_are_aliases_of_the_short_ones() {
 }
 
 #[test]
-fn export_is_refused_precisely_rather_than_reported_as_unknown() {
-    let out = run(&["emulators:export", "./out"]);
+fn export_without_a_running_suite_says_which_suite_it_looked_for() {
+    let dir = scratch("export-no-suite");
+    let out = run(&[
+        "emulators:export",
+        dir.join("out").to_str().unwrap(),
+        "--project",
+        "demo-nothing-runs-here",
+    ]);
     assert_eq!(
         out.status.code(),
         Some(1),
-        "a command that exists but is not implemented is a refusal, not a usage error"
+        "a command that needs a running suite and finds none is a refusal, not a usage error"
     );
     let text = stderr(&out);
+    assert!(text.contains("no running fireemu suite"), "{text}");
     assert!(
-        text.contains("emulators:export is not supported yet"),
-        "{text}"
-    );
-    assert!(
-        text.contains("snapshots"),
-        "{text}: it must say what to use instead"
+        text.contains("demo-nothing-runs-here"),
+        "{text}: it must name the project it looked for"
     );
 }
 
 #[test]
-fn import_and_export_on_exit_fail_before_anything_starts() {
+fn a_bad_import_or_export_target_fails_before_anything_starts() {
     let dir = scratch("import");
     let marker = dir.join("ran");
-    for (label, flag, value) in [
-        ("import", "--import", Some("./seed")),
-        ("export-on-exit-dir", "--export-on-exit", Some("./out")),
-        ("export-on-exit-bare", "--export-on-exit", None),
+    let occupied = dir.join("occupied");
+    std::fs::create_dir_all(&occupied).unwrap();
+    std::fs::write(occupied.join("notes.txt"), "keep me").unwrap();
+    for (label, extra, fragment) in [
+        (
+            "a directory that does not exist",
+            vec!["--import", "./no-such-export"],
+            "no such directory",
+        ),
+        (
+            "a target that is not an export directory",
+            vec!["--export-on-exit", occupied.to_str().unwrap()],
+            "not an export directory",
+        ),
+        (
+            "--export-on-exit with nothing to resolve it against",
+            vec!["--export-on-exit"],
+            "must be used with --import",
+        ),
     ] {
-        let mut extra = vec![flag];
-        if let Some(v) = value {
-            extra.push(v);
-        }
         let out = exec_with(&extra, &["touch", marker.to_str().unwrap()]);
-        assert_eq!(out.status.code(), Some(1), "{label}");
         let text = stderr(&out);
-        assert!(text.contains("not supported yet"), "{label}: {text}");
-        assert!(text.contains("nothing was started"), "{label}: {text}");
+        assert!(matches!(out.status.code(), Some(1 | 2)), "{label}: {text}");
+        assert!(text.contains(fragment), "{label}: {text}");
         assert!(!marker.exists(), "{label}: the command ran anyway");
     }
 }

@@ -130,15 +130,24 @@ impl Endpoints<'_> {
     }
 }
 
+/// The documents of every database, keyed by `(project, database)`.
+type PreparedDatabases = BTreeMap<(String, String), Vec<ImportedDocument>>;
+
+/// The accounts and the project configuration of the Auth section.
+type PreparedAuth = (Vec<ImportedUser>, ProjectAuthConfig);
+
+/// The objects with their bytes, and the buckets the Storage section listed.
+type PreparedStorage = (Vec<(ImportedObject, Vec<u8>)>, Vec<String>);
+
 /// Everything one export directory holds, parsed and ready to install.
 #[derive(Debug, Default)]
 pub struct Prepared {
-    /// The Firestore databases, keyed by `(project, database)`.
-    firestore: Option<BTreeMap<(String, String), Vec<ImportedDocument>>>,
+    /// The Firestore databases.
+    firestore: Option<PreparedDatabases>,
     /// The Auth accounts and the project configuration.
-    auth: Option<(Vec<ImportedUser>, ProjectAuthConfig)>,
-    /// The Storage objects with their bytes, and the buckets the artifact listed.
-    storage: Option<(Vec<(ImportedObject, Vec<u8>)>, Vec<String>)>,
+    auth: Option<PreparedAuth>,
+    /// The Storage objects and buckets.
+    storage: Option<PreparedStorage>,
     /// What the operator should be told before the run starts.
     pub notices: Vec<String>,
 }
@@ -215,19 +224,16 @@ impl Products {
 /// A section of a product fireemu does not serve at all -- Realtime Database, SQL Connect --
 /// is a failure, because ignoring it would start a suite that silently holds less state than
 /// the artifact recorded.
-pub fn prepare(
-    dir: &Path,
-    products: Products,
-    project: &str,
-) -> Result<Prepared, ArtifactError> {
+pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared, ArtifactError> {
     let manifest_path = dir.join(METADATA_FILE_NAME);
-    let text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| ArtifactError::new("import", &manifest_path, format!("cannot read it: {e}")))?;
+    let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        ArtifactError::new("import", &manifest_path, format!("cannot read it: {e}"))
+    })?;
     let manifest = ExportMetadata::parse(&text)
         .map_err(|e| ArtifactError::new("import", &manifest_path, e.to_string()))?;
 
     let mut prepared = Prepared::default();
-    for product in manifest.deferred() {
+    if let Some(product) = manifest.deferred().first().copied() {
         return Err(ArtifactError::new(
             "import",
             &manifest_path,
@@ -249,7 +255,13 @@ pub fn prepare(
             Product::Firestore => {
                 let mut databases = BTreeMap::new();
                 let documents = read_firestore_section(dir, section)?;
-                collect_documents(&mut databases, documents, DEFAULT_DATABASE, &mut prepared.notices, project)?;
+                collect_documents(
+                    &mut databases,
+                    documents,
+                    DEFAULT_DATABASE,
+                    &mut prepared.notices,
+                    project,
+                )?;
                 for (database, named) in manifest.named_databases() {
                     let documents = read_firestore_section(dir, named)?;
                     collect_documents(
@@ -306,7 +318,11 @@ pub fn apply(prepared: &Prepared, endpoints: &Endpoints) -> Result<(), ArtifactE
     if let Some((users, config)) = &prepared.auth {
         let store = endpoints.auth.default_store();
         let mut store = store.lock().map_err(|_| {
-            ArtifactError::new("auth", PathBuf::from(AUTH_PATH), "the Auth store is poisoned")
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                "the Auth store is poisoned",
+            )
         })?;
         store.clear();
         store.set_config(*config);
@@ -354,9 +370,10 @@ fn read_firestore_section(
     dir: &Path,
     section: &Section,
 ) -> Result<Vec<ExportDocument>, ArtifactError> {
-    let metadata_file = section.metadata_file.clone().unwrap_or_else(|| {
-        format!("{}/{FIRESTORE_OVERALL_METADATA}", section.path)
-    });
+    let metadata_file = section
+        .metadata_file
+        .clone()
+        .unwrap_or_else(|| format!("{}/{FIRESTORE_OVERALL_METADATA}", section.path));
     let overall_path = dir.join(&metadata_file);
     let bytes = std::fs::read(&overall_path).map_err(|e| {
         ArtifactError::new("firestore", &overall_path, format!("cannot read it: {e}"))
@@ -444,10 +461,7 @@ fn collect_documents(
     Ok(())
 }
 
-fn read_auth_section(
-    dir: &Path,
-    section: &Section,
-) -> Result<(Vec<ImportedUser>, ProjectAuthConfig), ArtifactError> {
+fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
     let config_path = section_dir.join(CONFIG_FILE);
     let config = match std::fs::read_to_string(&config_path) {
@@ -464,12 +478,11 @@ fn read_auth_section(
 
     // Reject a tenant accounts file explicitly: fireemu serves no Identity Platform tenants,
     // and importing only the default one would drop accounts without saying so.
-    let entries = std::fs::read_dir(&section_dir).map_err(|e| {
-        ArtifactError::new("auth", &section_dir, format!("cannot read it: {e}"))
-    })?;
+    let entries = std::fs::read_dir(&section_dir)
+        .map_err(|e| ArtifactError::new("auth", &section_dir, format!("cannot read it: {e}")))?;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with("accounts-") && name.ends_with(".json") {
+        if name.starts_with("accounts-") && name.to_ascii_lowercase().ends_with(".json") {
             return Err(ArtifactError::new(
                 "auth",
                 entry.path(),
@@ -479,9 +492,8 @@ fn read_auth_section(
     }
 
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
-    let text = std::fs::read_to_string(&accounts_path).map_err(|e| {
-        ArtifactError::new("auth", &accounts_path, format!("cannot read it: {e}"))
-    })?;
+    let text = std::fs::read_to_string(&accounts_path)
+        .map_err(|e| ArtifactError::new("auth", &accounts_path, format!("cannot read it: {e}")))?;
     let accounts = AccountsFile::parse(&text)
         .map_err(|e| ArtifactError::new("auth", &accounts_path, e.to_string()))?;
     let mut users = Vec::with_capacity(accounts.users.len());
@@ -520,8 +532,8 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
             hash.chars().take(24).collect::<String>()
         )));
     }
-    let created_at =
-        millis_instant(record.created_at.as_deref()).unwrap_or(LogicalInstant::from_unix_seconds(0));
+    let created_at = millis_instant(record.created_at.as_deref())
+        .unwrap_or(LogicalInstant::from_unix_seconds(0));
     let mut totp_factors = Vec::new();
     let mut phone_factors = Vec::new();
     for (index, enrollment) in record.mfa_info.iter().enumerate() {
@@ -530,11 +542,7 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         } else {
             enrollment.mfa_enrollment_id.clone()
         };
-        let enrolled_at = enrollment
-            .enrolled_at
-            .as_deref()
-            .and_then(|_| None)
-            .unwrap_or(created_at);
+        let enrolled_at = rfc3339_instant(enrollment.enrolled_at.as_deref()).unwrap_or(created_at);
         if let Some(secret) = &enrollment.totp_shared_secret_key {
             totp_factors.push(TotpFactor {
                 mfa_enrollment_id: id,
@@ -594,7 +602,12 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
 
 /// The sign-in provider an account is attributed to, from the providers the export listed.
 fn provider_of(record: &UserRecord) -> Provider {
-    let has = |id: &str| record.provider_user_info.iter().any(|p| p.provider_id == id);
+    let has = |id: &str| {
+        record
+            .provider_user_info
+            .iter()
+            .any(|p| p.provider_id == id)
+    };
     if record.password_hash.is_some() || has("password") {
         return Provider::Password;
     }
@@ -647,10 +660,7 @@ fn decode_base32(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn read_storage_section(
-    dir: &Path,
-    section: &Section,
-) -> Result<(Vec<(ImportedObject, Vec<u8>)>, Vec<String>), ArtifactError> {
+fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
     let section_dir = dir.join(&section.path);
     let buckets_path = section_dir.join(BUCKETS_FILE);
     let text = std::fs::read_to_string(&buckets_path).map_err(|e| {
@@ -681,9 +691,8 @@ fn read_storage_section(
         .collect();
     paths.sort();
     for path in paths {
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            ArtifactError::new("storage", &path, format!("cannot read it: {e}"))
-        })?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| ArtifactError::new("storage", &path, format!("cannot read it: {e}")))?;
         let meta = ExportedObject::parse(&text)
             .map_err(|e| ArtifactError::new("storage", &path, e.to_string()))?;
         let id = path
@@ -695,7 +704,10 @@ fn read_storage_section(
             ArtifactError::new(
                 "storage",
                 &blob_path,
-                format!("the object {} names a blob that cannot be read: {e}", meta.name),
+                format!(
+                    "the object {} names a blob that cannot be read: {e}",
+                    meta.name
+                ),
             )
         })?;
         objects.push((imported_object(&meta, &path)?, bytes));
@@ -703,10 +715,7 @@ fn read_storage_section(
     Ok((objects, buckets.buckets))
 }
 
-fn imported_object(
-    meta: &ExportedObject,
-    path: &Path,
-) -> Result<ImportedObject, ArtifactError> {
+fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("storage", path, message);
     let bucket = BucketName::try_new(meta.bucket.clone())
         .map_err(|e| refuse(format!("bucket {:?}: {e}", meta.bucket)))?;
@@ -801,8 +810,10 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 /// `2026-08-30T15:58:33.194Z` from a logical instant.
 fn rfc3339_text(at: LogicalInstant) -> String {
     let nanos = at.as_nanos();
-    let seconds = (nanos.div_euclid(1_000_000_000)) as i64;
-    let millis = (nanos.rem_euclid(1_000_000_000) / 1_000_000) as i64;
+    // A logical instant is nanoseconds in an i128; the year range the format covers fits an
+    // i64 many times over, and a value that somehow did not is clamped rather than wrapped.
+    let seconds = i64::try_from(nanos.div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    let millis = i64::try_from(nanos.rem_euclid(1_000_000_000) / 1_000_000).unwrap_or(0);
     let days = seconds.div_euclid(86_400);
     let rest = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
@@ -949,7 +960,13 @@ fn export_firestore(
 fn sanitize(database: &str) -> String {
     database
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -961,11 +978,43 @@ fn export_auth(
     let section_dir = dir.join(AUTH_PATH);
     create_private_dir(&section_dir).map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
     let store = endpoints.auth.default_store();
-    let store = store.lock().map_err(|_| {
-        ArtifactError::new("auth", &section_dir, "the Auth store is poisoned")
-    })?;
+    let store = store
+        .lock()
+        .map_err(|_| ArtifactError::new("auth", &section_dir, "the Auth store is poisoned"))?;
     let mut file = AccountsFile::default();
     for user in store.users_by_creation() {
+        file.users.push(exported_account(&store, user));
+    }
+    let accounts_path = section_dir.join(ACCOUNTS_FILE);
+    write_private_file(&accounts_path, file.to_json().as_bytes())
+        .map_err(|e| ArtifactError::new("auth", &accounts_path, e))?;
+
+    let config = store.config();
+    let config_path = section_dir.join(CONFIG_FILE);
+    let document = AuthConfig {
+        allow_duplicate_emails: config.allow_duplicate_emails,
+        enable_improved_email_privacy: config.enable_improved_email_privacy,
+    };
+    write_private_file(&config_path, document.to_json().as_bytes())
+        .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
+
+    manifest.set(
+        Product::Auth,
+        Section {
+            version: COMPATIBLE_CLI_VERSION.to_owned(),
+            path: AUTH_PATH.to_owned(),
+            metadata_file: None,
+        },
+    );
+    Ok(())
+}
+
+/// One account as the Identity Toolkit document an export carries.
+fn exported_account(
+    store: &fireemu_core_auth::store::AuthStore,
+    user: &fireemu_core_auth::store::UserRecord,
+) -> UserRecord {
+    {
         let (password_hash, salt) = match store
             .password_digest(&user.local_id)
             .and_then(fireemu_core_auth::store::PasswordDigest::emulator_form)
@@ -1037,7 +1086,7 @@ fn export_auth(
             });
         }
         let claims = user.custom_claims.canonical_json();
-        file.users.push(UserRecord {
+        UserRecord {
             local_id: user.local_id.as_str().to_owned(),
             email: user.email.clone(),
             email_verified: user.email_verified,
@@ -1059,30 +1108,8 @@ fn export_auth(
             provider_user_info: providers,
             mfa_info,
             extra: Vec::new(),
-        });
+        }
     }
-    let accounts_path = section_dir.join(ACCOUNTS_FILE);
-    write_private_file(&accounts_path, file.to_json().as_bytes())
-        .map_err(|e| ArtifactError::new("auth", &accounts_path, e))?;
-
-    let config = store.config();
-    let config_path = section_dir.join(CONFIG_FILE);
-    let document = AuthConfig {
-        allow_duplicate_emails: config.allow_duplicate_emails,
-        enable_improved_email_privacy: config.enable_improved_email_privacy,
-    };
-    write_private_file(&config_path, document.to_json().as_bytes())
-        .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
-
-    manifest.set(
-        Product::Auth,
-        Section {
-            version: COMPATIBLE_CLI_VERSION.to_owned(),
-            path: AUTH_PATH.to_owned(),
-            metadata_file: None,
-        },
-    );
-    Ok(())
 }
 
 fn export_storage(
@@ -1097,9 +1124,10 @@ fn export_storage(
     create_private_dir(&metadata_dir)
         .map_err(|e| ArtifactError::new("storage", &metadata_dir, e))?;
 
-    let store = endpoints.storage.store.lock().map_err(|_| {
-        ArtifactError::new("storage", &section_dir, "the object store is poisoned")
-    })?;
+    let store =
+        endpoints.storage.store.lock().map_err(|_| {
+            ArtifactError::new("storage", &section_dir, "the object store is poisoned")
+        })?;
     let mut buckets: Vec<String> = store
         .buckets()
         .iter()
@@ -1138,7 +1166,11 @@ fn export_storage(
             content_disposition: object.content_disposition.clone(),
             content_encoding: object.content_encoding.clone(),
             content_language: object.content_language.clone(),
-            custom_metadata: object.custom.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            custom_metadata: object
+                .custom
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             extra: Vec::new(),
         };
         let metadata_path = metadata_dir.join(format!("{id}.json"));
@@ -1277,7 +1309,10 @@ mod tests {
 
     #[test]
     fn base64_and_base32_decode_the_spellings_the_export_uses() {
-        assert_eq!(decode_base64("DFKqKz9JSntkXcjLkQABSQ==").map(|b| b.len()), Some(16));
+        assert_eq!(
+            decode_base64("DFKqKz9JSntkXcjLkQABSQ==").map(|b| b.len()),
+            Some(16)
+        );
         assert_eq!(decode_base64(""), Some(Vec::new()));
         assert_eq!(decode_base64("!!!"), None);
         assert_eq!(

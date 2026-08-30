@@ -182,7 +182,9 @@ impl ExportMetadata {
             firestore_databases: Vec::new(),
         });
         let database = database.into();
-        extension.firestore_databases.retain(|(d, _)| *d != database);
+        extension
+            .firestore_databases
+            .retain(|(d, _)| *d != database);
         extension.firestore_databases.push((database, section));
         extension.firestore_databases.sort_by(|a, b| a.0.cmp(&b.0));
     }

@@ -247,9 +247,7 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
         .get("origins")
         .and_then(|o| o.get(0))
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            CliError::refused(format!("{} names no Hub origin", locator.display()))
-        })?;
+        .ok_or_else(|| CliError::refused(format!("{} names no Hub origin", locator.display())))?;
     let address = origin.trim_start_matches("http://");
     let body = serde_json::json!({
         "path": absolute.to_string_lossy(),
@@ -289,9 +287,7 @@ fn post_json(address: &str, path: &str, body: &str) -> Result<(u16, String), Str
     .map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
     let mut raw = String::new();
-    stream
-        .read_to_string(&mut raw)
-        .map_err(|e| e.to_string())?;
+    stream.read_to_string(&mut raw).map_err(|e| e.to_string())?;
     let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
     let status = head
         .lines()
@@ -357,8 +353,18 @@ struct RawOptions {
     verbosity: Verbosity,
     /// `--import <dir>`.
     import: Option<PathBuf>,
-    /// `--export-on-exit [dir]`; the inner `None` means "the `--import` directory".
-    export_on_exit: Option<Option<PathBuf>>,
+    /// `--export-on-exit [dir]`.
+    export_on_exit: Option<ExportOnExit>,
+}
+
+/// What `--export-on-exit` named, before it is resolved against `--import`.
+#[derive(Debug, Clone)]
+enum ExportOnExit {
+    /// `--export-on-exit <dir>`.
+    Directory(PathBuf),
+    /// `--export-on-exit` with no value: the `--import` directory, as the official CLI
+    /// resolves it.
+    ImportDirectory,
 }
 
 /// The Node inspector port `--inspect-functions` defaults to, as in the official CLI.
@@ -460,16 +466,16 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
                 i += 2;
             }
             "--import" => {
-                raw.import = Some(PathBuf::from(
-                    args.get(i + 1)
-                        .ok_or_else(|| CliError::usage("--import needs a directory"))?,
-                ));
+                raw.import =
+                    Some(PathBuf::from(args.get(i + 1).ok_or_else(|| {
+                        CliError::usage("--import needs a directory")
+                    })?));
                 i += 2;
             }
             "--export-on-exit" => {
                 let (dir, step) = match optional_value(args, i + 1) {
-                    Some(v) => (Some(PathBuf::from(v)), 2),
-                    None => (None, 1),
+                    Some(v) => (ExportOnExit::Directory(PathBuf::from(v)), 2),
+                    None => (ExportOnExit::ImportDirectory, 1),
                 };
                 raw.export_on_exit = Some(dir);
                 i += step;
@@ -599,27 +605,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
     // the official CLI resolves it (`commandUtils.ts` `setExportOnExitOptions`). A target
     // that is the working directory or one of its parents is refused there too, because an
     // export replaces what the directory holds.
-    let export_on_exit = match raw.export_on_exit {
-        None => None,
-        Some(Some(dir)) => Some(dir),
-        Some(None) => Some(raw.import.clone().ok_or_else(|| {
-            CliError::usage(
-                "--export-on-exit must be used with --import, or be given a directory of its own",
-            )
-        })?),
-    };
-    if let Some(dir) = &export_on_exit {
-        let absolute = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
-        if let Ok(cwd) = std::env::current_dir() {
-            if cwd.starts_with(&absolute) {
-                return Err(CliError::refused(format!(
-                    "--export-on-exit {}: that is the working directory or one of its parents, and an export replaces what the directory holds; choose a dedicated directory",
-                    dir.display()
-                )));
-            }
-        }
-        import_export::may_overwrite(dir).map_err(CliError::refused)?;
-    }
+    let export_on_exit = resolve_export_on_exit(raw.export_on_exit, raw.import.as_deref())?;
     if let Some(dir) = &raw.import {
         if !dir.is_dir() {
             return Err(CliError::refused(format!(
@@ -635,6 +621,41 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         import: raw.import,
         export_on_exit,
     })
+}
+
+/// Resolves `--export-on-exit` against `--import` and refuses a target that would replace
+/// the working directory.
+///
+/// Without a directory of its own the flag means "where `--import` read from", exactly as
+/// the official CLI resolves it (`commandUtils.ts` `setExportOnExitOptions`), and a target
+/// that is the working directory or one of its parents is refused there too -- an export
+/// replaces what the directory holds.
+fn resolve_export_on_exit(
+    requested: Option<ExportOnExit>,
+    import: Option<&Path>,
+) -> Result<Option<PathBuf>, CliError> {
+    let dir = match requested {
+        None => return Ok(None),
+        Some(ExportOnExit::Directory(dir)) => dir,
+        Some(ExportOnExit::ImportDirectory) => import
+            .ok_or_else(|| {
+                CliError::usage(
+                    "--export-on-exit must be used with --import, or be given a directory of its own",
+                )
+            })?
+            .to_path_buf(),
+    };
+    let absolute = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.starts_with(&absolute) {
+            return Err(CliError::refused(format!(
+                "--export-on-exit {}: that is the working directory or one of its parents, and an export replaces what the directory holds; choose a dedicated directory",
+                dir.display()
+            )));
+        }
+    }
+    import_export::may_overwrite(&dir).map_err(CliError::refused)?;
+    Ok(Some(dir))
 }
 
 /// `--inspect-functions [port]`: the bundled runner is a Node script, so the inspector is

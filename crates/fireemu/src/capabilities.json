@@ -555,10 +555,10 @@
       "the locator file <temp dir>/hub-<project>.json written at start with version, origins and pid, and removed at exit only while it still names this process; a live locator from another suite is left alone with a notice",
       "FIREBASE_EMULATOR_HUB exported to the exec command as a bare host:port",
       "@firebase/rules-unit-testing 5.0.2 discovers the suite with no explicit host: tools/sdk-smoke/rules-unit-testing.mjs runs initializeTestEnvironment with an empty configuration and exercises the rules decisions, withSecurityRulesDisabled, clearFirestore and a trigger-suppressed write",
-      "DELETE /emulator/v1/projects/{project}/databases/{database}/documents on the Firestore port, which is what clearFirestore() calls"
+      "DELETE /emulator/v1/projects/{project}/databases/{database}/documents on the Firestore port, which is what clearFirestore() calls",
+      "POST /_admin/export with the official body {\"path\", \"initiatedBy\"}, refusing a request that carries an Origin header exactly as upstream does; it is what fireemu emulators:export drives after finding the suite through its locator file"
     ],
     "unimplemented": [
-      "POST /_admin/export answers 501: fireemu has no on-disk export artifact yet",
       "POST /dataconnect/clearData: fireemu serves no Data Connect emulator"
     ],
     "notes": [
@@ -571,7 +571,7 @@
     "status": "partial",
     "precision": "boundary-conformance",
     "implemented": [
-      "emulators:start and emulators:exec as exact aliases of up and exec, and emulators:export as a command that exists and refuses precisely",
+      "emulators:start and emulators:exec as exact aliases of up and exec, and emulators:export <dir> [--project <id>] [--force] against a running suite",
       "the official flag names --only, --project / -P, --config, --import, --export-on-exit, --inspect-functions and --log-verbosity, next to the fireemu port flags",
       "--inspect-functions [port] inserts Node's --inspect=<port> before the runner script (default 9229), and refuses with a precise message when a configured functions.runner is not Node rather than starting without the inspector",
       "--log-verbosity quiet | info | debug (case-insensitive): quiet suppresses the banner and the notices, debug adds the resolved configuration",
@@ -579,8 +579,6 @@
       "SIGINT and SIGTERM are forwarded to the command with their identity and the whole process group is swept afterwards"
     ],
     "unimplemented": [
-      "--import and --export-on-exit parse and then fail with a precise not-yet-supported error; no partial start",
-      "emulators:export reports unsupported until the import / export artifact format lands",
       "--ui / --no-ui: the UI is controlled by --ui-port and emulators.ui"
     ],
     "notes": [
@@ -600,6 +598,49 @@
     ],
     "notes": [
       "the switch is process-wide, not per session: one functions runtime serves every session"
+    ]
+  },
+  "DATA-1": {
+    "status": "implemented",
+    "precision": "boundary-conformance",
+    "implemented": [
+      "the pinned firebase-export-metadata.json manifest of firebase-tools 15.28.2: the version, the per-product sections with their version, path and (Firestore) metadata_file, in the official product order",
+      "the Firestore managed export the emulator jar writes: the LevelDB log framing with its masked CRC-32C, and the apphosting.datastore.v3 EntityProto encoding of a document, covering null, boolean, integer (two's complement), double (exact bits, so NaN and negative zero survive), string, bytes, microsecond timestamps, geo points, references, maps, arrays, the empty array as an indexed EMPTY_LIST property, the empty map as a nested EntityProto, and paths of any subcollection depth",
+      "auth_export/accounts.json as the identitytoolkit#DownloadAccountResponse the CLI streams to disk, with providers, custom claims, phone second factors, the reversible fakeHash:salt=<salt>:password=<plaintext> convention and auth_export/config.json",
+      "storage_export/buckets.json, blobs/<id> and metadata/<id>.json, with the object bytes byte for byte and the recorded generation, metageneration, times, hashes, download tokens and custom metadata",
+      "a member the model does not know is carried through an import and written out again unchanged, so a newer emulator's field is never silently dropped",
+      "a malformed section is refused with the byte offset or the member that caused it, never read short"
+    ],
+    "unimplemented": [
+      "database_export (Realtime Database) and dataconnect_export (SQL Connect) are detected and refused with their deferred status; fireemu serves neither product",
+      "accounts-<tenant>.json is refused: fireemu serves no Identity Platform tenants, and importing only the default tenant would drop accounts",
+      "a passwordHash that is not the emulator's own reversible form (a real scrypt hash from a production export) is refused rather than installed as a credential nothing can sign in with"
+    ],
+    "notes": [
+      "the format is pinned by fixtures recorded from real runs of the official suite (crates/fireemu/tests/fixtures/export/, recorded by conformance/src/record-export.mjs)",
+      "the official managed export records no document creation or update time, so an import necessarily stamps them with the commit that installs them; the official Firestore emulator does the same",
+      "a Firestore database other than (default) has no place in the official format, whose export request is hard-coded to databases/(default); fireemu writes those under a fireemu member of the manifest that the official CLI ignores",
+      "a TOTP second factor has no official equivalent (the Auth emulator has no TOTP factor at all) and is written under totpInfo.sharedSecretKey"
+    ]
+  },
+  "DATA-2": {
+    "status": "implemented",
+    "precision": "boundary-conformance",
+    "implemented": [
+      "--import <dir> reads every section of the products --only selected into memory and installs them together under the exclusive admission barrier, so a failure in any product leaves the empty start state and exits 1 naming the product and the path",
+      "a section of a product --only did not select is skipped with a notice rather than refused",
+      "--export-on-exit [dir] writes the export on a clean exit, on the command's failure and on SIGINT or SIGTERM; an omitted directory resolves to the --import one, and the working directory or a parent is refused",
+      "emulators:export <dir> finds the running suite through its Emulator Hub locator file and drives POST /_admin/export, whose body is the official {\"path\", \"initiatedBy\"} and which refuses a request carrying an Origin header",
+      "overwrite protection: a directory is overwritten only when it is empty or already holds a firebase-export-metadata.json",
+      "every exported directory is created 0700 and every file 0600, because an Auth export carries password material and TOTP secrets",
+      "an import fires no Auth user event and no Storage object event: it restores state rather than producing it"
+    ],
+    "unimplemented": [
+      "importing a project id other than the one the run serves installs the data under the project the artifact names, with a notice, rather than remapping it"
+    ],
+    "notes": [
+      "fireemu's own session snapshots, fault plans, text index definitions and every App Check secret (debug tokens, project epochs, the instance signing key) never reach an export directory",
+      "a password set through fireemu's own API has no reversible emulator form and is exported without a passwordHash rather than with an invented one; a password that arrived from an official import is written back exactly as it was read"
     ]
   }
 }

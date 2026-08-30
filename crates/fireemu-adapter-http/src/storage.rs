@@ -775,14 +775,13 @@ fn patch_from_json(v: &Value) -> MetadataPatch {
         }
     };
     let custom = match v.get("metadata") {
-        None => None,
         Some(Value::Null) => Some(CustomMetadataPatch::Clear),
         Some(Value::Object(m)) => Some(CustomMetadataPatch::Merge(
             m.iter()
                 .map(|(k, val)| (k.clone(), coerce_custom_value(val)))
                 .collect(),
         )),
-        Some(_) => None,
+        _ => None,
     };
     MetadataPatch {
         content_type: field("contentType"),
@@ -1649,9 +1648,8 @@ fn object_name(name: &str) -> Result<ObjectName, StorageResponse> {
 pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let params = query_params(&req.query);
     let host = req.host.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
-    let route = match route(&req.method, &req.path) {
-        Ok(r) => r,
-        Err(_) => return plain_status(400),
+    let Ok(route) = route(&req.method, &req.path) else {
+        return plain_status(400);
     };
     let dialect = match &route {
         Route::FbRoot | Route::FbBucket { .. } | Route::FbObject { .. } => Dialect::Firebase,

@@ -29,6 +29,28 @@ pub enum ClaimValue {
     Map(BTreeMap<String, ClaimValue>),
 }
 
+impl ClaimValue {
+    /// The same value read from a parsed JSON document.
+    #[must_use]
+    pub fn from_json(value: &fireemu_core_types::json::JsonValue) -> Self {
+        use fireemu_core_types::json::JsonValue;
+        match value {
+            JsonValue::Null => Self::Null,
+            JsonValue::Bool(b) => Self::Bool(*b),
+            JsonValue::Int(i) => Self::Int(*i),
+            JsonValue::Float(f) => Self::Float(*f),
+            JsonValue::String(s) => Self::String(s.clone()),
+            JsonValue::Array(items) => Self::List(items.iter().map(Self::from_json).collect()),
+            JsonValue::Object(members) => Self::Map(
+                members
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::from_json(v)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
 /// Writes `s` as a JSON string literal.
 pub fn write_json_string(out: &mut String, s: &str) {
     out.push('"');
@@ -124,6 +146,8 @@ pub enum CustomClaimsError {
     ReservedName(String),
     /// Empty claim name.
     EmptyName,
+    /// The `customAttributes` text is not a JSON object.
+    NotAnObject,
 }
 
 impl fmt::Display for CustomClaimsError {
@@ -131,6 +155,7 @@ impl fmt::Display for CustomClaimsError {
         match self {
             Self::ReservedName(n) => write!(f, "claim name {n:?} is reserved"),
             Self::EmptyName => f.write_str("claim name is empty"),
+            Self::NotAnObject => f.write_str("customAttributes is not a JSON object"),
         }
     }
 }
@@ -166,6 +191,25 @@ impl CustomClaims {
     #[must_use]
     pub const fn entries(&self) -> &BTreeMap<String, ClaimValue> {
         &self.entries
+    }
+
+    /// Parses the `customAttributes` text an export or the Identity Toolkit carries.
+    ///
+    /// The API transports custom claims as a JSON *string* holding an object, so an import
+    /// has to parse it back. A reserved claim name is refused rather than dropped: an
+    /// artifact that smuggled `sub` or `iss` into the claims would otherwise silently change
+    /// what every ID token of that account says.
+    pub fn parse_attributes(text: &str) -> Result<Self, CustomClaimsError> {
+        let parsed =
+            fireemu_core_types::json::parse(text).map_err(|_| CustomClaimsError::NotAnObject)?;
+        let fireemu_core_types::json::JsonValue::Object(members) = parsed else {
+            return Err(CustomClaimsError::NotAnObject);
+        };
+        let mut claims = Self::default();
+        for (name, value) in &members {
+            claims.insert(name, ClaimValue::from_json(value))?;
+        }
+        Ok(claims)
     }
 
     /// Canonical JSON encoding.

@@ -64,6 +64,19 @@ pub struct Document {
     pub version: CommitVersion,
 }
 
+/// A document an import installs, with the times the artifact recorded for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedDocument {
+    /// Where the document goes.
+    pub path: DocumentPath,
+    /// Its fields.
+    pub fields: BTreeMap<String, Value>,
+    /// The creation time to keep; `None` uses the import's commit time.
+    pub create_time: Option<LogicalInstant>,
+    /// The update time to keep; `None` uses the import's commit time.
+    pub update_time: Option<LogicalInstant>,
+}
+
 /// Transaction handle.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TransactionId(u64);
@@ -382,6 +395,87 @@ impl FirestoreState {
         self.history.iter().filter_map(move |(path, _)| match at {
             Some(v) => self.get_at(path, v),
             None => self.get(path),
+        })
+    }
+
+    /// Every live document (latest versions), in path order.
+    ///
+    /// This is what an export walks: the current state of the database, without the version
+    /// history, transactions or tombstones that belong to the running session.
+    #[must_use]
+    pub fn documents(&self) -> Vec<Document> {
+        self.live_documents(None).cloned().collect()
+    }
+
+    /// Installs `documents` as one commit, keeping the creation and update times they
+    /// carry.
+    ///
+    /// An import is not a sequence of writes: the documents come from an artifact that
+    /// already recorded what the database held, so they are published together, at one
+    /// commit version and one commit time, and a document that named its own creation time
+    /// keeps it. `None` times fall back to the commit time -- which is what the official
+    /// Firestore managed export always leads to, because that format records no document
+    /// timestamps at all.
+    ///
+    /// The result is the same [`CommitResult`] a commit produces, so the caller can publish
+    /// the change set the way a normal commit does. Every document is validated first, so a
+    /// rejected one leaves the database untouched.
+    pub fn import_documents(
+        &mut self,
+        documents: Vec<ImportedDocument>,
+        now: LogicalInstant,
+    ) -> Result<CommitResult, FirestoreError> {
+        let commit_time = self.next_commit_time(now);
+        let next_version = CommitVersion(self.version.0 + 1);
+        // Stage and validate everything before anything is published.
+        let mut staged: BTreeMap<DocumentPath, Document> = BTreeMap::new();
+        for imported in documents {
+            let document = Document {
+                path: imported.path.clone(),
+                fields: imported.fields,
+                create_time: imported.create_time.unwrap_or(commit_time),
+                update_time: imported.update_time.unwrap_or(commit_time),
+                version: next_version,
+            };
+            validate_document(&document)?;
+            staged.insert(imported.path, document);
+        }
+        self.last_commit_time = Some(commit_time);
+        if staged.is_empty() {
+            return Ok(CommitResult {
+                commit_time,
+                write_results: Vec::new(),
+                version: self.version,
+                changes: Vec::new(),
+            });
+        }
+        self.version = next_version;
+        self.commit_times.push((next_version, commit_time));
+        let mut changes = Vec::with_capacity(staged.len());
+        for (path, document) in staged {
+            let before = self.get(&path).cloned();
+            // A second version is something a later compaction can drop, exactly as after a
+            // normal commit.
+            let compactable = self.history.contains_key(&path);
+            changes.push(DocumentChange {
+                path: path.clone(),
+                before,
+                after: Some(document.clone()),
+            });
+            self.history
+                .entry(path.clone())
+                .or_default()
+                .push((next_version, Some(document)));
+            if compactable {
+                self.compactable.insert(path);
+            }
+        }
+        self.compact(now);
+        Ok(CommitResult {
+            commit_time,
+            write_results: Vec::new(),
+            version: next_version,
+            changes,
         })
     }
 

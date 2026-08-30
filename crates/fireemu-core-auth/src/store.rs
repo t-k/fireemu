@@ -417,8 +417,11 @@ pub enum AuthError {
     InvalidEmail,
     /// Password shorter than six characters (Firebase minimum).
     WeakPassword,
-    /// Unknown email or wrong password.
+    /// Unknown email or wrong password, undistinguished (the improved email privacy mode).
     InvalidCredentials,
+    /// Wrong password, or no password credential, for a known email (the default mode of
+    /// the official emulator, which distinguishes it from an unknown email).
+    InvalidPassword,
     /// The user is disabled.
     UserDisabled,
     /// Unknown or revoked refresh token.
@@ -441,6 +444,9 @@ pub enum AuthError {
     InvalidVerificationCode,
     /// The federated identity is linked to another user.
     FederatedUserIdAlreadyLinked,
+    /// The project already holds [`MAX_OUTSTANDING_CODES`] outstanding codes of the kind
+    /// requested; nothing was created.
+    TooManyOutstandingCodes,
     /// Limit violation.
     LimitExceeded(LimitViolation),
 }
@@ -453,6 +459,7 @@ impl fmt::Display for AuthError {
             Self::InvalidEmail => f.write_str("invalid email"),
             Self::WeakPassword => f.write_str("password must be at least 6 characters"),
             Self::InvalidCredentials => f.write_str("invalid email or password"),
+            Self::InvalidPassword => f.write_str("invalid password"),
             Self::UserDisabled => f.write_str("user is disabled"),
             Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
             Self::InvalidLocalId => f.write_str("invalid local id"),
@@ -466,6 +473,7 @@ impl fmt::Display for AuthError {
             Self::FederatedUserIdAlreadyLinked => {
                 f.write_str("federated identity linked to another user")
             }
+            Self::TooManyOutstandingCodes => f.write_str("too many outstanding codes"),
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
         }
     }
@@ -516,6 +524,10 @@ pub struct AuthStore {
     signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
     oob_codes: BTreeMap<String, OobCode>,
     verification_codes: BTreeMap<String, VerificationCode>,
+    /// Which user owns each outstanding pending sign-in (`mfaPendingCredential`), so a
+    /// credential is resolved directly rather than by scanning every user
+    /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
+    pending_sign_in_owners: BTreeMap<String, LocalId>,
     created_users: Vec<LocalId>,
     deleted_users: Vec<UserRecord>,
     /// The project-level Auth configuration an import carried, kept so an export can write
@@ -527,6 +539,14 @@ pub struct AuthStore {
 pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
 /// Phone verification codes expire after ten minutes of virtual time.
 pub const SMS_CODE_TTL_SECONDS: i64 = 600;
+/// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
+/// time. The official emulator's credential is stateless and never expires; this is a local
+/// lifecycle policy, not a claimed production value.
+pub const PENDING_SIGN_IN_TTL_SECONDS: i64 = 3_600;
+/// Outstanding email action codes, and separately outstanding phone verification codes, one
+/// project may hold. A flow that keeps requesting codes without consuming them is refused at
+/// this budget, and the refused request creates nothing (`AUTH-TRANSIENT-03`).
+pub const MAX_OUTSTANDING_CODES: usize = 1_000;
 
 impl AuthStore {
     /// Installs the ID token signer (RS256 session key). Tokens issued afterwards are
@@ -562,6 +582,7 @@ impl AuthStore {
             signer: None,
             oob_codes: BTreeMap::new(),
             verification_codes: BTreeMap::new(),
+            pending_sign_in_owners: BTreeMap::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
             config: ProjectAuthConfig::default(),
@@ -625,6 +646,26 @@ impl AuthStore {
         )
     }
 
+    /// A generated account identifier: 28 characters of `[A-Za-z0-9]`, the shape the
+    /// official emulator and production assign (the client SDKs surface its length).
+    fn random_local_id(&mut self) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let mut id = String::with_capacity(28);
+        while id.len() < 28 {
+            let mut word = self.rng.next_u64();
+            // Ten characters per 64-bit word: 62^10 < 2^60, so each draw is a fair index.
+            for _ in 0..10 {
+                if id.len() == 28 {
+                    break;
+                }
+                let index = usize::try_from(word % 62).unwrap_or(0);
+                id.push(char::from(ALPHABET[index]));
+                word /= 62;
+            }
+        }
+        id
+    }
+
     fn random_secret(&mut self) -> TotpSecret {
         let mut bytes = Vec::with_capacity(20);
         for _ in 0..3 {
@@ -658,11 +699,17 @@ impl AuthStore {
         }
     }
 
-    /// Deletes a user and its refresh tokens.
+    /// Deletes a user and its refresh tokens, pending sign-ins and phone codes.
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
         let key = LocalId(uid.to_owned());
         let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
         self.refresh_tokens.retain(|_, s| s.uid != key);
+        self.pending_sign_in_owners.retain(|_, owner| *owner != key);
+        self.verification_codes.retain(|_, c| match &c.purpose {
+            VerificationPurpose::SignIn => true,
+            VerificationPurpose::Enrollment { uid }
+            | VerificationPurpose::MfaSignIn { uid, .. } => *uid != key,
+        });
         self.deleted_users.push(user);
         Ok(())
     }
@@ -674,6 +721,43 @@ impl AuthStore {
         self.refresh_tokens.clear();
         self.oob_codes.clear();
         self.verification_codes.clear();
+        self.pending_sign_in_owners.clear();
+    }
+
+    /// Drops every transient credential past its lifetime: email action codes
+    /// ([`OOB_CODE_TTL_SECONDS`]), phone verification codes ([`SMS_CODE_TTL_SECONDS`]), TOTP
+    /// enrollment sessions (the policy's session lifetime) and pending second-factor sign-ins
+    /// ([`PENDING_SIGN_IN_TTL_SECONDS`]), each at the boundary its consumer already applied.
+    /// Refresh tokens are not transient credentials and are never swept here.
+    ///
+    /// The adapter calls this before every request and the store calls it before every
+    /// creation, so an expired entry is never observable as active and the retained state is
+    /// bounded under abandoned flows (`AUTH-TRANSIENT-01`, `-02`). It depends on `now` and on
+    /// the order of operations only.
+    pub fn sweep_transient_credentials(&mut self, now: LogicalInstant) {
+        self.oob_codes
+            .retain(|_, c| !Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now));
+        self.verification_codes
+            .retain(|_, c| !Self::expired(c.created_at, SMS_CODE_TTL_SECONDS, now));
+        let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
+        let enrollment_grace = self.policy.enrollment_session_ttl;
+        for user in self.users.values_mut() {
+            for dropped in user.mfa.sweep(now, sign_in_ttl, enrollment_grace) {
+                self.pending_sign_in_owners.remove(&dropped);
+            }
+        }
+        // A phone code for a pending sign-in that no longer exists can never be finalized.
+        let owners = &self.pending_sign_in_owners;
+        self.verification_codes.retain(|_, c| match &c.purpose {
+            VerificationPurpose::MfaSignIn { pending, .. } => owners.contains_key(&pending.0),
+            VerificationPurpose::SignIn | VerificationPurpose::Enrollment { .. } => true,
+        });
+    }
+
+    /// Outstanding pending second-factor sign-ins across every user (bounded state).
+    #[must_use]
+    pub fn pending_sign_in_count(&self) -> usize {
+        self.pending_sign_in_owners.len()
     }
 
     /// Records a successful sign-in (Admin `lastLoginAt`).
@@ -889,7 +973,7 @@ impl AuthStore {
             Some(id) => LocalId(id),
             None => loop {
                 // Generated IDs share the namespace with caller-chosen ones: skip collisions.
-                let candidate = LocalId(self.next_id("u"));
+                let candidate = LocalId(self.random_local_id());
                 if !self.users.contains_key(&candidate) {
                     break candidate;
                 }
@@ -926,7 +1010,8 @@ impl AuthStore {
 
     // ---- email actions, phone sign-in, federated identities ----------------------------
 
-    /// Creates an email action code.
+    /// Creates an email action code. Expired codes are swept first; at
+    /// [`MAX_OUTSTANDING_CODES`] outstanding codes the request is refused and creates nothing.
     pub fn create_oob_code(
         &mut self,
         request_type: OobRequestType,
@@ -934,7 +1019,11 @@ impl AuthStore {
         uid: Option<LocalId>,
         new_email: Option<String>,
         now: LogicalInstant,
-    ) -> String {
+    ) -> Result<String, AuthError> {
+        self.sweep_transient_credentials(now);
+        if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
+            return Err(AuthError::TooManyOutstandingCodes);
+        }
         let code = self.next_id("oob-");
         self.oob_codes.insert(
             code.clone(),
@@ -947,7 +1036,7 @@ impl AuthStore {
                 created_at: now,
             },
         );
-        code
+        Ok(code)
     }
 
     /// Outstanding email action codes, oldest first.
@@ -994,6 +1083,8 @@ impl AuthStore {
     }
 
     /// Creates a phone verification code for `phone` (a deterministic six-digit code).
+    /// Expired codes are swept first; at [`MAX_OUTSTANDING_CODES`] outstanding codes the
+    /// request is refused and creates nothing.
     pub fn send_verification_code(
         &mut self,
         phone: &str,
@@ -1001,6 +1092,10 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<VerificationCode, AuthError> {
         Self::validate_phone_number(phone)?;
+        self.sweep_transient_credentials(now);
+        if self.verification_codes.len() >= MAX_OUTSTANDING_CODES {
+            return Err(AuthError::TooManyOutstandingCodes);
+        }
         let session_info = self.next_id("sms-");
         let code = format!("{:06}", self.rng.next_u64() % 1_000_000);
         let entry = VerificationCode {
@@ -1281,6 +1376,7 @@ impl AuthStore {
         if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
+        self.pending_sign_in_owners.remove(&pending.0);
         if !user
             .mfa
             .phone_factors()
@@ -1327,6 +1423,21 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Removes the password credential (`deleteProvider: password`, `deleteAttribute:
+    /// PASSWORD`); `true` when there was one.
+    pub fn clear_password(&mut self, uid: &LocalId) -> Result<bool, AuthError> {
+        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        Ok(user.password.take().is_some())
+    }
+
+    /// Removes the email address and its verified flag (`deleteAttribute: EMAIL`).
+    pub fn clear_email(&mut self, uid: &LocalId) -> Result<(), AuthError> {
+        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        user.email = None;
+        user.email_verified = false;
+        Ok(())
+    }
+
     /// Whether `uid` has a password credential (`createAuthUri` sign-in methods).
     #[must_use]
     pub fn has_password(&self, uid: &LocalId) -> bool {
@@ -1334,12 +1445,19 @@ impl AuthStore {
     }
 
     /// Verifies an email + password sign-in; returns the user ID.
+    ///
+    /// The refusal follows the project's email privacy setting the way the official emulator's
+    /// does: by default an unknown email is [`AuthError::EmailNotFound`] and a wrong password
+    /// [`AuthError::InvalidPassword`]; with `enableImprovedEmailPrivacy` both collapse into
+    /// [`AuthError::InvalidCredentials`] so the response no longer reveals whether the email
+    /// is registered.
     pub fn verify_password(
         &mut self,
         email: &str,
         password: &str,
         now: LogicalInstant,
     ) -> Result<LocalId, AuthError> {
+        let private = self.config.enable_improved_email_privacy;
         let (uid, disabled, ok) = self
             .users
             .values()
@@ -1351,12 +1469,21 @@ impl AuthStore {
                     u.password.as_ref().is_some_and(|p| p.verify(password)),
                 )
             })
-            .ok_or(AuthError::InvalidCredentials)?;
-        if !ok {
-            return Err(AuthError::InvalidCredentials);
-        }
+            .ok_or(if private {
+                AuthError::InvalidCredentials
+            } else {
+                AuthError::EmailNotFound
+            })?;
+        // The official emulator reports a disabled account before it checks the password.
         if disabled {
             return Err(AuthError::UserDisabled);
+        }
+        if !ok {
+            return Err(if private {
+                AuthError::InvalidCredentials
+            } else {
+                AuthError::InvalidPassword
+            });
         }
         if let Some(u) = self.users.get_mut(&uid) {
             u.last_sign_in_at = Some(now);
@@ -1518,6 +1645,13 @@ impl AuthStore {
             .email
             .clone()
             .unwrap_or_else(|| uid.as_str().to_owned());
+        // Expired sessions are swept before the budget is measured, so an abandoned flow
+        // frees its slot on expiry; a refused start creates no secret and no session.
+        self.sweep_transient_credentials(now);
+        let user = self.users.get(uid).ok_or(MfaError::UserNotFound)?;
+        if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
+            return Err(MfaError::TooManyPending);
+        }
         let secret = self.random_secret();
         let session_id = self.next_id("enroll-");
         let expires_at = now
@@ -1592,6 +1726,7 @@ impl AuthStore {
         uid: &LocalId,
         now: LogicalInstant,
     ) -> Result<PendingSignInId, MfaError> {
+        self.sweep_transient_credentials(now);
         let pending_id = self.next_id("signin-");
         let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
         if user.disabled {
@@ -1600,18 +1735,25 @@ impl AuthStore {
         if user.mfa.is_empty() {
             return Err(MfaError::NoEnrolledFactor);
         }
+        if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
+            return Err(MfaError::TooManyPending);
+        }
         user.mfa
             .pending_sign_ins_mut()
             .insert(pending_id.clone(), PendingSignIn { started_at: now });
+        self.pending_sign_in_owners
+            .insert(pending_id.clone(), uid.clone());
         Ok(PendingSignInId(pending_id))
     }
 
-    /// User that owns a pending sign-in, if any.
+    /// User that owns a pending sign-in, if any: a direct lookup in the ownership index,
+    /// confirmed against the user's own pending map so the two can never disagree.
     #[must_use]
     pub fn pending_sign_in_user(&self, pending: &PendingSignInId) -> Option<LocalId> {
+        let owner = self.pending_sign_in_owners.get(&pending.0)?;
         self.users
-            .values()
-            .find(|u| u.mfa.has_pending_sign_in(&pending.0))
+            .get(owner)
+            .filter(|u| u.mfa.has_pending_sign_in(&pending.0))
             .map(|u| u.local_id.clone())
     }
 
@@ -1628,6 +1770,7 @@ impl AuthStore {
         if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
+        self.pending_sign_in_owners.remove(&pending.0);
         let mut replayed = false;
         for factor in user.mfa.totp_factors_mut() {
             match match_code(

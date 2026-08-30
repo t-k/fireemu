@@ -85,7 +85,9 @@ fn sign_up_sign_in_lookup_and_refresh() {
         &json!({"email": "a@example.com", "password": "nope"}),
     );
     assert_eq!(status, 400);
-    assert_eq!(wrong["error"]["message"], "INVALID_LOGIN_CREDENTIALS");
+    // The default (non-private) mode distinguishes a wrong password from an unknown email,
+    // as the pinned official emulator does (auth/identity-toolkit-error-shapes).
+    assert_eq!(wrong["error"]["message"], "INVALID_PASSWORD");
     let (status, ok) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -474,7 +476,8 @@ fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_projec
         "/identitytoolkit.googleapis.com/v1/projects//accounts:delete",
         &json!({"localId": "x"}),
     );
-    assert_eq!(status, 400);
+    // An empty project segment is no route at all.
+    assert_eq!(status, 404);
     assert_eq!(
         handle_with(&s, "POST", &format!("{ADMIN}/accounts"), &local, &body).status,
         200
@@ -503,7 +506,10 @@ fn admin_create_is_atomic_and_typed() {
         &json!({"localId": ["u-alice"]}),
     );
     assert_eq!(status, 200);
-    assert_eq!(body["users"].as_array().map(Vec::len), Some(0));
+    assert!(
+        body.get("users").is_none(),
+        "no match is an absent users, as the official emulator answers"
+    );
     // Wrong JSON types are rejected instead of being treated as absent.
     let (status, _) = admin(
         &s,
@@ -755,8 +761,8 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         &json!({"localId": ["custom-2", "custom-3"]}),
     );
     assert_eq!(
-        looked["users"].as_array().map(Vec::len),
-        Some(0),
+        looked.get("users").map(|u| u.as_array().map(Vec::len)),
+        None,
         "rejected tokens create nobody"
     );
 }
@@ -899,7 +905,7 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
     );
     assert_eq!(
         looked.get("users").map(|u| u.as_array().map(Vec::len)),
-        Some(Some(0))
+        None
     );
     assert_eq!(
         admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &json!({})).0,

@@ -242,9 +242,17 @@ pub enum MfaError {
     NoEnrolledFactor,
     /// More than [`MAX_FACTORS_PER_USER`] factors.
     TooManyFactors,
+    /// The user already has [`MAX_PENDING_PER_USER`] outstanding enrollment sessions and
+    /// pending sign-ins; nothing was created.
+    TooManyPending,
     /// A limit was violated.
     LimitExceeded(LimitViolation),
 }
+
+/// Outstanding pending enrollments plus pending sign-ins one user may hold. A client that
+/// keeps starting flows without finishing them is refused at this budget, and the refused
+/// request creates nothing (`AUTH-TRANSIENT-03`).
+pub const MAX_PENDING_PER_USER: usize = 32;
 
 impl fmt::Display for MfaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -258,6 +266,7 @@ impl fmt::Display for MfaError {
             Self::PendingSignInUnknown => f.write_str("unknown pending sign-in"),
             Self::NoEnrolledFactor => f.write_str("no second factor enrolled"),
             Self::TooManyFactors => f.write_str("too many second factors"),
+            Self::TooManyPending => f.write_str("too many pending second-factor sessions"),
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
         }
     }
@@ -397,6 +406,57 @@ impl MfaState {
 
     pub(crate) fn has_pending_sign_in(&self, id: &str) -> bool {
         self.pending_sign_ins.contains_key(id)
+    }
+
+    /// Outstanding pending enrollments and sign-ins together (the per-user budget).
+    #[must_use]
+    pub fn pending_count(&self) -> usize {
+        self.pending_enrollments.len() + self.pending_sign_ins.len()
+    }
+
+    /// Drops every pending enrollment that expired more than `enrollment_grace` ago and every
+    /// pending sign-in older than `sign_in_ttl`, returning the ids of the sign-ins dropped.
+    ///
+    /// An expired enrollment session stays for one grace window so that a late finalize is
+    /// answered `SESSION_EXPIRED` rather than `INVALID_SESSION_INFO` (the `Expired` state of
+    /// spec 12A.5 is observable); it is reaped after that, so retained state stays bounded.
+    /// The sign-in boundary is the one finalization uses: an entry is kept while `now` is at
+    /// or before its expiry.
+    pub fn sweep(
+        &mut self,
+        now: LogicalInstant,
+        sign_in_ttl: LogicalDuration,
+        enrollment_grace: LogicalDuration,
+    ) -> Vec<String> {
+        self.pending_enrollments.retain(|_, p| {
+            now <= p
+                .expires_at
+                .checked_add(enrollment_grace)
+                .unwrap_or(LogicalInstant::MAX)
+        });
+        let mut dropped = Vec::new();
+        self.pending_sign_ins.retain(|id, p| {
+            let expires_at = p
+                .started_at
+                .checked_add(sign_in_ttl)
+                .unwrap_or(LogicalInstant::MAX);
+            if now <= expires_at {
+                true
+            } else {
+                dropped.push(id.clone());
+                false
+            }
+        });
+        dropped
+    }
+
+    /// Drops every pending enrollment and sign-in (a user whose factors were replaced or
+    /// whose account is being restored).
+    pub fn clear_pending(&mut self) -> Vec<String> {
+        self.pending_enrollments.clear();
+        std::mem::take(&mut self.pending_sign_ins)
+            .into_keys()
+            .collect()
     }
 
     /// Clears replay state. Test helper for stepping through window fixtures.

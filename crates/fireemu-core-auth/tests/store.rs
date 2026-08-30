@@ -2,7 +2,9 @@
 //! credentials, refresh sessions and token validity.
 
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthError, AuthStore, LocalId, NewUser, PendingSignInId};
+use fireemu_core_auth::store::{
+    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig,
+};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
@@ -178,6 +180,19 @@ fn passwords_are_validated_hashed_and_verified() {
     );
     assert_eq!(s.set_password(&a, "short"), Err(AuthError::WeakPassword));
     s.set_password(&a, "correct horse").unwrap();
+    // The default mode reports what the official emulator reports; improved email privacy
+    // collapses both refusals into one.
+    assert_eq!(
+        s.verify_password("a@example.com", "wrong", t(1)),
+        Err(AuthError::InvalidPassword)
+    );
+    assert_eq!(
+        s.verify_password("nobody@example.com", "correct horse", t(1)),
+        Err(AuthError::EmailNotFound)
+    );
+    let mut private = s.config();
+    private.enable_improved_email_privacy = true;
+    s.set_config(private);
     assert_eq!(
         s.verify_password("a@example.com", "wrong", t(1)),
         Err(AuthError::InvalidCredentials)
@@ -186,6 +201,7 @@ fn passwords_are_validated_hashed_and_verified() {
         s.verify_password("nobody@example.com", "correct horse", t(1)),
         Err(AuthError::InvalidCredentials)
     );
+    s.set_config(ProjectAuthConfig::default());
     assert_eq!(
         s.verify_password("a@example.com", "correct horse", t(1)),
         Ok(a.clone())

@@ -179,6 +179,17 @@ struct Inner {
     delayed: BTreeMap<EventId, Held>,
 }
 
+/// What a completion did to the event's record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retirement {
+    /// Terminal and successful: the payload is no longer needed.
+    Retired,
+    /// Retry-waiting or given back to the queue: the payload stays.
+    StillActive,
+    /// Terminal after the last attempt: the payload goes and a dead letter is recorded.
+    DeadLettered,
+}
+
 /// An event a `delay` fault holds back.
 struct Held {
     /// When it may go.
@@ -686,8 +697,7 @@ impl FunctionsRuntime {
             enqueued = true;
         }
         for id in inner.outbox.retries_due(now) {
-            if let Ok(r) = inner.outbox.record_mut(id) {
-                let _ = r.retry_due(now);
+            if inner.outbox.update(id, |r| r.retry_due(now)).is_ok() {
                 enqueued = true;
             }
         }
@@ -1224,14 +1234,15 @@ impl FunctionsRuntime {
                     decided
                 }
             };
-            let Ok(record) = inner.outbox.record_mut(id) else {
+            let leased = inner.outbox.update(id, |record| {
+                if record.lease().is_err() || record.start().is_err() {
+                    return None;
+                }
+                Some((record.attempt(), record.event().epoch))
+            });
+            let Ok(Some((attempt, epoch))) = leased else {
                 continue;
             };
-            if record.lease().is_err() || record.start().is_err() {
-                continue;
-            }
-            let attempt = record.attempt();
-            let epoch = record.event().epoch;
             let Some((_, payload)) = inner.payloads.get(&id) else {
                 continue;
             };
@@ -1361,39 +1372,51 @@ impl FunctionsRuntime {
                 attempt,
                 outcome: text.clone(),
             });
-            if let Ok(record) = inner.outbox.record_mut(id) {
+            let single = RetryPolicy::try_new(
+                1,
+                LogicalDuration::from_seconds(0),
+                LogicalDuration::from_seconds(0),
+            );
+            let policy = if retry {
+                self.retry
+            } else {
+                single.unwrap_or(self.retry)
+            };
+            // `Retired` means the event reached a terminal state and its payload is no longer
+            // needed; `DeadLettered` adds the diagnostic record. Decided inside the outbox
+            // update so the record's state and the indexes move together.
+            let outcome_of_record = inner.outbox.update(id, |record| {
                 if matches!(outcome, InvokeOutcome::Ok) {
                     let _ = record.succeed();
-                    inner.payloads.remove(&id);
+                    Retirement::Retired
                 } else if matches!(outcome, InvokeOutcome::RunnerGone(_)) {
                     // Infrastructure failure: the attempt is given back and the event waits,
                     // pending, for a runner (dispatch stops while the runner is dead).
                     let _ = record.interrupt();
+                    Retirement::StillActive
+                } else if matches!(
+                    record.fail(&policy, now),
+                    Ok(FailureOutcome::RetryScheduled { .. })
+                ) {
+                    Retirement::StillActive
                 } else {
-                    let single = RetryPolicy::try_new(
-                        1,
-                        LogicalDuration::from_seconds(0),
-                        LogicalDuration::from_seconds(0),
-                    );
-                    let policy = if retry {
-                        self.retry
-                    } else {
-                        single.unwrap_or(self.retry)
-                    };
-                    let scheduled = matches!(
-                        record.fail(&policy, now),
-                        Ok(FailureOutcome::RetryScheduled { .. })
-                    );
-                    if !scheduled {
-                        inner.payloads.remove(&id);
-                        inner.dead_letters.push(InvocationRecord {
-                            event_id: id.value(),
-                            function: function.to_owned(),
-                            attempt,
-                            outcome: text,
-                        });
-                    }
+                    Retirement::DeadLettered
                 }
+            });
+            match outcome_of_record {
+                Ok(Retirement::Retired) => {
+                    inner.payloads.remove(&id);
+                }
+                Ok(Retirement::DeadLettered) => {
+                    inner.payloads.remove(&id);
+                    inner.dead_letters.push(InvocationRecord {
+                        event_id: id.value(),
+                        function: function.to_owned(),
+                        attempt,
+                        outcome: text,
+                    });
+                }
+                Ok(Retirement::StillActive) | Err(_) => {}
             }
         }
         let more_due = self

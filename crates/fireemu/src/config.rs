@@ -67,6 +67,9 @@ pub struct RuntimeConfig {
     pub ui_addr: String,
     /// `emulators.ui.enabled`.
     pub ui_enabled: bool,
+    /// Whether `--ui-port`, `emulators.ui` or `daemon.uiPort` pinned the UI address. Like
+    /// the Hub's, a busy default port only disables the UI; a busy explicit one is an error.
+    pub ui_addr_explicit: bool,
     /// `emulators.singleProjectMode`. fireemu isolates every project into its own session, so
     /// this is recorded and published rather than enforced separately.
     pub single_project_mode: bool,
@@ -243,6 +246,7 @@ impl Default for RuntimeConfig {
             hub_addr_explicit: false,
             ui_addr: format!("127.0.0.1:{DEFAULT_UI_PORT}"),
             ui_enabled: true,
+            ui_addr_explicit: false,
             single_project_mode: false,
             functions_source: None,
             functions_codebases: Vec::new(),
@@ -623,6 +627,7 @@ impl RuntimeConfig {
                         })?;
                         self.ui_addr = addr;
                         self.ui_enabled = enabled;
+                        self.ui_addr_explicit = true;
                     }
                     "logging" => report.notices.push(
                         "emulators.logging: the Logging emulator stream is out of scope for this release; nothing is served on that port".to_owned(),
@@ -1004,6 +1009,7 @@ impl RuntimeConfig {
         if let Some(port) = d.get("uiPort").and_then(Value::as_u64) {
             cfg.ui_addr = format!("127.0.0.1:{port}");
             cfg.ui_enabled = port != 0;
+            cfg.ui_addr_explicit = true;
         }
         if let Some(port) = d.get("storagePort").and_then(Value::as_u64) {
             cfg.storage_addr = format!("127.0.0.1:{port}");

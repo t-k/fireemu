@@ -282,10 +282,15 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
                 i += 2;
             }
             "--only" => {
-                raw.only = Some(Selection::parse(
-                    args.get(i + 1)
-                        .ok_or_else(|| CliError::usage("--only needs a list"))?,
-                )?);
+                // A bad selection is a usage failure (exit 2), not a configuration one: the
+                // list came from the command line.
+                raw.only = Some(
+                    Selection::parse(
+                        args.get(i + 1)
+                            .ok_or_else(|| CliError::usage("--only needs a list"))?,
+                    )
+                    .map_err(|e| CliError::usage(e.0))?,
+                );
                 i += 2;
             }
             "--firestore-port" => {
@@ -464,6 +469,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
     if let Some(p) = raw.ui_port {
         cfg.ui_addr = with_port(&cfg.ui_addr, p);
         cfg.ui_enabled = p != 0;
+        cfg.ui_addr_explicit = true;
     }
     if let Some(dir) = raw.functions_source {
         cfg.functions_source = Some(dir);
@@ -471,15 +477,19 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
     if let Some(port) = raw.inspect_functions {
         apply_inspect_functions(&mut cfg, port)?;
     }
-    // The UI listener is configured through its own module; the port is all it takes.
-    ui::set_port(if cfg.ui_enabled {
-        cfg.ui_addr
-            .rsplit_once(':')
-            .and_then(|(_, p)| p.parse().ok())
-            .unwrap_or(config::DEFAULT_UI_PORT)
-    } else {
-        0
-    });
+    // The UI listener is configured through its own module, and only when a port was asked
+    // for: without one it keeps its best-effort default, where a busy 4000 disables the UI
+    // instead of failing the run.
+    if cfg.ui_addr_explicit {
+        ui::set_port(if cfg.ui_enabled {
+            cfg.ui_addr
+                .rsplit_once(':')
+                .and_then(|(_, p)| p.parse().ok())
+                .unwrap_or(config::DEFAULT_UI_PORT)
+        } else {
+            0
+        });
+    }
     Ok(Options {
         cfg,
         only,

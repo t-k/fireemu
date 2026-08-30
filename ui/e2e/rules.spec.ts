@@ -1,5 +1,19 @@
 import { expect, test } from "@playwright/test";
+import { PORTS } from "./global-setup";
 import { api, gotoApp } from "./helpers";
+
+/**
+ * A Firestore REST call straight at the daemon's Firestore port, with no credential, so
+ * Security Rules actually decide it. The UI's own proxy calls Firestore as the owner, which
+ * bypasses rules and would record no decision.
+ */
+const asClient = (method: string, path: string, body?: unknown): Promise<Response> =>
+  fetch(`http://127.0.0.1:${PORTS.firestore}/v1/projects/demo-app/databases/(default)/${path}`, {
+    method,
+    ...(body === undefined
+      ? {}
+      : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+  });
 
 const RULES = `rules_version = '2';
 service cloud.firestore {
@@ -30,5 +44,34 @@ test.describe("Rules", () => {
     await page.getByTestId("rules-firestore-drop").click();
     await page.getByTestId("rules-firestore-drop-confirm").click();
     await expect(page.getByText("Not loaded: every request is allowed").first()).toBeVisible();
+  });
+
+  test("lists the requests Security Rules decided and their per-expression traces", async ({
+    page,
+    request,
+  }) => {
+    await api(request, "PUT", "control/v1/rules", { source: RULES });
+    // One read the rules allow and one write they deny, decided by the ruleset just loaded.
+    expect((await asClient("GET", "documents/traced/a")).status).toBe(404);
+    expect(
+      (await asClient("PATCH", "documents/traced/a", { fields: { n: { integerValue: "1" } } }))
+        .status,
+    ).toBe(403);
+
+    await gotoApp(page, "/rules");
+    await page.getByTestId("rules-requests-refresh").click();
+    const rows = page.getByTestId("rules-requests").locator("tbody tr");
+    await expect(rows).toHaveCount(2);
+    // Newest first: the denied write, then the allowed read.
+    await expect(rows.nth(0)).toContainText("traced/a");
+    await expect(rows.nth(0)).toContainText("Denied");
+    await expect(rows.nth(1)).toContainText("Allowed");
+
+    // The trace names each expression by its position and the values it took.
+    await rows.nth(1).getByRole("button", { name: "Trace" }).click();
+    const trace = page.getByTestId("rules-request-expressions");
+    await expect(trace).toBeVisible();
+    await expect(trace).toContainText("4:");
+    await expect(trace).toContainText("true x1");
   });
 });

@@ -274,23 +274,35 @@
       "Storage object finalized / deleted / metadataUpdated triggers (v2 and v1)",
       "Pub/Sub topic triggers (v2 onMessagePublished, v1 topic().onPublish) fed by POST /v1/sessions/{s}/pubsub/topics/{t}:publish or /v1/projects/{p}/topics/{t}:publish",
       "Auth user created / deleted events to v1 auth.user() handlers",
+      "Eventarc custom events (onCustomEventPublished) fed by POST /projects/{p}/locations/{l}/channels/{c}:publishEvents on the functions port, which CLOUD_EVENTARC_EMULATOR_HOST names, so firebase-admin getEventarc().channel().publish() reaches them unconfigured; the proto CloudEvent is converted the way cloudEventFromProtoToJson converts it and eventFilters are matched as matchesAll matches them",
+      "Firebase alerts (the whole onAlertPublished family) fed by POST /google/publishEvents, which is the only door the official emulator has for them too: an alert trigger is an Eventarc trigger on the sentinel google channel, and the CloudEvent is forwarded verbatim",
       "retries with virtual-time backoff, dead letters, await-idle",
       "bounded diagnostic retention: the 1000 most recent invocation records, 500 dead letters and 1000 terminal event records are kept (older ones are dropped) while the succeeded / deadLettered / overlapRejected counters stay cumulative; every retained record carries a monotonic sequence inside a generation the reset bumps, and the UI log stream consumes cursor deltas and resyncs when its cursor is expired or from an older generation"
     ],
     "status": "implemented",
     "unimplemented": [
-      "blocking identity functions (beforeUserCreated / beforeUserSignedIn)",
+      "Cloud Tasks queue functions (onTaskDispatched): discovered, named and refused; the enqueue surface CLOUD_TASKS_EMULATOR_HOST points at is not served",
+      "blocking identity functions (beforeUserCreated / beforeUserSignedIn, v1 beforeCreate / beforeSignIn): discovered, named and refused; the Auth emulator does not call them",
       "Realtime Database and Remote Config triggers (no such service in the daemon)",
       "protobuf CloudEvents payloads (JSON is what firebase-functions consumes)"
+    ],
+    "notes": [
+      "the Eventarc and alerts routes live on the functions port, not on the official suite's own Eventarc port 9299; the environment variable is exported accordingly, so an SDK reaches them unchanged",
+      "no fireemu-only alert-injection route exists: firebase-tools has none either, and its Emulator UI fires an alert by POSTing to /google/publishEvents like any other client"
     ]
   },
   "FN-HTTP-1": {
     "implemented": [
-      "onRequest / onCall (v2) and v1 HTTPS functions proxied to the runner at /{project}/{region}/{function}"
+      "onRequest / onCall (v2) and v1 HTTPS functions proxied to the runner at /{project}/{region}/{function}[/path], with the path and query below the mount point reaching the handler",
+      "the official emulator's two 404s: `Not Found` (text/plain) for a path that is not a function route, and `Function <region>-<name> does not exist, valid functions are: <trigger keys>` (text/html) for a route whose function is unknown, with the keys in the official order (grouped by region, export order within a region)",
+      "timeoutSeconds: a function that overruns it gets the official answer, HTTP 500 with the body {\"code\":\"ECONNRESET\"} and no content-type, and the emulator logs `Your function timed out after ~Ns.`",
+      "CORS for an onRequest function on a loopback origin: the preflight answer cors({origin: true}) produces (204, the origin reflected, GET,HEAD,PUT,PATCH,POST,DELETE, the requested headers, Vary), and Access-Control-Allow-Origin on the ordinary answer"
     ],
     "notes": [
       "needs functions.source (or --functions <dir>) and the bundled Node runner; the codebase must have express installed (a dependency of firebase-functions)",
-      "conformance: functions/callable-error-envelope, functions/callable-auth-context (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
+      "conformance: functions/callable-error-envelope, functions/callable-auth-context, functions/http-routing-cors-and-timeouts (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
+      "a non-loopback Origin is refused with 403 rather than reflected: the official emulator runs its runtime with enableCors and answers any origin on the internet, which is the one documented divergence of this port",
+      "the timeout does not kill the runner; the official emulator kills the runtime process of the one trigger it runs per process, and one fireemu runner serves a whole codebase"
     ],
     "status": "implemented"
   },
@@ -605,6 +617,45 @@
     ],
     "notes": [
       "the switch is process-wide, not per session: one functions runtime serves every session"
+    ]
+  },
+  "FN-DISCOVERY-1": {
+    "status": "implemented",
+    "implemented": [
+      "every exported function the runner cannot serve is reported, never dropped: the manifest carries an `ignored` array with the name, region, trigger family and product scope, GET .../functions publishes it, and the daemon prints one `functions[<region>-<name>]: function ignored (<family>): <reason>` line per entry",
+      "an export whose endpoint cannot be described -- a v1 provider whose lazily-computed __endpoint throws -- becomes one ignored record naming it rather than a dead runner",
+      "export order is the codebase's, not the ES module namespace's alphabetical order, so the emulator lists functions the way the official one does",
+      "every codebase declared in a firebase.json `functions` array is loaded, one runner process per codebase, behind one runtime and one functions port; --only functions:<codebase> selects one",
+      "a function name two codebases both export is refused, naming both",
+      "`source`, `codebase`, `runtime` and `ignore` are read; a codebase whose runtime is not nodejs* is refused with the language named"
+    ],
+    "unimplemented": [
+      "Python (functions-framework) and Dart loader paths: refused by name, never handed to node",
+      "hot reload of a codebase's source: a change needs a restart, and `ignore` is recorded rather than driving a watcher"
+    ],
+    "notes": [
+      "a trigger family belonging to a product fireemu does not serve fails discovery by default, naming every such function; functions.unservedTriggers = \"report\" asks for the official emulator's carry-on instead, which prints the line and starts anyway",
+      "the official emulator never fails on an unsupported export: it logs `Unsupported trigger` (DEBUG) or `Unsupported function type on <name>` (WARN) and records the definition with ignored: true. fireemu keeps that inventory and parts company only on the product decision"
+    ]
+  },
+  "FN-ENV-1": {
+    "status": "implemented",
+    "implemented": [
+      "the dotenv chain in the official order and dialect (firebase-tools lib/functions/env.js): .env, .env.<projectId>, .env.<alias>, and emulator-only .env.local, later files overriding earlier ones",
+      "the official refusals, with their sentences: both a projectId and an alias file present, a line that is not an assignment, a reserved key, a key that is not SCREAMING_SNAKE, a key under a reserved prefix",
+      "the official quoting: single-quoted literal, double-quoted expanding \\n \\r \\t \\v \\\\ \\' \\\", unquoted ending at the first #, and a quoted value allowed to cross lines",
+      ".secret.local for defineSecret parameters, parsed the same way and merged over the chain",
+      ".runtimeconfig.json passed through as CLOUD_RUNTIME_CONFIG; a malformed one is reported and treated as absent",
+      "the variables the official emulator gives a runtime: FIREBASE_CONFIG (storageBucket, databaseURL, projectId), GCLOUD_PROJECT, GOOGLE_CLOUD_QUOTA_PROJECT, FUNCTIONS_EMULATOR, K_REVISION, PORT, TZ=UTC, METADATA_SERVER_DETECTION, plus per-invocation FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE and K_SERVICE",
+      "defineString / defineInt / defineBoolean / defineList / defineSecret resolve from that environment with the official missing-parameter behaviour, which is the SDK's: the emulator resolves no parameters and prompts for nothing"
+    ],
+    "unimplemented": [
+      "Google Cloud Secret Manager as a fallback for a secret .secret.local does not carry: fireemu holds no credentials and makes no network call, so the parameter resolves as an unset variable does"
+    ],
+    "notes": [
+      "the pinned firebase-functions@7.3.2 has removed functions.config(); CLOUD_RUNTIME_CONFIG is still set, as the official emulator sets it, and no supported SDK surface reads it",
+      "FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE and K_SERVICE name the most recently started invocation: the official emulator runs one runtime process per trigger and can set them once, and one fireemu runner serves a whole codebase",
+      "fireemu also sets GOOGLE_CLOUD_PROJECT, which the official emulator does not; the Google client libraries read either name"
     ]
   }
 }

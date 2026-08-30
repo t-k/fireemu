@@ -977,6 +977,68 @@
           "crates/fireemu/tests/exec.rs"
         ]
       }
+    },
+    {
+      "id": "FN-DISC-001",
+      "statement": "No exported function disappears: every export the runner cannot serve is reported with its name, region, trigger family and product scope, and one whose family belongs to a product the daemon does not serve stops the run unless the configuration asks for the official emulator's carry-on.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/functions_discovery.rs"
+        ]
+      }
+    },
+    {
+      "id": "FN-DISC-002",
+      "statement": "Every Functions codebase a firebase.json declares is loaded on a runner process of its own behind one functions port, and a function name two codebases both export is refused naming both.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/functions_codebases.rs"
+        ]
+      }
+    },
+    {
+      "id": "FN-ENV-001",
+      "statement": "A codebase's dotenv chain is applied in the official order and dialect, .secret.local overrides it, and a file the official parser refuses is refused here with the same sentence before anything starts.",
+      "criticality": "important",
+      "owner": "core-functions",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-functions/src/env.rs",
+          "crates/fireemu/tests/functions_environment.rs"
+        ]
+      }
+    },
+    {
+      "id": "FN-HTTP-001",
+      "statement": "The functions port answers the official emulator's two 404s, its timeout answer and the CORS a loopback origin gets, and refuses a non-loopback Origin.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-functions/tests/runtime.rs"
+        ],
+        "conformance": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json"
+      }
+    },
+    {
+      "id": "FN-EVENTARC-001",
+      "statement": "A custom event published on an Eventarc channel reaches every trigger whose type, channel and event filters match it, converted from the proto form on a custom channel and forwarded verbatim on the google channel that carries Firebase alerts.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-functions/src/eventarc.rs"
+        ]
+      }
     }
   ]
 }

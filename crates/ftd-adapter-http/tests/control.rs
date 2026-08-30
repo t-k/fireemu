@@ -30,6 +30,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         })],
         functions: None,
         control_token: "test-token".to_owned(),
+        app_check: None,
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(std::collections::BTreeMap::new()),

@@ -187,6 +187,23 @@ pub struct ControlState {
     /// cannot reset state, move the clock or change rules; command-line clients on loopback
     /// need not.
     pub control_token: String,
+    /// The App Check registry, when App Check is enabled: the observation route reads it, and
+    /// the lifecycle hooks rotate epochs through it.
+    pub app_check: Option<ftd_core_app_check::AppCheckGate>,
+}
+
+/// Where the App Check observations of one session are served.
+///
+/// The route is privileged for every method whatever the `Origin` (specification section 15),
+/// unlike the rest of the control API, whose guard only challenges browser requests: the
+/// detailed failure reasons here are exactly what an unprivileged view must never see.
+pub const APP_CHECK_OBSERVATIONS_SUFFIX: &str = "/appCheck/observations";
+
+/// Whether a response to `path` must carry `Cache-Control: no-store`.
+#[must_use]
+pub fn is_no_store_path(path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    path.starts_with("/v1/sessions/") && path.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX)
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -334,6 +351,9 @@ pub fn handle_with(
             }).collect::<Vec<_>>()}))
         }
         ("POST", "/v1/sessions") => create_session(state, body),
+        (m, p) if p.starts_with("/v1/sessions/") && p.ends_with(APP_CHECK_OBSERVATIONS_SUFFIX) => {
+            app_check_observations(state, m, p, headers)
+        }
         (m, p) if p.starts_with("/v1/sessions/") => session_route(state, m, p, body),
         // The Pub/Sub REST shape (`projects/{p}/topics/{t}:publish`), for clients that speak it.
         ("POST", p) if p.starts_with("/v1/projects/") && p.ends_with(":publish") => {
@@ -585,6 +605,96 @@ fn conflicting_session(
         ));
     }
     None
+}
+
+/// `GET /v1/sessions/{session}/appCheck/observations` (specification section 15).
+///
+/// Every method needs the control token, whether or not an `Origin` is present, because the
+/// body carries the stable failure reasons that public responses deliberately collapse. App
+/// IDs come from the observations, which already aggregate an unverified identity into the
+/// bounded `unknown` bucket, so no caller-supplied text becomes a counter label.
+fn app_check_observations(
+    state: &ControlState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+) -> JsonResponse {
+    let presented = headers
+        .authorization
+        .as_deref()
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .map(str::trim);
+    if presented != Some(state.control_token.as_str()) {
+        return error(
+            403,
+            "CONTROL_TOKEN_REQUIRED : App Check observations carry privileged failure reasons and need Authorization: Bearer <control token> on every method",
+        );
+    }
+    let session = path["/v1/sessions/".len()..]
+        .strip_suffix(APP_CHECK_OBSERVATIONS_SUFFIX)
+        .unwrap_or_default();
+    if session.is_empty() || session.contains('/') {
+        return error(404, "NOT_FOUND");
+    }
+    let project = match state.sessions.lock() {
+        Ok(sessions) => sessions.get(session).cloned(),
+        Err(_) => return error(500, "INTERNAL"),
+    };
+    let Some(project) = project else {
+        return error(
+            404,
+            &format!("NOT_FOUND : no session {session:?} (POST /v1/sessions creates one)"),
+        );
+    };
+    if method != "GET" {
+        return error(405, "METHOD_NOT_ALLOWED : this route is read-only");
+    }
+    let Some(gate) = &state.app_check else {
+        return error(
+            404,
+            "NOT_FOUND : App Check is not enabled in this runtime (appCheck.enabled)",
+        );
+    };
+    let Ok(registry) = gate.registry().read() else {
+        return error(500, "INTERNAL");
+    };
+    let observations: Vec<ftd_core_app_check::observe::Observation> = registry
+        .observations()
+        .into_iter()
+        .filter(|o| o.project_id == project)
+        .collect();
+    // Counters by service, verified app ID, category and outcome; nothing else is a label.
+    let mut counters: std::collections::BTreeMap<(&str, String, &str, bool), u64> =
+        std::collections::BTreeMap::new();
+    for o in &observations {
+        *counters
+            .entry((o.service, o.app_id.clone(), o.category.as_str(), o.admitted))
+            .or_insert(0) += 1;
+    }
+    ok(json!({
+        "session": session,
+        "project": project,
+        "policyGeneration": registry.policy_generation(&project),
+        "counters": counters.into_iter().map(|((service, app_id, category, admitted), count)| json!({
+            "service": service,
+            "appId": app_id,
+            "category": category,
+            "outcome": if admitted { "admitted" } else { "denied" },
+            "count": count,
+        })).collect::<Vec<_>>(),
+        "observations": observations.iter().map(|o| json!({
+            "service": o.service,
+            "transport": o.transport,
+            "operation": o.operation,
+            "mode": o.mode.as_config_str(),
+            "category": o.category.as_str(),
+            "reason": o.privileged_reason(),
+            "appId": o.app_id,
+            "at": o.at.to_rfc3339().unwrap_or_default(),
+            "policyGeneration": o.policy_generation,
+            "admitted": o.admitted,
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {

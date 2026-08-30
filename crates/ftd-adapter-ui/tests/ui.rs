@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 
 const TOKEN: &str = "ui-test-token";
 
+#[allow(clippy::too_many_lines)]
 fn state() -> Arc<UiState> {
     let gateway = Gateway {
         ctx: PlanningContext {
@@ -70,6 +71,7 @@ fn state() -> Arc<UiState> {
         reset_hooks: Vec::new(),
         functions: None,
         control_token: TOKEN.to_owned(),
+        app_check: None,
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(BTreeMap::new()),

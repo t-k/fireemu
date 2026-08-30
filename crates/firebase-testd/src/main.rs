@@ -658,6 +658,7 @@ fn control_state(
     text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexCatalog>>,
     registry: &Arc<ftd_core_auth::store::AuthRegistry>,
     tenancy: ftd_core_session::tenancy::SharedTenancy,
+    app_check: Option<ftd_core_app_check::AppCheckGate>,
 ) -> ftd_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases, buckets, users, fault
@@ -675,6 +676,9 @@ fn control_state(
     ];
     if let Some(runtime) = functions {
         snapshot_hooks.push(Arc::new(snapshots::Functions(runtime.clone())));
+    }
+    if let Some(gate) = &app_check {
+        snapshot_hooks.push(Arc::new(snapshots::AppCheck(gate.clone())));
     }
     // The default session's scope is wiped by the project hooks; the shared functions
     // runtime is reset afterwards.
@@ -706,6 +710,7 @@ fn control_state(
             storage: storage.clone(),
             registry: registry.clone(),
             seed: cfg.seed,
+            app_check: app_check.clone(),
         })),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))
@@ -713,6 +718,7 @@ fn control_state(
         }),
         control_token,
         barrier: Some(backend.barrier()),
+        app_check,
     }
 }
 
@@ -926,6 +932,7 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
             text_indexes.clone(),
             &registry,
             tenancy.clone(),
+            app_check_gate.clone(),
         ));
         print_banner(
             &cfg,

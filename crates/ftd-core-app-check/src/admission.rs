@@ -164,6 +164,70 @@ impl AppCheckGate {
         rotated
     }
 
+    /// The registered projects `accept` admits, each named once.
+    ///
+    /// A caller whose epoch source is fallible (the daemon draws from the operating system
+    /// CSPRNG) asks for the projects first, generates one epoch per project, and installs them
+    /// with [`Self::set_epochs`]; that way a failure is reported instead of turning into a
+    /// predictable epoch.
+    #[must_use]
+    pub fn projects<A: Fn(&str) -> bool>(&self, accept: A) -> Vec<String> {
+        let registry = self.registry.read().unwrap_or_else(PoisonError::into_inner);
+        let mut out: Vec<String> = Vec::new();
+        for app in registry.apps() {
+            let project = app.project_id();
+            if accept(project) && !out.iter().any(|seen| seen == project) {
+                out.push(project.to_owned());
+            }
+        }
+        out
+    }
+
+    /// Installs one epoch per named project under a single write, so a request sees either the
+    /// whole old set or the whole new one (`INV-APPCHECK-005`).
+    pub fn set_epochs(&self, epochs: &[(String, ProjectEpoch)]) {
+        let mut registry = self
+            .registry
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (project, epoch) in epochs {
+            registry.set_project_epoch(project, *epoch);
+        }
+    }
+
+    /// Captures the dynamic debug tokens of every project `accept` returns true for.
+    #[must_use]
+    pub fn capture_dynamic_debug_tokens<A: Fn(&str) -> bool>(
+        &self,
+        accept: A,
+    ) -> crate::registry::DynamicDebugTokens {
+        self.registry
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .capture_dynamic_debug_tokens(accept)
+    }
+
+    /// Replaces the dynamic debug tokens of every project `accept` returns true for.
+    pub fn restore_dynamic_debug_tokens<A: Fn(&str) -> bool>(
+        &self,
+        accept: A,
+        captured: &crate::registry::DynamicDebugTokens,
+    ) {
+        self.registry
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .restore_dynamic_debug_tokens(accept, captured);
+    }
+
+    /// Drops the retained observations of every project `accept` returns true for: counters
+    /// reset with the project state they describe (section 14).
+    pub fn clear_observations<A: Fn(&str) -> bool>(&self, accept: A) {
+        self.registry
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear_observations(accept);
+    }
+
     /// Drops the dynamic debug tokens of every project `accept` returns true for.
     pub fn clear_dynamic_debug_tokens<A: Fn(&str) -> bool>(&self, accept: A) {
         let mut registry = self

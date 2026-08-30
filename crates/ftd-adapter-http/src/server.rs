@@ -151,7 +151,13 @@ async fn respond(
             }
         }
     };
-    Ok(finish(status, &body, origin.as_deref(), false))
+    // Privileged App Check observations must never be cached (spec 15).
+    Ok(finish(
+        status,
+        &body,
+        origin.as_deref(),
+        crate::control::is_no_store_path(&path),
+    ))
 }
 
 /// Renders one JSON response, optionally forbidding every cache.

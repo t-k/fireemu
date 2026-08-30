@@ -32,7 +32,7 @@ pub fn unix_seconds(at: LogicalInstant) -> i64 {
 ///
 /// `ftd_epoch` is a local private claim: it binds the token to the project session epoch and
 /// makes it non-portable across reset, restore, project deletion and daemon instances.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AppCheckClaims {
     /// `iss`: `https://firebaseappcheck.googleapis.com/{projectNumber}`.
     pub iss: String,
@@ -48,6 +48,21 @@ pub struct AppCheckClaims {
     pub jti: String,
     /// `ftd_epoch`: the current project session epoch as 32 hexadecimal characters.
     pub ftd_epoch: String,
+}
+
+impl core::fmt::Debug for AppCheckClaims {
+    /// `jti` and `ftd_epoch` carry the project epoch: they are redacted like the epoch itself.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AppCheckClaims")
+            .field("iss", &self.iss)
+            .field("sub", &self.sub)
+            .field("aud", &self.aud)
+            .field("iat", &self.iat)
+            .field("exp", &self.exp)
+            .field("jti", &"<redacted>")
+            .field("ftd_epoch", &"<redacted>")
+            .finish()
+    }
 }
 
 impl AppCheckClaims {

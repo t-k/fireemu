@@ -392,8 +392,7 @@ fn app_check_bypass(
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
     if path.starts_with("/emulator/v1/projects/")
-        && control_token.is_some()
-        && presented == control_token
+        && control_token.is_some_and(|t| crate::control::token_matches(presented, t))
     {
         return PrivilegedBypass::ControlApi;
     }
@@ -518,7 +517,11 @@ pub fn handle_with(
                 .as_deref()
                 .and_then(|a| a.strip_prefix("Bearer "))
                 .map(str::trim);
-            if state.control_token.is_none() || presented != state.control_token.as_deref() {
+            if !state
+                .control_token
+                .as_deref()
+                .is_some_and(|t| crate::control::token_matches(presented, t))
+            {
                 return error(
                     403,
                     "CONTROL_TOKEN_REQUIRED : browser requests to the emulator routes need Authorization: Bearer <control token>",

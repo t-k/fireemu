@@ -27,7 +27,7 @@ pub struct ExchangeRequest<'a> {
     pub limited_use: bool,
 }
 
-/// What the exchange decided.
+/// What the exchange decided (`Debug` goes through the claims' redaction).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExchangeOutcome {
     /// The secret matched a registered digest: these claims may be signed and returned.

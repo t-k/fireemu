@@ -381,7 +381,7 @@ fn control_guard(state: &AppCheckState, headers: &RequestHeaders) -> Option<Json
         .as_deref()
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    if presented == Some(state.control_token.as_str()) {
+    if crate::control::token_matches(presented, &state.control_token) {
         return None;
     }
     Some(error(

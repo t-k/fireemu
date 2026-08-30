@@ -217,6 +217,18 @@ fn ok(body: Value) -> JsonResponse {
     JsonResponse { status: 200, body }
 }
 
+/// Whether a presented bearer value is the control token, compared in constant time like the
+/// other credentials the daemon holds (debug tokens, download tokens, the runner secret).
+#[must_use]
+pub fn token_matches(presented: Option<&str>, expected: &str) -> bool {
+    use subtle::ConstantTimeEq as _;
+    let Some(presented) = presented else {
+        return false;
+    };
+    // A length mismatch is a mismatch; lengths are not secret.
+    presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
+}
+
 /// What the session owning `project` owns.
 fn scope_of(state: &ControlState, project: &str) -> Scope {
     state.tenancy.read().map_or_else(
@@ -624,7 +636,7 @@ fn app_check_observations(
         .as_deref()
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    if presented != Some(state.control_token.as_str()) {
+    if !token_matches(presented, &state.control_token) {
         return error(
             403,
             "CONTROL_TOKEN_REQUIRED : App Check observations carry privileged failure reasons and need Authorization: Bearer <control token> on every method",
@@ -1797,7 +1809,7 @@ pub fn browser_guard(
         .as_deref()
         .and_then(|a| a.strip_prefix("Bearer "))
         .map(str::trim);
-    if privileged && presented != Some(state.control_token.as_str()) {
+    if privileged && !token_matches(presented, &state.control_token) {
         return Some(error(
             403,
             "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token> (printed at start, FTD_CONTROL_TOKEN)",

@@ -210,9 +210,38 @@ fn check_manifest_agrees_on_callables(
             .find(|f| f.name == name)
             .map(|f| matches!(f.trigger, Trigger::Http { callable: true, .. }))
     };
+    // The App Check options of a callable are what the runner observed in the code; a
+    // manifest may not weaken them (a `consumeAppCheckToken: true` callable written as
+    // disabled would run without replay protection, an `enforceAppCheck: true` one as open).
+    let app_check_in = |m: &ftd_core_functions::manifest::FunctionManifest, name: &str| {
+        m.functions
+            .iter()
+            .find(|f| f.name == name)
+            .and_then(|f| match &f.trigger {
+                Trigger::Http {
+                    callable: true,
+                    enforce_app_check,
+                    consume_app_check_token,
+                } => Some((*enforce_app_check, *consume_app_check_token)),
+                _ => None,
+            })
+    };
     for f in &configured.functions {
         if !matches!(f.trigger, Trigger::Http { .. }) {
             continue;
+        }
+        if let (Some(configured_options), Some(discovered_options)) = (
+            app_check_in(configured, &f.name),
+            app_check_in(discovered, &f.name),
+        ) {
+            if configured_options != discovered_options {
+                return Err(format!(
+                    "the configured functions manifest gives callable {:?} App Check options \
+                     (enforceAppCheck / consumeAppCheckToken) that differ from what the \
+                     codebase declares; the manifest cannot override them",
+                    f.name
+                ));
+            }
         }
         match callable_in(discovered, &f.name) {
             Some(discovered_callable)
@@ -485,6 +514,20 @@ mod tests {
             check_callable_app_check(&manifest(absent), None, false)
                 .expect("without App Check the callable protocol is inactive");
         }
+    }
+
+    /// A configured manifest cannot weaken what the runner observed: writing a token-consuming
+    /// callable as disabled would run it without replay protection.
+    #[test]
+    fn a_manifest_cannot_override_the_app_check_options_the_runner_observed() {
+        let e = check_manifest_agrees_on_callables(
+            &manifest(Some("disabled")),
+            &manifest(Some("enabled")),
+        )
+        .expect_err("the manifest disagrees with the code");
+        assert!(e.contains("cannot override"), "{e}");
+        check_manifest_agrees_on_callables(&manifest(Some("enabled")), &manifest(Some("enabled")))
+            .expect("agreeing manifests reconcile");
     }
 
     #[test]

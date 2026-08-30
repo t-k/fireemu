@@ -81,7 +81,7 @@ pub enum TokenClass {
 }
 
 /// The verified identity of an app.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AppIdentity {
     /// Verified Firebase app ID (`sub`).
     pub app_id: String,
@@ -97,6 +97,21 @@ pub struct AppIdentity {
     pub token_id: String,
     /// Token class.
     pub token_class: TokenClass,
+}
+
+impl core::fmt::Debug for AppIdentity {
+    /// The token ID carries the project epoch and is redacted.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AppIdentity")
+            .field("app_id", &self.app_id)
+            .field("project_id", &self.project_id)
+            .field("project_number", &self.project_number)
+            .field("issued_at", &self.issued_at)
+            .field("expires_at", &self.expires_at)
+            .field("token_id", &"<redacted>")
+            .field("token_class", &self.token_class)
+            .finish()
+    }
 }
 
 /// How a request's App Check credential classified.

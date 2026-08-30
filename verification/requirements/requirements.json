@@ -977,6 +977,84 @@
           "crates/fireemu/tests/exec.rs"
         ]
       }
+    },
+    {
+      "id": "REQ-RULES-PARITY-01",
+      "statement": "Every builtin, namespace, operator, coercion, comparison and regex construct of the Firestore Rules language answers what the pinned official runtime answers, or diverges only where the divergence is recorded.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "note": "Measured, not asserted: conformance/src/rules-probe installs bounded Rules programs into the official Firestore emulator and into fireemu through the same route and compares the verdict of each. 680 claims, 260 of them generated from a seed and shrunk on mismatch; three rows are documented divergences where the official compiler rejects statically what fireemu raises at evaluation.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-rules/tests/eval.rs",
+          "crates/fireemu-core-rules/tests/namespaces.rs",
+          "crates/fireemu-core-rules/tests/regex.rs",
+          "crates/fireemu-core-rules/tests/mutants.rs"
+        ],
+        "conformance": "conformance/rules-matrix.json",
+        "property": "prop_rules_slice_is_in_range_exactly_where_the_official_runtime_says"
+      }
+    },
+    {
+      "id": "REQ-RULES-PARITY-02",
+      "statement": "The request and resource models a rule sees -- request.auth, request.method, request.path, request.time, request.resource, request.query and resource -- are present, absent or null exactly as the official runtime makes them.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "partial",
+      "note": "Firestore is measured by the same differential probe: request.resource and request.query are absent rather than null when the request has none, request.query.orderBy is a map from field path to ASC / DESC, and request.keys() lists exactly what the official runtime lists. The Storage request model is not probed differentially yet.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu-adapter-http/tests/storage.rs"
+        ],
+        "conformance": "conformance/rules-programs.json"
+      }
+    },
+    {
+      "id": "REQ-RULES-PARITY-03",
+      "statement": "Query authorization, atomic-write authorization, document-access budgets and the call-graph limits reach the same decision as the official runtime, and the call-graph limits are reported when the ruleset loads rather than when a request arrives.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "note": "Ten distinct document accesses are served and eleven are denied; a path read repeatedly is charged once; a recursive call and a call chain of more than twenty calls are compile errors with the official messages; a list rule that reads a field the query does not constrain is denied and one the query does constrain is served. All twenty-two program probes agree with the pinned emulator on status, code and payload shape.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu-core-rules/tests/lint.rs"
+        ],
+        "conformance": "conformance/rules-programs.json",
+        "property": "prop_rules_call_graph_limits_are_compile_errors"
+      }
+    },
+    {
+      "id": "REQ-RULES-PARITY-04",
+      "statement": "Rules evaluation is observable: the official :ruleCoverage and :ruleCoverage.html endpoints report every expression by its source position with the values it took, and a privileged control route lists the last decided requests with their per-expression traces and no secret.",
+      "criticality": "important",
+      "owner": "core-rules",
+      "status": "implemented",
+      "note": "The report is keyed by (line, column, currentOffset, endOffset) as the official one is; an expression that raised contributes an undefined value naming the innermost expression that raised; an expression nothing reached has children and no values. The diagnostics live inside the loaded ruleset, so replacing it replaces them.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-rules/tests/coverage.rs",
+          "crates/fireemu-adapter-grpc/tests/rest.rs",
+          "crates/fireemu-adapter-http/tests/control.rs"
+        ]
+      }
+    },
+    {
+      "id": "REQ-RULES-PARITY-05",
+      "statement": "@firebase/rules-unit-testing runs unmodified against fireemu: Hub discovery, authenticated and unauthenticated contexts, withSecurityRulesDisabled, clear operations, trigger suppression and loading rules through the emulator's own securityRules route.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "partial",
+      "note": "The library's documented flows run with no explicit host anywhere (tools/sdk-smoke/rules-unit-testing.mjs). Its coverage-report helpers are served by the :ruleCoverage endpoints; the library's own assertion helpers over that report are not exercised yet.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/rest.rs",
+          "crates/fireemu-adapter-grpc/tests/rules.rs"
+        ]
+      }
     }
   ]
 }

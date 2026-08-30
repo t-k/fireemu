@@ -16,11 +16,46 @@ deterministic state machine that:
   Manifest with an explicit precision (`exact`, `boundary-conformance`, `estimated`,
   `oracle-only`, `unsupported`).
 
+## Compatibility
+
+fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase and Cloud Functions, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting and App Hosting are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Pub/Sub, Eventarc, Cloud Tasks and Data Connect remain open gaps.
+
+`spec/compatibility/contract.json` is that sentence in machine-readable form: it pins the baseline (`firebase-tools@15.28.2`, its lockfile integrity, its bundled emulator versions and the 2026-08-30 audit date), enumerates every emulator the pinned release ships, and binds each parity claim to the capability manifest entries it depends on and the tests and conformance fixtures that execute it. `cargo run -p compat-check` fails when the manifest, this README and the contract disagree; `docs/compatibility-contract.md` explains the rules.
+
+| Product | Official emulator | Scope | State |
+| --- | --- | --- | --- |
+| Cloud Firestore | `firestore` | active | parity claimed |
+| Firebase Authentication | `auth` | active | parity claimed |
+| Cloud Storage for Firebase | `storage` | active | parity claimed |
+| Cloud Functions for Firebase | `functions` | active | parity claimed |
+| Emulator Suite UI | `ui` | active | open gap: fireemu serves its own UI, no workflow parity is claimed |
+| Emulator Hub | `hub` | active | open gap: the discovery API on port 4400 is not served |
+| Emulator logging | `logging` | active | open gap: the log stream on port 4500 is not served |
+| Cloud Pub/Sub | `pubsub` | active | open gap: topic triggers only, no wire emulator |
+| Eventarc | `eventarc` | active | open gap |
+| Cloud Tasks | `tasks` | active | open gap |
+| Firebase Data Connect | `dataconnect` | active | open gap |
+| Firebase App Check | -- | active | a fireemu addition; the official suite ships no App Check surface |
+| fireemu control API | -- | active | a fireemu addition; sessions, virtual clock, snapshots, fault plans |
+| Firebase Realtime Database | `database` | deferred | nothing is served; low expected near-term demand |
+| Firebase Hosting | `hosting` | deferred | nothing is served; low expected near-term demand |
+| App Hosting | `apphosting` | deferred | nothing is served; low expected near-term demand |
+| Firebase Extensions | `extensions` | not planned | the managed service is deprecated and shuts down on 2027-03-31 |
+
+### Compatibility profiles
+
+fireemu is deliberately stricter than the official emulators in places. The contract separates the two so that extra strictness can never be read as parity, and both profiles are declared key sets you write into a `fireemu.json`:
+
+- **`firebase`** reproduces what the pinned suite ships and Firebase documents, including its documented limitations. It sets `firestore.indexValidationPolicy: "firebase"`, `firestore.enforceLimits: false`, `limits.enforcement: "observe"`, `limits.quotaAccounting: "off"`, `limits.warningsAsErrors: []`, `rules.staticLimitChecks: false`, `rules.runtimeBudgets: false`, `auth.idTokenSigning: "unsigned-emulator"`, `appCheck.enabled: false`, `events.delivery: "at-least-once"`, `scheduler.clock: "wall"` and `projects.requireDemoPrefix: false`. Nothing in this profile may refuse a request the official emulator admits. One value is worth naming: `firestore.indexValidationPolicy: "firebase"` reproduces the Firebase backend, which refuses a query whose composite index is missing, while the official Firestore emulator serves it -- set `"emulator"` when the emulator, rather than the backend, is the behaviour you need.
+- **`strict`** adds fireemu's own validation on top: `firestore.indexValidationPolicy: "conservative"`, `firestore.enforceLimits: true`, `limits.enforcement: "strict"`, `limits.quotaAccounting: "observe"`, `rules.staticLimitChecks: true`, `rules.runtimeBudgets: true`, `auth.idTokenSigning: "session-rsa"`, `appCheck.enabled: true`, `events.delivery: "exactly-once-test"`, `scheduler.clock: "virtual"` and `projects.requireDemoPrefix: true`. Every key here may only refuse more than the official emulator, and every refusal it adds is published as a capability precision or as a documented divergence in `conformance/divergences.json`.
+
+There is no single runtime switch that applies a profile yet: the canonical schema's top-level `profile` key is accepted and not yet interpreted. `compat-check` checks every key and value both profiles name against `spec/config/fireemu.schema.json`, so the sets cannot drift from the configuration surface.
+
 ## Status
 
 Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols; Storage Security Rules evaluated at upload finalization against the received bytes), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth over the Identity Toolkit REST subset: password / anonymous / custom token / email link / phone / fixture identity provider sign-in, email actions with codes readable from `/emulator/v1/projects/{p}/oobCodes`, TOTP and phone second factors, Admin SDK account endpoints) native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/fireemu-adapter-grpc/src/rules.rs`), and Milestone C (Cloud Functions: a `firebase-functions` v2 codebase runs in the bundled Node runner; Firestore document triggers, Storage object triggers, `onSchedule` driven by the virtual clock, `onRequest` / `onCall` over an HTTP port, retries with virtual-time backoff, `await-idle`).
 
-The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Rules cover `get()` / `exists()` / `getAfter()`, the `timestamp` / `duration` / `latlng` / `math` / `hashing` namespaces, `map.diff()`, query proofs from equality / `in` / `!=` / `not-in` / array / range constraints and `request.query`, and `firestore.get()` in Storage rules. `Listen` resumes from a token or read time by replaying only the changes since (MVCC history), and `PartitionQuery` splits collection groups for parallel readers. A target whose own query is refused (a missing composite index, a malformed query) is removed with its cause -- `TargetChange REMOVE` carrying `FAILED_PRECONDITION` and the actionable index diagnostic -- on both gRPC and WebChannel, and the stream stays open for its other targets; a stream-level error is reserved for session-wide or database-wide failures. Not implemented yet: `ExecutePipeline`, Storage object versioning / signed URLs / compose.
+The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Rules cover `get()` / `exists()` / `getAfter()`, the `timestamp` / `duration` / `latlng` / `math` / `hashing` namespaces, `map.diff()`, query proofs from equality / `in` / `!=` / `not-in` / array / range constraints and `request.query`, and `firestore.get()` in Storage rules. `Listen` resumes from a token or read time by replaying only the changes since (MVCC history), and `PartitionQuery` splits collection groups for parallel readers. A target whose own query is refused (a missing composite index, a malformed query) is removed with its cause -- `TargetChange REMOVE` carrying `FAILED_PRECONDITION` and the actionable index diagnostic -- on both gRPC and WebChannel, and the stream stays open for its other targets; a stream-level error is reserved for session-wide or database-wide failures. `ExecutePipeline` is validation-only (`FS-PIPE-RPC-1`): a pipeline is decoded, identified and checked against the documented stage registry, and a well-formed one is then answered `UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY` rather than executed. Storage object versioning, signed URLs and compose are not served.
 
 ## Install
 
@@ -356,6 +391,7 @@ scripts/check-core-deps.sh
 cargo nextest run --workspace --profile pr
 cargo run -p limit-catalog-gen -- check
 cargo run -p traceability-check
+cargo run -p compat-check
 cargo run -p config-schema-check
 cargo run -p proto-gen -- check            # needs protoc
 node npm/scripts/pack-local.mjs            # pack this host's npm packages from target/release
@@ -370,6 +406,17 @@ artifact a `fuzz/fuzz_targets/<name>.rs` file, and a `conformance` artifact an e
 Artifacts that are decided but not written yet are written as `pending:<name>`; a pending artifact
 is printed on every run and never counts as evidence. See
 [docs/verification-ledger.md](docs/verification-ledger.md) for the schema and the gate.
+
+`compat-check` is the same idea for the public compatibility claim. It reads
+`spec/compatibility/contract.json`, the capability manifest data in
+`crates/fireemu/src/capabilities.json` (which `crates/fireemu/src/control.rs` embeds with
+`include_str!`, so it is exactly what `GET /v1/capabilities` publishes) and this README, and it
+fails when an `implemented` capability is bound to no existing test or conformance fixture, when
+the manifest and the contract disagree on a status, when this README does not carry the claim
+sentence, when a deferred or not-planned product reads as supported, when two public statements
+contradict each other, or when a compatibility profile names a configuration key the canonical
+schema does not define. See
+[docs/compatibility-contract.md](docs/compatibility-contract.md) for the schema and the rules.
 
 The `pr` and `ci` profiles fail a run in which a process started by a test still holds the test's
 captured stdout or stderr 30 seconds after the test process exited (`leak-timeout` in

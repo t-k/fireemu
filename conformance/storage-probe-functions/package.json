@@ -1,0 +1,9 @@
+{
+  "name": "fireemu-storage-probe-functions",
+  "private": true,
+  "description": "Storage-triggered Cloud Functions codebase loaded by both sides of the storage probe.",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  }
+}

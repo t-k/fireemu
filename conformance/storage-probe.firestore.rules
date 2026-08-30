@@ -1,0 +1,9 @@
+// Firestore rules for the storage probe: the documents Storage rules read through
+// firestore.get() / firestore.exists() are seeded with owner credentials, so nothing here is
+// exercised by the probe itself.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} { allow read, write: if false; }
+  }
+}

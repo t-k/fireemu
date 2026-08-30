@@ -1,0 +1,14 @@
+{
+  "firestore": { "rules": "storage-probe.firestore.rules" },
+  "storage": { "rules": "storage-probe.rules" },
+  "functions": { "source": "storage-probe-functions" },
+  "emulators": {
+    "singleProjectMode": true,
+    "firestore": { "host": "127.0.0.1", "port": 32380 },
+    "storage": { "host": "127.0.0.1", "port": 32399 },
+    "functions": { "host": "127.0.0.1", "port": 32301 },
+    "hub": { "host": "127.0.0.1", "port": 32340 },
+    "logging": { "host": "127.0.0.1", "port": 32350 },
+    "ui": { "enabled": false }
+  }
+}

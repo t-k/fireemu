@@ -1,0 +1,640 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "firebaseTools": "15.28.2",
+    "note": "the Cloud Storage emulator that firebase-tools pins; see ORACLE.md"
+  },
+  "project": "demo-storage-probe",
+  "summary": {
+    "parity": 0,
+    "documented-divergence": 0,
+    "debt": 13
+  },
+  "programs": [
+    {
+      "id": "fb-media-upload",
+      "area": "firebase-protocol",
+      "faults": [],
+      "steps": [
+        {
+          "id": "upload",
+          "status": "debt",
+          "oracle": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentDisposition": "inline",
+              "contentEncoding": "identity",
+              "contentType": "text/plain",
+              "crc32c": "2910406364",
+              "downloadTokens": "<uuid>",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "6/VXNlH13/d7Q93100ERxg==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/hello.txt",
+              "size": "11",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "491",
+              "content-type": "application/json; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "text/plain",
+              "crc32c": "rXlG3A==",
+              "downloadTokens": "ca87cb278bbed782317cc0fa569e4021",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "6/VXNlH13/d7Q93100ERxg==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/hello.txt",
+              "size": "11",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "386",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          }
+        },
+        {
+          "id": "metadata",
+          "status": "debt",
+          "oracle": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentDisposition": "inline",
+              "contentEncoding": "identity",
+              "contentType": "text/plain",
+              "crc32c": "2910406364",
+              "downloadTokens": "<uuid>",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "6/VXNlH13/d7Q93100ERxg==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/hello.txt",
+              "size": "11",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "491",
+              "content-type": "application/json; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "text/plain",
+              "crc32c": "rXlG3A==",
+              "downloadTokens": "ca87cb278bbed782317cc0fa569e4021",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "6/VXNlH13/d7Q93100ERxg==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/hello.txt",
+              "size": "11",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "386",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          }
+        },
+        {
+          "id": "download",
+          "status": "debt",
+          "oracle": {
+            "body": "hello probe",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "cache-control": "",
+              "content-disposition": "inline; filename*=hello.txt",
+              "content-encoding": "",
+              "content-length": "11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "vary": "Origin",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metadatageneration": "1",
+              "x-goog-storage-class": "STANDARD"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": "hello probe",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metageneration": "1",
+              "x-goog-stored-content-length": "11"
+            },
+            "status": 200
+          }
+        },
+        {
+          "id": "download-range",
+          "status": "debt",
+          "oracle": {
+            "body": "llo p",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "cache-control": "",
+              "content-disposition": "inline; filename*=hello.txt",
+              "content-encoding": "",
+              "content-length": "5",
+              "content-range": "bytes 2-6/11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "vary": "Origin",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metadatageneration": "1",
+              "x-goog-storage-class": "STANDARD"
+            },
+            "status": 206
+          },
+          "fireemu": {
+            "body": "llo p",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "5",
+              "content-range": "bytes 2-6/11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metageneration": "1",
+              "x-goog-stored-content-length": "11"
+            },
+            "status": 206
+          }
+        },
+        {
+          "id": "download-open-ended-range",
+          "status": "debt",
+          "oracle": {
+            "body": "probe",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "cache-control": "",
+              "content-disposition": "inline; filename*=hello.txt",
+              "content-encoding": "",
+              "content-length": "5",
+              "content-range": "bytes 6-10/11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "vary": "Origin",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metadatageneration": "1",
+              "x-goog-storage-class": "STANDARD"
+            },
+            "status": 206
+          },
+          "fireemu": {
+            "body": "probe",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "5",
+              "content-range": "bytes 6-10/11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metageneration": "1",
+              "x-goog-stored-content-length": "11"
+            },
+            "status": 206
+          }
+        },
+        {
+          "id": "download-suffix-range",
+          "status": "debt",
+          "oracle": {
+            "body": "probe",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "cache-control": "",
+              "content-disposition": "inline; filename*=hello.txt",
+              "content-encoding": "",
+              "content-length": "5",
+              "content-range": "bytes 6-10/11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "vary": "Origin",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metadatageneration": "1",
+              "x-goog-storage-class": "STANDARD"
+            },
+            "status": 206
+          },
+          "fireemu": {
+            "body": "probe",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "5",
+              "content-range": "bytes 6-10/11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metageneration": "1",
+              "x-goog-stored-content-length": "11"
+            },
+            "status": 206
+          }
+        },
+        {
+          "id": "download-unsatisfiable-range",
+          "status": "debt",
+          "oracle": {
+            "body": "hello probe",
+            "headers": {
+              "accept-ranges": "bytes",
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "cache-control": "",
+              "content-disposition": "inline; filename*=hello.txt",
+              "content-encoding": "",
+              "content-length": "11",
+              "content-type": "text/plain",
+              "etag": "<etag>",
+              "vary": "Origin",
+              "x-goog-generation": "<generation>",
+              "x-goog-hash": "crc32c=rXlG3A==,md5=6/VXNlH13/d7Q93100ERxg==",
+              "x-goog-metadatageneration": "1",
+              "x-goog-storage-class": "STANDARD"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": "",
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "0",
+              "content-range": "bytes */11"
+            },
+            "status": 416
+          }
+        },
+        {
+          "id": "upload-without-content-type",
+          "status": "debt",
+          "oracle": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentDisposition": "inline",
+              "contentEncoding": "identity",
+              "contentType": "application/octet-stream",
+              "crc32c": "3644005027",
+              "downloadTokens": "<uuid>",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "N7Wa/VknJfkwXkhKXX9RaA==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/untyped.bin",
+              "size": "4",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "506",
+              "content-type": "application/json; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "application/octet-stream",
+              "crc32c": "2TMaow==",
+              "downloadTokens": "5ec01c939bbbaabb74656b05bc62c5fd",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "N7Wa/VknJfkwXkhKXX9RaA==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/untyped.bin",
+              "size": "4",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "401",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          }
+        },
+        {
+          "id": "upload-with-firebase-owner-credential",
+          "status": "debt",
+          "oracle": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentDisposition": "inline",
+              "contentEncoding": "identity",
+              "contentType": "text/plain",
+              "crc32c": "3387040375",
+              "downloadTokens": "<uuid>",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "pMuvgWlt4ki2yVy3Dzy90w==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "closed/firebase-owner.txt",
+              "size": "20",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "496",
+              "content-type": "application/json; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "text/plain",
+              "crc32c": "yeIidw==",
+              "downloadTokens": "ea8177e90c4bdd677ec6258d1a32976b",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "pMuvgWlt4ki2yVy3Dzy90w==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "closed/firebase-owner.txt",
+              "size": "20",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "391",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          }
+        },
+        {
+          "id": "upload-to-object-url",
+          "status": "debt",
+          "oracle": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentDisposition": "inline",
+              "contentEncoding": "identity",
+              "contentType": "text/plain",
+              "crc32c": "4077431509",
+              "downloadTokens": "<uuid>",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "yPpqcYIIZOLpbWxWeXwqgQ==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/at-object-url.txt",
+              "size": "24",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "499",
+              "content-type": "application/json; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": {
+              "error": {
+                "code": 405,
+                "message": "method not allowed",
+                "status": "INVALID_ARGUMENT"
+              }
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "81",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 405
+          }
+        },
+        {
+          "id": "upload-without-name",
+          "status": "debt",
+          "oracle": {
+            "body": "Bad Request",
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "11",
+              "content-type": "text/plain; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 400
+          },
+          "fireemu": {
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "object name is required",
+                "status": "INVALID_ARGUMENT"
+              }
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "86",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 400
+          }
+        },
+        {
+          "id": "unicode-name-round-trip",
+          "status": "debt",
+          "oracle": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentDisposition": "inline",
+              "contentEncoding": "identity",
+              "contentType": "text/plain",
+              "crc32c": "275424396",
+              "downloadTokens": "<uuid>",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "irOxnhNPAfuvlLjhXz3wkA==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/日本語 ファイル+name.txt",
+              "size": "7",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "511",
+              "content-type": "application/json; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "text/plain",
+              "crc32c": "EGqkjA==",
+              "downloadTokens": "6737ec928ad36dd795e154aa6701776f",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "md5Hash": "irOxnhNPAfuvlLjhXz3wkA==",
+              "metadata": {},
+              "metageneration": "1",
+              "name": "open/media/日本語 ファイル+name.txt",
+              "size": "7",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "407",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          }
+        },
+        {
+          "id": "root-route",
+          "status": "debt",
+          "oracle": {
+            "body": {
+              "emulator": "storage"
+            },
+            "headers": {
+              "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
+              "content-length": "22",
+              "content-type": "application/json; charset=utf-8",
+              "etag": "<etag>",
+              "vary": "Origin"
+            },
+            "status": 200
+          },
+          "fireemu": {
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "unknown path /v0/",
+                "status": "NOT_FOUND"
+              }
+            },
+            "headers": {
+              "access-control-allow-credentials": "true",
+              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+              "access-control-allow-origin": "*",
+              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
+              "content-length": "73",
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 404
+          }
+        }
+      ]
+    }
+  ]
+}

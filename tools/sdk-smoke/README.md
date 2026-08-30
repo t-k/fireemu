@@ -68,3 +68,25 @@ fireemu exec --config tools/sdk-smoke/fireemu.appcheck.json \
 Exit code 0 means every check passed; the JSON output lists each check.
 
 `txn-order.mjs` probes transaction ordering with the web and Admin SDKs: a write before a read fails client-side with `Firestore transactions require all reads to be executed before all writes.` (the SDKs buffer writes until Commit, so the daemon, like production, never sees a misordered transaction), and a well-ordered transaction commits.
+
+## `rules-unit-testing.mjs`
+
+`@firebase/rules-unit-testing` (pinned at 5.0.2) against fireemu with **no explicit host
+anywhere**: `initializeTestEnvironment({})` reads `GCLOUD_PROJECT` and `FIREBASE_EMULATOR_HUB`
+out of the environment `fireemu exec` exported, asks the Emulator Hub `GET /emulators` for the
+running services, and connects to what it answers. It then exercises the rules decisions,
+`withSecurityRulesDisabled`, `clearFirestore`, and a write made while background triggers are
+disabled -- asserting both that the trigger did not run and that re-enabling replays nothing.
+
+```sh
+./target/release/fireemu exec --config tools/sdk-smoke/fireemu.rules-unit-testing.json \
+  --project demo-app --firestore-port 28180 --http-port 29199 --storage-port 29299 \
+  --functions-port 25101 --ui-port 0 --hub-port 24400 \
+  -- sh -c 'cd tools/sdk-smoke && node rules-unit-testing.mjs'
+```
+
+Two things the script has to do that the official emulator does not require, both because
+fireemu verifies ID tokens where the official emulator waves them through: it passes an `iat`
+to `authenticatedContext` (`createMockUserToken` defaults to `iat: 0`, so `exp` is `3600` and
+the token expired in 1970) and it creates the users the contexts stand for (fireemu resolves a
+token's subject against the project's Auth store). Both are noted in place in the script.

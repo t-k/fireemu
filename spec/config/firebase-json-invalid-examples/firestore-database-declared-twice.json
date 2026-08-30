@@ -1,0 +1,12 @@
+{
+  "firestore": [
+    {
+      "database": "(default)",
+      "rules": "a.rules"
+    },
+    {
+      "database": "(default)",
+      "rules": "b.rules"
+    }
+  ]
+}

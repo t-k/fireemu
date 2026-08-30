@@ -1168,6 +1168,72 @@
       "claims": []
     },
     {
+      "id": "cli",
+      "title": "Firebase CLI configuration and command surface (firebase.json, --only, emulators:start / exec)",
+      "scope": "active",
+      "official": false,
+      "officialEmulator": null,
+      "officialDefaultPort": null,
+      "officialTraits": [],
+      "state": "claimed",
+      "decision": "Active supported surface: the orchestration behaviour of firebase-tools 15.28.2 (configuration schema, service selection, environment export, command names, exit codes) is reproduced for the served products; import/export and the --ui flag remain open.",
+      "docs": [
+        "https://firebase.google.com/docs/emulator-suite/install_and_configure",
+        "https://github.com/firebase/firebase-tools/blob/v15.28.2/schema/firebase-config.json"
+      ],
+      "issues": [
+        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md",
+        "docs.local/issues/open/support-official-import-and-export-artifacts.md"
+      ],
+      "notes": [],
+      "gaps": [
+        "--import / --export-on-exit / emulators:export (refused precisely until the artifact format exists)",
+        "--ui",
+        "a second Functions codebase, per-database Firestore rules and per-target Storage rules are reported, not loaded"
+      ],
+      "prohibitedClaimTerms": [],
+      "claims": [
+        {
+          "id": "CLI-CLAIM-LIFECYCLE",
+          "statement": "A firebase.json the official CLI accepts for the served products starts the same services on the same ports, --only decides which listeners exist and which canonical variables the command receives, unsupported official services are refused with their scope status, and the command names, flags and exit codes match firebase-tools 15.28.2.",
+          "capabilities": [
+            {
+              "id": "CLI-01",
+              "status": "partial"
+            },
+            {
+              "id": "CLI-02",
+              "status": "implemented"
+            },
+            {
+              "id": "CLI-04",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu/tests/cli.rs",
+              "crates/fireemu/tests/exec.rs",
+              "crates/fireemu/src/config.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official CLI only adds emulator variables to the child environment and never clears one it inherited"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "variables of unselected services are cleared in the child environment, and GOOGLE_CLOUD_PROJECT is set next to GCLOUD_PROJECT",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
+    },
+    {
       "id": "hub",
       "title": "Emulator Hub",
       "scope": "active",
@@ -1175,8 +1241,8 @@
       "officialEmulator": "hub",
       "officialDefaultPort": 4400,
       "officialTraits": [],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: the discovery and orchestration API firebase-tools exposes on the hub port is not served.",
+      "state": "claimed",
+      "decision": "Active supported surface: the Emulator Hub serves discovery (GET /emulators in the official shape), the background-trigger switch and the locator file firebase-tools writes; the export trigger stays open until the import/export contract exists.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
@@ -1186,11 +1252,45 @@
       ],
       "notes": [],
       "gaps": [
-        "GET /emulators discovery",
-        "the export trigger the CLI drives through the hub"
+        "the export trigger the CLI drives through the hub (POST /_admin/export answers 501)",
+        "the Logging emulator stream the UI and Functions workflows consume"
       ],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "HUB-CLAIM-DISCOVERY",
+          "statement": "Official tooling discovers the running suite through the Emulator Hub on the official port without being told a host or port, and the hub's background-trigger switch drops events exactly like firebase-tools 15.28.2.",
+          "capabilities": [
+            {
+              "id": "CLI-03",
+              "status": "implemented"
+            },
+            {
+              "id": "CLI-05",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu/tests/hub.rs",
+              "tools/sdk-smoke/rules-unit-testing.mjs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official hub notifies only the Functions emulator when triggers are disabled; other emulators keep posting events into 204 answers, so nothing is queued or replayed"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "a loopback-Host guard on the hub routes (the official hub has none)",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "logging",

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fireemu.dev/spec/config/firebase-json.schema.json",
+  "title": "The firebase.json subset fireemu honours",
+  "description": "Not a replacement for the official firebase-config schema: this describes exactly the shapes `fireemu --firebase-json` (or `--config`) reads, for the products fireemu serves. Keys of products it does not serve are permitted here and reported at startup -- as a notice, or as an error when --only asked for that product -- because refusing them in the schema would refuse most real projects. Cross-field rules that JSON Schema cannot express (duplicate codebases and databases, loopback-only hosts) are enforced by tools/config-schema-check and by the Rust loader.",
+  "type": "object",
+  "properties": {
+    "firestore": {
+      "description": "One database, or an array of named databases. Only the (default) entry's rules and indexes are loaded.",
+      "oneOf": [
+        { "$ref": "#/$defs/firestoreEntry" },
+        { "type": "array", "items": { "$ref": "#/$defs/firestoreEntry" }, "minItems": 1 }
+      ]
+    },
+    "storage": {
+      "description": "One bucket, or an array of targets. fireemu evaluates one ruleset for every bucket, so the entry without a target wins and the rest are reported.",
+      "oneOf": [
+        { "$ref": "#/$defs/storageEntry" },
+        { "type": "array", "items": { "$ref": "#/$defs/storageEntry" }, "minItems": 1 }
+      ]
+    },
+    "functions": {
+      "description": "One codebase, or an array of them. fireemu runs one runner, so a multi-codebase project names the codebase to load with --only functions:<codebase>.",
+      "oneOf": [
+        { "$ref": "#/$defs/functionsEntry" },
+        { "type": "array", "items": { "$ref": "#/$defs/functionsEntry" }, "minItems": 1 }
+      ]
+    },
+    "emulators": {
+      "type": "object",
+      "properties": {
+        "singleProjectMode": { "type": "boolean" },
+        "firestore": { "$ref": "#/$defs/emulator" },
+        "auth": { "$ref": "#/$defs/emulator" },
+        "storage": { "$ref": "#/$defs/emulator" },
+        "functions": { "$ref": "#/$defs/emulator" },
+        "hub": { "$ref": "#/$defs/emulator" },
+        "ui": { "$ref": "#/$defs/emulator" },
+        "logging": { "$ref": "#/$defs/emulator" },
+        "database": { "$ref": "#/$defs/emulator" },
+        "hosting": { "$ref": "#/$defs/emulator" },
+        "apphosting": { "$ref": "#/$defs/emulator" },
+        "pubsub": { "$ref": "#/$defs/emulator" },
+        "eventarc": { "$ref": "#/$defs/emulator" },
+        "tasks": { "$ref": "#/$defs/emulator" },
+        "dataconnect": { "$ref": "#/$defs/emulator" },
+        "extensions": { "$ref": "#/$defs/emulator" }
+      }
+    }
+  },
+  "$defs": {
+    "firestoreEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "database": { "type": "string", "minLength": 1 },
+        "rules": { "type": "string", "minLength": 1 },
+        "indexes": { "type": "string", "minLength": 1 },
+        "index": { "type": "string", "minLength": 1 }
+      }
+    },
+    "storageEntry": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "bucket": { "type": "string", "minLength": 1 },
+        "rules": { "type": "string", "minLength": 1 }
+      }
+    },
+    "functionsEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "codebase": { "type": "string", "minLength": 1 },
+        "runtime": { "type": "string", "minLength": 1 },
+        "ignore": { "type": "array", "items": { "type": "string" } },
+        "predeploy": {},
+        "postdeploy": {}
+      }
+    },
+    "emulator": {
+      "type": "object",
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "enabled": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 fn daemon() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    // `--hub-port 0` turns the Emulator Hub off: these scenarios are about the service
+    // listeners and the child environment, and a shared default Hub port would make them
+    // depend on which test won the race for it. `tests/hub.rs` covers the Hub itself.
     cmd.args([
         "exec",
         "--firestore-port",
@@ -20,11 +23,22 @@ fn daemon() -> Command {
         "0",
         "--storage-port",
         "0",
+        "--hub-port",
+        "0",
     ])
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
     cmd
+}
+
+/// A port nothing is listening on: bound, read back and released. A later bind can lose a
+/// race for it, which every caller treats as a failure to bind rather than a wrong answer.
+fn free_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -390,4 +404,283 @@ fn sigint_keeps_its_identity_when_forwarded() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(!alive(&child_pid));
+}
+
+// --------------------------------------------------------------------------------------
+// `--only` decides the lifecycle, not only the environment (CLI-02)
+// --------------------------------------------------------------------------------------
+
+/// Runs `exec` with the given extra arguments, dumping the child's environment to a file.
+fn run_selection(name: &str, ports: [u16; 3], extra: &[&str]) -> BTreeMap<String, String> {
+    let dir = scratch(name);
+    let out = dir.join("env.txt");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    cmd.args(["exec", "--hub-port", "0"])
+        .args(["--firestore-port", &ports[0].to_string()])
+        .args(["--http-port", &ports[1].to_string()])
+        .args(["--storage-port", &ports[2].to_string()])
+        .args(extra)
+        .args(["--", "sh", "-c"])
+        .arg(format!("env > {}", out.display()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    env_file(&out)
+}
+
+#[test]
+fn an_unselected_service_binds_no_listener_at_all() {
+    // Fixed ports: whatever `--only` leaves out has to stay free while the daemon serves,
+    // which is what "the service is not started" has to mean.
+    for (label, only, want) in [
+        ("firestore-only", "firestore", [true, false, false]),
+        ("auth-only", "auth", [false, true, false]),
+        ("storage-only", "storage", [false, false, true]),
+        ("auth-storage", "auth,storage", [false, true, true]),
+        (
+            "firestore-storage",
+            "firestore,storage",
+            [true, false, true],
+        ),
+    ] {
+        let ports = [free_port(), free_port(), free_port()];
+        let dir = scratch(&format!("lifecycle-{label}"));
+        let probe = dir.join("probe.txt");
+        // The command probes each port from inside the run, while the daemon is serving.
+        let script = format!(
+            "for p in {} {} {}; do (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && echo \"$p open\" || echo \"$p closed\"; done > {}",
+            ports[0],
+            ports[1],
+            ports[2],
+            probe.display()
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--hub-port", "0", "--only", only])
+            .args(["--firestore-port", &ports[0].to_string()])
+            .args(["--http-port", &ports[1].to_string()])
+            .args(["--storage-port", &ports[2].to_string()])
+            .args(["--", "bash", "-c"])
+            .arg(&script)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let probed = std::fs::read_to_string(&probe).unwrap();
+        for (i, service) in ["firestore", "auth", "storage"].into_iter().enumerate() {
+            let expected = if want[i] { "open" } else { "closed" };
+            assert!(
+                probed.contains(&format!("{} {expected}", ports[i])),
+                "{label}: {service} on {} should be {expected}\n{probed}",
+                ports[i]
+            );
+        }
+    }
+}
+
+#[test]
+fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
+    // The official `firebase emulators:exec` names, and only those: no
+    // FIREBASE_DATABASE_EMULATOR_HOST (fireemu serves no Realtime Database) and no
+    // variable for a service `--only` left out.
+    let firestore = [
+        "FIRESTORE_EMULATOR_HOST",
+        "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
+    ];
+    let auth = ["FIREBASE_AUTH_EMULATOR_HOST"];
+    let storage = ["FIREBASE_STORAGE_EMULATOR_HOST", "STORAGE_EMULATOR_HOST"];
+    for (label, only, want_fs, want_auth, want_st) in [
+        ("firestore", "firestore", true, false, false),
+        ("auth", "auth", false, true, false),
+        ("storage", "storage", false, false, true),
+        ("all-three", "firestore,auth,storage", true, true, true),
+        ("appcheck-only", "appcheck", false, false, false),
+    ] {
+        let ports = [free_port(), free_port(), free_port()];
+        let env = run_selection(&format!("vars-{label}"), ports, &["--only", only]);
+        for (keys, wanted) in [
+            (&firestore[..], want_fs),
+            (&auth[..], want_auth),
+            (&storage[..], want_st),
+        ] {
+            for key in keys {
+                assert_eq!(
+                    env.contains_key(*key),
+                    wanted,
+                    "{label}: {key} should{} be exported",
+                    if wanted { "" } else { " not" }
+                );
+            }
+        }
+        // The formats are the official ones: bare host:port everywhere but
+        // STORAGE_EMULATOR_HOST, which carries the scheme.
+        if want_fs {
+            assert!(env["FIRESTORE_EMULATOR_HOST"].starts_with("127.0.0.1:"));
+            assert_eq!(
+                env["FIREBASE_FIRESTORE_EMULATOR_ADDRESS"], env["FIRESTORE_EMULATOR_HOST"],
+                "{label}"
+            );
+        }
+        if want_st {
+            assert!(env["FIREBASE_STORAGE_EMULATOR_HOST"].starts_with("127.0.0.1:"));
+            assert_eq!(
+                env["STORAGE_EMULATOR_HOST"],
+                format!("http://{}", env["FIREBASE_STORAGE_EMULATOR_HOST"]),
+                "{label}"
+            );
+        }
+        assert!(
+            !env.contains_key("FIREBASE_DATABASE_EMULATOR_HOST"),
+            "{label}: fireemu has no Realtime Database to point that variable at"
+        );
+        // The control plane is always reachable: it is fireemu's own surface, not a product.
+        assert!(env["FIREEMU_CONTROL_URL"].starts_with("http://127.0.0.1:"));
+        assert_eq!(env["GCLOUD_PROJECT"], env["GOOGLE_CLOUD_PROJECT"]);
+    }
+}
+
+#[test]
+fn the_control_plane_leaves_the_auth_port_free_when_auth_is_not_selected() {
+    let ports = [free_port(), free_port(), free_port()];
+    let env = run_selection("control-plane", ports, &["--only", "firestore"]);
+    let control = env["FIREEMU_CONTROL_URL"].clone();
+    assert!(
+        !control.contains(&format!(":{}/", ports[1])),
+        "the control API took the Auth port although auth was not selected: {control}"
+    );
+    assert!(!env.contains_key("FIREBASE_AUTH_EMULATOR_HOST"));
+}
+
+#[test]
+fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
+    for (service, fragment) in [
+        ("database", "deferred"),
+        ("hosting", "deferred"),
+        ("apphosting", "deferred"),
+        ("pubsub", "planned"),
+        ("eventarc", "planned"),
+        ("tasks", "planned"),
+        ("dataconnect", "planned"),
+        ("extensions", "not planned"),
+    ] {
+        let dir = scratch(&format!("unsupported-{service}"));
+        let marker = dir.join("ran");
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args([
+                "exec",
+                "--firestore-port",
+                "0",
+                "--http-port",
+                "0",
+                "--storage-port",
+                "0",
+                "--hub-port",
+                "0",
+                "--only",
+            ])
+            .arg(format!("firestore,{service}"))
+            .args(["--", "touch"])
+            .arg(&marker)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{service}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(service), "{service}: {stderr}");
+        assert!(stderr.contains(fragment), "{service}: {stderr}");
+        assert!(
+            !marker.exists(),
+            "{service}: the command ran although the selection was refused"
+        );
+    }
+    // `hub`, `ui` and `logging` are emulators, but not selectable services.
+    for name in ["hub", "ui", "logging"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args(["exec", "--http-port", "0", "--only", name, "--", "true"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("not a service emulator"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn an_occupied_port_of_a_selected_service_fails_before_the_command_runs() {
+    for (label, flag) in [
+        ("firestore", "--firestore-port"),
+        ("auth", "--http-port"),
+        ("storage", "--storage-port"),
+    ] {
+        let dir = scratch(&format!("busy-{label}"));
+        let marker = dir.join("ran");
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = busy.local_addr().unwrap().port();
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args([
+                "exec",
+                "--firestore-port",
+                "0",
+                "--http-port",
+                "0",
+                "--storage-port",
+                "0",
+                "--hub-port",
+                "0",
+                "--only",
+                "firestore,auth,storage",
+            ])
+            .args([flag, &port.to_string()])
+            .args(["--", "touch"])
+            .arg(&marker)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{label}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("bind 127.0.0.1:{port}")),
+            "{stderr}"
+        );
+        assert!(!marker.exists(), "{label}: the command ran anyway");
+        drop(busy);
+    }
+    // The same port is free to use while the service that would have taken it is not
+    // selected: nothing binds it, so the run succeeds.
+    let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = busy.local_addr().unwrap().port();
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args([
+            "exec",
+            "--http-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--only",
+            "auth",
+            "--firestore-port",
+        ])
+        .arg(port.to_string())
+        .args(["--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "an unselected service must not fail on a busy port: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    drop(busy);
 }

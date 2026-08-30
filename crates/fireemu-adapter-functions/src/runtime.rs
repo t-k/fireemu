@@ -346,6 +346,17 @@ pub struct FunctionsRuntime {
     /// The callable trust boundary, when the callable trusted protocol is active
     /// (specification section 13.4). `None` leaves the pre-App-Check behaviour untouched.
     callable_trust: std::sync::RwLock<Option<Arc<crate::callable::CallableTrust>>>,
+    /// Whether background (event) triggers deliver, toggled by the Emulator Hub's
+    /// `PUT /functions/{disable,enable}BackgroundTriggers`. Disabled means **dropped**:
+    /// a Firestore, Storage, Pub/Sub or Auth event that arrives while it is off is never
+    /// enqueued, so re-enabling delivers nothing retroactively. That is what the official
+    /// emulator does -- its background-trigger route answers `204 "Background triggers are
+    /// currently disabled."` and discards the body -- and it is the property the switch
+    /// exists for: seeding data must not fire the triggers a later test asserts on.
+    ///
+    /// HTTP and callable invocations, manual `functions/{name}:run` requests and virtual
+    /// clock schedule runs are unaffected: none of them is a data-change delivery.
+    background_triggers: std::sync::atomic::AtomicBool,
 }
 
 impl FunctionsRuntime {
@@ -415,6 +426,7 @@ impl FunctionsRuntime {
             retry,
             faults: Mutex::new(None),
             callable_trust: std::sync::RwLock::new(None),
+            background_triggers: std::sync::atomic::AtomicBool::new(true),
         })
     }
 
@@ -474,6 +486,24 @@ impl FunctionsRuntime {
     #[must_use]
     pub fn callable_trust(&self) -> Option<Arc<crate::callable::CallableTrust>> {
         self.callable_trust.read().ok().and_then(|t| t.clone())
+    }
+
+    /// Turns background (event) trigger delivery on or off, as the Emulator Hub's
+    /// `PUT /functions/{disable,enable}BackgroundTriggers` routes do.
+    ///
+    /// Disabling drops what arrives while it is off. Events already accepted keep their
+    /// place in the outbox and are still delivered and retried, exactly as upstream's
+    /// `disableBackgroundTriggers` drains the work queue it had already taken on.
+    pub fn set_background_triggers(&self, enabled: bool) {
+        self.background_triggers
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether background (event) triggers deliver.
+    #[must_use]
+    pub fn background_triggers_enabled(&self) -> bool {
+        self.background_triggers
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The callable's declared `enforceAppCheck`, or `None` when the function is not a
@@ -563,6 +593,9 @@ impl FunctionsRuntime {
 
     /// Turns a Firestore commit into document events for every matching trigger.
     pub fn on_commit(&self, commit: &CommitEvent) {
+        if !self.background_triggers_enabled() {
+            return; // dropped, never held for a later replay
+        }
         let Some(time) = commit.commit_time else {
             return; // reset
         };
@@ -646,6 +679,9 @@ impl FunctionsRuntime {
 
     /// Turns a Storage object event into events for every matching trigger.
     pub fn on_storage_event(&self, event: &StorageEvent) {
+        if !self.background_triggers_enabled() {
+            return; // dropped, never held for a later replay
+        }
         let (kind, object) = match event {
             StorageEvent::Finalized(m) => (ObjectEvent::Finalized, m),
             StorageEvent::Deleted(m) => (ObjectEvent::Deleted, m),
@@ -688,10 +724,14 @@ impl FunctionsRuntime {
         };
         let mut ids = Vec::with_capacity(messages.len());
         let mut enqueued = false;
+        let deliver = self.background_triggers_enabled();
         for message in messages {
             inner.next_event += 1;
             let message_id = format!("{}-{}", self.config.session.value(), inner.next_event);
             ids.push(message_id.clone());
+            if !deliver {
+                continue; // the message is accepted and dropped, as Pub/Sub does without a subscriber
+            }
             for f in self.manifest.pubsub_matches(topic) {
                 let payload = pubsub_event(&message_id, &self.config.project, topic, message, time);
                 self.enqueue_delivery(
@@ -715,6 +755,9 @@ impl FunctionsRuntime {
 
     /// Turns a user lifecycle event into events for every matching Auth trigger.
     pub fn on_user_event(&self, event: &UserEvent) {
+        if !self.background_triggers_enabled() {
+            return; // dropped, never held for a later replay
+        }
         let kind = match event.kind {
             UserEventKind::Created => AuthEvent::Created,
             UserEventKind::Deleted => AuthEvent::Deleted,

@@ -311,6 +311,47 @@ impl RestState {
         }
     }
 
+    /// The Firestore emulator's own routes, under `/emulator/v1/projects/`.
+    ///
+    /// Only `DELETE .../databases/{database}/documents` exists: it drops every document of
+    /// the project, which is what `@firebase/rules-unit-testing`'s `clearFirestore()` and
+    /// the Emulator UI's "clear data" button call between tests. It takes no credential,
+    /// exactly as the official emulator's route does not -- `clearFirestore` sends no
+    /// headers at all -- and is reachable only from the loopback listener. A browser page
+    /// cannot reach it either: `DELETE` is not a CORS-simple method, so it needs a preflight
+    /// that this surface never answers.
+    ///
+    /// `PUT /emulator/v1/projects/{project}:securityRules` is deliberately absent: load
+    /// rules from `firestore.rules` in `firebase.json`, from `rules.source`, or through
+    /// `PUT /v1/rules` on the control API.
+    fn emulator_route(&self, req: &RestRequest, rest: &str) -> Result<RestResponse, Status> {
+        let mut parts = rest.split('/');
+        let (Some(project), Some("databases"), Some(database), Some("documents"), None) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
+            return Err(Status::not_found(format!("unknown path {}", req.path)));
+        };
+        if req.method != "DELETE" {
+            return Err(Status::invalid_argument(format!(
+                "{} is not supported on {}; only DELETE clears the emulator's documents",
+                req.method, req.path
+            )));
+        }
+        if project.is_empty() || database.is_empty() {
+            return Err(Status::invalid_argument(
+                "the project and database of an emulator clear must both be named",
+            ));
+        }
+        // The wipe is per project: fireemu isolates a session's databases by project, so
+        // clearing one never touches another session's data.
+        self.local.reset_project(project);
+        Ok(ok(Value::Object(serde_json::Map::new())))
+    }
+
     /// Handles one request.
     pub fn handle(&self, req: &RestRequest) -> RestResponse {
         match self.dispatch(req) {
@@ -327,6 +368,9 @@ impl RestState {
             _ => (req.path.as_str(), None),
         };
         let decoded = decode_path(raw_resource)?;
+        if let Some(rest) = decoded.strip_prefix("/emulator/v1/projects/") {
+            return self.emulator_route(req, rest);
+        }
         let Some(path) = decoded.strip_prefix("/v1/") else {
             return Err(Status::not_found(format!("unknown path {}", req.path)));
         };

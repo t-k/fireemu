@@ -1,0 +1,436 @@
+//! The command surface: the official command and flag spellings, the exit codes they
+//! produce, and how a real `firebase.json` / `.firebaserc` pair reaches the daemon
+//! (CLI-01, CLI-04).
+//!
+//! Every scenario runs the shipped binary, so what is asserted is what a project invoking
+//! `fireemu` actually gets rather than what the parser returns internally.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("fireemu-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+/// Runs the binary with ephemeral service ports and the Hub off, so a scenario is about the
+/// arguments and never about which port was free.
+fn run(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+/// The port arguments every successful scenario needs.
+const PORTS: [&str; 10] = [
+    "--firestore-port",
+    "0",
+    "--http-port",
+    "0",
+    "--storage-port",
+    "0",
+    "--ui-port",
+    "0",
+    "--hub-port",
+    "0",
+];
+
+fn exec_with(extra: &[&str], command: &[&str]) -> Output {
+    let mut args: Vec<&str> = vec!["exec"];
+    args.extend_from_slice(&PORTS);
+    args.extend_from_slice(extra);
+    args.push("--");
+    args.extend_from_slice(command);
+    run(&args)
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+// --------------------------------------------------------------------------------------
+// Command names and exit codes
+// --------------------------------------------------------------------------------------
+
+#[test]
+fn the_official_command_names_are_aliases_of_the_short_ones() {
+    // `emulators:exec` runs a command and propagates its status, exactly as `exec` does.
+    let out = exec_with(&[], &["sh", "-c", "exit 7"]);
+    assert_eq!(out.status.code(), Some(7));
+    let mut args: Vec<&str> = vec!["emulators:exec"];
+    args.extend_from_slice(&PORTS);
+    args.extend_from_slice(&["--", "sh", "-c", "exit 7"]);
+    assert_eq!(run(&args).status.code(), Some(7));
+
+    // `emulators:start` is `up`; both refuse the same unknown argument the same way.
+    for verb in ["up", "emulators:start"] {
+        let out = run(&[verb, "--nope"]);
+        assert_eq!(out.status.code(), Some(2), "{verb}");
+        assert!(stderr(&out).contains("unknown argument --nope"), "{verb}");
+    }
+
+    // An unknown verb prints the usage and exits 2.
+    let out = run(&["emulators:frobnicate"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("usage: fireemu"));
+}
+
+#[test]
+fn export_is_refused_precisely_rather_than_reported_as_unknown() {
+    let out = run(&["emulators:export", "./out"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a command that exists but is not implemented is a refusal, not a usage error"
+    );
+    let text = stderr(&out);
+    assert!(
+        text.contains("emulators:export is not supported yet"),
+        "{text}"
+    );
+    assert!(
+        text.contains("snapshots"),
+        "{text}: it must say what to use instead"
+    );
+}
+
+#[test]
+fn import_and_export_on_exit_fail_before_anything_starts() {
+    let dir = scratch("import");
+    let marker = dir.join("ran");
+    for (label, flag, value) in [
+        ("import", "--import", Some("./seed")),
+        ("export-on-exit-dir", "--export-on-exit", Some("./out")),
+        ("export-on-exit-bare", "--export-on-exit", None),
+    ] {
+        let mut extra = vec![flag];
+        if let Some(v) = value {
+            extra.push(v);
+        }
+        let out = exec_with(&extra, &["touch", marker.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(1), "{label}");
+        let text = stderr(&out);
+        assert!(text.contains("not supported yet"), "{label}: {text}");
+        assert!(text.contains("nothing was started"), "{label}: {text}");
+        assert!(!marker.exists(), "{label}: the command ran anyway");
+    }
+}
+
+#[test]
+fn log_verbosity_decides_whether_the_banner_is_printed() {
+    for (level, banner) in [("quiet", false), ("info", true), ("DEBUG", true)] {
+        let out = exec_with(&["--log-verbosity", level], &["true"]);
+        assert!(out.status.success(), "{level}: {}", stderr(&out));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            stdout.contains("control API:"),
+            banner,
+            "{level} printed: {stdout}"
+        );
+    }
+    // `debug` adds the resolved configuration on top of everything `info` prints.
+    let out = exec_with(&["--log-verbosity", "debug"], &["true"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("resolved config:"));
+    // An unknown level is a usage error, not a silent fallback.
+    let out = exec_with(&["--log-verbosity", "loud"], &["true"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("quiet, info, debug"));
+}
+
+#[test]
+fn inspect_functions_passes_the_node_inspector_through_to_the_runner() {
+    let dir = scratch("inspect");
+    // With no codebase there is no runner to start, so the flag only has to be accepted.
+    let out = exec_with(&["--inspect-functions"], &["true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = exec_with(&["--inspect-functions", "9330"], &["true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // A configured runner that is not Node cannot take `--inspect`, and says so instead of
+    // starting without the inspector the caller asked for.
+    let config = write(
+        &dir,
+        "fireemu.json",
+        r#"{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "firestore": { "edition": "standard", "apiMode": "native" },
+  "functions": { "runner": ["python3", "runner.py"] }
+}
+"#,
+    );
+    let out = exec_with(
+        &["--config", config.to_str().unwrap(), "--inspect-functions"],
+        &["true"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let text = stderr(&out);
+    assert!(text.contains("--inspect-functions"), "{text}");
+    assert!(text.contains("not node"), "{text}");
+}
+
+// --------------------------------------------------------------------------------------
+// firebase.json and .firebaserc
+// --------------------------------------------------------------------------------------
+
+/// Reports the child's environment from a run configured by `firebase.json`.
+fn env_of(dir: &Path, extra: &[&str]) -> std::collections::BTreeMap<String, String> {
+    let out_file = dir.join("env.txt");
+    let script = format!("env > {}", out_file.display());
+    let mut args: Vec<&str> = vec!["exec"];
+    args.extend_from_slice(&PORTS);
+    args.extend_from_slice(extra);
+    args.extend_from_slice(&["--", "sh", "-c", &script]);
+    let out = run(&args);
+    assert!(out.status.success(), "{}", stderr(&out));
+    std::fs::read_to_string(&out_file)
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect()
+}
+
+#[test]
+fn a_project_alias_from_firebaserc_resolves_the_project() {
+    let dir = scratch("firebaserc");
+    write(&dir, "firebase.json", "{}");
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-default-app", "staging": "demo-staging-app"}}"#,
+    );
+    let firebase = dir.join("firebase.json");
+    let firebase = firebase.to_str().unwrap();
+
+    // No --project: the `default` alias.
+    let env = env_of(&dir, &["--firebase-json", firebase]);
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-default-app");
+
+    // A named alias resolves to its project ID.
+    let env = env_of(&dir, &["--firebase-json", firebase, "--project", "staging"]);
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-staging-app");
+
+    // A value that is not an alias is taken as a project ID, as `firebase --project` does.
+    let env = env_of(
+        &dir,
+        &["--firebase-json", firebase, "--project", "demo-literal"],
+    );
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-literal");
+}
+
+#[test]
+fn config_accepts_a_firebase_json_as_well_as_the_canonical_configuration() {
+    let dir = scratch("config-kind");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"emulators": {"singleProjectMode": true}}"#,
+    );
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-cfg"}}"#,
+    );
+    // `firebase emulators:exec --config firebase.json` works verbatim: a file without
+    // `schemaVersion` is a firebase.json.
+    let env = env_of(
+        &dir,
+        &["--config", dir.join("firebase.json").to_str().unwrap()],
+    );
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-cfg");
+
+    // A canonical configuration through --config still loads, and passing one to
+    // --firebase-json is refused with the flag to use instead.
+    let canonical = write(
+        &dir,
+        "fireemu.json",
+        r#"{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "firestore": { "edition": "standard", "apiMode": "native" },
+  "daemon": { "authProject": "demo-canonical" }
+}
+"#,
+    );
+    let env = env_of(&dir, &["--config", canonical.to_str().unwrap()]);
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-canonical");
+    let out = exec_with(&["--firebase-json", canonical.to_str().unwrap()], &["true"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("pass it with --config"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
+    let dir = scratch("deferred");
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{
+  "database": {"rules": "database.rules.json"},
+  "emulators": {
+    "firestore": {"port": 8080},
+    "database": {"port": 9000},
+    "pubsub": {"port": 8085},
+    "logging": {"port": 4500}
+  }
+}
+"#,
+    );
+    let firebase = firebase.to_str().unwrap();
+    // Without --only naming them, they are notices and the run proceeds.
+    let out = exec_with(&["--firebase-json", firebase], &["true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stderr(&out);
+    assert!(text.contains("emulators.database"), "{text}");
+    assert!(text.contains("deferred"), "{text}");
+    assert!(text.contains("emulators.pubsub"), "{text}");
+    assert!(
+        text.contains("emulators.logging") && text.contains("out of scope"),
+        "the Logging emulator stream is out of scope for this release and must say so: {text}"
+    );
+
+    // Naming one in --only is refused before anything binds; the message names the product.
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "database"],
+        &["true"],
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("database"), "{}", stderr(&out));
+}
+
+#[test]
+fn a_multi_codebase_functions_section_names_the_codebase_to_load() {
+    let dir = scratch("codebases");
+    std::fs::create_dir_all(dir.join("fn-a")).unwrap();
+    std::fs::create_dir_all(dir.join("fn-b")).unwrap();
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{
+  "functions": [
+    {"source": "fn-a", "codebase": "alpha", "runtime": "nodejs20", "ignore": ["node_modules"]},
+    {"source": "fn-b", "codebase": "beta"}
+  ]
+}
+"#,
+    );
+    let firebase = firebase.to_str().unwrap();
+
+    // Ambiguous: fireemu runs one runner, so it asks which codebase rather than guessing.
+    let out = exec_with(&["--firebase-json", firebase], &["true"]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stderr(&out);
+    assert!(text.contains("alpha") && text.contains("beta"), "{text}");
+    assert!(text.contains("--only functions:<codebase>"), "{text}");
+
+    // Naming one selects it; the directory is empty, so the runner fails on the codebase
+    // itself rather than on the configuration -- which is the point: it was loaded.
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "functions:alpha"],
+        &["true"],
+    );
+    let text = stderr(&out);
+    assert!(
+        !text.contains("--only functions:<codebase>"),
+        "a named codebase must not be ambiguous: {text}"
+    );
+
+    // An unknown codebase names the ones that exist.
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "functions:gamma"],
+        &["true"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let text = stderr(&out);
+    assert!(text.contains("no such codebase"), "{text}");
+    assert!(text.contains("alpha, beta"), "{text}");
+
+    // Not selecting functions at all leaves the ambiguity moot.
+    let out = exec_with(
+        &["--firebase-json", firebase, "--only", "firestore"],
+        &["true"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn a_named_firestore_database_is_reported_rather_than_folded_into_the_default_one() {
+    let dir = scratch("databases");
+    write(&dir, "firestore.rules", "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{d=**} { allow read, write: if true; }\n  }\n}\n");
+    write(&dir, "reports.rules", "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{d=**} { allow read, write: if false; }\n  }\n}\n");
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{
+  "firestore": [
+    {"database": "(default)", "rules": "firestore.rules"},
+    {"database": "reports", "rules": "reports.rules"}
+  ]
+}
+"#,
+    );
+    let out = exec_with(&["--firebase-json", firebase.to_str().unwrap()], &["true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stderr(&out);
+    assert!(text.contains("reports"), "{text}");
+    assert!(
+        text.contains("not loaded"),
+        "the named database's own rules are not loaded and that must be said: {text}"
+    );
+    // The (default) entry did load: the banner says the rules are enforced from that file.
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("firestore.rules"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn a_routable_emulator_host_is_refused() {
+    let dir = scratch("host");
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{"emulators": {"firestore": {"host": "0.0.0.0", "port": 8080}}}"#,
+    );
+    let out = exec_with(&["--firebase-json", firebase.to_str().unwrap()], &["true"]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stderr(&out);
+    assert!(text.contains("emulators.firestore.host"), "{text}");
+    assert!(text.contains("loopback"), "{text}");
+}
+
+#[test]
+fn a_command_line_port_overrides_the_one_in_firebase_json() {
+    let dir = scratch("override");
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-ports"}}"#,
+    );
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{"emulators": {"firestore": {"port": 8123}, "auth": {"host": "localhost", "port": 9123}}}"#,
+    );
+    // The ports of `PORTS` are all 0 (ephemeral), so nothing lands on 8123 or 9123.
+    let env = env_of(&dir, &["--firebase-json", firebase.to_str().unwrap()]);
+    assert!(!env["FIRESTORE_EMULATOR_HOST"].ends_with(":8123"));
+    assert!(!env["FIREBASE_AUTH_EMULATOR_HOST"].ends_with(":9123"));
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-ports");
+}

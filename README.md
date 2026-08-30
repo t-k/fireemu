@@ -76,6 +76,19 @@ pnpm -C ui test && pnpm -C ui e2e          # unit tests; Playwright against a re
 - `conservative` (default) and `firebase`: the query is refused with `FAILED_PRECONDITION` and the `firestore.indexes.json` fragment production would need, before it runs.
 - `emulator`: the query runs as if the index existed, which is what the Firebase Emulator Suite does; the gateway records an `FS_EMULATOR_INDEX_ASSUMED` warning. Use it for projects that never maintained an index file; it says nothing about production index conformance.
 
+### Firestore history retention
+
+Firestore keeps every document version it may still be asked about, and drops the rest at the end of the commit that makes them unreachable. A version is retained while at least one retention root can reach it:
+
+- **The `read_time` window.** `read_time` selectors, and read-only transactions started at a `read_time`, reach one hour back (`READ_TIME_RETENTION_SECONDS`, Firestore without PITR). The version that was current when the window opened is retained too, so a read at the very start of the window is exact. A `read_time` older than the retained history is refused with `FAILED_PRECONDITION`; it is never answered from a different version.
+- **Open transactions.** Every transaction still inside its budget (`FS-LIMIT-TRANSACTION-TOTAL-TIME` / `FS-LIMIT-TRANSACTION-IDLE-TIME`) pins the version it reads at, so its snapshot stays stable across compaction. An expired transaction pins nothing: it can never read again.
+- **`Listen` resume tokens.** A token names the version it was issued at and is honoured while that version is retained: the target's state is recomputed there and only the changes since are replayed. A token whose version has been compacted away (or one from another session, database, target or the future) is refused explicitly -- the target is `RESET` and replays from scratch -- so a token is never resumed against unrelated history. Resume tokens therefore live exactly as long as the `read_time` window.
+- **The current state.** The newest version or tombstone of every path is always kept, so live reads and queries never change. A path whose only remaining version is a tombstone older than the window is dropped entirely: at every version that can still be asked about, it is indistinguishable from a path that never existed.
+
+Named snapshots are independent copies, not references into the live history: restoring one reproduces exactly what it captured, whatever the live database compacted in the meantime.
+
+Memory therefore tracks the live data plus what the retention roots pin, not the number of writes a session made. All of it runs on the virtual clock: without `clock:advance`, nothing is ever compacted, so tests see the whole history of their run.
+
 ### Clock
 
 The virtual clock starts at the wall-clock time unless `daemon.clockStart` pins it (a pinned start keeps runs reproducible; an unpinned one keeps the ID tokens the daemon issues valid for SDKs that check expiry against real time, such as the Admin SDK's `verifyIdToken`). Either way the clock only moves through the control API afterwards.

@@ -10,3 +10,12 @@ verification/tla/states/
 verification/tla/**/states/
 *.tlaps
 .tools/
+# cargo-mutants default output (use --output docs.local/mutants/... for kept runs)
+mutants.out/
+mutants.out.old/
+# Emulator UI build output and dependencies (built by pnpm -C ui build, embedded at compile time)
+ui/dist/
+ui/node_modules/
+ui/test-results/
+ui/playwright-report/
+.claude/worktrees/

@@ -815,3 +815,502 @@ service cloud.firestore {
     assert!(err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"));
     h.handle.abort();
 }
+
+fn list_range(
+    collection: &str,
+    field: &str,
+    op: sq::field_filter::Operator,
+    value: pb::Value,
+    limit: Option<i32>,
+) -> pb::RunQueryRequest {
+    let mut req = list(collection);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut req.query_type {
+        sq.r#where = Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                field: Some(sq::FieldReference {
+                    field_path: field.to_owned(),
+                }),
+                op: op as i32,
+                value: Some(value),
+            })),
+        });
+        sq.limit = limit;
+    }
+    req
+}
+
+#[tokio::test]
+async fn queries_are_proven_from_inequality_constraints_and_request_query() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /people/{id} { allow list: if resource.data.age >= 18; }
+    match /paged/{id} { allow list: if request.query.limit <= 20; }
+  }
+}",
+    )
+    .unwrap();
+    let int = |v: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
+    };
+    let people = |op, v| list_range("people", "age", op, int(v), None);
+    // age >= 18 and age > 20 prove the rule; age >= 10 and an unfiltered list do not.
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            people(Op::GreaterThanOrEqual, 18),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(people(Op::GreaterThan, 20), &alice_token))
+        .await
+        .is_ok());
+    for (op, v) in [(Op::GreaterThanOrEqual, 10), (Op::LessThan, 30)] {
+        let err = h
+            .client
+            .run_query(with_bearer(people(op, v), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied, "{op:?} {v}");
+    }
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(list("people"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    // request.query.limit
+    let paged = |limit| list_range("paged", "x", Op::Equal, int(1), limit);
+    assert!(h
+        .client
+        .run_query(with_bearer(paged(Some(20)), &alice_token))
+        .await
+        .is_ok());
+    for limit in [Some(21), None] {
+        let err = h
+            .client
+            .run_query(with_bearer(paged(limit), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied, "{limit:?}");
+    }
+    // ListDocuments: the page size is the limit the rules see (100 by default).
+    let listing = |page_size: i32| pb::ListDocumentsRequest {
+        parent: DOCS.to_owned(),
+        collection_id: "paged".to_owned(),
+        page_size,
+        ..Default::default()
+    };
+    assert!(h
+        .client
+        .list_documents(with_bearer(listing(20), &alice_token))
+        .await
+        .is_ok());
+    for (page_size, code) in [
+        (21, tonic::Code::PermissionDenied),
+        (0, tonic::Code::PermissionDenied),
+        (-1, tonic::Code::InvalidArgument),
+    ] {
+        let err = h
+            .client
+            .list_documents(with_bearer(listing(page_size), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), code, "page_size {page_size}");
+    }
+    h.handle.abort();
+}
+
+async fn query_code(
+    h: &mut Harness,
+    token: &str,
+    req: pb::RunQueryRequest,
+) -> Result<(), tonic::Code> {
+    h.client
+        .run_query(with_bearer(req, token))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.code())
+}
+
+fn arr(items: Vec<pb::Value>) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+            values: items,
+        })),
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn queries_are_proven_from_in_not_in_not_equal_and_order_by() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /posts/{id} { allow list: if resource.data.status in ['published', 'archived']; }
+    match /live/{id} { allow list: if resource.data.status != 'deleted'; }
+    match /typed/{id} { allow list: if resource.data.kind is string; }
+    match /ordered/{id} { allow list: if request.query.orderBy == 'createdAt DESC'; }
+  }
+}",
+    )
+    .unwrap();
+    let denied = Err(tonic::Code::PermissionDenied);
+    // `in` with candidates all inside the rule's set proves it; one outside does not.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("posts", "status", Op::In, arr(vec![s("published")]), None)
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "posts",
+                "status",
+                Op::In,
+                arr(vec![s("published"), s("archived")]),
+                None
+            )
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_where("posts", "status", s("archived"))
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "posts",
+                "status",
+                Op::In,
+                arr(vec![s("published"), s("draft")]),
+                None
+            )
+        )
+        .await,
+        denied
+    );
+    assert_eq!(
+        query_code(&mut h, &alice_token, list("posts")).await,
+        denied
+    );
+    // `!=` and `not-in` prove a `!=` rule when the excluded value is among the filter's.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("live", "status", Op::NotEqual, s("deleted"), None)
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "live",
+                "status",
+                Op::NotIn,
+                arr(vec![s("deleted"), s("hidden")]),
+                None
+            )
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("live", "status", Op::NotEqual, s("hidden"), None)
+        )
+        .await,
+        denied
+    );
+    // A type check is proven by an `in` over one type only.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("typed", "kind", Op::In, arr(vec![s("a"), s("b")]), None)
+        )
+        .await,
+        Ok(())
+    );
+    let int = |v: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
+    };
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("typed", "kind", Op::In, arr(vec![s("a"), int(1)]), None)
+        )
+        .await,
+        denied
+    );
+    // request.query.orderBy
+    let ordered = |direction: sq::Direction| {
+        let mut req = list("ordered");
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut req.query_type {
+            sq.order_by = vec![sq::Order {
+                field: Some(sq::FieldReference {
+                    field_path: "createdAt".to_owned(),
+                }),
+                direction: direction as i32,
+            }];
+        }
+        req
+    };
+    assert_eq!(
+        query_code(&mut h, &alice_token, ordered(sq::Direction::Descending)).await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(&mut h, &alice_token, ordered(sq::Direction::Ascending)).await,
+        denied
+    );
+    assert_eq!(
+        query_code(&mut h, &alice_token, list("ordered")).await,
+        denied
+    );
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn get_after_reads_the_state_the_whole_commit_leaves_behind() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // A post may be created only together with the counter increment.
+    match /posts/{id} {
+      allow create: if getAfter(/databases/$(database)/documents/stats/posts).data.count
+                       == get(/databases/$(database)/documents/stats/posts).data.count + 1;
+    }
+    match /stats/{id} {
+      allow update: if request.resource.data.count == resource.data.count + 1;
+    }
+  }
+}",
+    )
+    .unwrap();
+    let int = |v: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
+    };
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("stats/posts", &[("count", int(0))])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    // The post alone: the counter would stay at 0 after the commit.
+    let err = h
+        .client
+        .commit(with_bearer(
+            commit(vec![set_write("posts/p1", &[("title", s("hi"))])]),
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // Post first, counter second: getAfter() sees the whole batch.
+    assert!(h
+        .client
+        .commit(with_bearer(
+            commit(vec![
+                set_write("posts/p1", &[("title", s("hi"))]),
+                set_write("stats/posts", &[("count", int(1))]),
+            ]),
+            &alice_token,
+        ))
+        .await
+        .is_ok());
+    // A read cannot use getAfter(): fails closed with the reason.
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /posts/{id} { allow read: if getAfter(/databases/$(database)/documents/stats/posts).data.count == 1; }
+  }
+}",
+    )
+    .unwrap();
+    let err = h
+        .client
+        .get_document(with_bearer(get("posts/p1"), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(err.message().contains("getAfter()"), "{}", err.message());
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn array_contains_any_queries_are_proven_soundly() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /tagged/{id} { allow list: if resource.data.tags.hasAny(['x', 'y']); }
+    match /strict/{id} { allow list: if resource.data.tags.hasAll(['x', 'y']); }
+  }
+}",
+    )
+    .unwrap();
+    // Every candidate is accepted by the rule: proven.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "tagged",
+                "tags",
+                Op::ArrayContainsAny,
+                arr(vec![s("x"), s("y")]),
+                None
+            )
+        )
+        .await,
+        Ok(())
+    );
+    // A candidate the rule does not accept: a document holding only `z` would be denied.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "tagged",
+                "tags",
+                Op::ArrayContainsAny,
+                arr(vec![s("x"), s("z")]),
+                None
+            )
+        )
+        .await,
+        Err(tonic::Code::PermissionDenied)
+    );
+    // `hasAll` is never proven by array-contains-any (the array may hold one of them).
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "strict",
+                "tags",
+                Op::ArrayContainsAny,
+                arr(vec![s("x"), s("y")]),
+                None
+            )
+        )
+        .await,
+        Err(tonic::Code::PermissionDenied)
+    );
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn id_tokens_are_bound_to_the_requested_project() {
+    let mut h = start().await;
+    let (_, token) = h.user("a@example.com");
+    // The token's audience is demo-app: another project's data is off limits even where
+    // its rules would let any signed-in user in.
+    let err = h
+        .client
+        .get_document(with_bearer(
+            pb::GetDocumentRequest {
+                name: "projects/demo-b/databases/(default)/documents/users/x".to_owned(),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().contains("audience"), "{err}");
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn transactions_are_bound_to_the_token_audience_too() {
+    let mut h = start().await;
+    let (_, token) = h.user("t@example.com");
+    let err = h
+        .client
+        .begin_transaction(with_bearer(
+            pb::BeginTransactionRequest {
+                database: "projects/demo-b/databases/(default)".to_owned(),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    let err = h
+        .client
+        .batch_get_documents(with_bearer(
+            pb::BatchGetDocumentsRequest {
+                database: "projects/demo-b/databases/(default)".to_owned(),
+                documents: Vec::new(),
+                consistency_selector: Some(
+                    pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                        pb::TransactionOptions::default(),
+                    ),
+                ),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    // The token's own project is fine.
+    assert!(h
+        .client
+        .begin_transaction(with_bearer(
+            pb::BeginTransactionRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .is_ok());
+    h.handle.abort();
+}

@@ -2,6 +2,7 @@
 
 use core::fmt;
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use ftd_core_limits::catalogs::FIREBASE_AUTH_2026_08_30;
 use ftd_core_limits::evaluate::{evaluate, LimitDisposition, LimitViolation, DEFAULT_THRESHOLDS};
@@ -12,7 +13,7 @@ use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
 use crate::mfa::{
     match_code, CodeMatch, EnrolledFactor, MfaError, MfaState, PendingEnrollment, PendingSignIn,
-    TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret,
+    PhoneFactor, TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret, MAX_FACTORS_PER_USER,
 };
 
 /// ID token lifetime (`AUTH-LIMIT-ID-TOKEN-TTL-SECONDS`).
@@ -45,18 +46,153 @@ pub enum Provider {
     Anonymous,
     /// Custom token.
     Custom,
+    /// Phone number (SMS code).
+    Phone,
+    /// Email link (passwordless).
+    EmailLink,
+    /// A federated identity provider (`google.com`, `apple.com`, ...; fixture provider only).
+    Federated(String),
 }
 
 impl Provider {
     /// Provider ID as it appears in `firebase.sign_in_provider`.
     #[must_use]
-    pub const fn id(&self) -> &'static str {
+    pub fn id(&self) -> &str {
         match self {
             Self::Password => "password",
             Self::Anonymous => "anonymous",
             Self::Custom => "custom",
+            Self::Phone => "phone",
+            Self::EmailLink => "emailLink",
+            Self::Federated(id) => id,
         }
     }
+}
+
+/// A linked federated identity (`providerUserInfo`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FederatedIdentity {
+    /// Provider ID (`google.com`).
+    pub provider_id: String,
+    /// The provider's user ID (`sub`).
+    pub raw_id: String,
+    /// Email at the provider.
+    pub email: Option<String>,
+    /// Display name at the provider.
+    pub display_name: Option<String>,
+    /// Photo URL at the provider.
+    pub photo_url: Option<String>,
+}
+
+/// Out-of-band (email action) code kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OobRequestType {
+    /// Password reset.
+    PasswordReset,
+    /// Email verification.
+    VerifyEmail,
+    /// Email link sign-in.
+    EmailSignIn,
+    /// Verify and change the email.
+    VerifyAndChangeEmail,
+}
+
+impl OobRequestType {
+    /// The Identity Toolkit `requestType` name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PasswordReset => "PASSWORD_RESET",
+            Self::VerifyEmail => "VERIFY_EMAIL",
+            Self::EmailSignIn => "EMAIL_SIGNIN",
+            Self::VerifyAndChangeEmail => "VERIFY_AND_CHANGE_EMAIL",
+        }
+    }
+
+    /// Parses the Identity Toolkit `requestType` name.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "PASSWORD_RESET" => Self::PasswordReset,
+            "VERIFY_EMAIL" => Self::VerifyEmail,
+            "EMAIL_SIGNIN" => Self::EmailSignIn,
+            "VERIFY_AND_CHANGE_EMAIL" => Self::VerifyAndChangeEmail,
+            _ => return None,
+        })
+    }
+}
+
+/// An outstanding email action code. Never sent anywhere: tests read it from the store
+/// (the `/emulator/v1/projects/{p}/oobCodes` list).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OobCode {
+    /// The code.
+    pub code: String,
+    /// Kind.
+    pub request_type: OobRequestType,
+    /// Email the action concerns.
+    pub email: String,
+    /// User the action concerns (none for a sign-in link of an unknown email).
+    pub uid: Option<LocalId>,
+    /// New email (`VERIFY_AND_CHANGE_EMAIL`).
+    pub new_email: Option<String>,
+    /// Creation time.
+    pub created_at: LogicalInstant,
+}
+
+/// A user lifecycle event (Auth triggers).
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserEvent {
+    /// Created or deleted.
+    pub kind: UserEventKind,
+    /// The user as created / as it was before deletion.
+    pub user: UserRecord,
+}
+
+/// User lifecycle event kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserEventKind {
+    /// Created.
+    Created,
+    /// Deleted.
+    Deleted,
+}
+
+/// What a phone verification code is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerificationPurpose {
+    /// Phone sign-in / linking.
+    SignIn,
+    /// Enrolling a phone second factor.
+    Enrollment {
+        /// User enrolling.
+        uid: LocalId,
+    },
+    /// The second-factor step of a sign-in.
+    MfaSignIn {
+        /// User signing in.
+        uid: LocalId,
+        /// Pending sign-in.
+        pending: PendingSignInId,
+        /// Factor being verified.
+        enrollment_id: String,
+    },
+}
+
+/// An outstanding phone verification code. Never sent as SMS: tests read it from the
+/// store (the `/emulator/v1/projects/{p}/verificationCodes` list).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerificationCode {
+    /// Session handle returned to the client.
+    pub session_info: String,
+    /// Phone number.
+    pub phone_number: String,
+    /// Six-digit code.
+    pub code: String,
+    /// Purpose.
+    pub purpose: VerificationPurpose,
+    /// Creation time.
+    pub created_at: LogicalInstant,
 }
 
 /// New user request.
@@ -139,6 +275,8 @@ pub struct UserRecord {
     pub last_sign_in_at: Option<LogicalInstant>,
     /// Tokens issued before this instant are revoked.
     pub tokens_valid_after: LogicalInstant,
+    /// Linked federated identities.
+    pub federated: Vec<FederatedIdentity>,
     /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
     /// without a password credential.
     password: Option<PasswordDigest>,
@@ -198,6 +336,16 @@ pub enum AuthError {
     PhoneNumberExists,
     /// Phone number is not E.164.
     InvalidPhoneNumber,
+    /// Unknown email (password reset).
+    EmailNotFound,
+    /// Unknown, consumed or mismatched action code.
+    InvalidOobCode,
+    /// Unknown phone verification session.
+    InvalidSessionInfo,
+    /// Wrong phone verification code.
+    InvalidVerificationCode,
+    /// The federated identity is linked to another user.
+    FederatedUserIdAlreadyLinked,
     /// Limit violation.
     LimitExceeded(LimitViolation),
 }
@@ -216,6 +364,13 @@ impl fmt::Display for AuthError {
             Self::LocalIdExists => f.write_str("local id already exists"),
             Self::PhoneNumberExists => f.write_str("phone number already exists"),
             Self::InvalidPhoneNumber => f.write_str("invalid phone number"),
+            Self::EmailNotFound => f.write_str("email not found"),
+            Self::InvalidOobCode => f.write_str("invalid action code"),
+            Self::InvalidSessionInfo => f.write_str("invalid verification session"),
+            Self::InvalidVerificationCode => f.write_str("invalid verification code"),
+            Self::FederatedUserIdAlreadyLinked => {
+                f.write_str("federated identity linked to another user")
+            }
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
         }
     }
@@ -253,7 +408,7 @@ impl PendingSignInId {
 }
 
 /// Deterministic in-memory auth store for one project.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthStore {
     project_id: String,
     rng: SplitMix64,
@@ -263,9 +418,37 @@ pub struct AuthStore {
     refresh_tokens: BTreeMap<String, RefreshSession>,
     next_id_override: Option<String>,
     next_sequence: u64,
+    signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
+    oob_codes: BTreeMap<String, OobCode>,
+    verification_codes: BTreeMap<String, VerificationCode>,
+    created_users: Vec<LocalId>,
+    deleted_users: Vec<UserRecord>,
 }
 
+/// Email action codes expire after an hour of virtual time.
+pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
+/// Phone verification codes expire after ten minutes of virtual time.
+pub const SMS_CODE_TTL_SECONDS: i64 = 600;
+
 impl AuthStore {
+    /// Installs the ID token signer (RS256 session key). Tokens issued afterwards are
+    /// signed and only signed tokens verify.
+    pub fn set_signer(&mut self, signer: Arc<dyn crate::jwt::IdTokenSigner>) {
+        self.signer = Some(signer);
+    }
+
+    /// The ID token signer, if one is installed.
+    #[must_use]
+    pub fn signer(&self) -> Option<&dyn crate::jwt::IdTokenSigner> {
+        self.signer.as_deref()
+    }
+
+    /// The installed signer as a shared handle (to install it on another project's store).
+    #[must_use]
+    pub fn signer_arc(&self) -> Option<Arc<dyn crate::jwt::IdTokenSigner>> {
+        self.signer.clone()
+    }
+
     /// Creates a store for `project_id`.
     #[must_use]
     pub fn new(project_id: &str, rng: SplitMix64, policy: TotpPolicy) -> Self {
@@ -278,7 +461,39 @@ impl AuthStore {
             refresh_tokens: BTreeMap::new(),
             next_id_override: None,
             next_sequence: 0,
+            signer: None,
+            oob_codes: BTreeMap::new(),
+            verification_codes: BTreeMap::new(),
+            created_users: Vec::new(),
+            deleted_users: Vec::new(),
         }
+    }
+
+    /// User lifecycle events recorded since the last call (Auth triggers). A created user
+    /// is reported as it is now (password, phone, profile and factors applied after the
+    /// insert included); a user created and deleted in between (a rolled-back multi-step
+    /// create) produces no event.
+    pub fn take_user_events(&mut self) -> Vec<UserEvent> {
+        let created = std::mem::take(&mut self.created_users);
+        let deleted = std::mem::take(&mut self.deleted_users);
+        let mut events = Vec::new();
+        for uid in &created {
+            if let Some(user) = self.users.get(uid) {
+                events.push(UserEvent {
+                    kind: UserEventKind::Created,
+                    user: user.clone(),
+                });
+            }
+        }
+        for user in deleted {
+            if !created.contains(&user.local_id) {
+                events.push(UserEvent {
+                    kind: UserEventKind::Deleted,
+                    user,
+                });
+            }
+        }
+        events
     }
 
     /// TOTP policy.
@@ -347,8 +562,9 @@ impl AuthStore {
     /// Deletes a user and its refresh tokens.
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
         let key = LocalId(uid.to_owned());
-        self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
+        let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
         self.refresh_tokens.retain(|_, s| s.uid != key);
+        self.deleted_users.push(user);
         Ok(())
     }
 
@@ -357,6 +573,8 @@ impl AuthStore {
     pub fn clear(&mut self) {
         self.users.clear();
         self.refresh_tokens.clear();
+        self.oob_codes.clear();
+        self.verification_codes.clear();
     }
 
     /// Records a successful sign-in (Admin `lastLoginAt`).
@@ -484,9 +702,384 @@ impl AuthStore {
             created_at: now,
             last_sign_in_at: None,
             tokens_valid_after: now,
+            federated: Vec::new(),
             password: None,
         });
+        self.created_users.push(local_id.clone());
         Ok(local_id)
+    }
+
+    // ---- email actions, phone sign-in, federated identities ----------------------------
+
+    /// Creates an email action code.
+    pub fn create_oob_code(
+        &mut self,
+        request_type: OobRequestType,
+        email: &str,
+        uid: Option<LocalId>,
+        new_email: Option<String>,
+        now: LogicalInstant,
+    ) -> String {
+        let code = self.next_id("oob-");
+        self.oob_codes.insert(
+            code.clone(),
+            OobCode {
+                code: code.clone(),
+                request_type,
+                email: email.to_owned(),
+                uid,
+                new_email,
+                created_at: now,
+            },
+        );
+        code
+    }
+
+    /// Outstanding email action codes, oldest first.
+    #[must_use]
+    pub fn oob_codes(&self) -> Vec<&OobCode> {
+        let mut codes: Vec<&OobCode> = self.oob_codes.values().collect();
+        codes.sort_by_key(|c| c.created_at);
+        codes
+    }
+
+    /// An outstanding code (not consumed).
+    #[must_use]
+    pub fn oob_code(&self, code: &str) -> Option<&OobCode> {
+        self.oob_codes.get(code)
+    }
+
+    /// Consumes an action code of the expected kind (any kind when `None`).
+    pub fn consume_oob_code(
+        &mut self,
+        code: &str,
+        expected: Option<OobRequestType>,
+        now: LogicalInstant,
+    ) -> Result<OobCode, AuthError> {
+        let matches = self
+            .oob_codes
+            .get(code)
+            .is_some_and(|c| expected.is_none_or(|e| c.request_type == e));
+        if !matches {
+            return Err(AuthError::InvalidOobCode);
+        }
+        if self
+            .oob_codes
+            .get(code)
+            .is_some_and(|c| Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now))
+        {
+            self.oob_codes.remove(code);
+            return Err(AuthError::InvalidOobCode);
+        }
+        self.oob_codes.remove(code).ok_or(AuthError::InvalidOobCode)
+    }
+
+    fn expired(created_at: LogicalInstant, ttl_seconds: i64, now: LogicalInstant) -> bool {
+        now.as_nanos() - created_at.as_nanos() > i128::from(ttl_seconds) * 1_000_000_000
+    }
+
+    /// Creates a phone verification code for `phone` (a deterministic six-digit code).
+    pub fn send_verification_code(
+        &mut self,
+        phone: &str,
+        purpose: VerificationPurpose,
+        now: LogicalInstant,
+    ) -> Result<VerificationCode, AuthError> {
+        Self::validate_phone_number(phone)?;
+        let session_info = self.next_id("sms-");
+        let code = format!("{:06}", self.rng.next_u64() % 1_000_000);
+        let entry = VerificationCode {
+            session_info: session_info.clone(),
+            phone_number: phone.to_owned(),
+            code,
+            purpose,
+            created_at: now,
+        };
+        self.verification_codes.insert(session_info, entry.clone());
+        Ok(entry)
+    }
+
+    /// Outstanding phone verification codes, oldest first.
+    #[must_use]
+    pub fn verification_codes(&self) -> Vec<&VerificationCode> {
+        let mut codes: Vec<&VerificationCode> = self.verification_codes.values().collect();
+        codes.sort_by_key(|c| c.created_at);
+        codes
+    }
+
+    /// Checks and consumes a phone verification code.
+    pub fn verify_phone_code(
+        &mut self,
+        session_info: &str,
+        code: &str,
+        now: LogicalInstant,
+    ) -> Result<VerificationCode, AuthError> {
+        let entry = self.check_phone_code(session_info, code, now)?;
+        self.consume_phone_code(session_info);
+        Ok(entry)
+    }
+
+    /// Checks a phone verification code without consuming it (callers validate the rest
+    /// of the request first, so a rejected request does not burn the code).
+    pub fn check_phone_code(
+        &self,
+        session_info: &str,
+        code: &str,
+        now: LogicalInstant,
+    ) -> Result<VerificationCode, AuthError> {
+        let entry = self
+            .verification_codes
+            .get(session_info)
+            .ok_or(AuthError::InvalidSessionInfo)?;
+        if Self::expired(entry.created_at, SMS_CODE_TTL_SECONDS, now) {
+            return Err(AuthError::InvalidSessionInfo);
+        }
+        if entry.code != code {
+            return Err(AuthError::InvalidVerificationCode);
+        }
+        Ok(entry.clone())
+    }
+
+    /// Consumes a phone verification session.
+    pub fn consume_phone_code(&mut self, session_info: &str) {
+        self.verification_codes.remove(session_info);
+    }
+
+    /// Signs in with a verified phone number: the user owning it, or a new phone user.
+    /// Returns the user and whether it was created.
+    pub fn sign_in_with_phone(
+        &mut self,
+        phone: &str,
+        now: LogicalInstant,
+    ) -> Result<(LocalId, bool), AuthError> {
+        if let Some(u) = self.user_by_phone(phone) {
+            if u.disabled {
+                return Err(AuthError::UserDisabled);
+            }
+            let uid = u.local_id.clone();
+            self.record_sign_in(&uid, now);
+            return Ok((uid, false));
+        }
+        let uid = self.create_user(
+            NewUser {
+                email: None,
+                email_verified: false,
+                provider: Provider::Phone,
+            },
+            now,
+        )?;
+        self.set_phone_number(&uid, Some(phone))?;
+        self.record_sign_in(&uid, now);
+        Ok((uid, true))
+    }
+
+    /// Signs in with a verified email link: the user owning the email (now verified), or
+    /// a new passwordless user.
+    pub fn sign_in_with_email_link(
+        &mut self,
+        email: &str,
+        now: LogicalInstant,
+    ) -> Result<(LocalId, bool), AuthError> {
+        if let Some(u) = self.user_by_email(email) {
+            if u.disabled {
+                return Err(AuthError::UserDisabled);
+            }
+            let uid = u.local_id.clone();
+            if let Some(u) = self.users.get_mut(&uid) {
+                u.email_verified = true;
+            }
+            self.record_sign_in(&uid, now);
+            return Ok((uid, false));
+        }
+        let uid = self.create_user(
+            NewUser {
+                email: Some(email.to_owned()),
+                email_verified: true,
+                provider: Provider::EmailLink,
+            },
+            now,
+        )?;
+        self.record_sign_in(&uid, now);
+        Ok((uid, true))
+    }
+
+    /// User owning a federated identity.
+    #[must_use]
+    pub fn user_by_federated(&self, provider_id: &str, raw_id: &str) -> Option<&UserRecord> {
+        self.users.values().find(|u| {
+            u.federated
+                .iter()
+                .any(|f| f.provider_id == provider_id && f.raw_id == raw_id)
+        })
+    }
+
+    /// Links a federated identity to `uid` (replacing the user's identity at that provider).
+    pub fn link_federated(
+        &mut self,
+        uid: &LocalId,
+        identity: FederatedIdentity,
+    ) -> Result<(), AuthError> {
+        if self
+            .user_by_federated(&identity.provider_id, &identity.raw_id)
+            .is_some_and(|u| u.local_id != *uid)
+        {
+            return Err(AuthError::FederatedUserIdAlreadyLinked);
+        }
+        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        user.federated
+            .retain(|f| f.provider_id != identity.provider_id);
+        user.federated.push(identity);
+        Ok(())
+    }
+
+    /// Unlinks the identity at `provider_id`; `true` when one was linked.
+    pub fn unlink_federated(
+        &mut self,
+        uid: &LocalId,
+        provider_id: &str,
+    ) -> Result<bool, AuthError> {
+        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let before = user.federated.len();
+        user.federated.retain(|f| f.provider_id != provider_id);
+        Ok(user.federated.len() != before)
+    }
+
+    /// Signs in with a federated identity: the user it is linked to, else the user owning
+    /// the identity's email (the identity is linked to it, as the Emulator does for a
+    /// verified provider email), else a new user. Returns the user and whether it was
+    /// created.
+    pub fn sign_in_with_idp(
+        &mut self,
+        identity: FederatedIdentity,
+        email_verified: bool,
+        now: LogicalInstant,
+    ) -> Result<(LocalId, bool), AuthError> {
+        // Only an email the provider vouches for may claim an existing account: an
+        // assertion with an unverified email must not take over the user owning it.
+        let existing = self
+            .user_by_federated(&identity.provider_id, &identity.raw_id)
+            .or_else(|| {
+                identity
+                    .email
+                    .as_deref()
+                    .filter(|_| email_verified)
+                    .and_then(|e| self.user_by_email(e))
+            })
+            .map(|u| (u.local_id.clone(), u.disabled));
+        if let Some((uid, disabled)) = existing {
+            if disabled {
+                return Err(AuthError::UserDisabled);
+            }
+            self.link_federated(&uid, identity)?;
+            self.record_sign_in(&uid, now);
+            return Ok((uid, false));
+        }
+        let uid = self.create_user(
+            NewUser {
+                email: identity.email.clone(),
+                email_verified: identity.email.is_some() && email_verified,
+                provider: Provider::Federated(identity.provider_id.clone()),
+            },
+            now,
+        )?;
+        if let Some(u) = self.users.get_mut(&uid) {
+            u.display_name.clone_from(&identity.display_name);
+            u.photo_url.clone_from(&identity.photo_url);
+        }
+        self.link_federated(&uid, identity)?;
+        self.record_sign_in(&uid, now);
+        Ok((uid, true))
+    }
+
+    /// Enrolls a phone second factor (the number was verified by the caller).
+    pub fn enroll_phone_factor(
+        &mut self,
+        uid: &LocalId,
+        phone: &str,
+        display_name: Option<String>,
+        now: LogicalInstant,
+    ) -> Result<EnrolledFactor, MfaError> {
+        AuthStore::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
+        let enrollment_id = self.next_id("mfa-");
+        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        if user.disabled {
+            return Err(MfaError::UserDisabled);
+        }
+        if user.mfa.factor_count() >= MAX_FACTORS_PER_USER {
+            return Err(MfaError::TooManyFactors);
+        }
+        user.mfa.phone_factors_mut().push(PhoneFactor {
+            mfa_enrollment_id: enrollment_id.clone(),
+            display_name: display_name.clone(),
+            phone_number: phone.to_owned(),
+            enrolled_at: now,
+        });
+        Ok(EnrolledFactor {
+            mfa_enrollment_id: enrollment_id,
+            display_name,
+            enrolled_at: now,
+        })
+    }
+
+    /// Replaces the phone factors (Admin `mfa.enrollments`).
+    pub fn set_phone_factors(
+        &mut self,
+        uid: &LocalId,
+        factors: Vec<(String, Option<String>)>,
+        now: LogicalInstant,
+    ) -> Result<(), MfaError> {
+        if let Some(user) = self.users.get_mut(uid) {
+            user.mfa.phone_factors_mut().clear();
+        }
+        for (phone, display_name) in factors {
+            self.enroll_phone_factor(uid, &phone, display_name, now)?;
+        }
+        Ok(())
+    }
+
+    /// Removes one factor of any kind; `true` when it existed.
+    pub fn unenroll_factor(
+        &mut self,
+        uid: &LocalId,
+        enrollment_id: &str,
+    ) -> Result<bool, MfaError> {
+        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let before = user.mfa.factor_count();
+        user.mfa
+            .totp_factors_mut()
+            .retain(|f| f.mfa_enrollment_id != enrollment_id);
+        user.mfa
+            .phone_factors_mut()
+            .retain(|f| f.mfa_enrollment_id != enrollment_id);
+        Ok(user.mfa.factor_count() != before)
+    }
+
+    /// Completes the second-factor step with a verified phone code for `enrollment_id`.
+    pub fn finalize_phone_mfa_sign_in(
+        &mut self,
+        uid: &LocalId,
+        pending: &PendingSignInId,
+        enrollment_id: &str,
+        now: LogicalInstant,
+    ) -> Result<SecondFactorAssertion, MfaError> {
+        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
+            return Err(MfaError::PendingSignInUnknown);
+        }
+        if !user
+            .mfa
+            .phone_factors()
+            .iter()
+            .any(|f| f.mfa_enrollment_id == enrollment_id)
+        {
+            return Err(MfaError::NoEnrolledFactor);
+        }
+        user.last_sign_in_at = Some(now);
+        Ok(SecondFactorAssertion {
+            sign_in_second_factor: "phone".to_owned(),
+            second_factor_identifier: enrollment_id.to_owned(),
+            verified_at: now,
+        })
     }
 
     /// Minimum password length enforced by Firebase.
@@ -517,6 +1110,12 @@ impl AuthStore {
         let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
         user.password = Some(PasswordDigest::new(salt, password));
         Ok(())
+    }
+
+    /// Whether `uid` has a password credential (`createAuthUri` sign-in methods).
+    #[must_use]
+    pub fn has_password(&self, uid: &LocalId) -> bool {
+        self.users.get(uid).is_some_and(|u| u.password.is_some())
     }
 
     /// Verifies an email + password sign-in; returns the user ID.
@@ -783,7 +1382,7 @@ impl AuthStore {
         if user.disabled {
             return Err(MfaError::UserDisabled);
         }
-        if user.mfa.totp_factors().is_empty() {
+        if user.mfa.is_empty() {
             return Err(MfaError::NoEnrolledFactor);
         }
         user.mfa
@@ -853,17 +1452,21 @@ impl AuthStore {
     ) -> Result<IdTokenClaims, AuthError> {
         let user = self.users.get(uid).ok_or(AuthError::UserNotFound)?;
         let iat = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-        let mut identities = BTreeMap::new();
+        let mut identities: BTreeMap<String, Vec<String>> = BTreeMap::new();
         if let Some(email) = &user.email {
             identities.insert("email".to_owned(), vec![email.clone()]);
         }
+        if let Some(phone) = &user.phone_number {
+            identities.insert("phone".to_owned(), vec![phone.clone()]);
+        }
+        for f in &user.federated {
+            identities
+                .entry(f.provider_id.clone())
+                .or_default()
+                .push(f.raw_id.clone());
+        }
         // INV-AUTH-002: a second factor claim only ever comes from an enrolled factor.
-        let second = second_factor.filter(|a| {
-            user.mfa
-                .totp_factors()
-                .iter()
-                .any(|f| f.mfa_enrollment_id == a.second_factor_identifier)
-        });
+        let second = second_factor.filter(|a| user.mfa.has_factor(&a.second_factor_identifier));
         Ok(IdTokenClaims {
             iss: format!("https://securetoken.google.com/{}", self.project_id),
             aud: self.project_id.clone(),
@@ -874,6 +1477,7 @@ impl AuthStore {
             exp: iat.saturating_add(ID_TOKEN_TTL_SECONDS),
             email: user.email.clone(),
             email_verified: user.email_verified,
+            phone_number: user.phone_number.clone(),
             firebase: FirebaseClaims {
                 identities,
                 sign_in_provider: user.provider.id().to_owned(),
@@ -909,5 +1513,94 @@ impl AuthStore {
     #[must_use]
     pub const fn id_token_ttl() -> LogicalDuration {
         LogicalDuration::from_seconds(ID_TOKEN_TTL_SECONDS)
+    }
+}
+
+/// The Auth stores of every project a daemon serves: the configured (default) project plus
+/// the projects created as sessions through the control API. Tokens name their project in
+/// `aud`, so a verifier picks the store by audience.
+#[derive(Debug)]
+pub struct AuthRegistry {
+    default_project: String,
+    default: Arc<Mutex<AuthStore>>,
+    others: Mutex<BTreeMap<String, Arc<Mutex<AuthStore>>>>,
+}
+
+impl AuthRegistry {
+    /// A registry around the default project's store.
+    #[must_use]
+    pub fn new(default_project: &str, default: Arc<Mutex<AuthStore>>) -> Self {
+        Self {
+            default_project: default_project.to_owned(),
+            default,
+            others: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// The default project.
+    #[must_use]
+    pub fn default_project(&self) -> &str {
+        &self.default_project
+    }
+
+    /// The default project's store.
+    #[must_use]
+    pub fn default_store(&self) -> Arc<Mutex<AuthStore>> {
+        self.default.clone()
+    }
+
+    /// The store of `project`, if it is the default or a registered session.
+    #[must_use]
+    pub fn store_for(&self, project: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        if project == self.default_project {
+            return Some(self.default.clone());
+        }
+        self.others.lock().ok()?.get(project).cloned()
+    }
+
+    /// Registers a project's store; `false` when the project already has one.
+    pub fn register(&self, project: &str, store: AuthStore) -> bool {
+        if project == self.default_project {
+            return false;
+        }
+        let Ok(mut others) = self.others.lock() else {
+            return false;
+        };
+        if others.contains_key(project) {
+            return false;
+        }
+        others.insert(project.to_owned(), Arc::new(Mutex::new(store)));
+        true
+    }
+
+    /// Removes a registered project; `false` when it was not registered.
+    pub fn remove(&self, project: &str) -> bool {
+        self.others
+            .lock()
+            .ok()
+            .is_some_and(|mut o| o.remove(project).is_some())
+    }
+
+    /// The first store (the default first, then the registered ones in name order) that
+    /// satisfies `pred`.
+    pub fn find(&self, pred: impl Fn(&AuthStore) -> bool) -> Option<Arc<Mutex<AuthStore>>> {
+        if self.default.lock().is_ok_and(|s| pred(&s)) {
+            return Some(self.default.clone());
+        }
+        let others = self.others.lock().ok()?;
+        others
+            .values()
+            .find(|s| s.lock().is_ok_and(|s| pred(&s)))
+            .cloned()
+    }
+
+    /// Every project with a store, the default first.
+    #[must_use]
+    pub fn projects(&self) -> Vec<String> {
+        let mut out = vec![self.default_project.clone()];
+        if let Ok(others) = self.others.lock() {
+            out.extend(others.keys().cloned());
+        }
+        out
     }
 }

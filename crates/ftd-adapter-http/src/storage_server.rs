@@ -249,7 +249,7 @@ async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
     req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<Full<Bytes>>, std::io::Error> {
     let origin = req
         .headers()
         .get("origin")
@@ -324,6 +324,14 @@ async fn respond(
                 String::new()
             }
         );
+    }
+    if response
+        .headers
+        .iter()
+        .any(|(k, _)| k == crate::storage::DROP_CONNECTION_HEADER)
+    {
+        // A `dropConnection` fault: the connection closes without a response.
+        return Err(std::io::Error::other("fault plan: connection dropped"));
     }
     let mut builder = cors(
         Response::builder().status(

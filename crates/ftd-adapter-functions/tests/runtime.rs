@@ -7,7 +7,7 @@ use std::time::Duration;
 use ftd_adapter_functions::events::{firestore_event, storage_event};
 use ftd_adapter_functions::http::parse_response;
 use ftd_adapter_functions::manifest_json::{manifest_to_json, parse_manifest};
-use ftd_adapter_functions::runner::Runner;
+use ftd_adapter_functions::runner::{Runner, SpawnSpec};
 use ftd_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
 use ftd_adapter_grpc::local::CommitEvent;
 use ftd_core_firestore::path::DocumentPath;
@@ -42,6 +42,7 @@ fn doc(path: &str, v: i64) -> Document {
 
 fn commit(changes: Vec<DocumentChange>) -> CommitEvent {
     CommitEvent {
+        actor: ftd_adapter_grpc::local::Actor::system(),
         project: "demo-app".into(),
         database: "(default)".into(),
         version: 1,
@@ -51,15 +52,27 @@ fn commit(changes: Vec<DocumentChange>) -> CommitEvent {
 }
 
 async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with(ftd_adapter_functions::runtime::OverlapPolicy::Allow).await
+}
+
+async fn start_with(
+    overlap: ftd_adapter_functions::runtime::OverlapPolicy,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with_policies(overlap, ftd_adapter_functions::runtime::CatchUpPolicy::All).await
+}
+
+async fn start_with_policies(
+    overlap: ftd_adapter_functions::runtime::OverlapPolicy,
+    catch_up: ftd_adapter_functions::runtime::CatchUpPolicy,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
-    let runner = Runner::spawn(
-        &["python3".to_owned(), script.to_owned()],
-        None,
-        &[],
-        Duration::from_secs(20),
-    )
-    .await
-    .unwrap();
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::new(
@@ -73,9 +86,12 @@ async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
             retry_attempts: 4,
             max_catch_up_runs: 1000,
             runner_secret: "s".into(),
+            overlap,
+            catch_up,
         },
         clock.clone(),
         Arc::new(runner),
+        Some(spec),
     );
     tokio::spawn(runtime.clone().dispatch_loop());
     (runtime, clock)
@@ -183,12 +199,30 @@ async fn reset_discards_in_flight_work() {
         before: Some(doc("items/b", 0)),
         after: Some(doc("items/b", 1)),
     }]));
-    // `fail` (written) will be retry-waiting; a reset drops it.
+    // `fail` (written) will be retry-waiting; a reset drops it, kills the runner and
+    // restarts it, after which dispatch resumes.
     let _ = runtime.await_idle(Duration::from_millis(500)).await;
     assert!(!runtime.is_idle());
     runtime.reset();
     assert!(runtime.is_idle());
     assert_eq!(runtime.status()["epoch"], 1);
+    for _ in 0..100 {
+        if runtime.runner_alive() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(runtime.runner_alive(), "the runner was restarted");
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/c", 1).path,
+        before: None,
+        after: Some(doc("items/c", 1)),
+    }]));
+    let _ = runtime.await_idle(Duration::from_secs(5)).await;
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "ok" && r.outcome == "ok" && r.event_id > 1));
     runtime.runner().shutdown().await;
 }
 
@@ -209,7 +243,7 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
     for bad in [
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "nope", "document": "a/{b}"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "a"}}]}),
-        json!({"functions": [{"name": "x", "trigger": {"type": "schedule", "schedule": "* * * * *", "timeZone": "America/New_York"}}]}),
+        json!({"functions": [{"name": "x", "trigger": {"type": "schedule", "schedule": "* * * * *", "timeZone": "Mars/Olympus"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "pubsub"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "http"}}, {"name": "x", "trigger": {"type": "http"}}]}),
         json!({"nope": 1}),
@@ -232,6 +266,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
         Some(&before),
         Some(&after),
         START,
+        None,
     );
     assert_eq!(e["type"], "google.cloud.firestore.document.v1.updated");
     assert_eq!(
@@ -255,6 +290,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
         None,
         Some(&after),
         START,
+        None,
     );
     assert!(created["data"].get("oldValue").is_none());
     assert!(created["data"].get("updateMask").is_none());
@@ -304,4 +340,491 @@ fn http_responses_are_parsed_with_every_body_framing() {
     assert_eq!(parse_response(closed, "GET").unwrap().body, b"whole body");
     assert!(parse_response(b"garbage", "GET").is_err());
     assert!(parse_response(b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nshort", "GET").is_err());
+}
+
+#[test]
+fn iana_zones_follow_daylight_saving_time() {
+    use ftd_adapter_functions::zone::resolve;
+    use ftd_core_functions::cron::Schedule;
+    let t = |s: &str| LogicalInstant::parse_rfc3339(s).unwrap();
+    let ny = resolve(Some("America/New_York")).unwrap();
+    let nine = Schedule::parse("0 9 * * *").unwrap();
+    // EST (UTC-5) in January, EDT (UTC-4) in July.
+    assert_eq!(
+        nine.next_after_in(t("2026-01-10T00:00:00Z"), &*ny).unwrap(),
+        t("2026-01-10T14:00:00Z")
+    );
+    assert_eq!(
+        nine.next_after_in(t("2026-07-10T00:00:00Z"), &*ny).unwrap(),
+        t("2026-07-10T13:00:00Z")
+    );
+    // 2026-03-08: clocks jump from 02:00 to 03:00; a 02:30 schedule has no run that day.
+    let half_past_two = Schedule::parse("30 2 * * *").unwrap();
+    assert_eq!(
+        half_past_two
+            .next_after_in(t("2026-03-08T00:00:00Z"), &*ny)
+            .unwrap(),
+        t("2026-03-09T06:30:00Z"),
+        "the gap day is skipped; 02:30 EDT on the 9th is 06:30Z"
+    );
+    // 2026-11-01: 01:30 happens twice; the schedule runs once, at the first occurrence.
+    let half_past_one = Schedule::parse("30 1 * * *").unwrap();
+    let runs = half_past_one.runs_between_in(
+        t("2026-11-01T00:00:00Z"),
+        t("2026-11-02T00:00:00Z"),
+        &*ny,
+        10,
+    );
+    assert_eq!(runs, vec![t("2026-11-01T05:30:00Z")]);
+    // Fixed-offset aliases and unknown zones.
+    assert!(resolve(Some("Asia/Tokyo")).is_ok());
+    assert!(resolve(Some("Mars/Olympus")).is_err());
+    assert!(!ftd_adapter_functions::zone::database_version().is_empty());
+}
+
+#[tokio::test]
+async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
+    use ftd_adapter_functions::runtime::OverlapPolicy;
+    // reject: a second due run while the first is queued is a counted dead letter.
+    let (runtime, _clock) = start_with(OverlapPolicy::Reject).await;
+    runtime.run_schedule("tick").unwrap();
+    let second = runtime.run_schedule("tick");
+    assert!(second.is_err(), "{second:?}");
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert_eq!(runtime.status()["overlapRejected"], 1);
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|r| r.function == "tick" && r.outcome == "rejected: overlap"));
+    runtime.runner().shutdown().await;
+    // skip: the second run is dropped and recorded.
+    let (runtime, _clock) = start_with(OverlapPolicy::Skip).await;
+    runtime.run_schedule("tick").unwrap();
+    assert!(runtime.run_schedule("tick").is_err());
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "tick" && r.outcome == "skipped: overlap"));
+    assert_eq!(runtime.status()["overlapRejected"], 0);
+    runtime.runner().shutdown().await;
+    // queue: both runs happen, one after the other.
+    let (runtime, _clock) = start_with(OverlapPolicy::Queue).await;
+    runtime.run_schedule("tick").unwrap();
+    runtime.run_schedule("tick").unwrap();
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count(),
+        2
+    );
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn pubsub_messages_and_auth_user_events_reach_their_functions() {
+    use ftd_core_auth::mfa::TotpPolicy;
+    use ftd_core_auth::store::{AuthStore, NewUser};
+    use ftd_core_types::determinism::SplitMix64;
+    let (runtime, _clock) = start().await;
+    // Two messages on a subscribed topic, one on a topic nobody listens to.
+    let ids = runtime.publish(
+        "jobs",
+        &[
+            serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}}),
+            serde_json::json!({"data": "d29ybGQ=", "orderingKey": "o1"}),
+        ],
+    );
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+    let silent = runtime.publish("nobody", &[serde_json::json!({"data": ""})]);
+    assert_eq!(silent.len(), 1, "message ids are assigned regardless");
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    let on_job = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "onJob" && r.outcome == "ok")
+        .count();
+    assert_eq!(on_job, 2);
+    // A user created and deleted in the Auth store.
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("u@example.com"), START)
+        .unwrap();
+    let mut events = store.take_user_events();
+    assert_eq!(events.len(), 1);
+    store.delete_user_by_id(uid.as_str()).unwrap();
+    events.extend(store.take_user_events());
+    assert_eq!(events.len(), 2);
+    assert!(store.take_user_events().is_empty(), "drained once");
+    for e in &events {
+        runtime.on_user_event(e);
+    }
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    let names: Vec<String> = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function.starts_with("on") && r.function != "onJob")
+        .map(|r| r.function.clone())
+        .collect();
+    assert_eq!(names, vec!["onUser".to_owned(), "onGone".to_owned()]);
+}
+
+#[test]
+fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
+    use ftd_adapter_functions::events::{auth_event, firestore_event, pubsub_event};
+    use ftd_core_auth::mfa::TotpPolicy;
+    use ftd_core_auth::store::{AuthStore, NewUser};
+    use ftd_core_functions::manifest::{AuthEvent, DocumentEvent};
+    use ftd_core_types::determinism::SplitMix64;
+    let msg = serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}, "orderingKey": "o"});
+    let e = pubsub_event("m1", "demo-app", "jobs", &msg, START);
+    assert_eq!(e["type"], "google.cloud.pubsub.topic.v1.messagePublished");
+    assert_eq!(
+        e["source"],
+        "//pubsub.googleapis.com/projects/demo-app/topics/jobs"
+    );
+    assert_eq!(e["data"]["message"]["messageId"], "m1");
+    assert_eq!(e["data"]["message"]["data"], "aGVsbG8=");
+    assert_eq!(e["data"]["message"]["attributes"]["k"], "v");
+    assert_eq!(e["data"]["message"]["orderingKey"], "o");
+    assert!(e["data"]["subscription"]
+        .as_str()
+        .unwrap()
+        .starts_with("projects/demo-app/subscriptions/"));
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("u@example.com"), START)
+        .unwrap();
+    let user = store.user(&uid).unwrap().clone();
+    let e = auth_event("a1", "demo-app", AuthEvent::Created, &user, START);
+    assert_eq!(e["type"], "google.firebase.auth.user.v1.created");
+    assert_eq!(e["data"]["uid"], uid.as_str());
+    assert_eq!(e["data"]["email"], "u@example.com");
+    assert_eq!(e["data"]["emailVerified"], false);
+    assert_eq!(e["data"]["providerData"][0]["providerId"], "password");
+    assert!(e["data"]["metadata"]["creationTime"].is_string());
+    // withAuthContext: the type gains the suffix and the principal travels as attributes.
+    let d = doc("audited/x", 1);
+    let plain = firestore_event(
+        "f1",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "audited/x",
+        DocumentEvent::Created,
+        None,
+        Some(&d),
+        START,
+        None,
+    );
+    assert_eq!(plain["type"], "google.cloud.firestore.document.v1.created");
+    assert!(plain.get("authtype").is_none());
+    let with = firestore_event(
+        "f2",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "audited/x",
+        DocumentEvent::Created,
+        None,
+        Some(&d),
+        START,
+        Some(("app_user", Some("u1"))),
+    );
+    assert_eq!(
+        with["type"],
+        "google.cloud.firestore.document.v1.created.withAuthContext"
+    );
+    assert_eq!(with["authtype"], "app_user");
+    assert_eq!(with["authid"], "u1");
+}
+
+#[tokio::test]
+async fn with_auth_context_triggers_see_the_committing_principal() {
+    let (runtime, _clock) = start().await;
+    let mut ev = commit(vec![DocumentChange {
+        path: doc("audited/a", 1).path,
+        before: None,
+        after: Some(doc("audited/a", 1)),
+    }]);
+    ev.actor = ftd_adapter_grpc::local::Actor {
+        auth_type: "app_user".into(),
+        auth_id: Some("alice".into()),
+    };
+    runtime.on_commit(&ev);
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "withAuth" && r.outcome == "ok"));
+}
+
+#[tokio::test]
+async fn catch_up_policies_keep_all_the_latest_or_no_due_runs() {
+    use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for (policy, expected_runs, expected_skips) in [
+        (CatchUpPolicy::All, 3, 0),
+        (CatchUpPolicy::Latest, 1, 2),
+        (CatchUpPolicy::None, 0, 3),
+    ] {
+        let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(15 * 60))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+        let history = runtime.history();
+        let runs = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count();
+        let skips = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
+            .count();
+        assert_eq!((runs, skips), (expected_runs, expected_skips), "{policy:?}");
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
+    use ftd_core_auth::mfa::TotpPolicy;
+    use ftd_core_auth::store::{AuthStore, NewUser};
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use ftd_core_types::determinism::SplitMix64;
+    let (runtime, clock) = start().await;
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    let rule = |operation: &str, function: &str, nth: Option<u64>, action| FaultRule {
+        matches: FaultMatch {
+            operation: operation.into(),
+            nth,
+            function: Some(function.into()),
+            event_type: None,
+        },
+        action,
+    };
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![
+            // Deliveries to `onJob` are duplicated twice: three invocations per message.
+            rule(
+                "functions.deliver",
+                "onJob",
+                None,
+                FaultAction::Duplicate { count: 2 },
+            ),
+            // `withAuth` invocations are dead-lettered without calling the runner.
+            rule(
+                "functions.invoke",
+                "withAuth",
+                None,
+                FaultAction::DeadLetter,
+            ),
+            // `onUser` invocations are held for an hour of virtual time.
+            rule(
+                "functions.invoke",
+                "onUser",
+                None,
+                FaultAction::Delay { seconds: 3600 },
+            ),
+            // `onGone` crashes the runner (restarted, the event redelivered).
+            rule(
+                "functions.invoke",
+                "onGone",
+                Some(1),
+                FaultAction::CrashRunner,
+            ),
+        ],
+    });
+    runtime.set_faults(faults);
+    runtime.publish("jobs", &[serde_json::json!({"data": ""})]);
+    assert!(
+        runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    let on_job = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "onJob" && r.outcome == "ok")
+        .count();
+    assert_eq!(on_job, 3, "duplicate x2");
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("audited/c", 1).path,
+        before: None,
+        after: Some(doc("audited/c", 1)),
+    }]));
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|d| d.function == "withAuth" && d.outcome.contains("dead letter")));
+    assert!(!runtime
+        .runner()
+        .logs()
+        .iter()
+        .any(|l| l.contains("invoked withAuth")));
+    // Delayed: not idle until the clock passes the hold.
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("d@example.com"), START)
+        .unwrap();
+    for e in store.take_user_events() {
+        runtime.on_user_event(&e);
+    }
+    assert!(
+        runtime
+            .await_idle(Duration::from_millis(500))
+            .await
+            .is_err(),
+        "held by the delay"
+    );
+    assert!(!runtime.history().iter().any(|r| r.function == "onUser"));
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(3600))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "onUser" && r.outcome == "ok"));
+    // Crash: the runner dies on the attempt, a fresh one takes over and the event succeeds.
+    store.delete_user_by_id(uid.as_str()).unwrap();
+    for e in store.take_user_events() {
+        runtime.on_user_event(&e);
+    }
+    assert!(runtime.await_idle(Duration::from_secs(20)).await.is_ok());
+    let on_gone: Vec<String> = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "onGone")
+        .map(|r| r.outcome.clone())
+        .collect();
+    assert!(
+        on_gone.iter().any(|o| o.starts_with("runner gone")),
+        "{on_gone:?}"
+    );
+    assert!(on_gone.iter().any(|o| o == "ok"), "{on_gone:?}");
+    assert!(runtime.runner_alive());
+}
+
+#[tokio::test]
+async fn catch_up_latest_and_none_stay_idle_beyond_the_cap() {
+    use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for (policy, expected_runs) in [(CatchUpPolicy::Latest, 1), (CatchUpPolicy::None, 0)] {
+        let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
+        // A day: 288 "every 5 minutes" runs, far beyond a small cap of the test config
+        // (1000) only in principle; use a week to exceed it: 2016 runs.
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(7 * 24 * 3600))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert!(
+            runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
+            "{policy:?}: {}",
+            runtime.status()
+        );
+        let history = runtime.history();
+        let runs = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count();
+        assert_eq!(runs, expected_runs, "{policy:?}");
+        let skipped = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
+            .count();
+        assert!(skipped >= 1000, "{policy:?}: {skipped}");
+        assert!(
+            history
+                .iter()
+                .any(|r| r.function == "tick" && r.outcome.contains("more)")),
+            "{policy:?}"
+        );
+        assert_eq!(runtime.status()["catchUpPending"], false);
+    }
+}
+
+#[tokio::test]
+async fn scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    let (runtime, clock) = start().await;
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    let rule = |operation: &str, nth: Option<u64>, event_type: Option<&str>, action| FaultRule {
+        matches: FaultMatch {
+            operation: operation.into(),
+            nth,
+            function: Some("tick".into()),
+            event_type: event_type.map(str::to_owned),
+        },
+        action,
+    };
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![
+            // Scheduled deliveries are duplicated once: two invocations per run.
+            rule(
+                "functions.deliver",
+                None,
+                Some("google.cloud.scheduler.job.v1.executed"),
+                FaultAction::Duplicate { count: 1 },
+            ),
+            // The first invocation is held for a minute, then dead-lettered (both actions
+            // of the rule set apply, in that order).
+            rule(
+                "functions.invoke",
+                Some(1),
+                None,
+                FaultAction::Delay { seconds: 60 },
+            ),
+            rule("functions.invoke", Some(1), None, FaultAction::DeadLetter),
+        ],
+    });
+    runtime.set_faults(faults);
+    runtime.run_schedule("tick").unwrap();
+    assert!(
+        runtime
+            .await_idle(Duration::from_millis(500))
+            .await
+            .is_err(),
+        "held by the delay"
+    );
+    assert!(runtime.dead_letters().iter().all(|d| d.function != "tick"));
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(
+        runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|d| d.function == "tick" && d.outcome.contains("dead letter")));
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count(),
+        1,
+        "the duplicate ran: {:?}",
+        runtime.history()
+    );
 }

@@ -174,7 +174,7 @@ fn decode_chunked(mut rest: &[u8]) -> Result<Vec<u8>, String> {
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<Full<Bytes>>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
     // Like the other ports: a page on another site must not drive this loopback runtime.
@@ -240,6 +240,8 @@ async fn respond(
                 .body(Full::new(Bytes::from(r.body)))
                 .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
         }
+        // A `dropConnection` fault: the connection closes without a response.
+        Err(e) if e == crate::runtime::DROP_CONNECTION => Err(std::io::Error::other(e)),
         Err(e) => Ok(simple(StatusCode::BAD_GATEWAY, &e)),
     }
 }

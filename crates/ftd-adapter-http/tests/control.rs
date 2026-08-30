@@ -9,7 +9,7 @@ use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::edition::FirestoreEdition;
 use ftd_core_types::time::LogicalInstant;
-use serde_json::json;
+use serde_json::{json, Value};
 
 fn state(counter: Arc<AtomicUsize>) -> ControlState {
     ControlState {
@@ -26,6 +26,22 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         })],
         functions: None,
         control_token: "test-token".to_owned(),
+        barrier: None,
+        snapshot_hooks: Vec::new(),
+        snapshots: Mutex::new(std::collections::BTreeMap::new()),
+        faults: Some(Arc::new(ftd_core_session::fault::FaultRegistry::new())),
+        text_indexes: Arc::new(Mutex::new(
+            ftd_core_firestore::text_index::TextIndexCatalog::default(),
+        )),
+        default_project: "demo-app".to_owned(),
+        tenancy: Arc::new(RwLock::new(ftd_core_session::tenancy::Tenancy::new(
+            "demo-app",
+        ))),
+        sessions: Mutex::new(std::collections::BTreeMap::from([(
+            "default".to_owned(),
+            "demo-app".to_owned(),
+        )])),
+        project_hooks: None,
     }
 }
 
@@ -134,4 +150,686 @@ fn browser_requests_need_the_control_token_on_privileged_routes() {
         handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
         200
     );
+}
+
+/// A hook whose state is a string; restore reports what it was given.
+struct Slot(Mutex<String>);
+
+impl ftd_adapter_http::control::SnapshotHook for Slot {
+    fn name(&self) -> &'static str {
+        "slot"
+    }
+    fn capture(
+        &self,
+        _: &ftd_core_session::tenancy::Scope,
+    ) -> ftd_adapter_http::control::SnapshotPart {
+        Arc::new(self.0.lock().unwrap().clone())
+    }
+    fn restore(
+        &self,
+        _: &ftd_core_session::tenancy::Scope,
+        part: &ftd_adapter_http::control::SnapshotPart,
+    ) -> Result<(), String> {
+        let value = part.downcast_ref::<String>().ok_or("not a string")?;
+        self.0.lock().unwrap().clone_from(value);
+        Ok(())
+    }
+}
+
+#[test]
+fn snapshots_capture_every_part_and_restore_them_atomically() {
+    let slot = Arc::new(Slot(Mutex::new("one".to_owned())));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.snapshot_hooks = vec![slot.clone()];
+    let bad = handle(&s, "POST", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(bad.status, 400);
+    let bad = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "no spaces here"}),
+    );
+    assert_eq!(bad.status, 400);
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "base"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["parts"], json!(["slot"]));
+    assert_eq!(r.body["replaced"], false);
+    *slot.0.lock().unwrap() = "two".to_owned();
+    let list = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(list.body["snapshots"][0]["name"], "base");
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots/base:restore",
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(*slot.0.lock().unwrap(), "one");
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/nothing:restore",
+            &json!({})
+        )
+        .status,
+        404
+    );
+    // Overwriting keeps one entry; deleting removes it.
+    *slot.0.lock().unwrap() = "three".to_owned();
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "base"}),
+    );
+    assert_eq!(r.body["replaced"], true);
+    assert_eq!(
+        handle(
+            &s,
+            "DELETE",
+            "/v1/sessions/default/snapshots/base",
+            &json!({})
+        )
+        .status,
+        200
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "DELETE",
+            "/v1/sessions/default/snapshots/base",
+            &json!({})
+        )
+        .status,
+        404
+    );
+    assert!(
+        handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({})).body["snapshots"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn fault_plans_are_validated_installed_reported_and_removed() {
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    for bad in [
+        json!({}),
+        json!({"rules": [{"match": {"operation": "firestore.nothing"}, "action": {"type": "timeout"}}]}),
+        json!({"rules": [{"match": {"operation": "firestore.commit", "nth": 0}, "action": {"type": "timeout"}}]}),
+        json!({"rules": [{"match": {"operation": "firestore.commit"}, "action": {"type": "returnError"}}]}),
+        json!({"rules": [{"match": {"operation": "functions.invoke"}, "action": {"type": "explode"}}]}),
+        json!({"rules": [{"match": {"operation": "functions.deliver"}, "action": {"type": "duplicate", "count": 1000}}]}),
+    ] {
+        let r = handle(&s, "PUT", "/v1/sessions/default/faultPlan", &bad);
+        assert_eq!(r.status, 400, "{bad}");
+    }
+    let plan = json!({"seed": 7, "rules": [
+        {"match": {"operation": "firestore.commit", "nth": 3}, "action": {"type": "returnError", "code": "ABORTED"}},
+        {"match": {"operation": "functions.invoke", "function": "flaky"}, "action": {"type": "crashRunner"}},
+        {"match": {"operation": "functions.deliver", "eventType": "google.cloud.storage.object.v1.finalized"}, "action": {"type": "duplicate", "count": 2}}
+    ]});
+    let r = handle(&s, "PUT", "/v1/sessions/default/faultPlan", &plan);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["rules"], 3);
+    // Something fires: the adapters would call decide; here through the shared state.
+    s.faults
+        .as_ref()
+        .unwrap()
+        .for_project("demo-app")
+        .lock()
+        .unwrap()
+        .decide("firestore.commit", None, None);
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.body["plan"]["seed"], 7);
+    assert_eq!(r.body["plan"]["rules"][0]["match"]["nth"], 3);
+    assert_eq!(r.body["plan"]["rules"][2]["action"]["count"], 2);
+    assert_eq!(r.body["counters"]["firestore.commit"], 1);
+    assert!(r.body["fired"].as_array().unwrap().is_empty());
+    let r = handle(&s, "DELETE", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(r.status, 200);
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert!(r.body["plan"].is_null());
+}
+
+struct FakeFunctions(Mutex<Vec<(String, Vec<Value>)>>);
+
+impl ftd_adapter_http::control::FunctionsHook for FakeFunctions {
+    fn on_clock_changed(&self) {}
+    fn run_schedule(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn is_idle(&self) -> bool {
+        true
+    }
+    fn idle_notify(&self) -> Arc<tokio::sync::Notify> {
+        Arc::new(tokio::sync::Notify::new())
+    }
+    fn status(&self) -> Value {
+        json!({})
+    }
+    fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((topic.to_owned(), messages.to_vec()));
+        Ok(messages.iter().map(|_| "m".to_owned()).collect())
+    }
+    fn project(&self) -> String {
+        "demo-app".to_owned()
+    }
+}
+
+#[test]
+fn pubsub_publish_routes_check_the_project_and_the_message_shape() {
+    let published = Arc::new(FakeFunctions(Mutex::new(Vec::new())));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.functions = Some(published.clone());
+    let ok =
+        json!({"messages": [{"data": "aGVsbG8=", "attributes": {"k": "v"}, "orderingKey": "k1"}]});
+    assert_eq!(
+        handle(&s, "POST", "/v1/projects/demo-app/topics/jobs:publish", &ok).status,
+        200
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/projects/other-app/topics/jobs:publish",
+            &ok
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/pubsub/topics/jobs:publish",
+            &ok
+        )
+        .status,
+        200
+    );
+    for bad in [
+        json!({"messages": [{"data": "not base64!"}]}),
+        json!({"messages": [{"data": "aGVsbG8=", "orderingKey": 5}]}),
+        json!({"messages": [{"data": "aGVsbG8=", "attributes": {"k": 1}}]}),
+        json!({"messages": "x"}),
+    ] {
+        assert_eq!(
+            handle(
+                &s,
+                "POST",
+                "/v1/projects/demo-app/topics/jobs:publish",
+                &bad
+            )
+            .status,
+            400,
+            "{bad}"
+        );
+    }
+    // A `json` value is encoded for the function.
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/projects/demo-app/topics/jobs:publish",
+        &json!({"messages": [{"json": {"a": 1}}]}),
+    );
+    assert_eq!(r.status, 200);
+    let calls = published.0.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[2].1[0]["data"], "eyJhIjoxfQ==");
+}
+
+#[test]
+fn text_index_definitions_are_loaded_listed_and_lifecycle_actions_are_unimplemented() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    let entry = |id: &str, field: &str, language: &str| {
+        json!({
+            "index": {
+                "name": format!("projects/demo-app/databases/(default)/collectionGroups/products/indexes/{id}"),
+                "queryScope": "COLLECTION",
+                "apiScope": "ANY_API",
+                "fields": [{"fieldPath": field, "searchConfig": {"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}],
+                "searchIndexOptions": {"textLanguage": language, "textLanguageOverrideFieldPath": "language"}
+            },
+            "xFirebaseTestd": {"state": "READY", "buildPolicy": "validation-only"}
+        })
+    };
+    let base = "/v1/sessions/default/firestore/text-indexes";
+    // Standard edition: refused.
+    let r = handle(
+        &s,
+        "POST",
+        &format!("{base}:load"),
+        &json!({"indexes": [entry("t1", "title", "ja")]}),
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    s.edition = FirestoreEdition::Enterprise;
+    // A bad entry rejects the whole file; nothing is kept.
+    let r = handle(
+        &s,
+        "POST",
+        &format!("{base}:load"),
+        &json!({"indexes": [entry("t1", "title", "ja"), entry("t2", "title", "japanese")]}),
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(r.body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("indexes[1]"));
+    assert!(handle(&s, "GET", base, &json!({})).body["indexes"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let r = handle(
+        &s,
+        "POST",
+        &format!("{base}:load"),
+        &json!({"indexes": [entry("t1", "title", "ja"), entry("t2", "body", "en-US")]}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["total"], 2);
+    // One more through POST; a duplicate id and a duplicate shape.
+    let r = handle(&s, "POST", base, &entry("t1", "other", "ja"));
+    assert_eq!(r.status, 400);
+    let r = handle(&s, "POST", base, &entry("t3", "title", "ja"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        r.body["warnings"],
+        json!(["FS_TEXT_DUPLICATE_INDEX_DEFINITION"])
+    );
+    // Unsupported options are refused rather than ignored; unknown local keys too.
+    let mut unique = entry("t4", "title", "ja");
+    unique["index"]["unique"] = json!(true);
+    assert_eq!(handle(&s, "POST", base, &unique).status, 400);
+    let mut local = entry("t5", "title", "ja");
+    local["xFirebaseTestd"]["shards"] = json!(3);
+    assert_eq!(handle(&s, "POST", base, &local).status, 400);
+    let one = handle(&s, "GET", &format!("{base}/t2"), &json!({}));
+    assert_eq!(one.status, 200);
+    assert_eq!(one.body["textLanguage"], "en-US");
+    assert_eq!(one.body["languageOverride"]["field"], "language");
+    assert_eq!(one.body["fidelity"], "strict-validation-only");
+    for action in ["advanceBackfill", "completeBackfill", "failBuild", "repair"] {
+        let r = handle(&s, "POST", &format!("{base}/t2:{action}"), &json!({}));
+        assert_eq!(r.status, 501, "{action}");
+    }
+    assert_eq!(
+        handle(&s, "GET", &format!("{base}/t2"), &json!({})).body["state"],
+        "READY"
+    );
+    assert_eq!(
+        handle(&s, "DELETE", &format!("{base}/t2"), &json!({})).status,
+        200
+    );
+    assert_eq!(
+        handle(&s, "GET", &format!("{base}/t2"), &json!({})).status,
+        404
+    );
+    assert_eq!(
+        handle(&s, "GET", base, &json!({})).body["indexes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+/// A part only the default session carries.
+struct SharedSlot;
+
+impl ftd_adapter_http::control::SnapshotHook for SharedSlot {
+    fn name(&self) -> &'static str {
+        "shared"
+    }
+    fn shared(&self) -> bool {
+        true
+    }
+    fn capture(
+        &self,
+        _: &ftd_core_session::tenancy::Scope,
+    ) -> ftd_adapter_http::control::SnapshotPart {
+        Arc::new(())
+    }
+    fn restore(
+        &self,
+        _: &ftd_core_session::tenancy::Scope,
+        _: &ftd_adapter_http::control::SnapshotPart,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct ProjectLog(Mutex<Vec<String>>);
+
+impl ftd_adapter_http::control::ProjectHooks for ProjectLog {
+    fn create(&self, project: &str) -> Result<(), String> {
+        self.0.lock().unwrap().push(format!("create {project}"));
+        Ok(())
+    }
+    fn reset_scope(&self, scope: &ftd_core_session::tenancy::Scope) {
+        let what = scope.project().map_or("default".to_owned(), str::to_owned);
+        self.0.lock().unwrap().push(format!("reset {what}"));
+    }
+    fn remove(&self, project: &str) {
+        self.0.lock().unwrap().push(format!("remove {project}"));
+    }
+}
+
+#[test]
+fn sessions_are_created_listed_reset_and_deleted_per_project() {
+    let log = Arc::new(ProjectLog(Mutex::new(Vec::new())));
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut s = state(counter.clone());
+    s.project_hooks = Some(log.clone());
+    // Validation: project shape, demo- prefix, duplicates.
+    for bad in [
+        json!({}),
+        json!({"project": "Bad_Project"}),
+        json!({"project": "other-app"}),
+    ] {
+        assert_eq!(
+            handle(&s, "POST", "/v1/sessions", &bad).status,
+            400,
+            "{bad}"
+        );
+    }
+    let r = handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["name"], "demo-b");
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        409
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions",
+            &json!({"name": "second", "project": "demo-b"})
+        )
+        .status,
+        409
+    );
+    let list = handle(&s, "GET", "/v1/sessions", &json!({}));
+    assert_eq!(
+        list.body["sessions"],
+        json!([{"name": "default", "project": "demo-app", "buckets": []}, {"name": "demo-b", "project": "demo-b", "buckets": []}])
+    );
+    let info = handle(&s, "GET", "/v1/sessions/demo-b", &json!({}));
+    assert_eq!(info.status, 200, "{}", info.body);
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/nothing", &json!({})).status,
+        404
+    );
+    // Reset of the extra session wipes only its project; the default reset runs the hooks.
+    let r = handle(&s, "POST", "/v1/sessions/demo-b/reset", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["scope"], "project");
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
+        200
+    );
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        handle(&s, "DELETE", "/v1/sessions/default", &json!({})).status,
+        400
+    );
+    assert_eq!(
+        handle(&s, "DELETE", "/v1/sessions/demo-b", &json!({})).status,
+        200
+    );
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/demo-b", &json!({})).status,
+        404
+    );
+    assert_eq!(
+        *log.0.lock().unwrap(),
+        vec![
+            "create demo-b",
+            "reset demo-b",
+            "reset demo-b",
+            "reset default",
+            "remove demo-b"
+        ]
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn sessions_scope_resets_snapshots_fault_plans_and_text_indexes_per_project() {
+    let log = Arc::new(ProjectLog(Mutex::new(Vec::new())));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.project_hooks = Some(log.clone());
+    s.edition = FirestoreEdition::Enterprise;
+    let slot = Arc::new(Slot(Mutex::new("owned".to_owned())));
+    s.snapshot_hooks = vec![slot.clone(), Arc::new(SharedSlot)];
+    // Buckets and API keys are registered with the session; conflicts are refused.
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions",
+        &json!({"project": "demo-b", "buckets": ["shared-b"], "apiKeys": ["key-b"]}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["buckets"], json!(["shared-b"]));
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions",
+            &json!({"project": "demo-c", "buckets": ["shared-b"]})
+        )
+        .status,
+        409
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions",
+            &json!({"project": "demo-c", "apiKeys": ["key-b"]})
+        )
+        .status,
+        409
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions",
+            &json!({"project": "demo-c", "buckets": ["Bad Bucket"]})
+        )
+        .status,
+        400
+    );
+    assert!(s.tenancy.read().unwrap().is_registered("demo-b"));
+    // Creation wipes what the default session held under the project; the default reset
+    // wipes everything except the registered projects.
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
+        200
+    );
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions/demo-b/reset", &json!({})).status,
+        200
+    );
+    assert_eq!(
+        log.0.lock().unwrap().as_slice(),
+        [
+            "create demo-b",
+            "reset demo-b",
+            "reset default",
+            "reset demo-b"
+        ]
+    );
+    // Fault plans: one state per session; B's counters are not A's.
+    let plan = json!({"rules": [{"match": {"operation": "firestore.commit", "nth": 1}, "action": {"type": "timeout"}}]});
+    assert_eq!(
+        handle(&s, "PUT", "/v1/sessions/demo-b/faultPlan", &plan).status,
+        200
+    );
+    let registry = s.faults.as_ref().unwrap();
+    assert!(registry
+        .for_project("demo-app")
+        .lock()
+        .unwrap()
+        .decide("firestore.commit", None, None)
+        .is_empty());
+    assert_eq!(
+        registry
+            .for_project("demo-b")
+            .lock()
+            .unwrap()
+            .decide("firestore.commit", None, None)
+            .len(),
+        1
+    );
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert!(r.body["plan"].is_null(), "{}", r.body);
+    let r = handle(&s, "GET", "/v1/sessions/demo-b/faultPlan", &json!({}));
+    assert_eq!(r.body["fired"][0]["operation"], "firestore.commit");
+    // A rule naming only an event type is a delivery rule; an action that does not apply
+    // to its operation is refused.
+    let r = handle(
+        &s,
+        "PUT",
+        "/v1/sessions/default/faultPlan",
+        &json!({"rules": [{"match": {"eventType": "google.cloud.firestore.document.v1.created"}, "action": {"type": "duplicate", "count": 1}}]}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
+    assert_eq!(
+        r.body["plan"]["rules"][0]["match"]["operation"],
+        "functions.deliver"
+    );
+    let r = handle(
+        &s,
+        "PUT",
+        "/v1/sessions/default/faultPlan",
+        &json!({"rules": [{"match": {"operation": "firestore.read"}, "action": {"type": "crashRunner"}}]}),
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    // Snapshots belong to their session; a project session skips the shared parts.
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/demo-b/snapshots",
+        &json!({"name": "b1"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["parts"], json!(["slot"]));
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({})).body["snapshots"],
+        json!([])
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/b1:restore",
+            &json!({})
+        )
+        .status,
+        404
+    );
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "a1"}),
+    );
+    assert_eq!(r.body["parts"], json!(["slot", "shared"]));
+    // Text indexes: a session defines only its own projects' and lists only those.
+    let base = "/v1/sessions/demo-b/firestore/text-indexes";
+    let def = |project: &str| {
+        json!({"index": {
+            "name": format!("projects/{project}/databases/(default)/collectionGroups/posts/indexes/t1"),
+            "fields": [{"fieldPath": "body", "searchConfig": {"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED"}]}}}]
+        }})
+    };
+    assert_eq!(handle(&s, "POST", base, &def("demo-app")).status, 400);
+    let r = handle(&s, "POST", base, &def("demo-b"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        handle(
+            &s,
+            "GET",
+            "/v1/sessions/default/firestore/text-indexes",
+            &json!({})
+        )
+        .body["indexes"],
+        json!([])
+    );
+    let listed = handle(&s, "GET", base, &json!({}));
+    assert_eq!(listed.body["indexes"][0]["project"], "demo-b");
+    // Strict validation: output-only and misspelled fields are refused.
+    let mut with_state = def("demo-b");
+    with_state["index"]["state"] = json!("NEEDS_REPAIR");
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/firestore/text-indexes",
+            &with_state
+        )
+        .status,
+        400
+    );
+    let mut misspelled = def("demo-app");
+    misspelled["index"]["searchIndexOptions"] = json!({"textLangauge": "ja"});
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/firestore/text-indexes",
+            &misspelled
+        )
+        .status,
+        400
+    );
+    // Deleting the session drops its snapshots, fault plan, text indexes and tenancy.
+    assert_eq!(
+        handle(&s, "DELETE", "/v1/sessions/demo-b", &json!({})).status,
+        200
+    );
+    assert!(!s.tenancy.read().unwrap().is_registered("demo-b"));
+    assert!(s.text_indexes.lock().unwrap().is_empty());
+    // Its fault state is gone: demo-b falls back to the default session's.
+    assert!(Arc::ptr_eq(
+        &registry.for_project("demo-b"),
+        &registry.default_state()
+    ));
+}
+
+#[test]
+fn functions_routes_belong_to_the_default_session() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.project_hooks = Some(Arc::new(ProjectLog(Mutex::new(Vec::new()))));
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        200
+    );
+    for (method, path) in [
+        ("GET", "/v1/sessions/demo-b/functions"),
+        ("POST", "/v1/sessions/demo-b/functions/tick:run"),
+        ("POST", "/v1/sessions/demo-b/pubsub/topics/jobs:publish"),
+    ] {
+        let r = handle(&s, method, path, &json!({"messages": [{"data": ""}]}));
+        assert_eq!(r.status, 400, "{path}: {}", r.body);
+        assert!(r.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("FAILED_PRECONDITION"));
+    }
 }

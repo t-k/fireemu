@@ -1,5 +1,17 @@
-//! Local execution backend: one `FirestoreState` per (project, database) behind a mutex, a
-//! shared virtual clock, strict gateway validation before every query.
+//! Local execution backend: one `FirestoreState` per (project, database), each behind its
+//! own mutex, a shared virtual clock, strict gateway validation before every query.
+//!
+//! Locking layers, outermost first:
+//!
+//! 1. the session [`AdmissionBarrier`]: every operation runs admitted, a reset / capture /
+//!    restore takes it exclusively, so nothing observes or straddles a half-reset session;
+//! 2. the database catalog (`databases`): held only long enough to locate or create one
+//!    entry and clone its [`DatabaseHandle`], never while an operation runs;
+//! 3. one database's own lock: it serializes that database's operations and nothing else,
+//!    so unrelated projects and databases make progress concurrently.
+//!
+//! The order is always 1 -> 2 -> 3 and no layer is re-entered, so the layering cannot
+//! deadlock. Commit actor attribution is operation-local (see [`Actor`]).
 
 // `tonic::Status` is the error type dictated by the generated service trait.
 #![allow(clippy::result_large_err)]
@@ -14,6 +26,7 @@ use ftd_core_firestore::store::{
     Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
     Precondition, TransactionId, Write, WriteOp,
 };
+use ftd_core_session::barrier::AdmissionBarrier;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
 use ftd_core_types::ids::{CollectionId, DocumentId};
@@ -34,15 +47,110 @@ pub const DEFAULT_LIST_PAGE_SIZE: usize = 100;
 /// How far back a `read_time` selector may reach (Firestore: one hour without PITR).
 pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 
+/// One database: its state and its own lock. The catalog hands out `Arc` references to
+/// it, so an operation holds this lock alone and never the catalog's.
+#[derive(Debug, Default)]
+struct DatabaseEntry {
+    cell: Mutex<DatabaseCell>,
+}
+
+impl DatabaseEntry {
+    /// A fresh, attached entry holding a restored state.
+    fn restored(state: FirestoreState) -> Self {
+        Self {
+            cell: Mutex::new(DatabaseCell {
+                detached: false,
+                state,
+            }),
+        }
+    }
+}
+
+/// A database's state behind its lock, with the flag that retires it.
+#[derive(Debug, Default)]
+struct DatabaseCell {
+    /// Set by the reset / restore that removed this database from the catalog. A handle
+    /// retained across that removal must not read or mutate state nobody can reach any
+    /// more, so every operation through it answers `UNAVAILABLE` instead.
+    detached: bool,
+    state: FirestoreState,
+}
+
+/// A retained reference to one database, from [`LocalBackend::database_handle`].
+///
+/// The handle keeps the database alive but not current: a reset or a snapshot restore
+/// detaches it, and every later operation through it fails with `UNAVAILABLE` rather than
+/// mutating state that has been dropped from the catalog. Operations through a handle take
+/// no session admission - callers that need one (every request surface) go through
+/// [`LocalBackend`]'s own methods instead.
+#[derive(Clone)]
+pub struct DatabaseHandle(Arc<DatabaseEntry>);
+
+impl std::fmt::Debug for DatabaseHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseHandle")
+            .field("detached", &self.is_detached())
+            .finish()
+    }
+}
+
+impl DatabaseHandle {
+    /// Runs `f` under this database's own lock. `UNAVAILABLE` once the database has been
+    /// detached by a reset or a restore, or when its lock is poisoned.
+    pub fn with<T>(
+        &self,
+        f: impl FnOnce(&mut FirestoreState) -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let mut cell = self.0.cell.lock().map_err(|_| lock_poisoned())?;
+        if cell.detached {
+            return Err(detached());
+        }
+        f(&mut cell.state)
+    }
+
+    /// Reads under this database's own lock; `None` once detached or poisoned.
+    fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
+        let cell = self.0.cell.lock().ok()?;
+        (!cell.detached).then(|| f(&cell.state))
+    }
+
+    /// Whether a reset or restore has retired this database.
+    #[must_use]
+    pub fn is_detached(&self) -> bool {
+        self.0.cell.lock().is_ok_and(|c| c.detached)
+    }
+
+    /// Retires the database under its own lock: the caller has already removed it from the
+    /// catalog, and this waits for whatever operation is still running inside it.
+    fn detach(&self) {
+        if let Ok(mut cell) = self.0.cell.lock() {
+            cell.detached = true;
+        }
+    }
+}
+
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
     clock: Arc<Mutex<VirtualClock>>,
-    databases: Mutex<BTreeMap<(String, String), FirestoreState>>,
+    /// The database catalog. Locked only to locate, create or retire an entry: an
+    /// operation clones the entry's handle and releases this lock before it runs.
+    databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
+    /// The sessions' fault plans (looked up by project), when shared.
+    faults: Mutex<Option<ftd_core_session::fault::SharedFaultRegistry>>,
+    /// Told after a fault plan moved the virtual clock (the functions runtime re-reads
+    /// its schedules and retries).
+    clock_observer: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Per-database generation, bumped by every wipe of that database (resume tokens are
+    /// bound to it, so a project reset invalidates that project's tokens only).
+    generations: Mutex<BTreeMap<(String, String), u64>>,
     ids: Mutex<SplitMix64>,
     commits: tokio::sync::broadcast::Sender<CommitEvent>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
+    /// Session-wide admission barrier shared with the other surfaces (reset holds it
+    /// exclusively).
+    barrier: Arc<AdmissionBarrier>,
     /// Called for every commit inside the database critical section, in commit order and
     /// before the commit's response is returned (event triggers): nothing is lost or
     /// reordered, and `await-idle` sees the event as soon as the write returns.
@@ -52,9 +160,25 @@ pub struct LocalBackend {
 /// Synchronous observer of commits (see [`LocalBackend::set_change_sink`]).
 pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
 
+/// Metadata key a `dropConnection` fault sets on its status: the server closes the
+/// connection (or resets the stream) instead of delivering the response.
+pub const DROP_CONNECTION_KEY: &str = "ftd-drop-connection";
+
+/// A session's Firestore snapshot: its databases, and the auto-ID generator when the
+/// session owns it (the default one).
+#[derive(Debug, Clone)]
+pub struct FirestoreSnapshot {
+    /// Databases by `(project, database)`.
+    pub databases: BTreeMap<(String, String), FirestoreState>,
+    /// The auto-ID generator state.
+    pub ids: Option<SplitMix64>,
+}
+
 /// Published after every successful commit (drives `Listen` streams).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommitEvent {
+    /// Who made the commit (`withAuthContext` triggers).
+    pub actor: Actor,
     /// Project.
     pub project: String,
     /// Database.
@@ -71,8 +195,95 @@ fn status(e: DecodeError) -> Status {
     Rejection::Decode(e).to_status()
 }
 
+/// The principal behind a commit, in Eventarc's `authtype` / `authid` terms.
+///
+/// Attribution is operation-local: a write guard stages the actor with
+/// [`LocalBackend::set_actor`] and `publish` takes it back, both inside the one database
+/// critical section that the operation's own thread holds without yielding (see
+/// `PENDING_ACTOR`). Concurrent operations in different databases therefore never consume
+/// each other's principal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actor {
+    /// `app_user`, `service_account`, `unauthenticated`, `system`.
+    pub auth_type: String,
+    /// The user ID (`app_user`) or the service account (`service_account`).
+    pub auth_id: Option<String>,
+}
+
+impl Actor {
+    /// The runtime itself (resets, internal writes).
+    #[must_use]
+    pub fn system() -> Self {
+        Self {
+            auth_type: "system".to_owned(),
+            auth_id: None,
+        }
+    }
+
+    /// The actor behind a request principal.
+    #[must_use]
+    pub fn from_principal(principal: &crate::rules::Principal) -> Self {
+        match principal {
+            crate::rules::Principal::Owner => Self {
+                auth_type: "service_account".to_owned(),
+                auth_id: Some("owner".to_owned()),
+            },
+            crate::rules::Principal::User(a) => Self {
+                auth_type: "app_user".to_owned(),
+                auth_id: Some(a.uid.clone()),
+            },
+            crate::rules::Principal::Anonymous => Self {
+                auth_type: "unauthenticated".to_owned(),
+                auth_id: None,
+            },
+        }
+    }
+}
+
 fn lock_poisoned() -> Status {
     Status::internal("backend state lock poisoned")
+}
+
+fn detached() -> Status {
+    Status::unavailable(
+        "the database was reset or restored while this operation held a handle to it",
+    )
+}
+
+thread_local! {
+    /// The actor staged by the write guard of the operation running on this thread.
+    ///
+    /// Guard, commit and publish run on one thread inside a single database critical
+    /// section with no await point in between, so this slot belongs to exactly one
+    /// operation at a time - unlike a slot on the backend, which every database would
+    /// share. [`ActorScope`] clears it at both ends of the critical section, so an actor
+    /// staged by a guard whose commit then failed is never attributed to a later commit.
+    static PENDING_ACTOR: std::cell::RefCell<Option<Actor>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Clears the operation-local actor slot on entry and on the way out.
+struct ActorScope;
+
+impl ActorScope {
+    fn enter() -> Self {
+        Self::clear();
+        Self
+    }
+
+    fn clear() {
+        PENDING_ACTOR.with(|slot| {
+            if let Ok(mut slot) = slot.try_borrow_mut() {
+                *slot = None;
+            }
+        });
+    }
+}
+
+impl Drop for ActorScope {
+    fn drop(&mut self) {
+        Self::clear();
+    }
 }
 
 /// One item of a batch get (core snapshot; encoded after authorization).
@@ -159,11 +370,21 @@ impl LocalBackend {
             gateway,
             clock,
             databases: Mutex::new(BTreeMap::new()),
+            faults: Mutex::new(None),
+            clock_observer: Mutex::new(None),
+            generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             commits: tokio::sync::broadcast::channel(1024).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
+            barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// The session's admission barrier (share it with every other mutable surface).
+    #[must_use]
+    pub fn barrier(&self) -> Arc<AdmissionBarrier> {
+        self.barrier.clone()
     }
 
     /// Installs the synchronous commit observer (at most one). Contract: the sink runs
@@ -181,20 +402,80 @@ impl LocalBackend {
         self.epoch.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Drops every database (session reset). Listen streams observe the wipe as deletes.
-    pub fn reset(&self) {
-        // Streams opened before the reset see the epoch change before any data is dropped.
-        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let cleared: Vec<(String, String)> = match self.databases.lock() {
+    /// The wipe generation of a database (see `generations`).
+    #[must_use]
+    pub fn database_generation(&self, parent: &Parent) -> u64 {
+        self.generations
+            .lock()
+            .ok()
+            .and_then(|g| g.get(&database_key(parent)).copied())
+            .unwrap_or(0)
+    }
+
+    fn bump_generations(&self, keys: &[(String, String)]) {
+        if let Ok(mut g) = self.generations.lock() {
+            for k in keys {
+                *g.entry(k.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    /// Drops every database of one project (a session reset of that project): other
+    /// projects' streams and epoch are untouched; the project's streams observe the wipe.
+    pub fn reset_project(&self, project: &str) {
+        self.reset_scope(&ftd_core_session::tenancy::Scope::Project(
+            project.to_owned(),
+        ));
+    }
+
+    /// Drops every database `scope` owns. The default session's scope also starts a new
+    /// epoch (streams opened before it end like on a full reset); a project scope only
+    /// bumps the generations of the databases it wiped.
+    pub fn reset_scope(&self, scope: &ftd_core_session::tenancy::Scope) {
+        if scope.is_default() {
+            // Streams opened before the reset see the epoch change before any data is
+            // dropped.
+            self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let cleared = self.take_scope(scope);
+        self.bump_generations(&cleared);
+        self.announce_wipe(cleared);
+    }
+
+    /// Removes every database `scope` owns from the catalog and detaches it, returning the
+    /// keys in catalog order.
+    ///
+    /// The catalog lock is released before the entries are detached, so a reset never
+    /// holds it while it waits; detaching takes each removed database's own lock, so the
+    /// reset waits for the operations still running inside exactly those databases and
+    /// leaves the rest of the catalog alone.
+    fn take_scope(&self, scope: &ftd_core_session::tenancy::Scope) -> Vec<(String, String)> {
+        let removed: Vec<((String, String), DatabaseHandle)> = match self.databases.lock() {
             Ok(mut dbs) => {
-                let keys = dbs.keys().cloned().collect();
-                dbs.clear();
-                keys
+                let keys: Vec<(String, String)> = dbs
+                    .keys()
+                    .filter(|(p, _)| scope.owns_project(p))
+                    .cloned()
+                    .collect();
+                keys.into_iter()
+                    .filter_map(|k| dbs.remove(&k).map(|e| (k, DatabaseHandle(e))))
+                    .collect()
             }
             Err(_) => Vec::new(),
         };
-        for (project, database) in cleared {
+        removed
+            .into_iter()
+            .map(|(key, handle)| {
+                handle.detach();
+                key
+            })
+            .collect()
+    }
+
+    fn announce_wipe(&self, databases: Vec<(String, String)>) {
+        for (project, database) in databases {
             let _ = self.commits.send(CommitEvent {
+                actor: Actor::system(),
                 project,
                 database,
                 version: 0,
@@ -202,6 +483,109 @@ impl LocalBackend {
                 changes: Arc::new(Vec::new()),
             });
         }
+    }
+
+    /// A copy of every database (the default session's snapshot).
+    #[must_use]
+    pub fn snapshot_databases(&self) -> BTreeMap<(String, String), FirestoreState> {
+        self.copy_databases(&ftd_core_session::tenancy::Scope::AllExcept(
+            std::collections::BTreeSet::new(),
+        ))
+    }
+
+    /// The handles of the databases `scope` owns, in catalog order.
+    fn handles_of(
+        &self,
+        scope: &ftd_core_session::tenancy::Scope,
+    ) -> Vec<((String, String), DatabaseHandle)> {
+        self.databases
+            .lock()
+            .map(|dbs| {
+                dbs.iter()
+                    .filter(|((p, _), _)| scope.owns_project(p))
+                    .map(|(k, v)| (k.clone(), DatabaseHandle(v.clone())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Copies the databases `scope` owns, each under its own lock.
+    ///
+    /// Cross-database atomicity is the [`AdmissionBarrier`]'s: capture runs under the
+    /// exclusive guard, so no operation is in flight and the copies all belong to the same
+    /// session state.
+    fn copy_databases(
+        &self,
+        scope: &ftd_core_session::tenancy::Scope,
+    ) -> BTreeMap<(String, String), FirestoreState> {
+        self.handles_of(scope)
+            .into_iter()
+            .filter_map(|(key, handle)| handle.read(Clone::clone).map(|state| (key, state)))
+            .collect()
+    }
+
+    /// The databases `scope` owns, plus the auto-ID generator for the default scope (it
+    /// is shared by every project, so only the default session snapshots it).
+    #[must_use]
+    pub fn snapshot_scope(&self, scope: &ftd_core_session::tenancy::Scope) -> FirestoreSnapshot {
+        let databases = self.copy_databases(scope);
+        let ids = scope
+            .is_default()
+            .then(|| self.ids.lock().map(|r| r.clone()).ok())
+            .flatten();
+        FirestoreSnapshot { databases, ids }
+    }
+
+    /// Replaces every database with `databases` (the default session's restore): a new
+    /// epoch, and the streams opened before it end like on a reset.
+    pub fn restore_databases(&self, databases: BTreeMap<(String, String), FirestoreState>) {
+        self.restore_scope(
+            &ftd_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new()),
+            &FirestoreSnapshot {
+                databases,
+                ids: None,
+            },
+        );
+    }
+
+    /// Replaces the databases `scope` owns with the snapshot's (the others stay). The
+    /// default scope starts a new epoch and puts the auto-ID generator back; a project
+    /// scope bumps the generations of the databases it replaced.
+    pub fn restore_scope(
+        &self,
+        scope: &ftd_core_session::tenancy::Scope,
+        snapshot: &FirestoreSnapshot,
+    ) {
+        if scope.is_default() {
+            self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        // The replaced databases are detached first: a handle retained across the restore
+        // belongs to the state that was thrown away, and answers UNAVAILABLE.
+        let mut touched = self.take_scope(scope);
+        if let Ok(mut dbs) = self.databases.lock() {
+            for (k, v) in &snapshot.databases {
+                if scope.owns_project(&k.0) {
+                    if !touched.contains(k) {
+                        touched.push(k.clone());
+                    }
+                    dbs.insert(k.clone(), Arc::new(DatabaseEntry::restored(v.clone())));
+                }
+            }
+        }
+        if let Some(ids) = &snapshot.ids {
+            if let Ok(mut rng) = self.ids.lock() {
+                *rng = ids.clone();
+            }
+        }
+        self.bump_generations(&touched);
+        self.announce_wipe(touched);
+    }
+
+    /// Drops every database (session reset). Listen streams observe the wipe as deletes.
+    pub fn reset(&self) {
+        self.reset_scope(&ftd_core_session::tenancy::Scope::AllExcept(
+            std::collections::BTreeSet::new(),
+        ));
     }
 
     /// Subscribes to commit events.
@@ -212,8 +596,105 @@ impl LocalBackend {
 
     /// Publishes a commit: the change sink first (synchronously, inside the database
     /// critical section the caller holds), then the `Listen` broadcast.
+    /// Shares the session's fault plan with this backend.
+    pub fn set_faults(&self, faults: ftd_core_session::fault::SharedFaultRegistry) {
+        if let Ok(mut slot) = self.faults.lock() {
+            *slot = Some(faults);
+        }
+    }
+
+    /// Installs the observer told after a fault plan moved the virtual clock.
+    pub fn set_clock_observer(&self, observer: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut slot) = self.clock_observer.lock() {
+            *slot = Some(observer);
+        }
+    }
+
+    fn clock_moved(&self) {
+        let observer = self.clock_observer.lock().ok().and_then(|o| o.clone());
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
+
+    /// [`Self::fault`] for the surfaces outside this module (Listen refreshes).
+    pub fn consult_faults(&self, project: &str, operation: &str) -> Result<(), Status> {
+        self.fault(project, operation)
+    }
+
+    /// Applies `project`'s fault plan to `operation` (spec 18): an error action fails the
+    /// request here, a delay moves the virtual clock before it runs.
+    fn fault(&self, project: &str, operation: &str) -> Result<(), Status> {
+        use ftd_core_session::fault::FaultAction;
+        let faults = self.faults.lock().ok().and_then(|f| f.clone());
+        for action in
+            ftd_core_session::fault::decide_for(faults.as_ref(), project, operation, None, None)
+        {
+            match action {
+                FaultAction::ReturnError { code } => {
+                    return Err(Status::new(
+                        grpc_code(&code),
+                        format!("fault plan: {operation} returns {code}"),
+                    ))
+                }
+                FaultAction::TransactionConflict => {
+                    return Err(Status::aborted(format!(
+                        "fault plan: {operation} conflicts (ABORTED)"
+                    )))
+                }
+                FaultAction::Timeout => {
+                    return Err(Status::deadline_exceeded(format!(
+                        "fault plan: {operation} timed out"
+                    )))
+                }
+                FaultAction::DropConnection => {
+                    // The transport layer closes the connection instead of answering
+                    // (see `DROP_CONNECTION_KEY`); the status is what a client that
+                    // still gets an answer (WebChannel) sees.
+                    let mut status = Status::unavailable(format!(
+                        "fault plan: connection dropped during {operation}"
+                    ));
+                    if let Ok(v) = "1".parse() {
+                        status.metadata_mut().insert(DROP_CONNECTION_KEY, v);
+                    }
+                    return Err(status);
+                }
+                FaultAction::Delay { seconds } => {
+                    if let Ok(mut clock) = self.clock.lock() {
+                        let _ = clock.advance(ftd_core_types::time::LogicalDuration::from_seconds(
+                            seconds.max(0),
+                        ));
+                    }
+                    self.clock_moved();
+                }
+                FaultAction::Duplicate { .. }
+                | FaultAction::CrashRunner
+                | FaultAction::DeadLetter => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Stages the actor of the commit about to be published (called by write guards inside
+    /// the database critical section).
+    ///
+    /// The actor is kept in this thread's operation-local slot, not on the backend, so a
+    /// commit running concurrently in another database cannot consume it (see [`Actor`]).
+    #[allow(clippy::unused_self)]
+    pub fn set_actor(&self, actor: Actor) {
+        PENDING_ACTOR.with(|slot| {
+            if let Ok(mut slot) = slot.try_borrow_mut() {
+                *slot = Some(actor);
+            }
+        });
+    }
+
     fn publish(&self, parent: &Parent, result: &CommitResult) {
+        let actor = PENDING_ACTOR
+            .with(|slot| slot.try_borrow_mut().ok().and_then(|mut s| s.take()))
+            .unwrap_or_else(Actor::system);
         let event = CommitEvent {
+            actor,
             project: parent.project.as_str().to_owned(),
             database: parent.database.as_str().to_owned(),
             version: result.version.value(),
@@ -233,6 +714,7 @@ impl LocalBackend {
         writes: &[Write],
         guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.now();
         let result = self.with_db(parent, |db| {
             guard(db, writes, now)?;
@@ -290,6 +772,146 @@ impl LocalBackend {
         })
     }
 
+    /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
+    /// `__name__`, without filters, other orderings, limits or cursors) into up to
+    /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.
+    /// The cuts are computed at one version (the `read_time` selector's, else the version
+    /// current at the first page) that the page token carries, so later pages see the same
+    /// partitioning whatever was written in between; the token is bound to the query.
+    #[allow(clippy::too_many_lines)]
+    pub fn partition_query(
+        &self,
+        req: &pb::PartitionQueryRequest,
+    ) -> Result<pb::PartitionQueryResponse, Status> {
+        let parent = parse_parent(&req.parent).map_err(status)?;
+        if parent.document.is_some() {
+            return Err(Status::invalid_argument(
+                "PartitionQuery parent must be the database (projects/{p}/databases/{d}/documents)",
+            ));
+        }
+        let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &req.query_type
+        else {
+            return Err(Status::invalid_argument(
+                "PartitionQuery requires a structured_query",
+            ));
+        };
+        self.fault(parent.project.as_str(), "firestore.read")?;
+        let query = self.accepted_query(&parent, sq)?.query;
+        let name_ascending_only = query.order_by.iter().all(|o| {
+            o.field.is_document_name()
+                && o.direction == ftd_core_firestore::query::Direction::Ascending
+        });
+        if !query.scope.all_descendants
+            || query.filter.is_some()
+            || !name_ascending_only
+            || query.limit.is_some()
+            || query.offset != 0
+            || query.start_at.is_some()
+            || query.end_at.is_some()
+        {
+            return Err(Status::invalid_argument(
+                "PartitionQuery requires a collection group query ordered by __name__ only (no filters, order bys, limits, offsets or cursors)",
+            ));
+        }
+        let partition_count = usize::try_from(req.partition_count)
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| Status::invalid_argument("partition_count must be positive"))?;
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("page_size must not be negative"));
+        }
+        let read_time = req.consistency_selector.as_ref().map(
+            |pb::partition_query_request::ConsistencySelector::ReadTime(t)| {
+                crate::encode::decode_instant(t)
+            },
+        );
+        // Fingerprint of everything a page token must agree with, including the reset
+        // epoch and the database generation: a token from before a reset or restore is
+        // refused instead of resuming against unrelated history at the same version.
+        let fingerprint = {
+            let text = format!(
+                "{}|{}|{}|{:?}|{}|{}",
+                req.parent,
+                query.scope.collection_id.as_str(),
+                partition_count,
+                read_time.map(ftd_core_types::time::LogicalInstant::as_nanos),
+                self.epoch(),
+                self.database_generation(&parent)
+            );
+            text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
+        // The page token: `<version>:<fingerprint>:<index>`.
+        let (token_version, start) = if req.page_token.is_empty() {
+            (None, 0usize)
+        } else {
+            let parts: Vec<&str> = req.page_token.split(':').collect();
+            let parsed = match parts.as_slice() {
+                [v, f, i] => v
+                    .parse::<u64>()
+                    .ok()
+                    .zip(f.parse::<u64>().ok())
+                    .zip(i.parse::<usize>().ok())
+                    .filter(|((_, f), _)| *f == fingerprint)
+                    .map(|((v, _), i)| (v, i)),
+                _ => None,
+            };
+            let (v, i) = parsed.ok_or_else(|| {
+                Status::invalid_argument(
+                    "invalid page_token (not issued for this query, count and read time, or the session was reset)",
+                )
+            })?;
+            (Some(CommitVersion::from_value(v)), i)
+        };
+        let (names, version): (Vec<String>, CommitVersion) = self.with_db(&parent, |db| {
+            let version = match (token_version, read_time) {
+                (Some(v), _) => v,
+                (None, Some(t)) => db.version_at(t),
+                (None, None) => db.current_version(),
+            };
+            if version > db.current_version() {
+                return Err(Status::invalid_argument("invalid page_token"));
+            }
+            db.run_query(&query, Some(version))
+                .map(|docs| {
+                    (
+                        docs.iter().map(|d| d.path.resource_name()).collect(),
+                        version,
+                    )
+                })
+                .map_err(|e| status_from_error(&e))
+        })?;
+        // k cut points split n documents into k + 1 ranges; never more than n - 1 cuts.
+        let cuts = partition_count.min(names.len().saturating_sub(1));
+        let cursors: Vec<pb::Cursor> = (1..=cuts)
+            .map(|i| pb::Cursor {
+                values: vec![pb::Value {
+                    value_type: Some(pb::value::ValueType::ReferenceValue(
+                        names[names.len() * i / (cuts + 1)].clone(),
+                    )),
+                }],
+                before: true,
+            })
+            .collect();
+        if start > cursors.len() {
+            return Err(Status::invalid_argument("invalid page_token"));
+        }
+        let page = usize::try_from(req.page_size)
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(cursors.len().max(1));
+        let end = (start + page).min(cursors.len());
+        Ok(pb::PartitionQueryResponse {
+            partitions: cursors[start..end].to_vec(),
+            next_page_token: if end < cursors.len() {
+                format!("{}:{fingerprint}:{end}", version.value())
+            } else {
+                String::new()
+            },
+        })
+    }
+
     /// Current logical time of the backend clock.
     pub fn now(&self) -> ftd_core_types::time::LogicalInstant {
         self.clock
@@ -298,19 +920,50 @@ impl LocalBackend {
             .unwrap_or(ftd_core_types::time::LogicalInstant::UNIX_EPOCH)
     }
 
+    /// Reads a database without taking a session admission: for callers that already
+    /// hold one (a Storage request evaluating `firestore.get()` in its rules). `None` when
+    /// the database does not exist yet or the lock is poisoned.
+    pub fn read_unadmitted<T>(
+        &self,
+        parent: &Parent,
+        f: impl FnOnce(&FirestoreState) -> T,
+    ) -> Option<T> {
+        // The catalog lock is dropped before the database's own lock is taken.
+        let handle = {
+            let dbs = self.databases.lock().ok()?;
+            DatabaseHandle(dbs.get(&database_key(parent))?.clone())
+        };
+        handle.read(f)
+    }
+
+    /// The handle of one database, creating its entry when the database does not exist
+    /// yet. The catalog lock is held only for this lookup.
+    ///
+    /// Operations through the returned handle take no session admission and are not
+    /// coordinated with a reset beyond the handle's own detachment; request surfaces
+    /// should use [`LocalBackend`]'s operations, which admit first.
+    pub fn database_handle(&self, parent: &Parent) -> Result<DatabaseHandle, Status> {
+        let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
+        Ok(DatabaseHandle(
+            dbs.entry(database_key(parent)).or_default().clone(),
+        ))
+    }
+
     fn with_db<T>(
         &self,
         parent: &Parent,
         f: impl FnOnce(&mut FirestoreState) -> Result<T, Status>,
     ) -> Result<T, Status> {
-        let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
-        let db = dbs
-            .entry((
-                parent.project.as_str().to_owned(),
-                parent.database.as_str().to_owned(),
-            ))
-            .or_default();
-        f(db)
+        // Admitted for the whole critical section: a reset waits for it and nothing runs
+        // against a half-reset session.
+        let _admitted = self.barrier.admit();
+        // The catalog is locked only for the lookup; the operation then runs under this
+        // database's own lock, so other databases are free to make progress.
+        let handle = self.database_handle(parent)?;
+        // Attribution is confined to this operation: whatever a previous one left on this
+        // thread is dropped here, and whatever this one stages is dropped on the way out.
+        let _actor = ActorScope::enter();
+        handle.with(f)
     }
 
     fn auto_id(&self) -> String {
@@ -427,6 +1080,7 @@ impl LocalBackend {
     ) -> Result<DocumentSnapshot, Status> {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.now();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
@@ -493,6 +1147,7 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
     ) -> Result<BatchGetOutcome, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.now();
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let paths = req
@@ -672,6 +1327,7 @@ impl LocalBackend {
         mask: Option<&pb::DocumentMask>,
         guard: WriteGuard<'_>,
     ) -> Result<pb::Document, Status> {
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.now();
@@ -740,6 +1396,7 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.now();
         self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
@@ -782,6 +1439,7 @@ impl LocalBackend {
     /// `BeginTransaction`.
     pub fn begin_transaction(&self, req: &pb::BeginTransactionRequest) -> Result<Vec<u8>, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.beginTransaction")?;
         // BeginTransaction without options is read-write (unlike `new_transaction`).
         let now = self.now();
         self.with_db(&parent, |db| {
@@ -816,6 +1474,7 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<pb::CommitResponse, Status> {
         let (parent, writes) = Self::plan_commit(req)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let txn = Self::txn(&parent, &req.transaction)?;
         let now = self.now();
         let result = self.with_db(&parent, |db| {
@@ -845,6 +1504,7 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
                 "RunQuery requires a structured_query",
@@ -934,6 +1594,7 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
     ) -> Result<pb::RunAggregationQueryResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
             &req.query_type
         else {
@@ -1041,6 +1702,7 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.now();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
@@ -1073,7 +1735,20 @@ impl LocalBackend {
         );
         let after = list_page_cursor(&req.page_token, &identity)?;
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("page_size must not be negative"));
+        }
         let accepted = self.accepted_query(&parent, &list_query(req))?;
+        // The rules see the page size as `request.query.limit` (the number of documents the
+        // request can return); the scan itself stays unlimited so the page cursor applies
+        // before truncation.
+        let page_size = if req.page_size > 0 {
+            usize::try_from(req.page_size).unwrap_or(usize::MAX)
+        } else {
+            DEFAULT_LIST_PAGE_SIZE
+        };
+        let mut proof_query = accepted.query.clone();
+        proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
         self.with_db(&parent, |db| {
             let version = match (&txn, read_at) {
                 (Some(t), _) => {
@@ -1092,7 +1767,7 @@ impl LocalBackend {
                 version,
                 ReadCheck::Query {
                     parent: &parent,
-                    query: &accepted.query,
+                    query: &proof_query,
                 },
             )?;
             // Inside a transaction the scan is recorded like a query, so a concurrent
@@ -1106,11 +1781,6 @@ impl LocalBackend {
             if let Some(after) = &after {
                 docs.retain(|d| d.path.resource_name() > *after);
             }
-            let page_size = if req.page_size > 0 {
-                usize::try_from(req.page_size).unwrap_or(usize::MAX)
-            } else {
-                DEFAULT_LIST_PAGE_SIZE
-            };
             let has_more = docs.len() > page_size;
             docs.truncate(page_size);
             let next_page_token = if has_more {
@@ -1197,6 +1867,7 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<pb::BatchWriteResponse, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.now();
         let decoded: Vec<Result<Write, Status>> = req
             .writes
@@ -1330,6 +2001,14 @@ fn decode_aggregations(
     Ok((aliases, aggregations))
 }
 
+/// Catalog key of a database.
+fn database_key(parent: &Parent) -> (String, String) {
+    (
+        parent.project.as_str().to_owned(),
+        parent.database.as_str().to_owned(),
+    )
+}
+
 fn database_tag(parent: &Parent) -> u64 {
     // FNV-1a over "project\0database": stable, dependency-free.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1443,4 +2122,26 @@ fn query_responses(
         );
     }
     responses
+}
+
+/// A gRPC status code from its name (or `UNKNOWN`).
+fn grpc_code(name: &str) -> tonic::Code {
+    match name.to_ascii_uppercase().as_str() {
+        "CANCELLED" => tonic::Code::Cancelled,
+        "INVALID_ARGUMENT" => tonic::Code::InvalidArgument,
+        "DEADLINE_EXCEEDED" => tonic::Code::DeadlineExceeded,
+        "NOT_FOUND" => tonic::Code::NotFound,
+        "ALREADY_EXISTS" => tonic::Code::AlreadyExists,
+        "PERMISSION_DENIED" => tonic::Code::PermissionDenied,
+        "RESOURCE_EXHAUSTED" => tonic::Code::ResourceExhausted,
+        "FAILED_PRECONDITION" => tonic::Code::FailedPrecondition,
+        "ABORTED" => tonic::Code::Aborted,
+        "OUT_OF_RANGE" => tonic::Code::OutOfRange,
+        "UNIMPLEMENTED" => tonic::Code::Unimplemented,
+        "INTERNAL" => tonic::Code::Internal,
+        "UNAVAILABLE" => tonic::Code::Unavailable,
+        "DATA_LOSS" => tonic::Code::DataLoss,
+        "UNAUTHENTICATED" => tonic::Code::Unauthenticated,
+        _ => tonic::Code::Unknown,
+    }
 }

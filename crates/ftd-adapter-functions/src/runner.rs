@@ -66,6 +66,19 @@ pub const INHERITED_ENV: &[&str] = &[
 /// Variable prefixes inherited by a runner (Node version managers only).
 pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"];
 
+/// How to start (and restart) a runner.
+#[derive(Debug, Clone)]
+pub struct SpawnSpec {
+    /// Program and arguments.
+    pub command: Vec<String>,
+    /// Working directory.
+    pub cwd: Option<String>,
+    /// Extra environment (emulator endpoints, project settings).
+    pub env: Vec<(String, String)>,
+    /// How long to wait for the `hello`.
+    pub hello_timeout: Duration,
+}
+
 /// A running runner.
 pub struct Runner {
     child: AsyncMutex<Option<Child>>,
@@ -118,6 +131,38 @@ pub struct Invocation {
 }
 
 impl Runner {
+    /// Spawns a runner from its spec.
+    pub async fn spawn_spec(spec: &SpawnSpec) -> Result<Self, String> {
+        Self::spawn(
+            &spec.command,
+            spec.cwd.as_deref(),
+            &spec.env,
+            spec.hello_timeout,
+        )
+        .await
+    }
+
+    /// Kills the process immediately (session reset: handlers still running must not write
+    /// into the reset state). Waiters learn it through the reader task's exit.
+    pub fn kill_now(&self) {
+        self.alive.store(false, Ordering::SeqCst);
+        if let Ok(mut slot) = self.child.try_lock() {
+            if let Some(mut child) = slot.take() {
+                let _ = child.start_kill();
+                kill_process_group(child.id());
+                // Reaped in the background: a killed runner must not linger as a zombie.
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let _ = child.wait().await;
+                    });
+                }
+            }
+        }
+        if let Ok(mut stdin) = self.stdin.try_lock() {
+            *stdin = None;
+        }
+    }
+
     /// Spawns `command` (program + args) with `env`, in `cwd`, and waits for its `hello`.
     #[allow(clippy::too_many_lines)]
     pub async fn spawn(
@@ -135,6 +180,9 @@ impl Runner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Its own process group, so a reset or shutdown takes the handlers' own
+            // subprocesses down with it.
+            .process_group(0)
             .kill_on_drop(true);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -275,10 +323,12 @@ impl Runner {
         let hello = match tokio::time::timeout(hello_timeout, hello_rx).await {
             Ok(Ok(h)) => h,
             Ok(Err(_)) => {
+                kill_process_group(child.id());
                 let _ = child.kill().await;
                 return Err("functions runner exited before its hello".to_owned());
             }
             Err(_) => {
+                kill_process_group(child.id());
                 let _ = child.kill().await;
                 return Err(format!(
                     "functions runner sent no hello within {}s",
@@ -389,13 +439,39 @@ impl Runner {
 
     /// Asks the runner to exit, then kills it.
     pub async fn shutdown(&self) {
-        if let Some(stdin) = self.stdin.lock().await.as_mut() {
-            let _ = write_frame(stdin, &json!({"type": "shutdown"})).await;
-        }
-        if let Some(mut child) = self.child.lock().await.take() {
+        // The polite part is bounded: a stalled runner or a full pipe must not keep the
+        // daemon alive.
+        let polite = async {
+            if let Some(stdin) = self.stdin.lock().await.as_mut() {
+                let _ = write_frame(stdin, &json!({"type": "shutdown"})).await;
+            }
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(2), polite).await;
+        let child = tokio::time::timeout(Duration::from_secs(2), self.child.lock())
+            .await
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(mut child) = child {
+            let pid = child.id();
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             let _ = child.kill().await;
+            kill_process_group(pid);
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         }
         eprintln!("{} stopped", self.label);
     }
+}
+
+/// Kills the process group the runner leads (`process_group(0)`: its id is the runner's
+/// pid), taking the subprocesses of handlers with it. Best effort, through `kill(1)` (the
+/// core forbids unsafe code, so no direct `killpg`).
+fn kill_process_group(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        return;
+    };
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }

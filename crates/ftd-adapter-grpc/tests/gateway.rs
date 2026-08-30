@@ -250,6 +250,8 @@ async fn malformed_parent_and_unknown_operator_are_invalid_argument() {
 async fn pipeline_and_listen_are_explicitly_unimplemented() {
     let (url, handle) = start(FirestoreEdition::Enterprise, IndexSet::default()).await;
     let mut client = connect(&url).await;
+    // Strict validation only: an undecodable request is refused as such, a valid pipeline
+    // is answered with UNIMPLEMENTED (never forwarded or executed).
     let status = client
         .execute_pipeline(pb::ExecutePipelineRequest {
             database: "projects/demo-app/databases/(default)".to_owned(),
@@ -257,7 +259,38 @@ async fn pipeline_and_listen_are_explicitly_unimplemented() {
         })
         .await
         .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(status.metadata().get("ftd-code").unwrap(), "FS_PIPE_DECODE");
+    let status = client
+        .execute_pipeline(pb::ExecutePipelineRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            pipeline_type: Some(
+                pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                    pb::StructuredPipeline {
+                        pipeline: Some(pb::Pipeline {
+                            stages: vec![pb::pipeline::Stage {
+                                name: "collection".to_owned(),
+                                args: vec![pb::Value {
+                                    value_type: Some(pb::value::ValueType::StringValue(
+                                        "users".to_owned(),
+                                    )),
+                                }],
+                                options: HashMap::new(),
+                            }],
+                        }),
+                        options: HashMap::new(),
+                    },
+                ),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), tonic::Code::Unimplemented);
+    assert_eq!(
+        status.metadata().get("ftd-pipeline").unwrap(),
+        "collection(1)"
+    );
     let status = client
         .get_document(pb::GetDocumentRequest {
             name: "projects/demo-app/databases/(default)/documents/a/b".to_owned(),

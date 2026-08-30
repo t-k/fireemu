@@ -4,9 +4,13 @@
 
 use ftd_adapter_grpc::encode::encode_document;
 use ftd_adapter_grpc::rest::json::document_to_json;
+use ftd_core_auth::store::UserRecord;
 use ftd_core_firestore::store::Document;
-use ftd_core_functions::event::{firestore_attributes, schedule_attributes, storage_attributes};
-use ftd_core_functions::manifest::{DocumentEvent, ObjectEvent};
+use ftd_core_functions::event::{
+    auth_attributes, firestore_attributes, pubsub_attributes, schedule_attributes,
+    storage_attributes, with_auth_context,
+};
+use ftd_core_functions::manifest::{AuthEvent, DocumentEvent, ObjectEvent};
 use ftd_core_storage::store::ObjectMetadata;
 use ftd_core_types::time::LogicalInstant;
 use serde_json::{json, Map, Value};
@@ -58,8 +62,12 @@ pub fn firestore_event(
     before: Option<&Document>,
     after: Option<&Document>,
     time: LogicalInstant,
+    auth: Option<(&str, Option<&str>)>,
 ) -> Value {
-    let attrs = firestore_attributes(project, database, document_path, kind, location);
+    let mut attrs = firestore_attributes(project, database, document_path, kind, location);
+    if let Some((auth_type, auth_id)) = auth {
+        with_auth_context(&mut attrs, auth_type, auth_id);
+    }
     // `firebase-functions` decodes JSON payloads with `createSnapshotFromJson(data, source,
     // ...)`, which uses `source` as the document name when a side of the change is absent;
     // it therefore has to be the full document resource name (the protobuf path derives the
@@ -166,6 +174,94 @@ pub fn storage_event(
         event[k] = Value::String(v);
     }
     event
+}
+
+/// A Pub/Sub message event (`MessagePublishedData` of `onMessagePublished`): `message` is
+/// the published message (`data` base64, `attributes`, `orderingKey`).
+#[must_use]
+pub fn pubsub_event(
+    id: &str,
+    project: &str,
+    topic: &str,
+    message: &Value,
+    time: LogicalInstant,
+) -> Value {
+    let attrs = pubsub_attributes(project, topic);
+    let mut msg = json!({
+        "messageId": id,
+        "data": message.get("data").cloned().unwrap_or(Value::String(String::new())),
+        "attributes": message.get("attributes").cloned().unwrap_or_else(|| json!({})),
+        "publishTime": rfc3339(time),
+    });
+    if let Some(key) = message.get("orderingKey").and_then(Value::as_str) {
+        msg["orderingKey"] = Value::String(key.to_owned());
+    }
+    json!({
+        "specversion": "1.0",
+        "id": id,
+        "source": attrs.source,
+        "type": attrs.event_type,
+        "time": rfc3339(time),
+        "datacontenttype": "application/json",
+        "data": {
+            "message": msg,
+            "subscription": format!("projects/{project}/subscriptions/firebase-testd-{topic}"),
+        },
+    })
+}
+
+/// The v1 `UserRecord` wire shape.
+#[must_use]
+pub fn user_record_json(u: &UserRecord) -> Value {
+    let mut providers: Vec<Value> = Vec::new();
+    if let Some(email) = &u.email {
+        providers.push(json!({"uid": email, "providerId": "password", "email": email, "displayName": u.display_name, "photoURL": u.photo_url}));
+    }
+    if let Some(phone) = &u.phone_number {
+        providers.push(json!({"uid": phone, "providerId": "phone", "phoneNumber": phone}));
+    }
+    for f in &u.federated {
+        providers.push(json!({"uid": f.raw_id, "providerId": f.provider_id, "email": f.email, "displayName": f.display_name, "photoURL": f.photo_url}));
+    }
+    let claims: Value =
+        serde_json::from_str(&u.custom_claims.canonical_json()).unwrap_or(json!({}));
+    json!({
+        "uid": u.local_id.as_str(),
+        "email": u.email,
+        "emailVerified": u.email_verified,
+        "displayName": u.display_name,
+        "photoURL": u.photo_url,
+        "phoneNumber": u.phone_number,
+        "disabled": u.disabled,
+        "metadata": {
+            "creationTime": rfc3339(u.created_at),
+            "lastSignInTime": u.last_sign_in_at.map(rfc3339),
+        },
+        "providerData": providers,
+        "customClaims": claims,
+        "tokensValidAfterTime": rfc3339(u.tokens_valid_after),
+    })
+}
+
+/// An Auth user event (`data` is the v1 `UserRecord`).
+#[must_use]
+pub fn auth_event(
+    id: &str,
+    project: &str,
+    kind: AuthEvent,
+    user: &UserRecord,
+    time: LogicalInstant,
+) -> Value {
+    let attrs = auth_attributes(project, kind);
+    json!({
+        "specversion": "1.0",
+        "id": id,
+        "source": attrs.source,
+        "type": attrs.event_type,
+        "time": rfc3339(time),
+        "datacontenttype": "application/json",
+        "data": user_record_json(user),
+    })
 }
 
 /// A scheduled run (`ScheduledEvent` of `onSchedule`).

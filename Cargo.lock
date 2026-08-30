@@ -212,6 +212,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compat-check"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "config-schema-check"
 version = "0.1.0"
 dependencies = [

@@ -129,17 +129,17 @@ impl GatewayService {
         let Some(policy) = &self.app_check else {
             return Ok(());
         };
+        // Every instance, in wire order, so a duplicate can be refused (spec 7.3). A binary
+        // entry cannot be one: gRPC binary keys end in `-bin`, and `as_str` includes that
+        // suffix, so such a key is never the App Check field. A value that is not renderable
+        // as text becomes an empty string, which classifies as malformed.
         let values: Vec<&str> = metadata
             .iter()
             .filter_map(|entry| match entry {
                 tonic::metadata::KeyAndValueRef::Ascii(name, value) => {
                     is_app_check_header(name.as_str()).then(|| value.to_str().unwrap_or_default())
                 }
-                // A binary metadata entry can never be a compact JWT, but it is still an
-                // instance of the field: it must make the classification ambiguous.
-                tonic::metadata::KeyAndValueRef::Binary(name, _) => {
-                    is_app_check_header(name.as_str()).then_some("")
-                }
+                tonic::metadata::KeyAndValueRef::Binary(_, _) => None,
             })
             .collect();
         let header = classify_app_check_header(&values);

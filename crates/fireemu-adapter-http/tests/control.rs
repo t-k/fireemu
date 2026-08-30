@@ -1366,3 +1366,109 @@ fn replacing_and_deleting_a_snapshot_release_what_it_retained() {
     );
     assert_eq!(dropped.load(Ordering::SeqCst), 3);
 }
+
+#[test]
+fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expressions() {
+    use fireemu_core_rules::coverage::RequestTrace;
+    use fireemu_core_rules::eval::{evaluate_request_traced, Method, RequestContext, RulesService};
+    use fireemu_core_rules::parse::parse_ruleset;
+
+    let s = state(Arc::new(AtomicUsize::new(0)));
+    let source = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /notes/{id} { allow get: if id != 'secret'; } } }";
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source": source})).status,
+        200
+    );
+
+    // Empty until something is decided, and only GET is served.
+    let empty = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(empty.status, 200, "{}", empty.body);
+    assert_eq!(empty.body["requests"], json!([]));
+    assert_eq!(empty.body["loaded"], true);
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/rules/requests",
+            &json!({})
+        )
+        .status,
+        400
+    );
+
+    // Decide two requests through the evaluator and record them where the Firestore
+    // adapter records them: the diagnostics that travel with the loaded ruleset.
+    let ruleset = parse_ruleset(source).unwrap();
+    for (id, allowed) in [("a", true), ("secret", false)] {
+        let ctx = RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: format!("/databases/(default)/documents/notes/{id}"),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 1_788_004_860_i128 * 1_000_000_000,
+            abstract_path: false,
+            request_query: None,
+        };
+        let (_, coverage) = evaluate_request_traced(&ruleset, &ctx, None);
+        let expressions = coverage.entries().into_iter().cloned().collect();
+        let rules = s.rules.read().unwrap();
+        rules
+            .diagnostics
+            .lock()
+            .unwrap()
+            .push(&coverage, |sequence| RequestTrace {
+                sequence,
+                method: "get",
+                path: format!("notes/{id}"),
+                allowed,
+                reason: if allowed {
+                    String::new()
+                } else {
+                    "denied".to_owned()
+                },
+                uid: None,
+                expressions,
+            });
+    }
+
+    let r = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let requests = r.body["requests"].as_array().cloned().unwrap_or_default();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["path"], "notes/secret", "newest first");
+    assert_eq!(requests[0]["allowed"], false);
+    assert_eq!(requests[0]["sequence"], 2);
+    assert_eq!(requests[1]["path"], "notes/a");
+    assert_eq!(requests[1]["allowed"], true);
+    assert_eq!(requests[0]["service"], "firestore");
+    assert_eq!(requests[0]["uid"], Value::Null);
+
+    // Every expression of the decided request is there, keyed by its source position.
+    let expressions = requests[0]["expressions"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(!expressions.is_empty());
+    let condition_at = source.find("id != 'secret'").unwrap();
+    let condition = expressions
+        .iter()
+        .find(|e| {
+            e["currentOffset"] == json!(condition_at)
+                && e["endOffset"] == json!(condition_at + "id != 'secret'".len())
+        })
+        .expect("the allow condition is traced");
+    assert_eq!(
+        condition["values"],
+        json!([{"value": {"kind": "bool", "bool": false}, "count": 1}])
+    );
+
+    // Loading another ruleset drops the trace with the source it described.
+    assert_eq!(
+        handle(&s, "PUT", "/v1/rules", &json!({"source": source})).status,
+        200
+    );
+    let after = handle(&s, "GET", "/v1/sessions/default/rules/requests", &json!({}));
+    assert_eq!(after.body["requests"], json!([]));
+}

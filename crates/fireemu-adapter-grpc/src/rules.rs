@@ -44,8 +44,9 @@ use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, Unary
 use fireemu_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, WriteOp};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::ast::Ruleset;
+use fireemu_core_rules::coverage::{CoverageEntry, RequestTrace, RulesDiagnostics};
 use fireemu_core_rules::eval::{
-    evaluate_request_with, try_compare, Decision, DenyReason, DocumentAccess, Method,
+    evaluate_request_traced, try_compare, Decision, DenyReason, DocumentAccess, Method,
     RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::runtime::LoadedRules;
@@ -378,6 +379,12 @@ impl RulesEnforcer {
         }
     }
 
+    /// The loaded rules, whose `diagnostics` a coverage report and a request trace read.
+    #[must_use]
+    pub fn rules(&self) -> &Arc<RwLock<LoadedRules>> {
+        &self.rules
+    }
+
     /// Verifies tokens of every registered session project, not only the default one.
     #[must_use]
     pub fn with_registry(mut self, registry: Arc<fireemu_core_auth::store::AuthRegistry>) -> Self {
@@ -408,6 +415,8 @@ impl RulesEnforcer {
     pub fn replace_source(&self, source: &str) -> Result<(), RulesLoadError> {
         let loaded = LoadedRules::from_source(source).map_err(RulesLoadError::Compile)?;
         let mut slot = self.rules.write().map_err(|_| RulesLoadError::Poisoned)?;
+        // The new ruleset brings its own diagnostics store, so every position recorded
+        // against the old source goes with it.
         *slot = loaded;
         Ok(())
     }
@@ -515,6 +524,7 @@ impl RulesEnforcer {
             request_resource,
             now,
             access,
+            Some(&rules.diagnostics),
         )
     }
 
@@ -569,6 +579,7 @@ impl RulesEnforcer {
                 None,
                 now,
                 &reader,
+                Some(&rules.diagnostics),
             )?;
             let accessed = reader.seen.borrow().len() as u64;
             if items.len() > 1 && accessed > multi_total {
@@ -626,7 +637,14 @@ impl RulesEnforcer {
                     abstract_path: true,
                     request_query: Some(query_value(query)),
                 };
-                decide(ruleset, &ctx, Method::List, &placeholder, &reader)?;
+                decide(
+                    ruleset,
+                    &ctx,
+                    Method::List,
+                    &placeholder,
+                    &reader,
+                    Some(&rules.diagnostics),
+                )?;
                 let accessed = reader.seen.borrow().len() as u64;
                 if accessed > single_max {
                     return Err(Status::permission_denied(format!(
@@ -720,6 +738,7 @@ impl RulesEnforcer {
                 preview.as_ref(),
                 at,
                 &reader,
+                Some(&rules.diagnostics),
             )?;
             let accessed = reader.seen.borrow().len() as u64;
             if writes.len() > 1 && accessed > multi_total {
@@ -747,6 +766,7 @@ fn evaluate_with(
     request_resource: Option<&Document>,
     now: LogicalInstant,
     access: &dyn DocumentAccess,
+    diagnostics: Option<&Mutex<RulesDiagnostics>>,
 ) -> Result<(), Status> {
     let ctx = RequestContext {
         service: RulesService::Firestore,
@@ -762,7 +782,7 @@ fn evaluate_with(
         abstract_path: false,
         request_query: None,
     };
-    decide(ruleset, &ctx, method, path, access)
+    decide(ruleset, &ctx, method, path, access, diagnostics)
 }
 
 fn decide(
@@ -771,15 +791,38 @@ fn decide(
     method: Method,
     path: &DocumentPath,
     access: &dyn DocumentAccess,
+    diagnostics: Option<&Mutex<RulesDiagnostics>>,
 ) -> Result<(), Status> {
-    match evaluate_request_with(ruleset, ctx, Some(access)).decision {
-        Decision::Allow => Ok(()),
-        Decision::Deny(reason) => Err(Status::permission_denied(format!(
+    let (report, coverage) = evaluate_request_traced(ruleset, ctx, Some(access));
+    let denial = match &report.decision {
+        Decision::Allow => None,
+        Decision::Deny(reason) => Some(format!(
             "{} on {} denied by Security Rules: {}",
             method_name(method),
             path.relative(),
-            deny_text(&reason)
-        ))),
+            deny_text(reason)
+        )),
+    };
+    if let Some(sink) = diagnostics {
+        if let Ok(mut sink) = sink.lock() {
+            let expressions: Vec<CoverageEntry> = coverage.entries().into_iter().cloned().collect();
+            let path = path.relative();
+            let uid = ctx.auth.as_ref().map(|a| a.uid.clone());
+            let reason = denial.clone().unwrap_or_default();
+            sink.push(&coverage, move |sequence| RequestTrace {
+                sequence,
+                method: method_name(method),
+                path,
+                allowed: reason.is_empty(),
+                reason,
+                uid,
+                expressions,
+            });
+        }
+    }
+    match denial {
+        None => Ok(()),
+        Some(message) => Err(Status::permission_denied(message)),
     }
 }
 

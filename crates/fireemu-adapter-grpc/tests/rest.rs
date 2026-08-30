@@ -395,3 +395,151 @@ fn the_profile_decides_whether_rest_admits_a_mock_token() {
     );
     assert_eq!(status, 401, "{body}");
 }
+
+const EMULATOR: &str = "/emulator/v1/projects/demo-app";
+
+fn put_rules(s: &RestState, source: &str) -> (u16, Value) {
+    call_as(
+        s,
+        "PUT",
+        &format!("{EMULATOR}:securityRules"),
+        json!({"rules": {"files": [{"name": "firestore.rules", "content": source}]}}),
+        None,
+    )
+}
+
+#[test]
+fn the_emulator_security_rules_route_replaces_the_ruleset_and_reports_the_compiler() {
+    let s = state(Some("rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{document=**} { allow read, write: if false; }\n  }\n}\n"));
+    // The ruleset that is loaded denies everything, with no credential in play.
+    let (status, _) = call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
+    assert_eq!(status, 403);
+
+    let (status, body) = put_rules(
+        &s,
+        "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} { allow read: if id != 'secret'; }\n  }\n}\n",
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, json!({"issues": []}), "the official success shape");
+
+    let (status, _) = call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
+    assert_eq!(status, 404, "allowed, and the document does not exist");
+    let (status, _) = call_as(&s, "GET", &format!("{DOCS}/notes/secret"), json!({}), None);
+    assert_eq!(status, 403);
+
+    // A source that does not compile is refused, and the previous ruleset stays in force.
+    let (status, body) = put_rules(
+        &s,
+        "service cloud.firestore { match /a/{b} { allow read: if (; } }",
+    );
+    assert_eq!(status, 400, "{body}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("Error compiling rules:\nL"),
+        "{message}"
+    );
+    let (status, _) = call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
+    assert_eq!(status, 404, "the failed load did not open the session up");
+
+    // Only PUT, and only with one file.
+    let (status, _) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:securityRules"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 400);
+    let (status, _) = call_as(
+        &s,
+        "PUT",
+        &format!("{EMULATOR}:securityRules"),
+        json!({"rules": {"files": []}}),
+        None,
+    );
+    assert_eq!(status, 400);
+}
+
+#[test]
+fn the_rule_coverage_route_reports_every_expression_by_its_source_position() {
+    let source = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} {\n      allow get: if id != 'secret';\n      allow create: if request.resource.data.n > 0;\n    }\n  }\n}\n";
+    let s = state(Some(source));
+    for id in ["a", "secret", "a"] {
+        call_as(&s, "GET", &format!("{DOCS}/notes/{id}"), json!({}), None);
+    }
+
+    let (status, body) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:ruleCoverage"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["rules"]["files"][0]["name"], "firestore.rules");
+    assert_eq!(body["rules"]["files"][0]["content"], source);
+
+    let report = body["report"].as_array().expect("a report").clone();
+    let condition_at = source.find("id != 'secret'").unwrap();
+    let condition = report
+        .iter()
+        .find(|n| n["sourcePosition"]["currentOffset"] == json!(condition_at))
+        .expect("the get condition is a root of the report");
+    assert_eq!(condition["sourcePosition"]["line"], 5);
+    assert_eq!(
+        condition["sourcePosition"]["endOffset"],
+        json!(condition_at + "id != 'secret'".len())
+    );
+    assert_eq!(
+        condition["values"],
+        json!([
+            {"value": {"boolValue": true}, "count": 2},
+            {"value": {"boolValue": false}, "count": 1},
+        ])
+    );
+    // `id` is a child, and it took each document id it was asked about.
+    assert_eq!(
+        condition["children"][0]["values"],
+        json!([
+            {"value": {"stringValue": "a"}, "count": 2},
+            {"value": {"stringValue": "secret"}, "count": 1},
+        ])
+    );
+    // The create condition was never reached: children, no values.
+    let create_at = source.find("request.resource.data.n > 0").unwrap();
+    let create = report
+        .iter()
+        .find(|n| n["sourcePosition"]["currentOffset"] == json!(create_at))
+        .expect("an unevaluated condition is still in the report");
+    assert!(create.get("values").is_none(), "{create}");
+    assert!(create["children"].is_array());
+
+    // The HTML report is the same document in a page.
+    let (status, body) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:ruleCoverage.html"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 200);
+    let html = body[fireemu_adapter_grpc::rest::coverage::HTML_KEY]
+        .as_str()
+        .expect("an HTML body");
+    assert!(html.starts_with("<!DOCTYPE html>"), "{html}");
+    assert!(html.contains("Firestore Rule Coverage Report"));
+    assert!(html.contains("coverage-expr"));
+
+    // Loading a new ruleset drops the positions that described the old one.
+    put_rules(&s, "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} { allow read: if true; }\n  }\n}\n");
+    let (_, body) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:ruleCoverage"),
+        json!({}),
+        None,
+    );
+    for node in body["report"].as_array().cloned().unwrap_or_default() {
+        assert!(node.get("values").is_none(), "{node}");
+    }
+}

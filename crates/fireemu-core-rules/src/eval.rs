@@ -22,9 +22,10 @@ use fireemu_core_limits::catalogs::FIREBASE_RULES_2026_08_25;
 use fireemu_core_limits::model::LimitMaximum;
 
 use crate::ast::{
-    Allow, BinaryOp, Expr, FunctionDecl, Item, Literal, MatchBlock, Method as AstMethod,
+    Allow, BinaryOp, Expr, ExprKind, FunctionDecl, Item, Literal, MatchBlock, Method as AstMethod,
     PathSegment, Ruleset, UnaryOp,
 };
+use crate::coverage::{Coverage, ExprValue, UndefinedCause};
 use crate::value::{AuthContext, MapDiff, RulesValue, ValueRange};
 
 /// Namespaces callable as `namespace.function(...)` unless shadowed by a binding.
@@ -182,7 +183,6 @@ pub struct EvaluationReport {
 enum EvalError {
     /// Condition is false because of a type / missing member error. The message is kept for
     /// the `rules explain` output (Milestone H); it does not influence the decision.
-    #[allow(dead_code)]
     Soft(String),
     /// The value is not determined by the request (query proofs); the condition cannot be
     /// proven and the allow does not apply.
@@ -292,6 +292,11 @@ struct Evaluator<'a> {
     absent_resource_used: core::cell::Cell<bool>,
     budget: Budget,
     scope: Scope<'a>,
+    /// Where every evaluated expression's value is recorded, when a trace was asked for.
+    coverage: Option<&'a core::cell::RefCell<Coverage>>,
+    /// The innermost expression that raised while the current error propagates, so an
+    /// `undefined` value names the cause rather than the outermost node.
+    cause: Option<UndefinedCause>,
 }
 
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
@@ -299,6 +304,19 @@ struct Evaluator<'a> {
 #[must_use]
 pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationReport {
     evaluate_request_with(ruleset, ctx, None)
+}
+
+/// Evaluates a request and records what every expression evaluated to, which is what a
+/// coverage report and a request trace are built from (`RULES-PARITY-04`).
+#[must_use]
+pub fn evaluate_request_traced(
+    ruleset: &Ruleset,
+    ctx: &RequestContext,
+    access: Option<&dyn DocumentAccess>,
+) -> (EvaluationReport, Coverage) {
+    let coverage = core::cell::RefCell::new(Coverage::default());
+    let report = evaluate_with_coverage(ruleset, ctx, access, Some(&coverage));
+    (report, coverage.into_inner())
 }
 
 /// Evaluates a request against a ruleset; `access` serves `get()` / `exists()` within the
@@ -312,6 +330,15 @@ pub fn evaluate_request_with(
     ruleset: &Ruleset,
     ctx: &RequestContext,
     access: Option<&dyn DocumentAccess>,
+) -> EvaluationReport {
+    evaluate_with_coverage(ruleset, ctx, access, None)
+}
+
+fn evaluate_with_coverage(
+    ruleset: &Ruleset,
+    ctx: &RequestContext,
+    access: Option<&dyn DocumentAccess>,
+    coverage: Option<&core::cell::RefCell<Coverage>>,
 ) -> EvaluationReport {
     let mut budget = Budget {
         expressions: 0,
@@ -361,6 +388,8 @@ pub fn evaluate_request_with(
             absent_resource_used: core::cell::Cell::new(false),
             budget,
             scope,
+            coverage,
+            cause: None,
         };
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
@@ -632,6 +661,19 @@ fn evaluate_allows<'a>(
     match deferred {
         Some(e) => Err(e),
         None => Ok(false),
+    }
+}
+
+/// One line of why an expression is undefined, for a trace.
+fn describe(e: &EvalError) -> String {
+    match e {
+        EvalError::Soft(m) | EvalError::Unsupported(m) => m.clone(),
+        EvalError::Unknown => "the request does not determine this value".to_owned(),
+        EvalError::Budget {
+            limit_id,
+            current,
+            maximum,
+        } => format!("{limit_id}: {current} exceeds {maximum}"),
     }
 }
 
@@ -911,24 +953,57 @@ impl<'a> Evaluator<'a> {
         self.nesting += 1;
         let result = self.eval_inner(expr);
         self.nesting -= 1;
+        if self.coverage.is_some() {
+            self.record(expr, &result);
+        }
         result
+    }
+
+    /// Records one evaluation of `expr`. A success is recorded as its value; a failure as
+    /// `undefined`, carrying the innermost expression that actually raised.
+    fn record(&mut self, expr: &Expr, result: &Result<RulesValue, EvalError>) {
+        let value = match result {
+            Ok(v) => {
+                self.cause = None;
+                ExprValue::of(v)
+            }
+            Err(e) => {
+                if self.cause.is_none() {
+                    self.cause = Some(UndefinedCause {
+                        span: expr.span,
+                        end: expr.end,
+                        message: describe(e),
+                    });
+                }
+                ExprValue::Undefined(self.cause.clone().unwrap_or_else(|| UndefinedCause {
+                    span: expr.span,
+                    end: expr.end,
+                    message: describe(e),
+                }))
+            }
+        };
+        if let Some(coverage) = self.coverage {
+            if let Ok(mut c) = coverage.try_borrow_mut() {
+                c.record(expr.span, expr.end, value);
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)]
     fn eval_inner(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
         self.budget.charge()?;
-        match expr {
-            Expr::Literal(l) => Ok(match l {
+        match expr.kind() {
+            ExprKind::Literal(l) => Ok(match l {
                 Literal::Null => RulesValue::Null,
                 Literal::Bool(b) => RulesValue::Bool(*b),
                 Literal::Int(i) => RulesValue::Int(*i),
                 Literal::Float(f) => RulesValue::Float(*f),
                 Literal::Str(s) => RulesValue::String(s.clone()),
             }),
-            Expr::Ident(name) => self
+            ExprKind::Ident(name) => self
                 .lookup(name)
                 .ok_or_else(|| soft(format!("unknown identifier {name}"))),
-            Expr::Member { object, name } => {
+            ExprKind::Member { object, name } => {
                 let obj = self.eval(object)?;
                 match obj {
                     RulesValue::Map(m) => m
@@ -944,7 +1019,7 @@ impl<'a> Evaluator<'a> {
                     other => Err(soft(format!("member {name} of {}", other.type_name()))),
                 }
             }
-            Expr::Index { object, index } => {
+            ExprKind::Index { object, index } => {
                 let obj = self.eval(object)?;
                 let idx = self.eval(index)?;
                 match (obj, idx) {
@@ -977,14 +1052,14 @@ impl<'a> Evaluator<'a> {
                     ))),
                 }
             }
-            Expr::Slice { object, start, end } => {
+            ExprKind::Slice { object, start, end } => {
                 let obj = self.eval(object)?;
                 let lo = self.eval(start)?;
                 let hi = self.eval(end)?;
                 slice(&obj, &lo, &hi)
             }
-            Expr::Call { callee, args, .. } => self.call(callee, args),
-            Expr::Unary { op, expr } => {
+            ExprKind::Call { callee, args } => self.call(callee, args),
+            ExprKind::Unary { op, expr } => {
                 let v = self.eval(expr)?;
                 match (op, v) {
                     (_, v) if undetermined(&v) => Err(EvalError::Unknown),
@@ -997,8 +1072,8 @@ impl<'a> Evaluator<'a> {
                     (_, v) => Err(soft(format!("unary operator on {}", v.type_name()))),
                 }
             }
-            Expr::Binary { op, left, right } => self.binary(*op, left, right),
-            Expr::Ternary {
+            ExprKind::Binary { op, left, right } => self.binary(*op, left, right),
+            ExprKind::Ternary {
                 cond,
                 then,
                 otherwise,
@@ -1010,20 +1085,20 @@ impl<'a> Evaluator<'a> {
                     self.eval(otherwise)
                 }
             }
-            Expr::List(items) => Ok(RulesValue::List(
+            ExprKind::List(items) => Ok(RulesValue::List(
                 items
                     .iter()
                     .map(|i| self.eval(i))
                     .collect::<Result<_, _>>()?,
             )),
-            Expr::Map(entries) => {
+            ExprKind::Map(entries) => {
                 let mut m = BTreeMap::new();
                 for (k, v) in entries {
                     m.insert(k.clone(), self.eval(v)?);
                 }
                 Ok(RulesValue::Map(m))
             }
-            Expr::Path(segments) => {
+            ExprKind::Path(segments) => {
                 let mut out = Vec::new();
                 for s in segments {
                     match s {
@@ -1044,7 +1119,7 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(RulesValue::Path(out))
             }
-            Expr::Is { expr, type_name } => {
+            ExprKind::Is { expr, type_name } => {
                 let v = self.eval(expr)?;
                 if matches!(v, RulesValue::Unknown) {
                     return Err(EvalError::Unknown);
@@ -1103,11 +1178,11 @@ impl<'a> Evaluator<'a> {
         if matches!(op, BinaryOp::And | BinaryOp::Or) {
             let mut operands: Vec<&Expr> = vec![right];
             let mut cursor = left;
-            while let Expr::Binary {
+            while let ExprKind::Binary {
                 op: inner,
                 left: l,
                 right: r,
-            } = cursor
+            } = cursor.kind()
             {
                 if *inner != op {
                     break;
@@ -1294,8 +1369,8 @@ impl<'a> Evaluator<'a> {
     }
 
     fn call(&mut self, callee: &Expr, args: &[Expr]) -> Result<RulesValue, EvalError> {
-        match callee {
-            Expr::Ident(name) => {
+        match callee.kind() {
+            ExprKind::Ident(name) => {
                 if let Some(f) = self.function(name) {
                     let values = args
                         .iter()
@@ -1325,14 +1400,14 @@ impl<'a> Evaluator<'a> {
                     _ => Err(soft(format!("unknown function {name}"))),
                 }
             }
-            Expr::Member { object, name } => {
-                if let Expr::Ident(ns) = object.as_ref() {
-                    if NAMESPACES.contains(&ns.as_str()) && self.lookup(ns).is_none() {
+            ExprKind::Member { object, name } => {
+                if let ExprKind::Ident(ns) = object.kind() {
+                    if NAMESPACES.contains(&ns.as_str()) && self.lookup(ns.as_str()).is_none() {
                         let values = args
                             .iter()
                             .map(|a| self.eval(a))
                             .collect::<Result<Vec<_>, _>>()?;
-                        return self.namespace_call(ns, name, &values);
+                        return self.namespace_call(ns.as_str(), name, &values);
                     }
                 }
                 let receiver = self.eval(object)?;

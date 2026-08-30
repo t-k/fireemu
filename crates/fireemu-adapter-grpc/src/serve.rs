@@ -56,6 +56,14 @@ fn cors_headers(
 }
 
 fn json_response(r: &RestResponse, origin: Option<&str>) -> Response<OutBody> {
+    // `:ruleCoverage.html` is the one route whose body is a page rather than JSON; it says
+    // so with a single key, exactly as a `dropConnection` fault does.
+    if let Some(html) = r.body[crate::rest::coverage::HTML_KEY].as_str() {
+        return cors_headers(Response::builder().status(r.status), origin)
+            .header("content-type", "text/html; charset=utf-8")
+            .body(full(Bytes::from(html.to_owned())))
+            .unwrap_or_else(|_| Response::new(full(Bytes::new())));
+    }
     let text = serde_json::to_vec(&r.body).unwrap_or_default();
     cors_headers(Response::builder().status(r.status), origin)
         .header("content-type", "application/json; charset=utf-8")

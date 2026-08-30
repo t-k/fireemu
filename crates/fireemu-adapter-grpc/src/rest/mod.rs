@@ -6,6 +6,7 @@
 // `tonic::Status` is the error type shared with the gRPC surface.
 #![allow(clippy::result_large_err)]
 
+pub mod coverage;
 pub mod json;
 
 use std::collections::BTreeMap;
@@ -329,6 +330,11 @@ impl RestState {
         if let Some(project) = rest.strip_suffix(":securityRules") {
             return self.security_rules_route(req, project);
         }
+        for (suffix, html) in [(":ruleCoverage.html", true), (":ruleCoverage", false)] {
+            if let Some(project) = rest.strip_suffix(suffix) {
+                return self.rule_coverage_route(req, project, html);
+            }
+        }
         let mut parts = rest.split('/');
         let (Some(project), Some("databases"), Some(database), Some("documents"), None) = (
             parts.next(),
@@ -408,6 +414,46 @@ impl RestState {
             ))),
             Err(rules::RulesLoadError::Poisoned) => Err(Status::internal("rules lock poisoned")),
         }
+    }
+
+    /// `GET /emulator/v1/projects/{project}:ruleCoverage` and its `.html` form.
+    fn rule_coverage_route(
+        &self,
+        req: &RestRequest,
+        project: &str,
+        html: bool,
+    ) -> Result<RestResponse, Status> {
+        if req.method != "GET" {
+            return Err(Status::invalid_argument(format!(
+                "{} is not supported on {}; a coverage report is read with GET",
+                req.method, req.path
+            )));
+        }
+        if project.is_empty() || project.contains('/') {
+            return Err(Status::invalid_argument(
+                "the project of a coverage report must be named",
+            ));
+        }
+        let Some(rules) = self.rules.as_ref() else {
+            return Err(Status::failed_precondition(
+                "this daemon evaluates no Security Rules, so it reports no coverage",
+            ));
+        };
+        let loaded = rules
+            .rules()
+            .read()
+            .map_err(|_| Status::internal("rules lock poisoned"))?;
+        let diagnostics = loaded
+            .diagnostics
+            .lock()
+            .map_err(|_| Status::internal("rules diagnostics lock poisoned"))?;
+        Ok(if html {
+            ok(json!({
+                coverage::HTML_KEY: coverage::coverage_html(&loaded, diagnostics.coverage()),
+            }))
+        } else {
+            ok(coverage::coverage_json(&loaded, diagnostics.coverage()))
+        })
     }
 
     /// Handles one request.

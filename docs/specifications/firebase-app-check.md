@@ -549,6 +549,8 @@ For each Auth, Firestore, and Storage surface, cover the Cartesian matrix of bas
 2. `read-only observations reject a missing or wrong control token`
 3. `snapshot restore replaces post-snapshot debug-token registrations and rotates the epoch`
 4. `unknown token input does not create an unbounded metrics label`
+5. `a session reads only its own project's observations`
+6. `heavy traffic to one project never evicts another project's observations`
 
 ## 20. Verification strategy
 

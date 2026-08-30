@@ -318,9 +318,20 @@ pub fn handle_with(
             ("POST", "accounts:update") => update(&mut store, body, at),
             ("POST", "accounts:delete") => admin_delete(&mut store, body),
             ("GET" | "POST", "accounts:batchGet") => admin_batch_get(&store, query, body),
-            (_, "accounts" | "accounts:lookup" | "accounts:update" | "accounts:delete") => {
-                error(405, "METHOD_NOT_ALLOWED")
+            // Admin link generators: the code and link come back to the caller.
+            ("POST", "accounts:sendOobCode") => {
+                let mut with_link = body.clone();
+                with_link["returnOobLink"] = json!(true);
+                send_oob_code(&mut store, &with_link, at, headers)
             }
+            (
+                _,
+                "accounts"
+                | "accounts:lookup"
+                | "accounts:update"
+                | "accounts:delete"
+                | "accounts:sendOobCode",
+            ) => error(405, "METHOD_NOT_ALLOWED"),
             _ => error(404, "NOT_FOUND"),
         };
     }

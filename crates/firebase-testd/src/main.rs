@@ -39,6 +39,7 @@ use ftd_core_firestore::index::{IndexSet, PlanningContext};
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::SplitMix64;
+use ftd_core_types::time::LogicalInstant;
 use ftd_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
 
 use crate::config::{RuntimeConfig, Selection};
@@ -497,7 +498,16 @@ fn print_banner(
         }
     }
     println!("  control API:      http://{http_addr}/v1/  (health: /health/live)");
-    println!("  edition: {}   clock: {}", cfg.edition, cfg.clock_start);
+    println!(
+        "  edition: {}   clock: {}{}",
+        cfg.edition,
+        cfg.clock_start,
+        if cfg.clock_start_pinned {
+            " (pinned by daemon.clockStart)"
+        } else {
+            " (wall clock at start; pin with daemon.clockStart)"
+        }
+    );
 }
 
 /// Resolves on SIGTERM (so a killed daemon still stops its runner); never on platforms
@@ -599,7 +609,16 @@ fn control_state(
 }
 
 #[allow(clippy::too_many_lines)]
-fn run(cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
+fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
+    if !cfg.clock_start_pinned {
+        // Unpinned: start at the wall clock (whole seconds) so ID tokens verify against
+        // real time; daemon.clockStart pins it for reproducible runs.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(0))
+            .unwrap_or(0);
+        cfg.clock_start = LogicalInstant::from_unix_seconds(now);
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

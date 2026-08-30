@@ -30,6 +30,11 @@ pub struct RuntimeConfig {
     pub require_demo_prefix: bool,
     /// Initial virtual clock instant.
     pub clock_start: LogicalInstant,
+    /// Whether `daemon.clockStart` pinned it. Without it the daemon starts its virtual
+    /// clock at the wall-clock time, so tokens it issues are valid for SDKs that check
+    /// expiry against real time (the Admin SDK's `verifyIdToken`); a pinned start keeps
+    /// runs reproducible.
+    pub clock_start_pinned: bool,
     /// Deterministic seed.
     pub seed: u64,
     /// Project ID used for Auth token issuance.
@@ -75,6 +80,7 @@ impl Default for RuntimeConfig {
             index_policy: IndexValidationPolicy::Conservative,
             require_demo_prefix: true,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
+            clock_start_pinned: false,
             seed: 42,
             auth_project: "demo-app".to_owned(),
             index_file: None,
@@ -291,6 +297,7 @@ impl RuntimeConfig {
             cfg.functions_addr = format!("127.0.0.1:{port}");
         }
         if let Some(start) = d.get("clockStart").and_then(Value::as_str) {
+            cfg.clock_start_pinned = true;
             cfg.clock_start = LogicalInstant::parse_rfc3339(start)
                 .map_err(|e| ConfigError(format!("daemon.clockStart: {e}")))?;
         }

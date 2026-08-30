@@ -83,9 +83,66 @@ function firstRegion(ep) {
   return r || undefined;
 }
 
+// firebase-functions v1 triggers: legacy event types and a resource pattern.
+function describeV1Event(base, type, resource, schedule, retry) {
+  const v1 = { v1: true };
+  const fsMatch = type.match(/^providers\/cloud\.firestore\/eventTypes\/document\.(create|update|delete|write)$/);
+  if (fsMatch) {
+    const docIndex = resource.indexOf("/documents/");
+    const dbMatch = resource.match(/\/databases\/([^/]+)\//);
+    return {
+      ...base,
+      ...v1,
+      retry,
+      trigger: {
+        type: "firestore",
+        eventType: `google.cloud.firestore.document.v1.${{ create: "created", update: "updated", delete: "deleted", write: "written" }[fsMatch[1]]}`,
+        database: dbMatch ? dbMatch[1] : "(default)",
+        document: docIndex >= 0 ? resource.slice(docIndex + "/documents/".length) : undefined,
+      },
+    };
+  }
+  const stMatch = type.match(/^google\.storage\.object\.(finalize|delete|metadataUpdate|archive)$/);
+  if (stMatch) {
+    const bucketMatch = resource.match(/\/buckets\/([^/]+)/);
+    return {
+      ...base,
+      ...v1,
+      retry,
+      trigger: {
+        type: "storage",
+        eventType: `google.cloud.storage.object.v1.${{ finalize: "finalized", delete: "deleted", metadataUpdate: "metadataUpdated", archive: "archived" }[stMatch[1]]}`,
+        bucket: bucketMatch ? bucketMatch[1] : undefined,
+      },
+    };
+  }
+  if (schedule) {
+    return {
+      ...base,
+      ...v1,
+      retry: Number(schedule.retryConfig?.retryCount || 0) > 0,
+      trigger: { type: "schedule", schedule: schedule.schedule, timeZone: schedule.timeZone || undefined },
+    };
+  }
+  return { ...base, unsupported: `v1 event type ${type}` };
+}
+
+function isV1(fn) {
+  return fn.__endpoint?.platform === "gcfv1" || (!(fn.__endpoint && Object.keys(fn.__endpoint).length > 0) && !!fn.__trigger);
+}
+
 function describe(name, fn) {
   const ep = fn.__endpoint;
   const base = { name, entryPoint: name };
+  if (ep && ep.platform === "gcfv1") {
+    if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
+    const region = firstRegion(ep);
+    if (region) base.region = region;
+    if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
+    if (ep.callableTrigger) return { ...base, trigger: { type: "http", callable: true } };
+    const et = ep.eventTrigger || {};
+    return describeV1Event(base, String(et.eventType || ""), String(et.eventFilters?.resource || ""), ep.scheduleTrigger, !!et.retry);
+  }
   if (ep && Object.keys(ep).length > 0) {
     const region = firstRegion(ep);
     if (region) base.region = region;
@@ -134,63 +191,17 @@ function describe(name, fn) {
   }
   const t = fn.__trigger;
   if (t) {
-    // firebase-functions v1: legacy trigger metadata.
     if (t.timeout) base.timeoutSeconds = Number(String(t.timeout).replace(/s$/, "")) || undefined;
     if (t.regions?.length) base.region = t.regions[0];
     if (t.httpsTrigger) return { ...base, trigger: { type: "http", callable: !!t.labels?.["deployment-callable"] } };
     const et = t.eventTrigger;
-    if (et) {
-      const resource = String(et.resource || "");
-      const type = String(et.eventType || "");
-      base.retry = !!et.failurePolicy || !!t.failurePolicy;
-      const v1 = { v1: true };
-      const fsMatch = type.match(/^providers\/cloud\.firestore\/eventTypes\/document\.(create|update|delete|write)$/);
-      if (fsMatch) {
-        const docIndex = resource.indexOf("/documents/");
-        const dbMatch = resource.match(/\/databases\/([^/]+)\//);
-        return {
-          ...base,
-          ...v1,
-          trigger: {
-            type: "firestore",
-            eventType: `google.cloud.firestore.document.v1.${{ create: "created", update: "updated", delete: "deleted", write: "written" }[fsMatch[1]]}`,
-            database: dbMatch ? dbMatch[1] : "(default)",
-            document: docIndex >= 0 ? resource.slice(docIndex + "/documents/".length) : undefined,
-          },
-        };
-      }
-      const stMatch = type.match(/^google\.storage\.object\.(finalize|delete|metadataUpdate|archive)$/);
-      if (stMatch) {
-        const bucketMatch = resource.match(/\/buckets\/([^/]+)/);
-        return {
-          ...base,
-          ...v1,
-          trigger: {
-            type: "storage",
-            eventType: `google.cloud.storage.object.v1.${{ finalize: "finalized", delete: "deleted", metadataUpdate: "metadataUpdated", archive: "archived" }[stMatch[1]]}`,
-            bucket: bucketMatch ? bucketMatch[1] : undefined,
-          },
-        };
-      }
-      if (type === "google.pubsub.topic.publish" && t.schedule) {
-        return {
-          ...base,
-          ...v1,
-          retry: Number(t.schedule.retryConfig?.retryCount || 0) > 0,
-          trigger: { type: "schedule", schedule: t.schedule.schedule, timeZone: t.schedule.timeZone || undefined },
-        };
-      }
-      return { ...base, unsupported: `v1 event type ${type}` };
-    }
+    if (et) return describeV1Event(base, String(et.eventType || ""), String(et.resource || ""), t.schedule, !!et.failurePolicy || !!t.failurePolicy);
     return { ...base, unsupported: "unknown v1 trigger shape" };
   }
   return { ...base, unsupported: "not a Firebase function" };
 }
 
 // v1 functions are called as (data, context) with the legacy event shapes.
-function isV1(fn) {
-  return !(fn.__endpoint && Object.keys(fn.__endpoint).length > 0) && !!fn.__trigger;
-}
 
 function v1Context(msg) {
   const event = msg.event;

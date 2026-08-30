@@ -1988,3 +1988,209 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
         "under strict the token names no user of the Auth store, so the caller is refused"
     );
 }
+
+// ---- Security regressions (storage parity review) ------------------------------------
+
+/// M-1: a missing object served through a media route must never be typed `text/html`, or
+/// the reflected object name is a stored-data-stealing reflected-XSS vector on the emulator
+/// origin (a top-level GET carries no Origin, so the loopback guard never fires). The body
+/// still reflects the name, as the official emulator's does -- only the content-type differs.
+#[test]
+fn a_missing_media_object_never_answers_with_html() {
+    let s = state(None);
+    let evil = "a%3Cscript%3Ealert(1)%3C%2Fscript%3E.txt";
+    // JSON API media read of a missing object.
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/b/{BUCKET}/o/{evil}?alt=media"),
+            &[("authorization", "Bearer owner")],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 404);
+    assert!(
+        !header(&r, "content-type").unwrap_or("").contains("text/html"),
+        "media 404 must not be text/html: {:?}",
+        header(&r, "content-type")
+    );
+    // The XML-style GET fallback reaches the same answer.
+    let r = handle(&s, req("GET", &format!("/{BUCKET}/{evil}?alt=media"), &[], b""));
+    assert_eq!(r.status, 404);
+    assert!(
+        !header(&r, "content-type").unwrap_or("").contains("text/html"),
+        "xml-style 404 must not be text/html: {:?}",
+        header(&r, "content-type")
+    );
+}
+
+/// S-4: metadata strings that carry a control character are refused at the input boundary,
+/// so they can never be echoed into a response header (the same rule the object name is
+/// already held to). Covers both dialects' PATCH, a NUL in a custom value, and the
+/// form-upload header fields where `value.trim()` would leave an internal CR/LF in place.
+#[test]
+fn metadata_with_control_characters_is_refused_at_the_boundary() {
+    let s = state(None);
+    // Firebase PATCH: a CR/LF in a standard field.
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/v0/b/{BUCKET}/o/x"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+            ],
+            b"{\"contentType\": \"text/plain\r\nX-Injected: 1\"}",
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    // JSON API PATCH: a CR/LF in contentDisposition.
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/b/{BUCKET}/o/x"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+            ],
+            b"{\"contentDisposition\": \"inline\r\nX-Injected: 1\"}",
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    // A NUL in a custom metadata value.
+    let r = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/v0/b/{BUCKET}/o/x"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+            ],
+            b"{\"metadata\": {\"k\": \"a\x00b\"}}",
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    // The form-upload header fields: a CR/LF in a content-disposition field value.
+    let boundary = "formbound";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nobj.txt\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"content-disposition\"\r\n\r\ninline\r\nX-Injected: 1\r\n").as_bytes(),
+    );
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f\"\r\nContent-Type: text/plain\r\n\r\nhi\r\n--{boundary}--\r\n").as_bytes(),
+    );
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/{BUCKET}"),
+            &[("content-type", &format!("multipart/form-data; boundary={boundary}"))],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+}
+
+/// S-3: a multipart body whose bytes are all the boundary character parses in linear time.
+/// Before the fix the delimiter scan was O(N*M) and this took minutes; the assertion is a
+/// generous ceiling so it fixes the linear-time regression without being CI-flaky.
+#[test]
+fn a_multipart_body_of_boundary_bytes_parses_in_bounded_time() {
+    let s = state(None);
+    let boundary = "A".repeat(70);
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+    // 8 MiB of the boundary character: every offset used to match-then-reject and advance one.
+    let body = vec![b'A'; 8 * 1024 * 1024];
+    let start = std::time::Instant::now();
+    let r = handle(
+        &s,
+        owned_req("POST", &format!("/{BUCKET}"), &[("content-type", &content_type)], body),
+    );
+    let elapsed = start.elapsed();
+    // It is a malformed body, so the status is a 4xx; what matters is that it returned fast.
+    assert!(r.status >= 400);
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "multipart parse took {elapsed:?} -- the O(N*M) regression is back"
+    );
+}
+
+/// S-3 (double defence): a boundary longer than RFC 2046's 70-byte cap is refused outright.
+#[test]
+fn an_oversized_multipart_boundary_is_refused() {
+    let s = state(None);
+    let boundary = "b".repeat(8 * 1024);
+    let content_type = format!("multipart/related; boundary={boundary}");
+    let r = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart&name=x"),
+            &[("authorization", "Bearer owner"), ("content-type", &content_type)],
+            b"body",
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+}
+
+/// S-4 (real server): an object with ordinary metadata still answers `?alt=media` with its
+/// bytes and the CORS headers. This exercises the hyper response builder that the direct
+/// `handle()` tests bypass -- the path whose silent "200, empty body, no CORS" failure mode
+/// the S-4 boundary check and the 500 fallback close.
+#[tokio::test]
+async fn a_stored_object_always_answers_media_with_its_bytes() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
+
+    // Upload an object with a full set of ordinary metadata fields.
+    let body = b"hello bytes";
+    let head = format!(
+        "POST /upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=served.txt HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let mut up = tokio::net::TcpStream::connect(addr).await.unwrap();
+    up.write_all(head.as_bytes()).await.unwrap();
+    up.write_all(body).await.unwrap();
+    let uploaded = read_response(&mut up).await;
+    assert!(uploaded.starts_with("HTTP/1.1 200"), "{uploaded}");
+
+    // Read it back with an Origin, and assert the real bytes and the CORS header come back.
+    let mut get = tokio::net::TcpStream::connect(addr).await.unwrap();
+    get.write_all(
+        format!("GET /b/{BUCKET}/o/served.txt?alt=media HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:5173\r\nConnection: close\r\n\r\n").as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut raw = Vec::new();
+    get.read_to_end(&mut raw).await.unwrap();
+    let split = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("a header/body split");
+    let head_text = String::from_utf8_lossy(&raw[..split]).to_lowercase();
+    let returned_body = &raw[split + 4..];
+    assert!(head_text.starts_with("http/1.1 200"), "{head_text}");
+    assert!(
+        head_text.contains("access-control-allow-origin: http://localhost:5173"),
+        "CORS header missing: {head_text}"
+    );
+    assert!(
+        head_text.contains("x-content-type-options: nosniff"),
+        "nosniff missing: {head_text}"
+    );
+    assert_eq!(returned_body, body, "the object bytes must come back");
+    server.abort();
+}

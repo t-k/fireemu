@@ -1028,3 +1028,194 @@ fn an_owned_chunk_is_adopted_by_an_empty_session_and_follows_every_append_rule()
         "a size mismatch ends the session"
     );
 }
+
+#[test]
+fn download_tokens_are_capped_and_do_not_escape_the_metadata_budget() {
+    use fireemu_core_storage::store::{
+        CustomMetadataPatch, MAX_DOWNLOAD_TOKENS, MAX_DOWNLOAD_TOKEN_LEN,
+    };
+    let mut s = StorageState::new(7);
+    let b = bucket();
+    let n = name("t");
+
+    // The per-token length cap: an over-long single token is dropped, not stored, and never
+    // stashes unbounded state under this one key (S-1). Non-token custom metadata is what the
+    // 8 KiB budget still guards, so a short list rides through and the budget is unaffected.
+    let long_token = "b".repeat(MAX_DOWNLOAD_TOKEN_LEN + 1);
+    let with_long = NewMetadata {
+        custom: Some(BTreeMap::from([(
+            "firebaseStorageDownloadTokens".to_owned(),
+            format!("keep,{long_token}"),
+        )])),
+        ..NewMetadata::default()
+    };
+    let m = s
+        .put(&b, &n, b"x".to_vec(), with_long, Precondition::default(), t(1))
+        .unwrap();
+    assert_eq!(m.download_tokens, vec!["keep"], "the over-long token is dropped");
+
+    // The count cap: a list far past MAX_DOWNLOAD_TOKENS keeps only the cap, so the joined
+    // value can never grow without bound (cap x length stays well under the 8 KiB budget).
+    let many: Vec<String> = (0..MAX_DOWNLOAD_TOKENS + 200).map(|i| format!("t{i}")).collect();
+    let over = NewMetadata {
+        custom: Some(BTreeMap::from([(
+            "firebaseStorageDownloadTokens".to_owned(),
+            many.join(","),
+        )])),
+        ..NewMetadata::default()
+    };
+    let m = s
+        .put(&b, &n, b"y".to_vec(), over, Precondition::default(), t(2))
+        .unwrap();
+    assert_eq!(m.download_tokens.len(), MAX_DOWNLOAD_TOKENS, "the count is capped on put");
+
+    // update_metadata caps the same way when it merges the key.
+    let patch = MetadataPatch {
+        custom: Some(CustomMetadataPatch::Merge(BTreeMap::from([(
+            "firebaseStorageDownloadTokens".to_owned(),
+            Some(many.join(",")),
+        )]))),
+        ..MetadataPatch::default()
+    };
+    let m = s
+        .update_metadata(&b, &n, &patch, Precondition::default(), t(3))
+        .unwrap();
+    assert_eq!(
+        m.download_tokens.len(),
+        MAX_DOWNLOAD_TOKENS,
+        "the count is capped on update"
+    );
+
+    // ?create_token=true (add_download_token) refuses to grow past the cap one at a time.
+    for k in 0..1000 {
+        if s.add_download_token(&b, &n, t(4 + k)).is_err() {
+            break;
+        }
+    }
+    assert_eq!(
+        s.get(&b, &n).unwrap().download_tokens.len(),
+        MAX_DOWNLOAD_TOKENS,
+        "minting one token at a time never exceeds the cap"
+    );
+
+    // The plain (non-token) custom budget is unchanged: a 9 KiB ordinary value is refused.
+    let fat = NewMetadata {
+        custom: Some(BTreeMap::from([("k".to_owned(), "v".repeat(9 * 1024))])),
+        ..NewMetadata::default()
+    };
+    assert_eq!(
+        s.put(&b, &name("fat"), b"x".to_vec(), fat, Precondition::default(), t(2000)),
+        Err(StorageError::MetadataTooLarge)
+    );
+}
+
+#[test]
+fn copying_an_object_keeps_metadata_within_the_budget() {
+    let mut s = StorageState::new(9);
+    let b = bucket();
+    s.put(
+        &b,
+        &name("src"),
+        b"data".to_vec(),
+        NewMetadata {
+            custom: Some(BTreeMap::from([("k".to_owned(), "v".to_owned())])),
+            ..NewMetadata::default()
+        },
+        Precondition::default(),
+        t(0),
+    )
+    .unwrap();
+    // A copy with no override inherits the source's ordinary custom metadata (the adapter is
+    // what carries download tokens across a copy; the storage-probe pins that path).
+    let copied = s
+        .copy(
+            (&b, &name("src")),
+            (&b, &name("dst")),
+            None,
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    assert_eq!(copied.custom.get("k").map(String::as_str), Some("v"));
+    // A copy whose override metadata carries an oversized ordinary value is refused on the
+    // budget, so the S-1 changes did not open a copy-shaped bypass.
+    let over = NewMetadata {
+        custom: Some(BTreeMap::from([("k".to_owned(), "v".repeat(9 * 1024))])),
+        ..NewMetadata::default()
+    };
+    assert_eq!(
+        s.copy(
+            (&b, &name("src")),
+            (&b, &name("dst2")),
+            Some(over),
+            Precondition::default(),
+            t(2)
+        ),
+        Err(StorageError::MetadataTooLarge)
+    );
+}
+
+#[test]
+fn a_denied_upload_releases_its_bytes_but_keeps_its_count() {
+    use fireemu_core_storage::store::UploadPhase;
+    let mut s = StorageState::new(11);
+    let b = bucket();
+    let id = s
+        .begin_upload(
+            &b,
+            &name("big.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    let chunk = vec![7u8; 1024 * 1024];
+    s.append_upload_owned(&id, 0, chunk, t(0)).unwrap();
+    // Rules refused the finalization: the session is terminal, the byte count stays
+    // observable, and the bytes themselves are released (S-2).
+    s.mark_upload_denied(&id, t(0)).unwrap();
+    assert_eq!(
+        s.upload_phase(&id, t(0)).unwrap(),
+        UploadPhase::Denied(1024 * 1024)
+    );
+    let (received, committed) = s.upload_status(&id, t(0)).unwrap();
+    assert_eq!((received, committed.is_none()), (1024 * 1024, true));
+}
+
+#[test]
+fn a_denied_upload_can_never_be_revived() {
+    let mut s = StorageState::new(13);
+    let b = bucket();
+    let id = s
+        .begin_upload(
+            &b,
+            &name("x.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    s.append_upload_owned(&id, 0, vec![1u8; 8], t(0)).unwrap();
+    s.mark_upload_denied(&id, t(0)).unwrap();
+    // Every mutating path refuses a denied session, so no object is ever published.
+    assert_eq!(
+        s.append_upload(&id, 8, b"more", t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert_eq!(
+        s.append_upload_owned(&id, 8, b"more".to_vec(), t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert_eq!(
+        s.finalize_upload(&id, t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert_eq!(
+        s.cancel_upload(&id, t(0)),
+        Err(StorageError::UploadFinalized)
+    );
+    assert!(s.pending_upload(&id, t(0)).is_err());
+    assert!(s.get(&b, &name("x.bin")).is_none(), "nothing was published");
+}

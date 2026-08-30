@@ -15,6 +15,16 @@ use crate::name::{BucketName, ObjectName};
 pub const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 /// Custom metadata budget (Cloud Storage: 8 KiB of keys and values).
 pub const MAX_CUSTOM_METADATA_BYTES: usize = 8 * 1024;
+
+/// The most download tokens one object may carry. Production keeps a small handful; the cap
+/// is a fireemu-only safety bound (the official emulator has none), so an unauthenticated
+/// `PATCH` cannot grow an object's token list without limit.
+pub const MAX_DOWNLOAD_TOKENS: usize = 32;
+
+/// The longest a single download token may be. fireemu mints 36-character UUIDs; the cap
+/// leaves room for the client-supplied tokens the Firebase dialect honours while refusing an
+/// oversized one.
+pub const MAX_DOWNLOAD_TOKEN_LEN: usize = 128;
 /// Resumable upload sessions expire after a week of virtual time (Cloud Storage: 7 days).
 pub const UPLOAD_SESSION_TTL_SECONDS: i64 = 7 * 24 * 3600;
 /// Maximum upload sessions still receiving bytes (abandoned sessions expire).
@@ -330,9 +340,10 @@ enum UploadState {
     Receiving,
     Committed(Box<ObjectMetadata>),
     Aborted,
-    /// Finalization ran and Security Rules refused it: terminal like `Committed`, and the
-    /// received byte count stays observable, as the official emulator keeps it.
-    Denied,
+    /// Finalization ran and Security Rules refused it: terminal like `Committed`. Only the
+    /// received byte count is kept observable; the bytes themselves are dropped, so a
+    /// refused near-limit upload does not sit in memory until its TTL (S-2).
+    Denied(u64),
 }
 
 /// What a status query observes about a resumable upload.
@@ -477,6 +488,29 @@ pub struct StorageState {
 fn custom_metadata_size(custom: &BTreeMap<String, String>) -> usize {
     custom.iter().map(|(k, v)| k.len() + v.len()).sum()
 }
+
+/// The bytes charged against the custom-metadata budget: the plain custom map plus the
+/// download tokens as they serialize back into the `firebaseStorageDownloadTokens` key.
+///
+/// Download tokens are lifted out of custom metadata before the plain map is measured, so
+/// counting the plain map alone would let a caller smuggle unbounded state past the 8 KiB
+/// budget through that one key (an unauthenticated `PATCH` can set it, and each `GET` then
+/// scans every token in constant time). Charging the tokens here closes that, and does it
+/// consistently across `put`, `update_metadata`, `add_download_token` and the resumable
+/// start, which used to check inconsistently.
+fn metadata_budget_size(custom: &BTreeMap<String, String>, download_tokens: &[String]) -> usize {
+    let mut size = custom_metadata_size(custom);
+    if !download_tokens.is_empty() {
+        size += TOKENS_METADATA_KEY.len();
+        size += download_tokens.iter().map(String::len).sum::<usize>();
+        // The comma separators of the joined value.
+        size += download_tokens.len().saturating_sub(1);
+    }
+    size
+}
+
+/// The custom-metadata key download tokens ride in on, as the official emulator stores them.
+const TOKENS_METADATA_KEY: &str = "firebaseStorageDownloadTokens";
 
 impl StorageState {
     /// Empty store with a deterministic token generator.
@@ -691,7 +725,7 @@ impl StorageState {
         let custom_defined = metadata.custom.is_some();
         let mut custom = metadata.custom.unwrap_or_default();
         let download_tokens = extract_download_tokens(&mut custom, Vec::new());
-        if custom_metadata_size(&custom) > MAX_CUSTOM_METADATA_BYTES {
+        if metadata_budget_size(&custom, &download_tokens) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
         let key = (bucket.clone(), name.clone());
@@ -747,7 +781,7 @@ impl StorageState {
         // ordinary custom metadata.
         next.download_tokens =
             extract_download_tokens(&mut next.custom, std::mem::take(&mut next.download_tokens));
-        if custom_metadata_size(&next.custom) > MAX_CUSTOM_METADATA_BYTES {
+        if metadata_budget_size(&next.custom, &next.download_tokens) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
         next.metageneration += 1;
@@ -772,6 +806,12 @@ impl StorageState {
             .objects
             .get_mut(&(bucket.clone(), name.clone()))
             .ok_or(StorageError::NotFound)?;
+        // The token-mint route (?create_token=true) has no other size gate, so the count
+        // cap is enforced here too: an unauthenticated caller cannot grow the list without
+        // limit one token at a time (S-1).
+        if meta.download_tokens.len() >= MAX_DOWNLOAD_TOKENS {
+            return Err(StorageError::MetadataTooLarge);
+        }
         meta.download_tokens.push(token);
         meta.metageneration += 1;
         meta.updated = now;
@@ -1169,9 +1209,8 @@ impl StorageState {
         let u = self.upload_mut(id, now)?;
         Ok(match &u.state {
             UploadState::Committed(m) => (m.size, Some((**m).clone())),
-            UploadState::Receiving | UploadState::Aborted | UploadState::Denied => {
-                (u.received.len() as u64, None)
-            }
+            UploadState::Denied(received) => (*received, None),
+            UploadState::Receiving | UploadState::Aborted => (u.received.len() as u64, None),
         })
     }
 
@@ -1186,7 +1225,7 @@ impl StorageState {
             UploadState::Receiving => UploadPhase::Active(u.received.len() as u64),
             UploadState::Committed(m) => UploadPhase::Finalized(m.clone()),
             UploadState::Aborted => UploadPhase::Cancelled(u.received.len() as u64),
-            UploadState::Denied => UploadPhase::Denied(u.received.len() as u64),
+            UploadState::Denied(received) => UploadPhase::Denied(*received),
         })
     }
 
@@ -1201,7 +1240,10 @@ impl StorageState {
     ) -> Result<(), StorageError> {
         let u = self.upload_mut(id, now)?;
         if u.state == UploadState::Receiving {
-            u.state = UploadState::Denied;
+            // Keep the count for a later status query; drop the bytes, exactly as a cancel
+            // and a size / checksum abort do (S-2).
+            u.state = UploadState::Denied(u.received.len() as u64);
+            u.received = Vec::new();
         }
         Ok(())
     }
@@ -1238,7 +1280,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
                 return Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving => {}
@@ -1280,7 +1322,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
                 return Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving => {}
@@ -1311,7 +1353,7 @@ impl StorageState {
     ) -> Result<PendingUpload<'_>, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
                 Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving => Ok(PendingUpload {
@@ -1339,6 +1381,22 @@ impl StorageState {
         Ok(self.upload_mut(id, now)?.admission.as_ref())
     }
 
+    /// The bucket a session belongs to, whatever state the session is in.
+    ///
+    /// Like [`Self::upload_admission`] and unlike [`Self::pending_upload`], this answers for a
+    /// terminal (committed, aborted or rules-denied) session too, so the protocol layer can
+    /// refuse a request that names the wrong bucket before it learns the session's received
+    /// byte count or status. A `pending_upload`-only check let a `query` command on one
+    /// bucket's URL read a terminal session that belongs to another bucket (and so another
+    /// project).
+    pub fn upload_bucket(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<&BucketName, StorageError> {
+        Ok(&self.upload_mut(id, now)?.bucket)
+    }
+
     /// Commits the received bytes as a new generation.
     pub fn finalize_upload(
         &mut self,
@@ -1348,7 +1406,7 @@ impl StorageState {
         let (bucket, name, metadata, precondition, bytes) = {
             let u = self.upload_mut(id, now)?;
             match u.state {
-                UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
+                UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
                     return Err(StorageError::UploadFinalized)
                 }
                 UploadState::Receiving => {}
@@ -1433,7 +1491,7 @@ impl StorageState {
     ) -> Result<(), StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Denied => {
+            UploadState::Committed(_) | UploadState::Denied(_) => {
                 return Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving | UploadState::Aborted => {}
@@ -1471,9 +1529,20 @@ fn extract_download_tokens(
     existing: Vec<String>,
 ) -> Vec<String> {
     let mut tokens = existing;
-    if let Some(joined) = custom.remove("firebaseStorageDownloadTokens") {
+    if let Some(joined) = custom.remove(TOKENS_METADATA_KEY) {
         for t in joined.split(',') {
-            if !t.is_empty() && !tokens.iter().any(|x| x == t) {
+            // Every write path funnels through here, so bounding the count and length here
+            // is the single place that stops an unauthenticated caller from smuggling
+            // unbounded token state past the custom-metadata budget through this one key
+            // (S-1). An over-long candidate is dropped whole rather than truncated, so a
+            // token is never silently mangled into a different value.
+            if t.is_empty() || t.len() > MAX_DOWNLOAD_TOKEN_LEN {
+                continue;
+            }
+            if tokens.len() >= MAX_DOWNLOAD_TOKENS {
+                break;
+            }
+            if !tokens.iter().any(|x| x == t) {
                 tokens.push(t.to_owned());
             }
         }

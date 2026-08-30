@@ -51,6 +51,11 @@ use serde_json::{json, Map, Value};
 /// The custom-metadata key download tokens ride in on, exactly as upstream stores them.
 const TOKENS_KEY: &str = "firebaseStorageDownloadTokens";
 
+/// The longest MIME multipart boundary accepted (RFC 2046 caps it at 70). A longer one is a
+/// red flag rather than a real client, and refusing it is a second line of defence for the
+/// multipart scanner behind its O(N) fix (S-3).
+const MAX_MULTIPART_BOUNDARY_LEN: usize = 70;
+
 /// Observer of Storage object events (see [`StorageState::events`]).
 pub type StorageEventSink = Arc<dyn Fn(&StorageEvent) + Send + Sync>;
 
@@ -409,12 +414,30 @@ fn gcs_json_error(status: u16, message: &str, reason: &str) -> StorageResponse {
 
 /// The JSON API's missing-object answer: a plain sentence for a media request, the JSON
 /// envelope otherwise.
+///
+/// The media branch is a **documented divergence** from the official emulator, which types
+/// this body `text/html`: the message reflects the decoded object name, and the route is a
+/// top-level `GET` reachable with no `Origin` (so the loopback CORS guard never fires), so a
+/// `text/html` reflection is a stored-data-stealing reflected-XSS vector on the emulator's
+/// own origin (the JSON API dialect is unauthenticated and rules-free). fireemu answers the
+/// identical status and body bytes as `text/plain`, which no browser executes. The
+/// divergence is pinned in `conformance/storage-matrix.json`.
 fn gcs_no_such_object(bucket: &str, name: &str, media: bool) -> StorageResponse {
     let message = format!("No such object: {bucket}/{name}");
     if media {
-        html_text(404, &message)
+        plain_text(404, &message)
     } else {
         gcs_json_error(404, &message, "notFound")
+    }
+}
+
+/// A `text/plain; charset=utf-8` body of arbitrary text (used where the official emulator
+/// reflects caller-influenced text that must never be typed as HTML).
+fn plain_text(status: u16, text: &str) -> StorageResponse {
+    StorageResponse {
+        status,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: text.as_bytes().to_vec(),
     }
 }
 
@@ -561,6 +584,9 @@ fn parse_multipart(content_type: &str, mut body: Vec<u8>) -> Result<(Value, Vec<
     else {
         return Err(format!("Bad content type. {content_type}"));
     };
+    if boundary.len() > MAX_MULTIPART_BOUNDARY_LEN {
+        return Err("multipart boundary is too long".to_owned());
+    }
     let delimiter = format!("--{boundary}").into_bytes();
     let parts = split_multipart_parts(&body, &delimiter)
         .map_err(|()| "Unexpected number of parts in request body".to_owned())?;
@@ -626,28 +652,46 @@ fn split_multipart_parts(body: &[u8], delimiter: &[u8]) -> Result<Vec<MultipartP
 
 /// Position of the next delimiter at or after `from` that starts a line.
 fn find_delimiter(body: &[u8], from: usize, delimiter: &[u8]) -> Option<usize> {
-    let mut at = from;
-    while let Some(rel) = find(body.get(at..)?, delimiter) {
-        let pos = at + rel;
-        let line_start = pos == 0 || body[pos - 1] == b'\n';
-        // A delimiter line is the delimiter followed by `--`, a line break or the end.
-        let after = pos + delimiter.len();
-        let line_end = matches!(body.get(after), None | Some(b'\r' | b'\n'))
-            || (body.get(after..after + 2) == Some(b"--") && {
-                // Closing delimiter: optional transport padding, then a line break or
-                // the end of the body.
-                let mut q = after + 2;
-                while matches!(body.get(q), Some(b' ' | b'\t')) {
-                    q += 1;
-                }
-                matches!(body.get(q), None | Some(b'\r' | b'\n'))
-            });
-        if line_start && line_end {
-            return Some(pos);
+    // A delimiter line begins at the body start or immediately after a '\n', so only those
+    // offsets are candidates. Walking newline-to-newline visits each byte a bounded number of
+    // times -- O(N) -- rather than testing the delimiter at every offset, which is O(N*M): a
+    // body of pure delimiter bytes used to make every offset match, get rejected for not
+    // starting a line, and advance by a single byte, burning minutes of CPU on one
+    // unauthenticated request (S-3).
+    let mut pos = if from == 0 || body.get(from.wrapping_sub(1)) == Some(&b'\n') {
+        from
+    } else {
+        next_line_start(body, from)?
+    };
+    loop {
+        if pos + delimiter.len() <= body.len() && &body[pos..pos + delimiter.len()] == delimiter {
+            // A delimiter line is the delimiter followed by `--`, a line break or the end.
+            let after = pos + delimiter.len();
+            let line_end = matches!(body.get(after), None | Some(b'\r' | b'\n'))
+                || (body.get(after..after + 2) == Some(b"--") && {
+                    // Closing delimiter: optional transport padding, then a line break or
+                    // the end of the body.
+                    let mut q = after + 2;
+                    while matches!(body.get(q), Some(b' ' | b'\t')) {
+                        q += 1;
+                    }
+                    matches!(body.get(q), None | Some(b'\r' | b'\n'))
+                });
+            if line_end {
+                return Some(pos);
+            }
         }
-        at = pos + 1;
+        pos = next_line_start(body, pos)?;
     }
-    None
+}
+
+/// The index just after the next `'\n'` at or after `from`, or `None` when there is none.
+/// Each call only moves forward, so a scan driven by it is linear in the body length.
+fn next_line_start(body: &[u8], from: usize) -> Option<usize> {
+    body.get(from..)?
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|i| from + i + 1)
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -697,6 +741,9 @@ fn parse_form_data(content_type: &str, body: &[u8]) -> Result<Vec<FormPart>, Str
     else {
         return Err(format!("Bad content type. {content_type}"));
     };
+    if boundary.len() > MAX_MULTIPART_BOUNDARY_LEN {
+        return Err("multipart boundary is too long".to_owned());
+    }
     let delimiter = format!("--{boundary}").into_bytes();
     let parts = split_multipart_parts(body, &delimiter).map_err(|()| {
         "Failed to parse multipart part: Missing header-body separator.".to_owned()
@@ -744,53 +791,110 @@ fn coerce_custom_value(v: &Value) -> Option<String> {
     }
 }
 
-fn new_metadata_from_json(v: &Value, content_type: Option<String>) -> NewMetadata {
+/// Rejects a metadata string that carries a C0 control character (`0x00`-`0x1F`) or `DEL`
+/// (`0x7F`).
+///
+/// The five standard fields (`contentType`, `contentDisposition`, `contentEncoding`,
+/// `contentLanguage`, `cacheControl`) are echoed verbatim into response headers by
+/// [`send_file_bytes`] and [`with_object_headers`]; a `CR`/`LF` in one would be a header
+/// value hyper refuses, and hyper's refusal is a deferred error that would collapse the whole
+/// response to a silent empty 200 (S-4). Rejecting the character at the input boundary is
+/// also what the project's input-canonicalization rule requires of every stored string. The
+/// object name is already held to the same rule (`name.rs`), so this closes the gap for
+/// metadata.
+fn header_safe(field: &str, value: &str) -> Result<(), String> {
+    if value.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err(format!("{field} contains a control character"));
+    }
+    Ok(())
+}
+
+/// Custom metadata whose keys and values are all control-character-free.
+fn checked_custom(
+    m: &Map<String, Value>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut out = BTreeMap::new();
+    for (k, val) in m {
+        header_safe(&format!("metadata key {k:?}"), k)?;
+        if let Some(sv) = coerce_custom_value(val) {
+            header_safe(&format!("metadata.{k}"), &sv)?;
+            out.insert(k.clone(), sv);
+        }
+    }
+    Ok(out)
+}
+
+fn new_metadata_from_json(
+    v: &Value,
+    content_type: Option<String>,
+) -> Result<NewMetadata, String> {
     let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
     // `metadata: null` and no `metadata` member both leave custom metadata undefined; an
     // object defines it, with `null` values dropped and non-strings stringified.
     let custom = match v.get("metadata") {
-        Some(Value::Object(m)) => Some(
-            m.iter()
-                .filter_map(|(k, val)| coerce_custom_value(val).map(|s| (k.clone(), s)))
-                .collect::<BTreeMap<_, _>>(),
-        ),
+        Some(Value::Object(m)) => Some(checked_custom(m)?),
         _ => None,
     };
-    NewMetadata {
+    let meta = NewMetadata {
         content_type: s("contentType").or(content_type),
         content_disposition: s("contentDisposition"),
         content_encoding: s("contentEncoding"),
         content_language: s("contentLanguage"),
         cache_control: s("cacheControl"),
         custom,
+    };
+    for (name, val) in [
+        ("contentType", &meta.content_type),
+        ("contentDisposition", &meta.content_disposition),
+        ("contentEncoding", &meta.content_encoding),
+        ("contentLanguage", &meta.content_language),
+        ("cacheControl", &meta.cache_control),
+    ] {
+        if let Some(val) = val {
+            header_safe(name, val)?;
+        }
     }
+    Ok(meta)
 }
 
-fn patch_from_json(v: &Value) -> MetadataPatch {
-    let field = |k: &str| -> Option<Option<String>> {
+fn patch_from_json(v: &Value) -> Result<MetadataPatch, String> {
+    let field = |k: &str| -> Result<Option<Option<String>>, String> {
         match v.get(k) {
-            None => None,
-            Some(Value::Null) => Some(None),
-            Some(x) => Some(x.as_str().map(str::to_owned)),
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(None)),
+            Some(x) => {
+                let val = x.as_str().map(str::to_owned);
+                if let Some(val) = &val {
+                    header_safe(k, val)?;
+                }
+                Ok(Some(val))
+            }
         }
     };
     let custom = match v.get("metadata") {
         Some(Value::Null) => Some(CustomMetadataPatch::Clear),
-        Some(Value::Object(m)) => Some(CustomMetadataPatch::Merge(
-            m.iter()
-                .map(|(k, val)| (k.clone(), coerce_custom_value(val)))
-                .collect(),
-        )),
+        Some(Value::Object(m)) => {
+            let mut out = BTreeMap::new();
+            for (k, val) in m {
+                header_safe(&format!("metadata key {k:?}"), k)?;
+                let sv = coerce_custom_value(val);
+                if let Some(sv) = &sv {
+                    header_safe(&format!("metadata.{k}"), sv)?;
+                }
+                out.insert(k.clone(), sv);
+            }
+            Some(CustomMetadataPatch::Merge(out))
+        }
         _ => None,
     };
-    MetadataPatch {
-        content_type: field("contentType"),
-        content_disposition: field("contentDisposition"),
-        content_encoding: field("contentEncoding"),
-        content_language: field("contentLanguage"),
-        cache_control: field("cacheControl"),
+    Ok(MetadataPatch {
+        content_type: field("contentType")?,
+        content_disposition: field("contentDisposition")?,
+        content_encoding: field("contentEncoding")?,
+        content_language: field("contentLanguage")?,
+        cache_control: field("cacheControl")?,
         custom,
-    }
+    })
 }
 
 /// The Firebase dialect's metadata document (`OutgoingFirebaseMetadata`): `crc32c` is the
@@ -2044,7 +2148,7 @@ fn fb_patch(
         serde_json::from_slice(&req.body)
             .map_err(|e| fb_json_error(400, &format!("metadata JSON: {e}")))?
     };
-    let patch = patch_from_json(&body);
+    let patch = patch_from_json(&body).map_err(|e| fb_json_error(400, &e))?;
     let mut store = state.store()?;
     let existing = store.get(&b, &n).cloned();
     // Rules run before existence is revealed, as the official emulator orders them.
@@ -2157,7 +2261,8 @@ fn fb_object_post(
             };
             // The official Firebase dialect reads the content type from the metadata
             // document alone.
-            let mut meta = new_metadata_from_json(&meta_json, None);
+            let mut meta =
+                new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
             inject_download_token(state, &mut meta)?;
             let (expected_md5, expected_crc32c) =
                 declared_hashes(&req, Some(&meta_json)).map_err(|(s, m)| fb_json_error(s, &m))?;
@@ -2215,7 +2320,8 @@ fn fb_object_post(
         let (meta_json, data) =
             parse_multipart(&content_type, body).map_err(|e| html_text(400, &e))?;
         // The data part's own content type is ignored, as upstream ignores it.
-        let mut meta = new_metadata_from_json(&meta_json, None);
+        let mut meta =
+            new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
         inject_download_token(state, &mut meta)?;
         let hashes =
             verify_hashes(&req, Some(&meta_json), &data).map_err(|(s, m)| fb_json_error(s, &m))?;
@@ -2326,8 +2432,8 @@ fn fb_resumable_command(
     // The upload belongs to the bucket its URL names: another bucket's URL (and so another
     // session's fault plan and ownership) cannot drive it.
     if store
-        .pending_upload(&id, now)
-        .is_ok_and(|pending| pending.bucket != bucket)
+        .upload_bucket(&id, now)
+        .is_ok_and(|b| b != bucket)
     {
         return Ok(plain_status(404));
     }
@@ -2592,7 +2698,8 @@ fn gcs_object(
             if store.get(&b, &n).is_none() {
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
-            let patch = patch_from_json(&body);
+            let patch =
+                patch_from_json(&body).map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let m = store
                 .update_metadata(&b, &n, &patch, pre, now)
                 .map_err(gcs_core_err)?;
@@ -2649,7 +2756,11 @@ fn gcs_copy(
         return Ok(gcs_no_such_object(bucket, name, false));
     };
     source_pre.check(Some(&src)).map_err(gcs_core_err)?;
-    let incoming_meta = incoming.as_ref().map(|v| new_metadata_from_json(v, None));
+    let incoming_meta = incoming
+        .as_ref()
+        .map(|v| new_metadata_from_json(v, None))
+        .transpose()
+        .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
     let mut meta = NewMetadata {
         content_type: Some(src.content_type.clone()),
         content_disposition: src.content_disposition.clone(),
@@ -2817,7 +2928,8 @@ fn gcs_upload(
             };
             let n = object_name(&name)?;
             let declared_ct = req.header("x-upload-content-type").map(str::to_owned);
-            let meta = new_metadata_from_json(&meta_json, declared_ct);
+            let meta = new_metadata_from_json(&meta_json, declared_ct)
+                .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let pre = precondition(params)?;
             let (expected_md5, expected_crc32c) = declared_hashes(&req, Some(&meta_json))
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
@@ -2871,7 +2983,8 @@ fn gcs_upload(
             };
             let n = object_name(&name)?;
             let declared_ct = req.header("x-upload-content-type").map(str::to_owned);
-            let meta = new_metadata_from_json(&meta_json, declared_ct);
+            let meta = new_metadata_from_json(&meta_json, declared_ct)
+                .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let pre = precondition(params)?;
             let hashes = verify_hashes(&req, Some(&meta_json), &data)
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
@@ -2937,8 +3050,8 @@ fn gcs_resumable_put(
         Ok(UploadPhase::Active(_)) => {}
     }
     if store
-        .pending_upload(&id, now)
-        .is_ok_and(|pending| pending.bucket != bucket)
+        .upload_bucket(&id, now)
+        .is_ok_and(|b| b != bucket)
     {
         return Ok(plain_status(404));
     }
@@ -3114,6 +3227,24 @@ fn form_upload(state: &StorageState, bucket: &str, req: &StorageRequest) -> Outc
                 _ => {}
             }
         }
+    }
+    // The form field values are raw body bytes and `value.trim()` does not strip an internal
+    // CR/LF or NUL, so the same control-character boundary check the JSON dialects run applies
+    // here before any of these strings can be echoed into a response header (S-4).
+    for (name, val) in [
+        ("contentType", &meta.content_type),
+        ("contentDisposition", &meta.content_disposition),
+        ("contentEncoding", &meta.content_encoding),
+        ("contentLanguage", &meta.content_language),
+        ("cacheControl", &meta.cache_control),
+    ] {
+        if let Some(val) = val {
+            header_safe(name, val).map_err(|e| html_text(400, &e))?;
+        }
+    }
+    for (k, v) in meta.custom.iter().flatten() {
+        header_safe(&format!("metadata key {k:?}"), k).map_err(|e| html_text(400, &e))?;
+        header_safe(&format!("metadata.{k}"), v).map_err(|e| html_text(400, &e))?;
     }
     let bytes = req.body[data].to_vec();
     let mut store = state.store()?;

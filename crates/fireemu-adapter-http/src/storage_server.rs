@@ -368,17 +368,34 @@ async fn respond(
         return Err(std::io::Error::other("fault plan: connection dropped"));
     }
     let mut builder = cors(
-        Response::builder().status(
-            StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        ),
+        Response::builder()
+            .status(
+                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            )
+            // Defence in depth: a body typed text/plain that happens to look like markup is
+            // never sniffed as HTML on this origin. It does not change how an explicit
+            // text/html content-type renders, so it is not a substitute for typing
+            // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
+            .header("x-content-type-options", "nosniff"),
         origin.as_deref(),
     );
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
-    Ok(builder
-        .body(Full::new(Bytes::from(response.body)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
+    match builder.body(Full::new(Bytes::from(response.body))) {
+        Ok(response) => Ok(response),
+        // A header value the handler built is not a valid HTTP header (a metadata string with
+        // a control character reached `Builder::header`). The input boundary rejects those, so
+        // this is unreachable in practice; if it ever fires, answer 500 rather than the silent
+        // "200 with an empty body and no CORS headers" the default builder would produce, which
+        // is far harder to diagnose (S-4).
+        Err(_) => Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("content-type", "text/plain; charset=utf-8")
+            .header("x-content-type-options", "nosniff")
+            .body(Full::new(Bytes::from_static(b"internal error building response")))
+            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))),
+    }
 }
 
 /// Serves the Storage surface on `listener` until the task is aborted. Request bodies are

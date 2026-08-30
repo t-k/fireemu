@@ -16,7 +16,15 @@
 // the *shape* still matches (the same file names and the same document count).
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, cpSync, readdirSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  cpSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -186,7 +194,11 @@ function record(recording, into) {
   writeFileSync(path.join(work, "package.json"), JSON.stringify({ type: "module" }));
   writeFileSync(path.join(work, "seed.mjs"), recording.seed);
   // The seed script resolves `firebase-admin` from the pinned conformance install.
-  spawnSync("ln", ["-sfn", path.join(conformance, "node_modules"), path.join(work, "node_modules")]);
+  spawnSync("ln", [
+    "-sfn",
+    path.join(conformance, "node_modules"),
+    path.join(work, "node_modules"),
+  ]);
 
   const out = path.join(work, "export");
   const result = spawnSync(
@@ -238,7 +250,9 @@ for (const recording of RECORDINGS) {
   const before = tree(target).join("\n");
   const after = tree(staged).join("\n");
   if (before !== after) {
-    console.error(`${recording.name}: the recorded file set changed\n--- kept\n${before}\n--- new\n${after}`);
+    console.error(
+      `${recording.name}: the recorded file set changed\n--- kept\n${before}\n--- new\n${after}`,
+    );
     process.exitCode = 1;
   } else {
     console.log(`${recording.name}: the recorded file set is unchanged`);

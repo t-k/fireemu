@@ -182,6 +182,121 @@ fn a_section_of_an_unselected_product_is_skipped_with_a_notice() {
     assert!(!log.contains("firestore: 30 document(s)"), "{log}");
 }
 
+#[test]
+fn a_named_firestore_database_and_a_second_bucket_survive_the_round_trip() {
+    let dir = scratch("named-database");
+    let export = copy_fixture("official-multiproduct", &dir);
+
+    // A second Firestore database, in the `fireemu` manifest member the official CLI
+    // ignores: a copy of the default section under its own directory.
+    copy_tree(
+        &export.join("firestore_export"),
+        &export.join("firestore_export_analytics"),
+    );
+    let manifest = export.join("firebase-export-metadata.json");
+    let manifest_text = std::fs::read_to_string(&manifest).unwrap();
+    let with_extension = manifest_text.trim_end().trim_end_matches('}').to_owned()
+        + r#",
+  "fireemu": {
+    "version": "0.1.0",
+    "firestoreDatabases": [
+      {
+        "database": "analytics",
+        "path": "firestore_export_analytics",
+        "metadata_file": "firestore_export_analytics/firestore_export.overall_export_metadata"
+      }
+    ]
+  }
+}
+"#;
+    std::fs::write(&manifest, with_extension).unwrap();
+
+    // A second bucket, holding a copy of an object of the first.
+    let metadata_dir = export.join("storage_export/metadata");
+    let source = std::fs::read_dir(&metadata_dir)
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap()
+        .path();
+    let source_id = source.file_stem().unwrap().to_string_lossy().into_owned();
+    let document = std::fs::read_to_string(&source)
+        .unwrap()
+        .replace("demo-export.appspot.com", "second.appspot.com");
+    std::fs::write(
+        metadata_dir.join("copied-into-second-bucket.json"),
+        document,
+    )
+    .unwrap();
+    std::fs::copy(
+        export.join("storage_export/blobs").join(&source_id),
+        export.join("storage_export/blobs/copied-into-second-bucket"),
+    )
+    .unwrap();
+    let buckets = export.join("storage_export/buckets.json");
+    std::fs::write(
+        &buckets,
+        r#"{"buckets":[{"id":"demo-export.appspot.com"},{"id":"second.appspot.com"}]}"#,
+    )
+    .unwrap();
+
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(
+        log.contains("firestore: 60 document(s) in 2 database(s)"),
+        "both databases are imported: {log}"
+    );
+    assert!(
+        log.contains("storage: 4 object(s) in 2 bucket(s)"),
+        "both buckets are imported: {log}"
+    );
+
+    // The export writes the named database back under its own section, and the manifest's
+    // official Firestore section still names only the default one.
+    let written = files(&out);
+    assert!(
+        written
+            .iter()
+            .any(|f| f.starts_with("firestore_export_analytics/")),
+        "{written:?}"
+    );
+    let manifest = std::fs::read_to_string(out.join("firebase-export-metadata.json")).unwrap();
+    assert!(manifest.contains("\"fireemu\""), "{manifest}");
+    assert!(
+        manifest.contains("\"database\": \"analytics\""),
+        "{manifest}"
+    );
+    assert!(
+        std::fs::read_to_string(out.join("storage_export/buckets.json"))
+            .unwrap()
+            .contains("second.appspot.com")
+    );
+
+    // And it imports again with the same shape.
+    let second = exec()
+        .args(["--import"])
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&second);
+    assert!(second.status.success(), "{log}");
+    assert!(
+        log.contains("firestore: 60 document(s) in 2 database(s)"),
+        "{log}"
+    );
+    assert!(log.contains("storage: 4 object(s) in 2 bucket(s)"), "{log}");
+}
+
 // --------------------------------------------------------------------------------------
 // DATA-03: a cross-product import is atomic
 // --------------------------------------------------------------------------------------

@@ -32,12 +32,14 @@ fn run(args: &[&str]) -> Output {
 }
 
 /// The port arguments every successful scenario needs.
-const PORTS: [&str; 10] = [
+const PORTS: [&str; 12] = [
     "--firestore-port",
     "0",
     "--http-port",
     "0",
     "--storage-port",
+    "0",
+    "--pubsub-port",
     "0",
     "--ui-port",
     "0",
@@ -311,7 +313,11 @@ fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
     let text = stderr(&out);
     assert!(text.contains("emulators.database"), "{text}");
     assert!(text.contains("deferred"), "{text}");
-    assert!(text.contains("emulators.pubsub"), "{text}");
+    // Pub/Sub is now a served service: its firebase.json entry is applied, not a notice.
+    assert!(
+        !text.contains("emulators.pubsub"),
+        "pubsub is served and must not be reported as unserved: {text}"
+    );
     assert!(
         text.contains("emulators.logging") && text.contains("out of scope"),
         "the Logging emulator stream is out of scope for this release and must say so: {text}"

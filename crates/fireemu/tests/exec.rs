@@ -566,7 +566,6 @@ fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
         ("database", "deferred"),
         ("hosting", "deferred"),
         ("apphosting", "deferred"),
-        ("pubsub", "planned"),
         ("eventarc", "planned"),
         ("tasks", "planned"),
         ("dataconnect", "planned"),

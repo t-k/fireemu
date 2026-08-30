@@ -14,6 +14,7 @@
 //! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest or the README |
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
 //! | `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow, and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
+//! | `CC-09` | a conformance fixture cited as evidence that records unresolved `debt`, unless the claim excludes that step by name with the issue that owns it; a fixture with no `parity` or `documented-divergence` step (so nothing the local oracle answered); a stale exclusion, and a step status the suite does not define |
 //!
 //! Artifact names resolve the way `tools/traceability-check` resolves them, so the two gates
 //! agree on what "an existing test" means: a `tests` name is a function defined in a Rust file
@@ -93,8 +94,27 @@ pub fn check(root: &Path) -> Report {
     check_scope_leakage(root, &contract, surfaces, entries, &mut report.problems);
     check_contradictions(root, &contract, entries, &statuses, &mut report.problems);
     check_profiles(root, &contract, &mut report.problems);
+    let excluded = excluded_debt_steps(surfaces);
+    if excluded > 0 {
+        report.notes.push(format!(
+            "{excluded} debt step(s) are excluded from claims by name; each names its owning issue"
+        ));
+    }
 
     report
+}
+
+/// How many fixture steps the claims exclude from their scope (`CC-09`), so every run prints
+/// how much recorded debt the public claim is currently carrying around.
+fn excluded_debt_steps(surfaces: &[Value]) -> usize {
+    surfaces
+        .iter()
+        .flat_map(|surface| claims_of(surface).iter())
+        .filter_map(|claim| claim.get("evidence")?.get("conformance")?.as_array())
+        .flatten()
+        .filter_map(|item| item.get("excludedSteps")?.as_array())
+        .map(Vec::len)
+        .sum()
 }
 
 /// The `surfaces` array, or an empty slice with the shape problem already reported.
@@ -341,19 +361,152 @@ fn resolved_evidence(
             ));
         }
     }
-    for name in strings(evidence, "conformance") {
+    for item in evidence
+        .get("conformance")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let Some(cited) = CitedFixture::parse(item) else {
+            problems.push(format!(
+                "CC-03: claim {cid}: a conformance evidence item is neither a fixture name nor an object with a fixture name"
+            ));
+            continue;
+        };
+        let name = cited.name;
         let path = root
             .join("conformance/fixtures")
             .join(format!("{name}.json"));
-        if path.is_file() {
-            resolved += 1;
-        } else {
+        if !path.is_file() {
             problems.push(format!(
                 "CC-03: claim {cid}: conformance fixture {name} has no conformance/fixtures/{name}.json"
             ));
+            continue;
+        }
+        let fixture = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let Some(fixture) = fixture else {
+            problems.push(format!(
+                "CC-09: claim {cid}: conformance fixture {name} is not a JSON document"
+            ));
+            continue;
+        };
+        if fixture_is_evidence(&fixture, &cited, problems, cid) {
+            resolved += 1;
         }
     }
     resolved
+}
+
+/// One `evidence.conformance` item: a fixture name, optionally with the debt steps the claim
+/// leaves out of its scope. Written as a bare string or as
+/// `{"fixture": name, "excludedSteps": [{"step", "issue", "reason"}]}`.
+struct CitedFixture<'a> {
+    name: &'a str,
+    excluded: Vec<&'a Value>,
+}
+
+impl<'a> CitedFixture<'a> {
+    fn parse(item: &'a Value) -> Option<Self> {
+        if let Some(name) = item.as_str() {
+            return Some(Self {
+                name,
+                excluded: Vec::new(),
+            });
+        }
+        let name = str_field(item, "fixture")?;
+        let excluded = item
+            .get("excludedSteps")
+            .and_then(Value::as_array)
+            .map(|steps| steps.iter().collect())
+            .unwrap_or_default();
+        Some(Self { name, excluded })
+    }
+}
+
+/// The step statuses `conformance/src/record.mjs` writes.
+const STEP_STATUSES: [&str; 4] = ["parity", "documented-divergence", "debt", "pending"];
+
+/// Whether a recorded fixture proves anything for the claim that cites it (`CC-09`).
+///
+/// A `parity` or `documented-divergence` step is a row the local oracle answered and the replay
+/// gates, so it is evidence. A `pending` row is one no local oracle can answer (the production
+/// service would have to), so it proves nothing about the official emulator and is neither
+/// evidence nor a problem. A `debt` row is a recorded mismatch nobody has ruled on: it
+/// invalidates the claim unless the claim excludes that step by name, with the issue that owns
+/// it, and an exclusion that names a step which is no longer debt is stale and reported so it
+/// gets removed.
+fn fixture_is_evidence(
+    fixture: &Value,
+    cited: &CitedFixture<'_>,
+    problems: &mut Vec<String>,
+    cid: &str,
+) -> bool {
+    let name = cited.name;
+    let Some(steps) = fixture.get("steps").and_then(Value::as_array) else {
+        problems.push(format!(
+            "CC-09: claim {cid}: conformance fixture {name} has no steps array"
+        ));
+        return false;
+    };
+    let mut status_of: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut evidence_steps = 0;
+    for step in steps {
+        let id = str_field(step, "id").unwrap_or("<unnamed>");
+        let status = str_field(step, "status").unwrap_or("");
+        status_of.insert(id, status);
+        match status {
+            "parity" | "documented-divergence" => evidence_steps += 1,
+            "pending" | "debt" => {}
+            other => problems.push(format!(
+                "CC-09: claim {cid}: conformance fixture {name} step {id} has status {other:?}, which is none of {STEP_STATUSES:?}"
+            )),
+        }
+    }
+    let mut excluded_ids: BTreeSet<&str> = BTreeSet::new();
+    for exclusion in &cited.excluded {
+        let Some(step) = str_field(exclusion, "step") else {
+            problems.push(format!(
+                "CC-09: claim {cid}: an exclusion of {name} names no step"
+            ));
+            continue;
+        };
+        excluded_ids.insert(step);
+        if str_field(exclusion, "issue").is_none_or(str::is_empty) {
+            problems.push(format!(
+                "CC-09: claim {cid}: excluded step {step} of {name} names no owning issue"
+            ));
+        }
+        if str_field(exclusion, "reason").is_none_or(str::is_empty) {
+            problems.push(format!(
+                "CC-09: claim {cid}: excluded step {step} of {name} gives no reason"
+            ));
+        }
+        match status_of.get(step) {
+            None => problems.push(format!(
+                "CC-09: claim {cid}: excluded step {step} is not a step of {name}; the exclusion is stale"
+            )),
+            Some(&"debt") => {}
+            Some(status) => problems.push(format!(
+                "CC-09: claim {cid}: excluded step {step} of {name} is {status}, not debt; the exclusion is stale"
+            )),
+        }
+    }
+    for (id, status) in &status_of {
+        if *status == "debt" && !excluded_ids.contains(id) {
+            problems.push(format!(
+                "CC-09: claim {cid}: conformance fixture {name} step {id} is debt (an unresolved mismatch with the official emulator); resolve it, document it as a divergence in conformance/divergences.json, or exclude it from the claim by name with its owning issue"
+            ));
+        }
+    }
+    if evidence_steps == 0 {
+        problems.push(format!(
+            "CC-09: claim {cid}: conformance fixture {name} carries no parity or documented-divergence step, so nothing in it was answered by the local oracle and it is not evidence"
+        ));
+        return false;
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -78,7 +78,13 @@ Each claim under a surface names, separately:
 - `capabilities`: the capability manifest IDs it depends on, each with the status the manifest
   must declare for it;
 - `evidence`: the executed proof, as `tests` (function names), `integration` (repository-relative
-  files) and `conformance` (fixture IDs);
+  files) and `conformance` (fixture IDs). A fixture is evidence only through the steps the local
+  oracle answered: its `parity` and `documented-divergence` rows. A `pending` row (one only the
+  production service could answer) proves nothing and is ignored; a `debt` row (a recorded
+  mismatch nobody has ruled on) invalidates the claim, unless the claim leaves that step out of
+  its scope by name: `{"fixture": id, "excludedSteps": [{"step", "issue", "reason"}]}`, where
+  `issue` is the issue that owns the mismatch. The exclusion is a scope statement, not evidence,
+  and it becomes an error the moment the step stops being debt, so it cannot outlive the fix;
 - `officialLimitations`: what the official emulator documents or ships as a limitation and which
   the `firebase` profile must therefore reproduce rather than "fix";
 - `fireemuOnly`: behaviour that has no official counterpart, each with its precision;
@@ -150,6 +156,7 @@ malformed file fails the test suite as well.
 | `CC-06` | a deferred or not-planned product that reads as supported: named in a manifest `implemented` list, named on a README line with no scope disclaimer, carrying a parity claim, or declaring no prohibited terms at all |
 | `CC-07` | contradictory public statements (below) |
 | `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow; a profile name the schema's `profile` key does not accept (a profile no run can select is a document, not a switch), and a name that key accepts which the contract does not declare |
+| `CC-09` | a conformance fixture cited as evidence that carries an unresolved `debt` step the claim does not exclude by name with its owning issue; an exclusion without an issue or a reason, or one whose step is no longer debt (stale); a fixture with no `parity` or `documented-divergence` step, which nothing local answered and which is therefore not evidence; and a step status the conformance suite does not define |
 
 Evidence names resolve the way `tools/traceability-check` resolves them, so the two gates agree
 on what "an existing test" means: a `tests` name is a function defined in a Rust file under a

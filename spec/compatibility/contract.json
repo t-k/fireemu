@@ -344,8 +344,31 @@
               "crates/fireemu-adapter-grpc/tests/rest.rs"
             ],
             "conformance": [
-              "firestore/rest-error-shapes",
-              "firestore/lite-rest-transport"
+              {
+                "fixture": "firestore/rest-error-shapes",
+                "excludedSteps": [
+                  {
+                    "step": "runQuery-with-an-unknown-operator",
+                    "issue": "docs.local/issues/open/close-firestore-emulator-compatibility-gaps.md",
+                    "reason": "status and canonical code agree; the message differs (the official emulator says \"Payload isn't valid for request.\", fireemu names the unknown operator)"
+                  },
+                  {
+                    "step": "get-a-missing-document",
+                    "issue": "docs.local/issues/open/close-firestore-emulator-compatibility-gaps.md",
+                    "reason": "status and canonical code agree; the word order of the message differs"
+                  }
+                ]
+              },
+              {
+                "fixture": "firestore/lite-rest-transport",
+                "excludedSteps": [
+                  {
+                    "step": "write-into-a-rules-closed-collection-is-denied",
+                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
+                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
+                  }
+                ]
+              }
             ]
           },
           "officialLimitations": [
@@ -490,7 +513,31 @@
               "crates/fireemu-core-rules/tests/regex.rs"
             ],
             "conformance": [
-              "firestore/rules-decisions"
+              {
+                "fixture": "firestore/rules-decisions",
+                "excludedSteps": [
+                  {
+                    "step": "anonymous-read-of-a-closed-document",
+                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
+                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
+                  },
+                  {
+                    "step": "anonymous-write-to-an-owner-document",
+                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
+                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
+                  },
+                  {
+                    "step": "owner-cannot-write-another-document",
+                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
+                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
+                  },
+                  {
+                    "step": "after-sign-out-the-document-is-protected-again",
+                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
+                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
+                  }
+                ]
+              }
             ]
           },
           "officialLimitations": [
@@ -656,9 +703,56 @@
               "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
             ],
             "conformance": [
-              "auth/sign-up-and-sign-in-errors",
-              "auth/identity-toolkit-error-shapes",
-              "auth/oob-code-shapes"
+              {
+                "fixture": "auth/sign-up-and-sign-in-errors",
+                "excludedSteps": [
+                  {
+                    "step": "sign-up",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator mints 28-character uids, fireemu 21-character ones"
+                  },
+                  {
+                    "step": "sign-in-with-the-wrong-password",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator answers the legacy EMAIL_NOT_FOUND / INVALID_PASSWORD family (auth/user-not-found, auth/wrong-password); fireemu answers the current INVALID_LOGIN_CREDENTIALS"
+                  },
+                  {
+                    "step": "sign-in-as-an-unknown-user",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator answers the legacy EMAIL_NOT_FOUND / INVALID_PASSWORD family (auth/user-not-found, auth/wrong-password); fireemu answers the current INVALID_LOGIN_CREDENTIALS"
+                  }
+                ]
+              },
+              {
+                "fixture": "auth/identity-toolkit-error-shapes",
+                "excludedSteps": [
+                  {
+                    "step": "signInWithPassword-for-an-unknown-user",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator answers the legacy EMAIL_NOT_FOUND / INVALID_PASSWORD family (auth/user-not-found, auth/wrong-password); fireemu answers the current INVALID_LOGIN_CREDENTIALS"
+                  },
+                  {
+                    "step": "signInWithPassword-with-a-missing-field",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator validates the email before the password (MISSING_EMAIL); fireemu checks the password first (MISSING_PASSWORD)"
+                  },
+                  {
+                    "step": "unknown-method",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the 404 envelope differs: the official emulator answers Not Found / notFound with a status member, fireemu NOT_FOUND / invalid without one"
+                  }
+                ]
+              },
+              {
+                "fixture": "auth/oob-code-shapes",
+                "excludedSteps": [
+                  {
+                    "step": "create-the-user",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "fireemu's signUp response lacks the kind member the official emulator includes"
+                  }
+                ]
+              }
             ]
           },
           "officialLimitations": [
@@ -693,7 +787,26 @@
               "crates/fireemu-core-auth/tests/jwt.rs"
             ],
             "conformance": [
-              "auth/sign-up-and-sign-in-errors"
+              {
+                "fixture": "auth/sign-up-and-sign-in-errors",
+                "excludedSteps": [
+                  {
+                    "step": "sign-up",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator mints 28-character uids, fireemu 21-character ones"
+                  },
+                  {
+                    "step": "sign-in-with-the-wrong-password",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator answers the legacy EMAIL_NOT_FOUND / INVALID_PASSWORD family (auth/user-not-found, auth/wrong-password); fireemu answers the current INVALID_LOGIN_CREDENTIALS"
+                  },
+                  {
+                    "step": "sign-in-as-an-unknown-user",
+                    "issue": "docs.local/issues/open/close-authentication-emulator-compatibility-gaps.md",
+                    "reason": "the official Auth emulator answers the legacy EMAIL_NOT_FOUND / INVALID_PASSWORD family (auth/user-not-found, auth/wrong-password); fireemu answers the current INVALID_LOGIN_CREDENTIALS"
+                  }
+                ]
+              }
             ]
           },
           "officialLimitations": [
@@ -728,7 +841,16 @@
               "crates/fireemu-core-auth/tests/mfa.rs"
             ],
             "conformance": [
-              "auth/mfa-error-shapes"
+              {
+                "fixture": "auth/mfa-error-shapes",
+                "excludedSteps": [
+                  {
+                    "step": "start-enrolment-without-a-verified-email",
+                    "issue": "docs.local/issues/open/match-auth-emulator-unverified-email-mfa-enrollment.md",
+                    "reason": "fireemu starts a phone enrolment for an unverified password user where the official emulator refuses with UNVERIFIED_EMAIL and no side effect"
+                  }
+                ]
+              }
             ]
           },
           "officialLimitations": [
@@ -791,7 +913,16 @@
               "crates/fireemu-core-storage/tests/store.rs"
             ],
             "conformance": [
-              "storage/admin-upload-download-metadata",
+              {
+                "fixture": "storage/admin-upload-download-metadata",
+                "excludedSteps": [
+                  {
+                    "step": "download-a-missing-object",
+                    "issue": "docs.local/issues/open/close-storage-emulator-compatibility-gaps.md",
+                    "reason": "the 404 body differs: the official emulator answers a plain 'No such object' sentence, fireemu a JSON error envelope"
+                  }
+                ]
+              },
               "storage/client-protocol-and-rules"
             ]
           },
@@ -883,7 +1014,16 @@
               "crates/fireemu-adapter-functions/tests/runtime.rs"
             ],
             "conformance": [
-              "functions/callable-error-envelope",
+              {
+                "fixture": "functions/callable-error-envelope",
+                "excludedSteps": [
+                  {
+                    "step": "unknown-callable",
+                    "issue": "docs.local/issues/open/close-functions-emulator-compatibility-gaps.md",
+                    "reason": "the 404 body of an unknown callable differs in length from the official emulator's"
+                  }
+                ]
+              },
               "functions/callable-auth-context"
             ]
           },

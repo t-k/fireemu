@@ -34,7 +34,10 @@ impl Fixture {
         fs::create_dir_all(&root).unwrap();
         let fixture = Self { root };
         fixture.write("crates/fixture/tests/it.rs", TEST_SOURCE);
-        fixture.write("conformance/fixtures/firestore/a-scenario.json", "{}");
+        fixture.write_fixture(
+            "firestore/a-scenario",
+            &json!([{"id": "read", "status": "parity", "value": {"status": 200}}]),
+        );
         fixture.write(
             "conformance/package.json",
             &json!({"dependencies": {"firebase-tools": "15.28.2"}}).to_string(),
@@ -65,6 +68,15 @@ impl Fixture {
                 },
             })
             .to_string(),
+        );
+    }
+
+    /// A recorded conformance fixture with the given steps, in the shape
+    /// `conformance/src/record.mjs` writes.
+    fn write_fixture(&self, name: &str, steps: &Value) {
+        self.write(
+            &format!("conformance/fixtures/{name}.json"),
+            &json!({"schemaVersion": 1, "id": name, "steps": steps}).to_string(),
         );
     }
 
@@ -468,6 +480,134 @@ fn cases() -> Vec<Case> {
                 fixture.write_config_schema(&json!(["firebase", "strict"]));
             },
             expect: Some("accepts profile strict, which"),
+        },
+        // CC-09: a fixture step recorded as debt invalidates the claim that cites the fixture.
+        Case {
+            name: "debt-step-fails-the-claim",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([
+                        {"id": "read", "status": "parity", "value": {"status": 200}},
+                        {"id": "write", "status": "debt", "oracle": {"status": 400}, "testd": {"status": 200}},
+                    ]),
+                );
+            },
+            expect: Some(
+                "CC-09: claim FS-CLAIM-RPC: conformance fixture firestore/a-scenario step write is debt",
+            ),
+        },
+        // CC-09: the same debt step, excluded from the claim's scope in the contract with an
+        // owning issue, does not fail it.
+        Case {
+            name: "explicitly-excluded-debt-step-passes",
+            mutate: |contract, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([
+                        {"id": "read", "status": "parity", "value": {"status": 200}},
+                        {"id": "write", "status": "debt", "oracle": {"status": 400}, "testd": {"status": 200}},
+                    ]),
+                );
+                set(
+                    contract,
+                    "surfaces/0/claims/0/evidence/conformance",
+                    json!([{
+                        "fixture": "firestore/a-scenario",
+                        "excludedSteps": [{
+                            "step": "write",
+                            "issue": "docs.local/issues/open/fix-the-write.md",
+                            "reason": "the status code differs; the claim covers reads until the issue closes",
+                        }],
+                    }]),
+                );
+            },
+            expect: None,
+        },
+        // CC-09: an exclusion must carry the issue that owns the debt and a reason.
+        Case {
+            name: "exclusion-without-an-issue",
+            mutate: |contract, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([
+                        {"id": "read", "status": "parity", "value": {"status": 200}},
+                        {"id": "write", "status": "debt", "oracle": {"status": 400}, "testd": {"status": 200}},
+                    ]),
+                );
+                set(
+                    contract,
+                    "surfaces/0/claims/0/evidence/conformance",
+                    json!([{
+                        "fixture": "firestore/a-scenario",
+                        "excludedSteps": [{"step": "write", "reason": "differs"}],
+                    }]),
+                );
+            },
+            expect: Some("CC-09: claim FS-CLAIM-RPC: excluded step write of firestore/a-scenario names no owning issue"),
+        },
+        // CC-09: an exclusion that names a step which is no longer debt is stale and must go.
+        Case {
+            name: "stale-exclusion-fails",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "surfaces/0/claims/0/evidence/conformance",
+                    json!([{
+                        "fixture": "firestore/a-scenario",
+                        "excludedSteps": [{
+                            "step": "read",
+                            "issue": "docs.local/issues/open/fix-the-read.md",
+                            "reason": "no longer true",
+                        }],
+                    }]),
+                );
+            },
+            expect: Some(
+                "CC-09: claim FS-CLAIM-RPC: excluded step read of firestore/a-scenario is parity, not debt; the exclusion is stale",
+            ),
+        },
+        // CC-09: a documented divergence is evidence: it is gated against the recorded value.
+        Case {
+            name: "documented-divergence-is-evidence",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{
+                        "id": "read",
+                        "status": "documented-divergence",
+                        "documents": "README.md",
+                        "oracle": {"status": 200},
+                        "testd": {"status": 404},
+                    }]),
+                );
+            },
+            expect: None,
+        },
+        // CC-09: a row no local oracle can answer (production-only) is not emulator evidence,
+        // so a fixture made only of such rows proves nothing.
+        Case {
+            name: "pending-only-fixture-is-not-evidence",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{"id": "read", "status": "pending", "reason": "needs production"}]),
+                );
+            },
+            expect: Some(
+                "CC-09: claim FS-CLAIM-RPC: conformance fixture firestore/a-scenario carries no parity or documented-divergence step",
+            ),
+        },
+        // CC-09: a status the conformance suite does not define cannot be counted either way.
+        Case {
+            name: "unknown-step-status",
+            mutate: |_, _, fixture| {
+                fixture.write_fixture(
+                    "firestore/a-scenario",
+                    &json!([{"id": "read", "status": "probably-fine", "value": {}}]),
+                );
+            },
+            expect: Some("CC-09: claim FS-CLAIM-RPC: conformance fixture firestore/a-scenario step read has status \"probably-fine\""),
         },
     ]
 }

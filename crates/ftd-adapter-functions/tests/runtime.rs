@@ -828,3 +828,112 @@ async fn scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome() {
         runtime.history()
     );
 }
+
+/// A finalized object event for the `slow` function (the fake runner never answers it).
+fn slow_object(name: &str) -> StorageEvent {
+    let mut store = StorageState::new(1);
+    let meta = store
+        .put(
+            &BucketName::try_new("demo-app.appspot.com").unwrap(),
+            &ObjectName::try_new(name).unwrap(),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            START,
+        )
+        .unwrap();
+    StorageEvent::Finalized(meta)
+}
+
+#[tokio::test]
+async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
+    // FN-EPOCH-01 / 02 / 04 / 05: a handler that finishes (or times out) after a reset must
+    // not append an invocation record or a dead letter to the new epoch, while the records
+    // committed before the reset stay visible.
+    let (runtime, _clock) = start().await;
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/a", 1).path,
+        before: None,
+        after: Some(doc("items/a", 1)),
+    }]));
+    for _ in 0..100 {
+        if runtime
+            .history()
+            .iter()
+            .any(|r| r.function == "ok" && r.outcome == "ok")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        runtime
+            .history()
+            .iter()
+            .any(|r| r.function == "ok" && r.outcome == "ok"),
+        "{:?}",
+        runtime.history()
+    );
+
+    // A `slow` invocation is in flight (1 s deadline, no answer from the runner).
+    runtime.on_storage_event(&slow_object("late.txt"));
+    for _ in 0..200 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        runtime.status()["running"].as_u64().unwrap_or(0) > 0,
+        "the slow handler is running: {}",
+        runtime.status()
+    );
+
+    // Two resets while it is unresolved: neither new epoch may observe it.
+    runtime.reset();
+    runtime.reset();
+    // Well past the 1 s deadline of `slow`, so its completion has certainly run.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let after = runtime.history();
+    assert!(
+        after
+            .iter()
+            .any(|r| r.function == "ok" && r.outcome == "ok"),
+        "the pre-reset record survives: {after:?}"
+    );
+    assert!(
+        !after.iter().any(|r| r.function == "slow"),
+        "no stale record reached the new epoch: {after:?}"
+    );
+    assert!(
+        !runtime.dead_letters().iter().any(|r| r.function == "slow"),
+        "no stale dead letter reached the new epoch: {:?}",
+        runtime.dead_letters()
+    );
+
+    // FN-EPOCH-03: a current-epoch completion is still recorded.
+    for _ in 0..200 {
+        if runtime.runner_alive() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/z", 1).path,
+        before: None,
+        after: Some(doc("items/z", 1)),
+    }]));
+    let _ = runtime.await_idle(Duration::from_secs(5)).await;
+    assert!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "ok" && r.outcome == "ok")
+            .count()
+            >= 2,
+        "{:?}",
+        runtime.history()
+    );
+    runtime.runner().shutdown().await;
+}

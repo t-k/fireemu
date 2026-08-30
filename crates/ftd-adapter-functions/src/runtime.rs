@@ -1343,6 +1343,17 @@ impl FunctionsRuntime {
         let now = self.now();
         let _ = key;
         if let Ok(mut inner) = self.inner.lock() {
+            // ADR-011: the captured epoch is validated before any observable mutation. Work
+            // that resolves after a reset belongs to a session that no longer exists, so it
+            // appends neither an invocation record nor a dead letter to the new epoch; only
+            // the payload kept for the running invocation goes.
+            if inner.epoch != epoch {
+                inner.payloads.remove(&id);
+                drop(inner);
+                self.idle.notify_waiters();
+                self.wake.notify_one();
+                return;
+            }
             let text = match &outcome {
                 InvokeOutcome::Ok => "ok".to_owned(),
                 InvokeOutcome::Failed(e) => format!("failed: {e}"),
@@ -1355,11 +1366,7 @@ impl FunctionsRuntime {
                 attempt,
                 outcome: text.clone(),
             });
-            if inner.epoch != epoch {
-                // Stale epoch: the record was discarded by the reset; only the payload kept
-                // for the running invocation goes.
-                inner.payloads.remove(&id);
-            } else if let Ok(record) = inner.outbox.record_mut(id) {
+            if let Ok(record) = inner.outbox.record_mut(id) {
                 if matches!(outcome, InvokeOutcome::Ok) {
                     let _ = record.succeed();
                     inner.payloads.remove(&id);

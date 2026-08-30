@@ -25,6 +25,11 @@ fn state() -> AuthState {
         clock: Arc::new(Mutex::new(VirtualClock::new(
             LogicalInstant::from_unix_seconds(1_788_004_860),
         ))),
+        barrier: None,
+        events: None,
+        control_token: None,
+        registry: None,
+        tenancy: None,
     }
 }
 
@@ -414,6 +419,7 @@ fn owner() -> RequestHeaders {
         authorization: Some("Bearer owner".to_owned()),
         origin: None,
         content_type: Some("application/json".to_owned()),
+        host: None,
     }
 }
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
@@ -806,8 +812,8 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
         400,
         "not E.164"
     );
-    // Unsupported request parts are refused instead of silently dropped.
-    assert_eq!(admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &json!({"localId": "u-b", "linkProviderUserInfo": {"providerId": "google.com", "rawId": "1"}})).0, 400);
+    // Provider links, unlinks and admin-enrolled phone factors are applied.
+    assert_eq!(admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &json!({"localId": "u-b", "linkProviderUserInfo": {"providerId": "google.com", "rawId": "1"}})).0, 200);
     assert_eq!(
         admin(
             &s,
@@ -816,7 +822,7 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
             &json!({"localId": "u-b", "deleteProvider": ["google.com"]})
         )
         .0,
-        400
+        200
     );
     assert_eq!(
         admin(
@@ -824,6 +830,18 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
             "POST",
             &format!("{ADMIN}/accounts"),
             &json!({"localId": "u-m", "mfaInfo": [{"phoneInfo": "+15550000009"}]})
+        )
+        .0,
+        200
+    );
+    // A malformed link and a TOTP admin enrollment are refused.
+    assert_eq!(admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &json!({"localId": "u-b", "linkProviderUserInfo": {"providerId": "password", "rawId": "x"}})).0, 400);
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "u-b", "mfa": {"enrollments": [{"totpInfo": {}}]}})
         )
         .0,
         400

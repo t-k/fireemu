@@ -16,6 +16,10 @@ pub enum EventSource {
     Scheduler,
     /// Manually injected by the control API or testkit.
     Manual,
+    /// A Pub/Sub message published through the control API.
+    PubSub,
+    /// An Auth user lifecycle event.
+    Auth,
 }
 
 /// CloudEvents-style event type, e.g. `google.cloud.firestore.document.v1.created`.

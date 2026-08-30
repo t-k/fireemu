@@ -74,10 +74,74 @@ exports.echo = onRequest((req, res) => {
   res.status(200).json({ method: req.method, path: req.path, query: req.query, body: req.body, header: req.get("x-smoke") });
 });
 
+// firebase-functions v1 API (legacy (data, context) handlers).
+const functionsV1 = require("firebase-functions/v1");
+
+exports.v1Mirror = functionsV1.firestore.document("v1todos/{todoId}").onCreate(async (snap, context) => {
+  await db.doc(`v1mirror/${context.params.todoId}`).set({
+    title: snap.data().title,
+    eventType: context.eventType,
+    resource: context.resource.name,
+  });
+});
+
+exports.v1Upload = functionsV1.storage.object().onFinalize(async (object, context) => {
+  await db.doc(`v1uploads/${object.name.replace(/\//g, "_")}`).set({
+    size: Number(object.size),
+    eventType: context.eventType,
+  });
+});
+
+exports.v1Tick = functionsV1.pubsub.schedule("every 10 minutes").onRun(async (context) => {
+  await db.doc("stats/v1ticks").set({ count: FieldValue.increment(1), eventType: context.eventType }, { merge: true });
+});
+
 exports.add = onCall((request) => {
   const { a, b } = request.data || {};
   if (typeof a !== "number" || typeof b !== "number") {
     throw new HttpsError("invalid-argument", "a and b must be numbers");
   }
   return { sum: a + b, uid: request.auth?.uid ?? null };
+});
+
+// Pub/Sub (v2): messages published through the control API land here.
+const { onMessagePublished } = require("firebase-functions/v2/pubsub");
+exports.onJob = onMessagePublished("jobs", async (event) => {
+  const message = event.data.message;
+  await db.doc(`jobs/${message.messageId}`).set({
+    json: message.json,
+    attributes: message.attributes,
+    orderingKey: message.orderingKey || null,
+    publishTime: message.publishTime,
+    subscription: event.data.subscription,
+  });
+});
+
+// Pub/Sub (v1): the same topic through the legacy API.
+exports.v1Job = functionsV1.pubsub.topic("jobs").onPublish(async (message, context) => {
+  await db.doc(`v1jobs/${context.eventId}`).set({ json: message.json, eventType: context.eventType });
+});
+
+// Auth user events (v1): every created user gets a profile.
+exports.onUserCreated = functionsV1.auth.user().onCreate(async (user, context) => {
+  await db.doc(`profiles/${user.uid}`).set({
+    email: user.email || null,
+    eventType: context.eventType,
+    creationTime: user.metadata.creationTime,
+    providers: user.providerData.map((p) => p.providerId),
+  });
+});
+
+exports.onUserDeleted = functionsV1.auth.user().onDelete(async (user) => {
+  await db.doc(`profiles/${user.uid}`).delete();
+});
+
+// withAuthContext: the principal that made the change travels with the event.
+const { onDocumentCreatedWithAuthContext } = require("firebase-functions/v2/firestore");
+exports.auditedCreate = onDocumentCreatedWithAuthContext("audited/{id}", async (event) => {
+  await db.doc(`auditedBy/${event.params.id}`).set({
+    authType: event.authType,
+    authId: event.authId || null,
+    type: event.type,
+  });
 });

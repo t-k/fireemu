@@ -42,6 +42,67 @@ pub enum RulesValue {
     PartialMap(BTreeMap<String, RulesValue>),
     /// A list known to contain the listed members plus an unknown remainder.
     PartialList(Vec<RulesValue>),
+    /// A list known to contain at least one of the listed candidates plus an unknown
+    /// remainder (query proofs: an `array-contains-any` filter).
+    PartialListAny(Vec<RulesValue>),
+    /// A value known only to lie within a range of one comparable type (query proofs: a
+    /// field constrained by inequality filters). Ordered comparisons and equality with a
+    /// concrete value are decided when every value of the range agrees.
+    Range(ValueRange),
+    /// A duration in nanoseconds (`duration` namespace, timestamp arithmetic).
+    Duration(i128),
+    /// `map.diff(other)`.
+    MapDiff(MapDiff),
+    /// A value known to be one of the listed concrete values (query proofs: an `in`
+    /// filter); non-empty. An operation is decided when every member agrees.
+    OneOf(Vec<RulesValue>),
+    /// A value known to exist, differ from every listed value and not be null (query
+    /// proofs: `!=` / `not-in` filters).
+    NotOneOf(Vec<RulesValue>),
+}
+
+/// The key sets of `map.diff(other)` (sorted).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapDiff {
+    /// Keys in the receiver only.
+    pub added: Vec<String>,
+    /// Keys in the argument only.
+    pub removed: Vec<String>,
+    /// Keys in both with different values.
+    pub changed: Vec<String>,
+    /// Keys in both with equal values.
+    pub unchanged: Vec<String>,
+}
+
+/// One end of a [`ValueRange`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeBound {
+    /// Concrete bound (`Int`, `Float`, `String`, `Timestamp` or `Bytes`).
+    pub value: Box<RulesValue>,
+    /// Whether the bound itself belongs to the range.
+    pub inclusive: bool,
+}
+
+/// A range of values of one comparable class (numbers, strings, timestamps or bytes);
+/// an absent end is unbounded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueRange {
+    /// Lower end.
+    pub lower: Option<RangeBound>,
+    /// Upper end.
+    pub upper: Option<RangeBound>,
+}
+
+impl ValueRange {
+    /// The class every member belongs to (`"number"`, `"string"`, `"timestamp"`, `"bytes"`),
+    /// taken from either bound.
+    #[must_use]
+    pub fn class(&self) -> Option<&'static str> {
+        self.lower
+            .as_ref()
+            .or(self.upper.as_ref())
+            .map(|b| RulesValue::compare_class(&b.value))
+    }
 }
 
 impl RulesValue {
@@ -54,13 +115,24 @@ impl RulesValue {
             Self::Int(_) => "int",
             Self::Float(_) => "float",
             Self::String(_) => "string",
-            Self::List(_) | Self::PartialList(_) => "list",
+            Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
             Self::Map(_) | Self::PartialMap(_) => "map",
             Self::Path(_) => "path",
             Self::Timestamp(_) => "timestamp",
             Self::Bytes(_) => "bytes",
             Self::LatLng { .. } => "latlng",
-            Self::Unknown => "unknown",
+            Self::Duration(_) => "duration",
+            Self::MapDiff(_) => "map_diff",
+            Self::Unknown | Self::Range(_) | Self::OneOf(_) | Self::NotOneOf(_) => "unknown",
+        }
+    }
+
+    /// Class of values that compare with each other (`Int` and `Float` are one class).
+    #[must_use]
+    pub fn compare_class(&self) -> &'static str {
+        match self {
+            Self::Int(_) | Self::Float(_) => "number",
+            other => other.type_name(),
         }
     }
 
@@ -119,8 +191,33 @@ impl fmt::Display for RulesValue {
                 longitude,
             } => write!(f, "latlng({latitude}, {longitude})"),
             Self::Unknown => f.write_str("unknown"),
+            Self::Duration(d) => write!(f, "duration({d}ns)"),
+            Self::MapDiff(d) => write!(
+                f,
+                "map_diff(+{} -{} ~{} ={})",
+                d.added.len(),
+                d.removed.len(),
+                d.changed.len(),
+                d.unchanged.len()
+            ),
+            Self::OneOf(items) => write!(f, "one_of({} values)", items.len()),
+            Self::NotOneOf(items) => write!(f, "not_one_of({} values)", items.len()),
             Self::PartialMap(m) => write!(f, "map({} known keys, ...)", m.len()),
             Self::PartialList(l) => write!(f, "list({} known members, ...)", l.len()),
+            Self::PartialListAny(l) => write!(f, "list(one of {} candidates, ...)", l.len()),
+            Self::Range(r) => {
+                f.write_str("range(")?;
+                match &r.lower {
+                    Some(b) => write!(f, "{} {}", if b.inclusive { ">=" } else { ">" }, b.value)?,
+                    None => f.write_str("..")?,
+                }
+                f.write_str(", ")?;
+                match &r.upper {
+                    Some(b) => write!(f, "{} {}", if b.inclusive { "<=" } else { "<" }, b.value)?,
+                    None => f.write_str("..")?,
+                }
+                f.write_str(")")
+            }
         }
     }
 }

@@ -1,0 +1,4 @@
+{
+  "printWidth": 100,
+  "ignorePatterns": ["dist", "node_modules", "playwright-report", "test-results", "pnpm-lock.yaml"]
+}

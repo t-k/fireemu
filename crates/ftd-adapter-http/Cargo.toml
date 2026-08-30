@@ -15,12 +15,17 @@ ftd-core-session = { path = "../ftd-core-session" }
 ftd-core-limits = { path = "../ftd-core-limits" }
 ftd-core-rules = { path = "../ftd-core-rules" }
 ftd-core-storage = { path = "../ftd-core-storage" }
+ftd-core-firestore = { path = "../ftd-core-firestore" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util"] }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
+rsa = "0.9"
+sha2 = { version = "0.10", features = ["oid"] }
+rand_chacha = "0.3"
+rand_core = "0.6"
 
 [lints]
 workspace = true

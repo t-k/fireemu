@@ -4,6 +4,9 @@
 //! `INV-TIME-001`. It is deliberately small so that Loom scenarios (`verification/loom`) and
 //! the TLA+ models `SessionEpoch.tla` / `AwaitIdle.tla` can cover it completely.
 
+pub mod barrier;
 pub mod clock;
+pub mod fault;
 pub mod idle;
 pub mod session;
+pub mod tenancy;

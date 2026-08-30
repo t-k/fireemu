@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ftd_adapter_functions::manifest_json::parse_manifest;
-use ftd_adapter_functions::runner::Runner;
+use ftd_adapter_functions::runner::{Runner, SpawnSpec};
 use ftd_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
 use ftd_adapter_grpc::local::LocalBackend;
 use ftd_adapter_http::control::FunctionsHook;
@@ -39,6 +39,7 @@ fn default_runner() -> Vec<String> {
 /// Starts the runner and the runtime for `cfg.functions_source` and installs it as the
 /// backend's synchronous commit observer (Storage events are wired by the caller through
 /// [`storage_sink`]).
+#[allow(clippy::too_many_lines)]
 pub async fn start(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -82,7 +83,13 @@ pub async fn start(
         ("FTD_RUNNER".to_owned(), "1".to_owned()),
         ("FTD_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
     ];
-    let runner = Runner::spawn(&command, None, &env, Duration::from_secs(60)).await?;
+    let spec = SpawnSpec {
+        command,
+        cwd: None,
+        env,
+        hello_timeout: Duration::from_secs(60),
+    };
+    let runner = Runner::spawn_spec(&spec).await?;
     let manifest_json = match &cfg.functions_manifest {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -125,8 +132,18 @@ pub async fn start(
         retry_attempts: cfg.events_max_attempts,
         max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
         runner_secret: runner_secret.to_owned(),
+        overlap: ftd_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
+            .unwrap_or_default(),
+        catch_up: ftd_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
+            .unwrap_or_default(),
     };
-    let runtime = FunctionsRuntime::new(manifest, config, clock.clone(), Arc::new(runner));
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        config,
+        clock.clone(),
+        Arc::new(runner),
+        Some(spec),
+    );
     tokio::spawn(runtime.clone().dispatch_loop());
     // Commits reach the runtime inside the database critical section: in order, never
     // dropped, and enqueued before the write returns to its caller.
@@ -138,9 +155,34 @@ pub async fn start(
 /// The Storage event observer for `runtime` (called inside the store's critical section).
 pub fn storage_sink(
     runtime: &Arc<FunctionsRuntime>,
+    tenancy: &ftd_core_session::tenancy::SharedTenancy,
 ) -> Arc<dyn Fn(&ftd_core_storage::store::StorageEvent) + Send + Sync> {
     let runtime = runtime.clone();
-    Arc::new(move |event| runtime.on_storage_event(event))
+    let tenancy = tenancy.clone();
+    Arc::new(move |event| {
+        use ftd_core_storage::store::StorageEvent;
+        let bucket = match event {
+            StorageEvent::Finalized(m)
+            | StorageEvent::Deleted(m)
+            | StorageEvent::MetadataUpdated(m) => m.bucket.as_str(),
+        };
+        // The runtime belongs to the default session: other sessions' buckets do not
+        // trigger its functions.
+        let owned = tenancy
+            .read()
+            .is_ok_and(|t| t.project_of_bucket(bucket) == runtime.project());
+        if owned {
+            runtime.on_storage_event(event);
+        }
+    })
+}
+
+/// The Auth user event observer for `runtime` (called after each Auth request).
+pub fn auth_sink(
+    runtime: &Arc<FunctionsRuntime>,
+) -> ftd_adapter_http::identity_toolkit::AuthEventSink {
+    let runtime = runtime.clone();
+    Arc::new(move |event| runtime.on_user_event(event))
 }
 
 /// The runtime as the control API's hook.
@@ -165,5 +207,16 @@ impl FunctionsHook for Hook {
 
     fn status(&self) -> serde_json::Value {
         self.0.status()
+    }
+
+    fn publish(&self, topic: &str, messages: &[serde_json::Value]) -> Result<Vec<String>, String> {
+        if topic.is_empty() || topic.len() > 255 {
+            return Err("topic must be 1..=255 characters".to_owned());
+        }
+        Ok(self.0.publish(topic, messages))
+    }
+
+    fn project(&self) -> String {
+        self.0.project().to_owned()
     }
 }

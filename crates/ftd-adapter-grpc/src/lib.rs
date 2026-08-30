@@ -10,6 +10,7 @@ pub mod decode;
 pub mod encode;
 pub mod gateway;
 pub mod local;
+pub mod pipeline;
 pub mod rest;
 pub mod rules;
 pub mod serve;

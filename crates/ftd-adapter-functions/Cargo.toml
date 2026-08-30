@@ -9,6 +9,7 @@ publish.workspace = true
 description = "Functions shell: runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy"
 
 [dependencies]
+ftd-core-auth = { path = "../ftd-core-auth" }
 ftd-core-types = { path = "../ftd-core-types" }
 ftd-core-events = { path = "../ftd-core-events" }
 ftd-core-functions = { path = "../ftd-core-functions" }
@@ -22,6 +23,8 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
+chrono-tz = "0.10"
+chrono = "0.4"
 
 [lints]
 workspace = true

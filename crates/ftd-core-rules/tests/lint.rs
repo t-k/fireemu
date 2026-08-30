@@ -304,3 +304,45 @@ fn unused_functions_are_reported_as_notices() {
         .iter()
         .any(|d| d.limit_id == "RULES-UNUSED-FUNCTION" && d.subject.as_deref() == Some("unused")));
 }
+
+#[test]
+fn diagnostics_name_their_match_path_and_respect_the_size_boundary() {
+    // A deep nest reports the path of the deepest match block.
+    let deep = wrap(&format!(
+        "{}{}",
+        (0..11)
+            .map(|i| format!("match /c{i}/{{d{i}}} {{"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        " allow read: if true; }".to_owned() + &"}".repeat(10)
+    ));
+    let report = lint_source(&deep, &LintOptions::default());
+    let depth = report
+        .diagnostics
+        .iter()
+        .find(|d| d.limit_id == "RULES-MATCH-DEPTH")
+        .expect("depth diagnostic");
+    let subject = depth.subject.as_deref().unwrap_or("");
+    assert!(
+        subject.contains("{d10}") && subject.contains("c10"),
+        "{subject}"
+    );
+    assert!(depth.current > depth.maximum, "{depth:?}");
+    // Below the source size limit there is no size diagnostic at all.
+    assert!(level_of(&wrap("allow read: if true;"), "RULES-SOURCE-SIZE").is_none());
+    // The deepest call chain is the one reported for RULES-FUNCTION-CALL-DEPTH.
+    let chains = wrap(
+        "function a1() { return true; } function a2() { return a1(); }\n\
+         function b1() { return true; } function b2() { return b1(); } function b3() { return b2(); }\n\
+         allow read: if a2() && b3();",
+    );
+    let report = lint_source(&chains, &LintOptions::default());
+    if let Some(d) = report
+        .diagnostics
+        .iter()
+        .find(|d| d.limit_id == "RULES-FUNCTION-CALL-DEPTH")
+    {
+        assert_eq!(d.current, 3, "{d:?}");
+        assert_eq!(d.subject.as_deref(), Some("b3"), "{d:?}");
+    }
+}

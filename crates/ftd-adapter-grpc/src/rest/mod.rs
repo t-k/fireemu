@@ -104,10 +104,25 @@ fn status_name(code: Code) -> &'static str {
 #[must_use]
 pub fn error_response(status: &Status) -> RestResponse {
     let code = status.code();
+    let mut body = json!({"error": {"code": http_status(code), "message": status.message(), "status": status_name(code)}});
+    if status
+        .metadata()
+        .contains_key(crate::local::DROP_CONNECTION_KEY)
+    {
+        // The server drops the connection instead of sending this body.
+        body["error"]["ftdDropConnection"] = json!(true);
+    }
     RestResponse {
         status: http_status(code),
-        body: json!({"error": {"code": http_status(code), "message": status.message(), "status": status_name(code)}}),
+        body,
     }
+}
+
+/// Whether a response stands for a `dropConnection` fault (the connection is closed
+/// without it).
+#[must_use]
+pub fn drops_connection(response: &RestResponse) -> bool {
+    response.body["error"]["ftdDropConnection"] == json!(true)
 }
 
 fn ok(body: Value) -> RestResponse {
@@ -193,20 +208,62 @@ fn classify(resource: &str) -> Result<Target, Status> {
     }
 }
 
+/// The caller of a REST request: its principal plus the reset epoch the request started in
+/// (read before the token is verified; the guards refuse a caller from an earlier epoch).
+pub struct Caller {
+    principal: Principal,
+    epoch: u64,
+}
+
+impl std::ops::Deref for Caller {
+    type Target = Principal;
+    fn deref(&self) -> &Principal {
+        &self.principal
+    }
+}
+
 impl RestState {
-    fn principal(&self, authorization: Option<&str>) -> Result<Principal, Status> {
-        match &self.rules {
-            Some(r) => r.principal_from_authorization(authorization),
-            None => Ok(Principal::Owner),
+    /// A user token must be minted for the project of `database` (transaction requests
+    /// carry no document the guards could check).
+    fn check_database_audience(&self, caller: &Caller, database: &str) -> Result<(), Status> {
+        if self.rules.is_none() {
+            return Ok(());
         }
+        let parent = crate::decode::parse_parent(&format!("{database}/documents"))
+            .map_err(|e| crate::gateway::Rejection::Decode(e).to_status())?;
+        rules::check_audience(&caller.principal, parent.project.as_str())
     }
 
-    fn write_guard<'a>(&'a self, principal: &'a Principal) -> rules::BoxedWriteGuard<'a> {
-        rules::write_guard(self.rules.as_ref(), principal)
+    fn principal(&self, authorization: Option<&str>) -> Result<Caller, Status> {
+        let epoch = self.local.barrier().epoch();
+        let principal = match &self.rules {
+            Some(r) => r.principal_from_authorization(authorization)?,
+            None => Principal::Owner,
+        };
+        Ok(Caller { principal, epoch })
     }
 
-    fn read_guard<'a>(&'a self, principal: &'a Principal) -> rules::BoxedReadGuard<'a> {
-        rules::read_guard(self.rules.as_ref(), principal)
+    fn write_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedWriteGuard<'a> {
+        let inner = rules::write_guard(self.rules.as_ref(), &caller.principal);
+        let barrier = self.local.barrier();
+        let epoch = caller.epoch;
+        let actor = crate::local::Actor::from_principal(&caller.principal);
+        let local = self.local.clone();
+        Box::new(move |db, writes, now| {
+            rules::same_epoch(&barrier, epoch)?;
+            local.set_actor(actor.clone());
+            inner(db, writes, now)
+        })
+    }
+
+    fn read_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedReadGuard<'a> {
+        let inner = rules::read_guard(self.rules.as_ref(), &caller.principal);
+        let barrier = self.local.barrier();
+        let epoch = caller.epoch;
+        Box::new(move |db, version, check| {
+            rules::same_epoch(&barrier, epoch)?;
+            inner(db, version, check)
+        })
     }
 
     /// Handles one request.
@@ -262,7 +319,7 @@ impl RestState {
 
     fn get(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         name: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
@@ -297,7 +354,7 @@ impl RestState {
 
     fn list(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         parent: &str,
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
@@ -345,7 +402,7 @@ impl RestState {
 
     fn create(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         parent: &str,
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
@@ -369,7 +426,7 @@ impl RestState {
 
     fn patch(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         name: &str,
         params: &BTreeMap<String, Vec<String>>,
         body: &Value,
@@ -403,7 +460,7 @@ impl RestState {
 
     fn delete(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         name: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
@@ -419,7 +476,7 @@ impl RestState {
 
     fn custom_method(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         action: &str,
         body: &Value,
@@ -430,6 +487,7 @@ impl RestState {
             "batchGet" => self.batch_get(principal, resource, body),
             "beginTransaction" => {
                 let database = database_of(resource)?;
+                self.check_database_audience(principal, &database)?;
                 let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
                     database,
                     options: Some(
@@ -441,6 +499,7 @@ impl RestState {
             }
             "rollback" => {
                 let database = database_of(resource)?;
+                self.check_database_audience(principal, &database)?;
                 self.local.rollback(&pb::RollbackRequest {
                     database,
                     transaction: transaction_bytes(body.get("transaction"))?,
@@ -481,7 +540,7 @@ impl RestState {
 
     fn commit(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -498,7 +557,7 @@ impl RestState {
 
     fn batch_write(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -518,7 +577,7 @@ impl RestState {
 
     fn batch_get(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -586,7 +645,7 @@ impl RestState {
 
     fn run_query(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -644,7 +703,7 @@ impl RestState {
 
     fn run_aggregation_query(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {

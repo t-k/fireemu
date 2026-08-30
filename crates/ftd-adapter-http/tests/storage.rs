@@ -21,16 +21,24 @@ fn state(rules: Option<&str>) -> StorageState {
     StorageState {
         store: Mutex::new(ObjectStore::new(9)),
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
-        auth: Arc::new(Mutex::new(AuthStore::new(
+        auth: Arc::new(ftd_core_auth::store::AuthRegistry::new(
             "demo-app",
-            SplitMix64::new(3),
-            TotpPolicy::default(),
-        ))),
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(3),
+                TotpPolicy::default(),
+            ))),
+        )),
+        tenancy: None,
         rules: Arc::new(RwLock::new(rules.map_or_else(LoadedRules::default, |r| {
             LoadedRules::from_source(r).unwrap()
         }))),
         project: "demo-app".to_owned(),
         events: None,
+        barrier: None,
+        firestore: None,
+        faults: None,
+        clock_observer: None,
     }
 }
 
@@ -477,7 +485,8 @@ service firebase.storage {
 }",
     ));
     let (uid, token) = {
-        let mut store = s.auth.lock().unwrap();
+        let store = s.auth.default_store();
+        let mut store = store.lock().unwrap();
         let uid = store
             .create_user(NewUser::email("u@example.com"), START)
             .unwrap();
@@ -683,7 +692,8 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
 }
 
 fn user_token(s: &StorageState) -> (String, String) {
-    let mut store = s.auth.lock().unwrap();
+    let store = s.auth.default_store();
+    let mut store = store.lock().unwrap();
     let uid = store
         .create_user(NewUser::email("u@example.com"), START)
         .unwrap();
@@ -1221,4 +1231,284 @@ service firebase.storage {
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     assert_eq!(json_body(&r)["size"], data.len().to_string());
+}
+
+struct Flags(Vec<String>);
+
+impl ftd_core_rules::eval::DocumentAccess for Flags {
+    fn get(&self, segments: &[String]) -> Option<ftd_core_rules::value::RulesValue> {
+        let path = segments.join("/");
+        self.0.contains(&path).then(|| {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(
+                "data".to_owned(),
+                ftd_core_rules::value::RulesValue::Map(std::collections::BTreeMap::from([(
+                    "open".to_owned(),
+                    ftd_core_rules::value::RulesValue::Bool(true),
+                )])),
+            );
+            ftd_core_rules::value::RulesValue::Map(m)
+        })
+    }
+}
+
+#[test]
+fn storage_rules_can_read_firestore_documents() {
+    let rules = "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /gated/{file} {
+      allow read: if firestore.exists(/databases/(default)/documents/flags/open)
+                  && firestore.get(/databases/(default)/documents/flags/open).data.open == true;
+    }
+  }
+}";
+    let mut s = state(Some(rules));
+    let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
+    let upload = format!("/v0/b/{BUCKET}/o?name=gated%2Fa.txt&uploadType=multipart");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &upload,
+            &[("authorization", "Bearer owner"), ("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let read = format!("/v0/b/{BUCKET}/o/gated%2Fa.txt?alt=media");
+    // No Firestore access: the rule fails closed.
+    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 403);
+    // The flag is absent: denied; present: allowed.
+    s.firestore = Some(Arc::new(Flags(vec![])));
+    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 403);
+    s.firestore = Some(Arc::new(Flags(vec![
+        "databases/(default)/documents/flags/open".to_owned(),
+    ])));
+    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 200);
+}
+
+#[test]
+fn fault_plans_fail_storage_operations() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
+    let mut s = state(None);
+    let registry = Arc::new(ftd_core_session::fault::FaultRegistry::new());
+    let faults = registry.default_state();
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "storage.upload".into(),
+                nth: Some(1),
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::ReturnError {
+                code: "UNAVAILABLE".into(),
+            },
+        }],
+    });
+    s.faults = Some(registry);
+    let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
+    let upload = format!("/v0/b/{BUCKET}/o?name=f.txt&uploadType=multipart");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &upload,
+            &[("authorization", "Bearer owner"), ("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 503, "{}", String::from_utf8_lossy(&r.body));
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &upload,
+            &[("authorization", "Bearer owner"), ("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+}
+
+#[test]
+fn storage_tokens_are_bound_to_the_buckets_project() {
+    let mut s = state(None);
+    let mut tenancy = ftd_core_session::tenancy::Tenancy::new("demo-app");
+    tenancy.register("demo-b", &[], &[]).unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    assert!(s.auth.register(
+        "demo-b",
+        AuthStore::new("demo-b", SplitMix64::new(4), TotpPolicy::default())
+    ));
+    let token_b = {
+        let store = s.auth.store_for("demo-b").unwrap();
+        let mut store = store.lock().unwrap();
+        let uid = store
+            .create_user(NewUser::email("b@example.com"), START)
+            .unwrap();
+        let claims = store.id_token_claims(&uid, None, START).unwrap();
+        format!("Firebase {}", ftd_core_auth::jwt::encode_unsigned(&claims))
+    };
+    let (_, token_a) = user_token(&s);
+    let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
+    let upload = |bucket: &str| format!("/v0/b/{bucket}/o?name=f.txt&uploadType=multipart");
+    // A demo-b user on demo-app's bucket, and a demo-app user on demo-b's: refused before
+    // any rule runs.
+    for (bucket, token) in [(BUCKET, &token_b), ("demo-b.appspot.com", &token_a)] {
+        let r = handle(
+            &s,
+            &req(
+                "POST",
+                &upload(bucket),
+                &[("authorization", token), ("content-type", &ct)],
+                &body,
+            ),
+        );
+        assert_eq!(r.status, 401, "{}", String::from_utf8_lossy(&r.body));
+        assert!(String::from_utf8_lossy(&r.body).contains("audience"));
+    }
+    // Each user on their own project's bucket.
+    for (bucket, token) in [(BUCKET, &token_a), ("demo-b.appspot.com", &token_b)] {
+        let r = handle(
+            &s,
+            &req(
+                "POST",
+                &upload(bucket),
+                &[("authorization", token), ("content-type", &ct)],
+                &body,
+            ),
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    }
+}
+
+#[test]
+fn drop_connection_faults_mark_the_response_for_the_server_to_close() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
+    let mut s = state(None);
+    let registry = Arc::new(ftd_core_session::fault::FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "storage.read".into(),
+                nth: Some(1),
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::DropConnection,
+        }],
+    });
+    s.faults = Some(registry);
+    let path = format!("/v0/b/{BUCKET}/o/f.txt?alt=media");
+    let r = handle(
+        &s,
+        &req("GET", &path, &[("authorization", "Bearer owner")], b""),
+    );
+    assert!(r
+        .headers
+        .iter()
+        .any(|(k, v)| k == ftd_adapter_http::storage::DROP_CONNECTION_HEADER && v == "1"));
+    let r = handle(
+        &s,
+        &req("GET", &path, &[("authorization", "Bearer owner")], b""),
+    );
+    assert_eq!(r.status, 404);
+    assert!(!r
+        .headers
+        .iter()
+        .any(|(k, _)| k == ftd_adapter_http::storage::DROP_CONNECTION_HEADER));
+}
+
+#[test]
+fn json_api_uploads_count_as_uploads_for_fault_plans() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
+    let mut s = state(None);
+    let registry = Arc::new(ftd_core_session::fault::FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "storage.upload".into(),
+                nth: Some(1),
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::Timeout,
+        }],
+    });
+    s.faults = Some(registry.clone());
+    let (ct, body) = multipart(&json!({"name": "j.txt"}), "text/plain", b"x");
+    let path = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart");
+    let r = handle(&s, &req("POST", &path, &[("content-type", &ct)], &body));
+    assert_eq!(r.status, 504, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        registry.default_state().lock().unwrap().counters()["storage.upload"],
+        1
+    );
+}
+
+#[test]
+fn resumable_uploads_answer_only_under_their_own_bucket() {
+    let s = state(None);
+    let start = format!("/v0/b/{BUCKET}/o?name=r.txt&uploadType=resumable");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &start,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+                ("x-goog-upload-header-content-type", "text/plain"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let upload_url = r
+        .headers
+        .iter()
+        .find(|(k, _)| k == "x-goog-upload-url")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let upload_id = upload_url.split("upload_id=").nth(1).unwrap().to_owned();
+    // The same upload ID under another bucket's URL: not this bucket's upload.
+    let elsewhere = format!("/v0/b/other-bucket/o?name=r.txt&upload_id={upload_id}");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &elsewhere,
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
+    let own = format!("/v0/b/{BUCKET}/o?name=r.txt&upload_id={upload_id}");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &own,
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
 }

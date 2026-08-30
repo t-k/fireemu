@@ -63,6 +63,12 @@ fn json_response(r: &RestResponse, origin: Option<&str>) -> Response<OutBody> {
         .unwrap_or_else(|_| Response::new(full(Bytes::new())))
 }
 
+/// The error that makes hyper close the connection (or reset the stream) for a
+/// `dropConnection` fault.
+fn dropped() -> std::io::Error {
+    std::io::Error::other("fault plan: connection dropped")
+}
+
 fn header<'a>(req: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
     req.headers().get(name).and_then(|v| v.to_str().ok())
 }
@@ -75,20 +81,23 @@ async fn read_body(req: Request<Incoming>, limit: usize) -> Result<Bytes, ()> {
         .map_err(|_| ())
 }
 
-async fn rest_call(state: Arc<RestState>, req: Request<Incoming>) -> Response<OutBody> {
+async fn rest_call(
+    state: Arc<RestState>,
+    req: Request<Incoming>,
+) -> Result<Response<OutBody>, std::io::Error> {
     let origin = header(&req, "origin").map(str::to_owned);
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
     let authorization = header(&req, "authorization").map(str::to_owned);
     let Ok(bytes) = read_body(req, MAX_REST_BODY_BYTES).await else {
-        return json_response(
+        return Ok(json_response(
             &RestResponse {
                 status: 413,
                 body: serde_json::json!({"error": {"code": 413, "message": "request body too large", "status": "INVALID_ARGUMENT"}}),
             },
             origin.as_deref(),
-        );
+        ));
     };
     let body = if bytes.is_empty() {
         serde_json::Value::Object(serde_json::Map::new())
@@ -96,12 +105,12 @@ async fn rest_call(state: Arc<RestState>, req: Request<Incoming>) -> Response<Ou
         match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(e) => {
-                return json_response(
+                return Ok(json_response(
                     &crate::rest::error_response(&Status::invalid_argument(format!(
                         "invalid JSON body: {e}"
                     ))),
                     origin.as_deref(),
-                )
+                ))
             }
         }
     };
@@ -112,7 +121,11 @@ async fn rest_call(state: Arc<RestState>, req: Request<Incoming>) -> Response<Ou
         authorization,
         body,
     });
-    json_response(&response, origin.as_deref())
+    if crate::rest::drops_connection(&response) {
+        // A `dropConnection` fault: the connection closes without a response.
+        return Err(dropped());
+    }
+    Ok(json_response(&response, origin.as_deref()))
 }
 
 async fn channel_call(
@@ -224,8 +237,19 @@ where
                         let req = req.map(|b| {
                             tonic::body::Body::new(b.map_err(|e| Status::internal(e.to_string())))
                         });
-                        let response = grpc.call(req).await?;
-                        return Ok::<_, Infallible>(
+                        let response = match grpc.call(req).await {
+                            Ok(r) => r,
+                            Err(never) => match never {},
+                        };
+                        if response
+                            .headers()
+                            .contains_key(crate::local::DROP_CONNECTION_KEY)
+                        {
+                            // A `dropConnection` fault: the stream is reset (HTTP/2) or
+                            // the connection closed (HTTP/1) instead of delivering it.
+                            return Err(dropped());
+                        }
+                        return Ok::<_, std::io::Error>(
                             response.map(|b| b.map_err(|e| Box::new(e) as BoxError).boxed_unsync()),
                         );
                     }
@@ -245,7 +269,7 @@ where
                     if let Some(kind) = channel_kind(req.uri().path()) {
                         return Ok(channel_call(hub, kind, req).await);
                     }
-                    Ok(rest_call(rest, req).await)
+                    rest_call(rest, req).await
                 }
             });
             // Connection errors are per-client; the accept loop keeps running.

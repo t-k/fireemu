@@ -336,3 +336,38 @@ fn conservative_accept_implies_reference_support() {
         other => panic!("{other:?}"),
     }
 }
+
+fn emulator() -> PlanningContext {
+    PlanningContext {
+        policy: IndexValidationPolicy::Emulator,
+        ..standard()
+    }
+}
+
+#[test]
+fn the_emulator_policy_serves_queries_without_their_composite_index() {
+    let q = tasks().with_filter(FilterExpr::And(vec![
+        field("done", FieldOp::Equal, Value::Boolean(false)),
+        field("owner", FieldOp::Equal, Value::String("u".to_owned())),
+    ]));
+    let required = match decide(&q, &IndexSet::default(), standard()) {
+        IndexDecision::MissingRequired { requirement } => requirement,
+        other => panic!("{other}"),
+    };
+    match decide(&q, &IndexSet::default(), emulator()) {
+        IndexDecision::AssumedIndex { requirement } => assert_eq!(requirement, required),
+        other => panic!("{other}"),
+    }
+    // A configured index is still preferred and reported as such.
+    let mut idx = IndexSet::default();
+    idx.add_composite(required);
+    assert!(matches!(
+        decide(&q, &idx, emulator()),
+        IndexDecision::UseIndex { .. }
+    ));
+    // Single-field queries need no assumption.
+    assert!(matches!(
+        decide(&tasks(), &IndexSet::default(), emulator()),
+        IndexDecision::UseIndex { .. }
+    ));
+}

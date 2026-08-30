@@ -6,9 +6,12 @@
 //! database snapshot; the diff against its last known `(path, version)` set becomes
 //! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
 //! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
-//! the snapshot version. A target added with a resume token is `RESET` before its replay
-//! (resume history is not kept). Security Rules are re-checked on every refresh; a denial
-//! removes the target with a `PERMISSION_DENIED` cause.
+//! the snapshot version. A target added with a resume token (or a read time) replays only
+//! what changed since that version: the store keeps every version, so the target's state
+//! at the token is recomputed and diffed against the current snapshot, followed by an
+//! `ExistenceFilter` with the current count (production's post-resume check). Only an
+//! undecodable or future token falls back to `RESET`. Security Rules are re-checked on
+//! every refresh; a denial removes the target with a `PERMISSION_DENIED` cause.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
@@ -26,7 +29,7 @@ use tokio_stream::StreamExt;
 use tonic::Status;
 
 use crate::decode::{parse_parent, Parent};
-use crate::encode::{decode_write, encode_document, encode_instant};
+use crate::encode::{decode_instant, decode_write, encode_document, encode_instant};
 use crate::gateway::Gateway;
 use crate::local::{CommitEvent, LocalBackend};
 use crate::rules::{write_guard, Principal, RulesEnforcer};
@@ -189,6 +192,7 @@ fn handle_write_request(
     // after the check above cannot be raced by this write.
     let epoch = ctx.epoch;
     let local = ctx.local.clone();
+    let actor = crate::local::Actor::from_principal(&principal);
     let guarded = move |db: &ftd_core_firestore::store::FirestoreState,
                         writes: &[Write],
                         now: ftd_core_types::time::LogicalInstant|
@@ -196,6 +200,7 @@ fn handle_write_request(
         if local.epoch() != epoch {
             return Err(Status::aborted("the session was reset"));
         }
+        local.set_actor(actor.clone());
         guard(db, writes, now)
     };
     let result = ctx.local.commit_writes(parent, &writes, &guarded)?;
@@ -211,15 +216,28 @@ fn handle_write_request(
 // Listen stream
 // ---------------------------------------------------------------------------------------
 
+#[derive(Debug)]
 enum TargetKind {
     Documents(Vec<DocumentPath>),
     Query(Box<Query>),
+}
+
+/// Where a re-added target resumes from.
+enum Resume {
+    /// A version the stream handed out earlier (or a read time).
+    Version(CommitVersion),
+    /// A read time: the version current at that instant.
+    ReadTime(ftd_core_types::time::LogicalInstant),
+    /// Not a token this daemon issued: full replay after a `RESET`.
+    Invalid,
 }
 
 struct TargetState {
     kind: TargetKind,
     parent: Parent,
     known: BTreeMap<DocumentPath, CommitVersion>,
+    /// Pending resume, resolved on the first refresh (it needs the snapshot).
+    resume: Option<Resume>,
     once: bool,
     /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
@@ -227,7 +245,17 @@ struct TargetState {
     pending: Vec<pb::ListenResponse>,
 }
 
+/// Maximum targets one `Listen` stream may hold (spec 10.6: queue length caps are explicit,
+/// never a silent drop); the web SDK multiplexes every listener of a client over one stream.
+pub const MAX_LISTEN_TARGETS: usize = 1000;
+
 /// Runs the `Listen` stream.
+///
+/// Back-pressure: responses go out through a bounded channel and the loop awaits it, so a
+/// slow client stalls the loop instead of growing a queue. Commits that land meanwhile
+/// accumulate in the broadcast channel and are coalesced into one refresh (the diff
+/// against the last known state covers every intervening commit), and a lagged broadcast
+/// is the same one refresh.
 pub async fn listen_stream(
     ctx: StreamContext,
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
@@ -246,11 +274,27 @@ pub async fn listen_stream(
                 Some(Ok(req)) => handle_listen_request(&ctx, &mut parent, &mut targets, &req, &mut out).map(|()| true),
             },
             ev = events.recv() => match ev {
-                Ok(CommitEvent { project, database, .. }) => {
-                    let relevant = parent.as_ref().is_some_and(|p| {
-                        p.project.as_str() == project && p.database.as_str() == database
-                    });
-                    if relevant {
+                Ok(first) => {
+                    // Coalesce: every commit already queued behind this one is covered by
+                    // the single refresh below.
+                    let mut relevant = is_relevant(parent.as_ref(), &first);
+                    let mut closed = false;
+                    loop {
+                        match events.try_recv() {
+                            Ok(ev) => relevant |= is_relevant(parent.as_ref(), &ev),
+                            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                                relevant = true;
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                                closed = true;
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                        }
+                    }
+                    if closed {
+                        Ok(false)
+                    } else if relevant {
                         refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out).map(|()| true)
                     } else {
                         Ok(true)
@@ -276,6 +320,11 @@ pub async fn listen_stream(
             }
         }
     }
+}
+
+/// Whether a commit concerns the stream's database.
+fn is_relevant(parent: Option<&Parent>, ev: &CommitEvent) -> bool {
+    parent.is_some_and(|p| p.project.as_str() == ev.project && p.database.as_str() == ev.database)
 }
 
 fn handle_listen_request(
@@ -307,6 +356,11 @@ fn handle_listen_request(
                     "target {id} is already active on this stream"
                 )));
             }
+            if targets.len() >= MAX_LISTEN_TARGETS {
+                return Err(Status::resource_exhausted(format!(
+                    "this Listen stream already holds {MAX_LISTEN_TARGETS} targets"
+                )));
+            }
             let kind = decode_target(ctx, parent, target)?;
             out.push(target_change(
                 pb::target_change::TargetChangeType::Add,
@@ -314,21 +368,30 @@ fn handle_listen_request(
                 None,
                 None,
             ));
-            if target.resume_type.is_some() {
-                // No resume history is kept: the client drops its cache and replays.
-                out.push(target_change(
-                    pb::target_change::TargetChangeType::Reset,
-                    vec![id],
-                    None,
-                    None,
-                ));
-            }
+            // A token is honoured only for the epoch, database and target it was issued
+            // for: after a reset (or on another database / target) the version numbers
+            // start over and would silently line up with unrelated history.
+            let binding = TokenBinding {
+                epoch: ctx.local.epoch(),
+                database: database_hash(parent, ctx.local.database_generation(parent)),
+                target: target_hash(&kind),
+            };
+            let resume = match &target.resume_type {
+                None => None,
+                Some(pb::target::ResumeType::ResumeToken(bytes)) => {
+                    Some(parse_resume_token(bytes, &binding))
+                }
+                Some(pb::target::ResumeType::ReadTime(t)) => {
+                    Some(Resume::ReadTime(decode_instant(t)))
+                }
+            };
             targets.insert(
                 id,
                 TargetState {
                     kind,
                     parent: parent.clone(),
                     known: BTreeMap::new(),
+                    resume,
                     once: target.once,
                     current: false,
                     pending: Vec::new(),
@@ -361,7 +424,11 @@ fn decode_target(
         Some(pb::target::TargetType::Documents(d)) => {
             let mut paths = Vec::with_capacity(d.documents.len());
             for name in &d.documents {
-                paths.push(LocalBackend::check_database(parent, name)?);
+                let path = LocalBackend::check_database(parent, name)?;
+                // A name listed twice is one document (one change, one in the count).
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
             }
             Ok(TargetKind::Documents(paths))
         }
@@ -388,6 +455,7 @@ fn decode_target(
 /// Refreshes every target against one snapshot, then emits the global boundary. Targets
 /// whose rules now deny are removed with a cause; `once` targets are removed after their
 /// first consistent snapshot.
+#[allow(clippy::too_many_lines)]
 fn refresh_all(
     ctx: &StreamContext,
     parent: Option<&Parent>,
@@ -407,6 +475,17 @@ fn refresh_all(
             return Err(e);
         }
     };
+    // A refresh is a read: the fault plan has its say like for any other read.
+    if let Err(e) = ctx
+        .local
+        .consult_faults(parent.project.as_str(), "firestore.read")
+    {
+        for id in targets.keys() {
+            out.push(removed_with_cause(*id, &e));
+        }
+        targets.clear();
+        return Err(e);
+    }
     // One critical section: every target sees the same version, read time and documents.
     let expected_epoch = ctx.epoch;
     let local = ctx.local.clone();
@@ -415,7 +494,12 @@ fn refresh_all(
             return Err(Status::aborted("the session was reset"));
         }
         let read_time = encode_instant(read_at);
-        let token = version.value().to_be_bytes().to_vec();
+        let binding = TokenBinding {
+            epoch: local.epoch(),
+            database: database_hash(parent, local.database_generation(parent)),
+            target: 0,
+        };
+        let token = resume_token(version, &binding);
         let mut removed = Vec::new();
         for (id, state) in targets.iter_mut() {
             match refresh_target(ctx, &principal, db, *id, state, read_time) {
@@ -423,10 +507,14 @@ fn refresh_all(
                     out.append(&mut state.pending);
                     if !state.current {
                         state.current = true;
+                        let bound = TokenBinding {
+                            target: target_hash(&state.kind),
+                            ..binding
+                        };
                         out.push(target_change(
                             pb::target_change::TargetChangeType::Current,
                             vec![*id],
-                            Some(token.clone()),
+                            Some(resume_token(version, &bound)),
                             Some(read_time),
                         ));
                     }
@@ -438,9 +526,9 @@ fn refresh_all(
                 }
             }
         }
-        Ok((read_time, token, removed))
+        Ok((read_time, token, removed, version, binding))
     });
-    let (read_time, token, removed) = match snapshot.and_then(|r| r) {
+    let (read_time, token, removed, version, binding) = match snapshot.and_then(|r| r) {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -456,11 +544,15 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    for id in targets.keys() {
+    for (id, state) in &*targets {
+        let bound = TokenBinding {
+            target: target_hash(&state.kind),
+            ..binding
+        };
         out.push(target_change(
             pb::target_change::TargetChangeType::NoChange,
             vec![*id],
-            Some(token.clone()),
+            Some(resume_token(version, &bound)),
             Some(read_time),
         ));
     }
@@ -496,6 +588,7 @@ fn refresh_target(
     state: &mut TargetState,
     read_time: prost_types::Timestamp,
 ) -> Result<(), Status> {
+    let resumed = resolve_resume(db, id, state)?;
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => {
             let mut docs = Vec::new();
@@ -559,7 +652,125 @@ fn refresh_target(
         });
     }
     state.known = next_known;
+    if resumed {
+        // Production follows a resume with the current count so the client can verify its
+        // cache; the diff above already made it exact.
+        state.pending.push(pb::ListenResponse {
+            response_type: Some(pb::listen_response::ResponseType::Filter(
+                pb::ExistenceFilter {
+                    target_id: id,
+                    count: i32::try_from(current.len()).unwrap_or(i32::MAX),
+                    unchanged_names: None,
+                },
+            )),
+        });
+    }
     Ok(())
+}
+
+/// Resume: the target's state at the token becomes the known state, so the diff carries
+/// exactly what changed since; a token this daemon cannot honour resets the target.
+/// Returns whether the target resumed.
+fn resolve_resume(
+    db: &ftd_core_firestore::store::FirestoreState,
+    id: i32,
+    state: &mut TargetState,
+) -> Result<bool, Status> {
+    let Some(resume) = state.resume.take() else {
+        return Ok(false);
+    };
+    let version = match resume {
+        Resume::Version(v) => Some(v),
+        Resume::ReadTime(t) => Some(db.version_at(t)),
+        Resume::Invalid => None,
+    }
+    .filter(|v| *v <= db.current_version());
+    if let Some(v) = version {
+        state.known = known_at(db, &state.kind, v)?;
+        return Ok(true);
+    }
+    state.pending.push(target_change(
+        pb::target_change::TargetChangeType::Reset,
+        vec![id],
+        None,
+        None,
+    ));
+    Ok(false)
+}
+
+/// What a resume token is bound to besides its version.
+#[derive(Debug, Clone, Copy)]
+struct TokenBinding {
+    /// Backend reset epoch.
+    epoch: u64,
+    /// Hash of the project / database.
+    database: u64,
+    /// Hash of the target definition; `0` in the global boundary that applies to every
+    /// target.
+    target: u64,
+}
+
+/// FNV-1a over `text`.
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+fn database_hash(parent: &Parent, generation: u64) -> u64 {
+    fnv(&format!(
+        "{}/{}#{generation}",
+        parent.project.as_str(),
+        parent.database.as_str()
+    ))
+}
+
+fn target_hash(kind: &TargetKind) -> u64 {
+    fnv(&format!("{kind:?}"))
+}
+
+/// 32 bytes: version, epoch, database hash, target hash (big-endian).
+fn resume_token(version: CommitVersion, binding: &TokenBinding) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32);
+    out.extend_from_slice(&version.value().to_be_bytes());
+    out.extend_from_slice(&binding.epoch.to_be_bytes());
+    out.extend_from_slice(&binding.database.to_be_bytes());
+    out.extend_from_slice(&binding.target.to_be_bytes());
+    out
+}
+
+/// A token this daemon issued for this epoch, database and target (or for every target).
+fn parse_resume_token(bytes: &[u8], binding: &TokenBinding) -> Resume {
+    let Ok(raw) = <[u8; 32]>::try_from(bytes) else {
+        return Resume::Invalid;
+    };
+    let word = |i: usize| u64::from_be_bytes(raw[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
+    let (version, epoch, database, target) = (word(0), word(1), word(2), word(3));
+    if epoch != binding.epoch
+        || database != binding.database
+        || (target != 0 && target != binding.target)
+    {
+        return Resume::Invalid;
+    }
+    Resume::Version(CommitVersion::from_value(version))
+}
+
+/// The `(path, version)` set of a target as of `version`.
+fn known_at(
+    db: &ftd_core_firestore::store::FirestoreState,
+    kind: &TargetKind,
+    version: CommitVersion,
+) -> Result<BTreeMap<DocumentPath, CommitVersion>, Status> {
+    let docs: Vec<Document> = match kind {
+        TargetKind::Documents(paths) => paths
+            .iter()
+            .filter_map(|p| db.get_at(p, version).cloned())
+            .collect(),
+        TargetKind::Query(query) => db
+            .run_query(query, Some(version))
+            .map_err(|e| crate::encode::status_from_error(&e))?,
+    };
+    Ok(docs.into_iter().map(|d| (d.path, d.version)).collect())
 }
 
 fn out_change(doc: &Document, id: i32, out: &mut Vec<pb::ListenResponse>) {

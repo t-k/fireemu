@@ -33,6 +33,12 @@ impl CommitVersion {
     pub const fn value(self) -> u64 {
         self.0
     }
+
+    /// A version from its raw value (resume tokens).
+    #[must_use]
+    pub const fn from_value(value: u64) -> Self {
+        Self(value)
+    }
 }
 
 /// A stored document version.
@@ -1036,11 +1042,14 @@ fn apply_transform(
     let current = get_field(fields, &t.field).cloned();
     let produced = match &t.kind {
         TransformKind::ServerTimestamp => {
-            // REQUEST_TIME is documented with millisecond precision.
-            let millis = now.as_nanos().div_euclid(1_000_000);
-            let secs = i64::try_from(millis.div_euclid(1_000))
+            // The commit time at microsecond precision (production stores server timestamps
+            // with microseconds): strictly increasing across commits even when the clock did
+            // not move, so `orderBy` on a server timestamp follows commit order, and identical
+            // for every transform of one commit.
+            let micros = now.as_nanos().div_euclid(1_000);
+            let secs = i64::try_from(micros.div_euclid(1_000_000))
                 .map_err(|_| FirestoreError::InvalidArgument("commit time out of range".into()))?;
-            let nanos = u32::try_from(millis.rem_euclid(1_000) * 1_000_000).unwrap_or(0);
+            let nanos = u32::try_from(micros.rem_euclid(1_000_000) * 1_000).unwrap_or(0);
             Value::Timestamp(
                 Timestamp::new(secs, nanos).map_err(|_| {
                     FirestoreError::InvalidArgument("commit time out of range".into())

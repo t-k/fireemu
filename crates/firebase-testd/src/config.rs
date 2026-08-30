@@ -30,12 +30,19 @@ pub struct RuntimeConfig {
     pub require_demo_prefix: bool,
     /// Initial virtual clock instant.
     pub clock_start: LogicalInstant,
+    /// Whether `daemon.clockStart` pinned it. Without it the daemon starts its virtual
+    /// clock at the wall-clock time, so tokens it issues are valid for SDKs that check
+    /// expiry against real time (the Admin SDK's `verifyIdToken`); a pinned start keeps
+    /// runs reproducible.
+    pub clock_start_pinned: bool,
     /// Deterministic seed.
     pub seed: u64,
     /// Project ID used for Auth token issuance.
     pub auth_project: String,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
+    /// Path of `firestore.text-indexes.json`, if configured.
+    pub text_index_file: Option<String>,
     /// Path of the Security Rules source, if configured.
     pub rules_file: Option<String>,
     /// Path of the Storage Security Rules source, if configured.
@@ -58,6 +65,12 @@ pub struct RuntimeConfig {
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
     pub scheduler_default_time_zone: Option<String>,
+    /// Catch-up policy of schedules (`scheduler.catchUp`: all, latest, none).
+    pub scheduler_catch_up: String,
+    /// Overlap policy of schedules (`scheduler.overlap`).
+    pub scheduler_overlap: String,
+    /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
+    pub id_token_signing: ftd_core_auth::jwt::SigningMode,
 }
 
 impl Default for RuntimeConfig {
@@ -71,9 +84,11 @@ impl Default for RuntimeConfig {
             index_policy: IndexValidationPolicy::Conservative,
             require_demo_prefix: true,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
+            clock_start_pinned: false,
             seed: 42,
             auth_project: "demo-app".to_owned(),
             index_file: None,
+            text_index_file: None,
             rules_file: None,
             storage_rules_file: None,
             rules_enforced: true,
@@ -85,13 +100,144 @@ impl Default for RuntimeConfig {
             events_max_attempts: 4,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
+            scheduler_overlap: "allow".to_owned(),
+            scheduler_catch_up: "all".to_owned(),
+            id_token_signing: ftd_core_auth::jwt::SigningMode::UnsignedEmulator,
         }
     }
 }
 
+/// The keys of the `auth` section (spec/config/firebase-testd.schema.json).
+const AUTH_KEYS: [&str; 5] = [
+    "enabled",
+    "projectIssuer",
+    "idTokenSigning",
+    "totp",
+    "secretMaterialization",
+];
+
 /// Configuration errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError(pub String);
+
+/// The services `exec` exports to its child (`--only auth,firestore,storage,functions`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // one flag per service, read independently
+pub struct Selection {
+    /// `FIRESTORE_EMULATOR_HOST`.
+    pub firestore: bool,
+    /// `FIREBASE_AUTH_EMULATOR_HOST`.
+    pub auth: bool,
+    /// `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`.
+    pub storage: bool,
+    /// The functions codebase is loaded and `FTD_FUNCTIONS_HOST` exported.
+    pub functions: bool,
+}
+
+impl Default for Selection {
+    fn default() -> Self {
+        Self {
+            firestore: true,
+            auth: true,
+            storage: true,
+            functions: true,
+        }
+    }
+}
+
+impl Selection {
+    /// Parses the `--only` list (`firebase emulators:exec --only` names).
+    pub fn parse(list: &str) -> Result<Self, ConfigError> {
+        let mut sel = Self {
+            firestore: false,
+            auth: false,
+            storage: false,
+            functions: false,
+        };
+        for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            match name {
+                "firestore" => sel.firestore = true,
+                "auth" => sel.auth = true,
+                "storage" => sel.storage = true,
+                "functions" => sel.functions = true,
+                other => {
+                    return Err(ConfigError(format!(
+                        "--only: unknown service {other:?} (firestore, auth, storage, functions)"
+                    )))
+                }
+            }
+        }
+        Ok(sel)
+    }
+}
+
+impl RuntimeConfig {
+    /// Applies the parts of a `firebase.json` the daemon can honour: `firestore.rules`,
+    /// `firestore.indexes` (also the `index` spelling), `storage.rules`, `emulators.*.port`
+    /// and, when functions are selected, `functions.source` (the first codebase). Paths are
+    /// relative to `base`. Returns the emulator entries it ignored, for a notice.
+    pub fn apply_firebase_json(
+        &mut self,
+        json: &Value,
+        base: &std::path::Path,
+        only: &Selection,
+    ) -> Result<Vec<String>, ConfigError> {
+        let obj = json
+            .as_object()
+            .ok_or_else(|| ConfigError("firebase.json must be an object".to_owned()))?;
+        let file = |v: &Value, key: &str| -> Result<String, ConfigError> {
+            let p = v
+                .as_str()
+                .ok_or_else(|| ConfigError(format!("firebase.json: {key} must be a string")))?;
+            Ok(base.join(p).to_string_lossy().into_owned())
+        };
+        if let Some(fs) = obj.get("firestore") {
+            let fs = fs.as_object().ok_or_else(|| {
+                ConfigError("firebase.json: firestore must be an object".to_owned())
+            })?;
+            if let Some(v) = fs.get("rules") {
+                self.rules_file = Some(file(v, "firestore.rules")?);
+            }
+            if let Some(v) = fs.get("indexes").or_else(|| fs.get("index")) {
+                self.index_file = Some(file(v, "firestore.indexes")?);
+            }
+        }
+        if let Some(v) = obj.get("storage").and_then(|s| s.get("rules")) {
+            self.storage_rules_file = Some(file(v, "storage.rules")?);
+        }
+        if only.functions {
+            let source = match obj.get("functions") {
+                Some(Value::Object(f)) => f.get("source"),
+                Some(Value::Array(codebases)) => codebases.first().and_then(|c| c.get("source")),
+                _ => None,
+            };
+            if let Some(v) = source {
+                self.functions_source = Some(file(v, "functions.source")?);
+            }
+        }
+        let mut ignored = Vec::new();
+        if let Some(emulators) = obj.get("emulators").and_then(Value::as_object) {
+            for (name, entry) in emulators {
+                let port = entry.get("port").and_then(Value::as_u64);
+                let port = match port {
+                    Some(p) => u16::try_from(p).map_err(|_| {
+                        ConfigError(format!("firebase.json: emulators.{name}.port out of range"))
+                    })?,
+                    None => continue,
+                };
+                let addr = format!("127.0.0.1:{port}");
+                match name.as_str() {
+                    "firestore" => self.firestore_addr = addr,
+                    "auth" => self.http_addr = addr,
+                    "storage" => self.storage_addr = addr,
+                    "functions" => self.functions_addr = addr,
+                    _ => ignored.push(format!("emulators.{name}")),
+                }
+            }
+        }
+        Ok(ignored)
+    }
+}
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -157,6 +303,7 @@ impl RuntimeConfig {
             cfg.functions_addr = format!("127.0.0.1:{port}");
         }
         if let Some(start) = d.get("clockStart").and_then(Value::as_str) {
+            cfg.clock_start_pinned = true;
             cfg.clock_start = LogicalInstant::parse_rfc3339(start)
                 .map_err(|e| ConfigError(format!("daemon.clockStart: {e}")))?;
         }
@@ -226,19 +373,30 @@ impl RuntimeConfig {
                 return Err(ConfigError(format!("unknown config key scheduler.{key}")));
             }
         }
-        for (key, allowed) in [
-            ("clock", "virtual"),
-            ("catchUp", "all"),
-            ("overlap", "allow"),
-        ] {
-            match s.get(key).and_then(Value::as_str) {
-                None => {}
-                Some(v) if v == allowed => {}
-                Some(other) => {
-                    return Err(ConfigError(format!(
-                        "scheduler.{key} {other:?} is declared but not implemented; use {allowed:?}"
-                    )))
-                }
+        if let Some(v) = s.get("overlap") {
+            let text = v.as_str().unwrap_or("");
+            if !["allow", "skip", "queue", "reject"].contains(&text) {
+                return Err(ConfigError(
+                    "scheduler.overlap must be one of allow, skip, queue, reject".into(),
+                ));
+            }
+            text.clone_into(&mut cfg.scheduler_overlap);
+        }
+        if let Some(v) = s.get("catchUp") {
+            let text = v.as_str().unwrap_or("");
+            if !["all", "latest", "none"].contains(&text) {
+                return Err(ConfigError(
+                    "scheduler.catchUp must be one of all, latest, none".into(),
+                ));
+            }
+            text.clone_into(&mut cfg.scheduler_catch_up);
+        }
+        match s.get("clock").and_then(Value::as_str) {
+            None | Some("virtual") => {}
+            Some(other) => {
+                return Err(ConfigError(format!(
+                    "scheduler.clock {other:?} is declared but not implemented; use \"virtual\""
+                )))
             }
         }
         if let Some(v) = s.get("maxCatchUpRuns") {
@@ -253,7 +411,7 @@ impl RuntimeConfig {
             cfg.scheduler_max_catch_up_runs = usize::try_from(n).unwrap_or(1000);
         }
         if let Some(tz) = s.get("defaultTimeZone").and_then(Value::as_str) {
-            ftd_core_functions::cron::fixed_offset_seconds(Some(tz))
+            ftd_adapter_functions::zone::resolve(Some(tz))
                 .map_err(|e| ConfigError(format!("scheduler.defaultTimeZone: {e}")))?;
             cfg.scheduler_default_time_zone = Some(tz.to_owned());
         }
@@ -297,6 +455,7 @@ impl RuntimeConfig {
     }
 
     /// Builds the runtime config from parsed JSON.
+    #[allow(clippy::too_many_lines)]
     pub fn from_json(json: &Value) -> Result<Self, ConfigError> {
         let obj = json
             .as_object()
@@ -330,12 +489,16 @@ impl RuntimeConfig {
                 cfg.index_policy = match p {
                     "firebase" => IndexValidationPolicy::Firebase,
                     "conservative" => IndexValidationPolicy::Conservative,
+                    "emulator" => IndexValidationPolicy::Emulator,
                     other => {
                         return Err(ConfigError(format!(
                             "unknown firestore.indexValidationPolicy {other:?}"
                         )))
                     }
                 };
+            }
+            if let Some(f) = fs.get("textIndexDefinitionFile").and_then(Value::as_str) {
+                cfg.text_index_file = Some(f.to_owned());
             }
             if let Some(f) = fs.get("indexFile").and_then(Value::as_str) {
                 cfg.index_file = Some(f.to_owned());
@@ -373,15 +536,128 @@ impl RuntimeConfig {
         if let Some(scheduler) = obj.get("scheduler").and_then(Value::as_object) {
             Self::parse_scheduler(scheduler, &mut cfg)?;
         }
-        if let Some(auth) = obj.get("auth").and_then(Value::as_object) {
-            if let Some(mode) = auth.get("idTokenSigning").and_then(Value::as_str) {
+        if let Some(auth) = obj.get("auth") {
+            let auth = auth
+                .as_object()
+                .ok_or_else(|| ConfigError("auth must be an object".to_owned()))?;
+            for key in auth.keys() {
+                if !AUTH_KEYS.contains(&key.as_str()) {
+                    return Err(ConfigError(format!("unknown config key auth.{key}")));
+                }
+            }
+            if let Some(mode) = auth.get("idTokenSigning") {
+                let mode = mode.as_str().ok_or_else(|| {
+                    ConfigError("auth.idTokenSigning must be a string".to_owned())
+                })?;
                 let m = ftd_core_auth::jwt::SigningMode::parse_config(mode)
                     .ok_or_else(|| ConfigError(format!("unknown auth.idTokenSigning {mode:?}")))?;
                 if !m.supported() {
-                    return Err(ConfigError(format!("auth.idTokenSigning {mode:?} is declared but not implemented; use \"unsigned-emulator\"")));
+                    return Err(ConfigError(format!(
+                        "auth.idTokenSigning {mode:?} is not implemented"
+                    )));
                 }
+                cfg.id_token_signing = m;
             }
         }
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn parse(auth: &Value) -> Result<RuntimeConfig, ConfigError> {
+        RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "deterministic",
+            "firestore": {"edition": "standard", "apiMode": "native"},
+            "auth": auth,
+        }))
+    }
+
+    #[test]
+    fn firebase_json_maps_rules_indexes_ports_and_the_selected_functions() {
+        let json = json!({
+            "firestore": {"rules": "firestore.rules", "index": "firestore.indexes.json"},
+            "storage": {"rules": "storage.rules"},
+            "functions": [{"source": "functions", "codebase": "default"}],
+            "emulators": {
+                "firestore": {"port": 8081},
+                "auth": {"port": 9100},
+                "storage": {"port": 9200},
+                "functions": {"port": 5002},
+                "pubsub": {"port": 8085},
+                "ui": {"enabled": true}
+            }
+        });
+        let base = std::path::Path::new("/proj");
+        let mut cfg = RuntimeConfig::default();
+        let ignored = cfg
+            .apply_firebase_json(&json, base, &Selection::default())
+            .unwrap();
+        assert_eq!(cfg.rules_file.as_deref(), Some("/proj/firestore.rules"));
+        assert_eq!(
+            cfg.index_file.as_deref(),
+            Some("/proj/firestore.indexes.json")
+        );
+        assert_eq!(
+            cfg.storage_rules_file.as_deref(),
+            Some("/proj/storage.rules")
+        );
+        assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+        assert_eq!(cfg.firestore_addr, "127.0.0.1:8081");
+        assert_eq!(cfg.http_addr, "127.0.0.1:9100");
+        assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
+        assert_eq!(cfg.functions_addr, "127.0.0.1:5002");
+        assert_eq!(ignored, vec!["emulators.pubsub".to_owned()]);
+        // Functions are loaded only when selected; the `indexes` spelling works too.
+        let mut cfg = RuntimeConfig::default();
+        let only = Selection::parse("auth,firestore,storage").unwrap();
+        cfg.apply_firebase_json(
+            &json!({"firestore": {"indexes": "idx.json"}, "functions": {"source": "fn"}}),
+            base,
+            &only,
+        )
+        .unwrap();
+        assert_eq!(cfg.index_file.as_deref(), Some("/proj/idx.json"));
+        assert_eq!(cfg.functions_source, None);
+        assert!(!only.functions);
+        assert!(Selection::parse("auth,database").is_err());
+        assert_eq!(
+            cfg.apply_firebase_json(&json!({"firestore": {"rules": 1}}), base, &only),
+            Err(ConfigError(
+                "firebase.json: firestore.rules must be a string".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn the_auth_section_never_downgrades_silently() {
+        assert_eq!(
+            parse(&json!({"idTokenSigning": "session-rsa"}))
+                .unwrap()
+                .id_token_signing,
+            ftd_core_auth::jwt::SigningMode::SessionRsa
+        );
+        assert_eq!(
+            parse(&json!({"idTokenSingning": "session-rsa"})),
+            Err(ConfigError(
+                "unknown config key auth.idTokenSingning".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&json!({"idTokenSigning": true})),
+            Err(ConfigError(
+                "auth.idTokenSigning must be a string".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&json!("session-rsa")),
+            Err(ConfigError("auth must be an object".to_owned()))
+        );
+        assert!(parse(&json!({"idTokenSigning": "hs256"})).is_err());
     }
 }

@@ -61,7 +61,7 @@
       "properties": {
         "edition": { "enum": ["standard", "enterprise"] },
         "apiMode": { "enum": ["native", "mongodb-compatible"] },
-        "indexValidationPolicy": { "enum": ["firebase", "conservative"] },
+        "indexValidationPolicy": { "enum": ["firebase", "conservative", "emulator"] },
         "indexFile": { "type": "string" },
         "textIndexDefinitionFile": { "type": "string" },
         "enforceLimits": { "type": "boolean" },

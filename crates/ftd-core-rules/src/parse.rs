@@ -15,8 +15,11 @@ use crate::ast::{
 /// Maximum accepted source size for parsing (well above the 256 KiB ruleset limit so that
 /// over-limit sources still produce size diagnostics).
 pub const MAX_PARSE_BYTES: usize = 4 * 1024 * 1024;
-/// Maximum expression nesting depth.
-pub const MAX_EXPR_DEPTH: u32 = 128;
+/// Maximum expression nesting depth. The recursive-descent parser and the evaluator spend
+/// several stack frames per level, so this stays well below what an 8 MiB stack holds in a
+/// debug build (a hostile ruleset must be refused, never overflow the stack); real rulesets
+/// nest a handful of levels.
+pub const MAX_EXPR_DEPTH: u32 = 32;
 /// Maximum `match` nesting depth accepted by the parser (the limit itself is 10; the parser
 /// allows more so that the linter can report the exact excess).
 pub const MAX_MATCH_NESTING: u32 = 64;
@@ -433,13 +436,18 @@ impl<'a> Parser<'a> {
                     segments.push(PathSegment::Capture { name, span });
                 }
             } else {
-                let end = rest
-                    .char_indices()
-                    .find(|(_, c)| {
-                        c.is_whitespace()
-                            || matches!(c, '/' | '{' | '}' | '(' | ')' | ',' | ';' | '[' | ']')
-                    })
-                    .map_or(rest.len(), |(i, _)| i);
+                // `(default)`: a parenthesised literal segment (Storage rules address the
+                // Firestore database that way); otherwise the segment ends at a delimiter.
+                let end = if rest.starts_with('(') {
+                    rest.find(')').map_or(0, |close| close + 1)
+                } else {
+                    rest.char_indices()
+                        .find(|(_, c)| {
+                            c.is_whitespace()
+                                || matches!(c, '/' | '{' | '}' | '(' | ')' | ',' | ';' | '[' | ']')
+                        })
+                        .map_or(rest.len(), |(i, _)| i)
+                };
                 if end == 0 {
                     self.pos = at;
                     return Err(self.error("empty path segment"));

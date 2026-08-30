@@ -2011,15 +2011,22 @@ fn a_missing_media_object_never_answers_with_html() {
     );
     assert_eq!(r.status, 404);
     assert!(
-        !header(&r, "content-type").unwrap_or("").contains("text/html"),
+        !header(&r, "content-type")
+            .unwrap_or("")
+            .contains("text/html"),
         "media 404 must not be text/html: {:?}",
         header(&r, "content-type")
     );
     // The XML-style GET fallback reaches the same answer.
-    let r = handle(&s, req("GET", &format!("/{BUCKET}/{evil}?alt=media"), &[], b""));
+    let r = handle(
+        &s,
+        req("GET", &format!("/{BUCKET}/{evil}?alt=media"), &[], b""),
+    );
     assert_eq!(r.status, 404);
     assert!(
-        !header(&r, "content-type").unwrap_or("").contains("text/html"),
+        !header(&r, "content-type")
+            .unwrap_or("")
+            .contains("text/html"),
         "xml-style 404 must not be text/html: {:?}",
         header(&r, "content-type")
     );
@@ -2092,7 +2099,10 @@ fn metadata_with_control_characters_is_refused_at_the_boundary() {
         owned_req(
             "POST",
             &format!("/{BUCKET}"),
-            &[("content-type", &format!("multipart/form-data; boundary={boundary}"))],
+            &[(
+                "content-type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )],
             body,
         ),
     );
@@ -2112,7 +2122,12 @@ fn a_multipart_body_of_boundary_bytes_parses_in_bounded_time() {
     let start = std::time::Instant::now();
     let r = handle(
         &s,
-        owned_req("POST", &format!("/{BUCKET}"), &[("content-type", &content_type)], body),
+        owned_req(
+            "POST",
+            &format!("/{BUCKET}"),
+            &[("content-type", &content_type)],
+            body,
+        ),
     );
     let elapsed = start.elapsed();
     // It is a malformed body, so the status is a 4xx; what matters is that it returned fast.
@@ -2134,7 +2149,10 @@ fn an_oversized_multipart_boundary_is_refused() {
         req(
             "POST",
             &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart&name=x"),
-            &[("authorization", "Bearer owner"), ("content-type", &content_type)],
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", &content_type),
+            ],
             b"body",
         ),
     );

@@ -810,9 +810,7 @@ fn header_safe(field: &str, value: &str) -> Result<(), String> {
 }
 
 /// Custom metadata whose keys and values are all control-character-free.
-fn checked_custom(
-    m: &Map<String, Value>,
-) -> Result<BTreeMap<String, String>, String> {
+fn checked_custom(m: &Map<String, Value>) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
     for (k, val) in m {
         header_safe(&format!("metadata key {k:?}"), k)?;
@@ -824,10 +822,7 @@ fn checked_custom(
     Ok(out)
 }
 
-fn new_metadata_from_json(
-    v: &Value,
-    content_type: Option<String>,
-) -> Result<NewMetadata, String> {
+fn new_metadata_from_json(v: &Value, content_type: Option<String>) -> Result<NewMetadata, String> {
     let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
     // `metadata: null` and no `metadata` member both leave custom metadata undefined; an
     // object defines it, with `null` values dropped and non-strings stringified.
@@ -2431,10 +2426,7 @@ fn fb_resumable_command(
     }
     // The upload belongs to the bucket its URL names: another bucket's URL (and so another
     // session's fault plan and ownership) cannot drive it.
-    if store
-        .upload_bucket(&id, now)
-        .is_ok_and(|b| b != bucket)
-    {
+    if store.upload_bucket(&id, now).is_ok_and(|b| b != bucket) {
         return Ok(plain_status(404));
     }
     let commands: Vec<&str> = command.split(',').map(str::trim).collect();
@@ -2698,8 +2690,7 @@ fn gcs_object(
             if store.get(&b, &n).is_none() {
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
-            let patch =
-                patch_from_json(&body).map_err(|e| gcs_json_error(400, &e, "invalid"))?;
+            let patch = patch_from_json(&body).map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let m = store
                 .update_metadata(&b, &n, &patch, pre, now)
                 .map_err(gcs_core_err)?;
@@ -3049,10 +3040,7 @@ fn gcs_resumable_put(
         }
         Ok(UploadPhase::Active(_)) => {}
     }
-    if store
-        .upload_bucket(&id, now)
-        .is_ok_and(|b| b != bucket)
-    {
+    if store.upload_bucket(&id, now).is_ok_and(|b| b != bucket) {
         return Ok(plain_status(404));
     }
     let range = match req.header("content-range") {

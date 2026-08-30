@@ -1050,13 +1050,26 @@ fn download_tokens_are_capped_and_do_not_escape_the_metadata_budget() {
         ..NewMetadata::default()
     };
     let m = s
-        .put(&b, &n, b"x".to_vec(), with_long, Precondition::default(), t(1))
+        .put(
+            &b,
+            &n,
+            b"x".to_vec(),
+            with_long,
+            Precondition::default(),
+            t(1),
+        )
         .unwrap();
-    assert_eq!(m.download_tokens, vec!["keep"], "the over-long token is dropped");
+    assert_eq!(
+        m.download_tokens,
+        vec!["keep"],
+        "the over-long token is dropped"
+    );
 
     // The count cap: a list far past MAX_DOWNLOAD_TOKENS keeps only the cap, so the joined
     // value can never grow without bound (cap x length stays well under the 8 KiB budget).
-    let many: Vec<String> = (0..MAX_DOWNLOAD_TOKENS + 200).map(|i| format!("t{i}")).collect();
+    let many: Vec<String> = (0..MAX_DOWNLOAD_TOKENS + 200)
+        .map(|i| format!("t{i}"))
+        .collect();
     let over = NewMetadata {
         custom: Some(BTreeMap::from([(
             "firebaseStorageDownloadTokens".to_owned(),
@@ -1067,7 +1080,11 @@ fn download_tokens_are_capped_and_do_not_escape_the_metadata_budget() {
     let m = s
         .put(&b, &n, b"y".to_vec(), over, Precondition::default(), t(2))
         .unwrap();
-    assert_eq!(m.download_tokens.len(), MAX_DOWNLOAD_TOKENS, "the count is capped on put");
+    assert_eq!(
+        m.download_tokens.len(),
+        MAX_DOWNLOAD_TOKENS,
+        "the count is capped on put"
+    );
 
     // update_metadata caps the same way when it merges the key.
     let patch = MetadataPatch {
@@ -1104,7 +1121,14 @@ fn download_tokens_are_capped_and_do_not_escape_the_metadata_budget() {
         ..NewMetadata::default()
     };
     assert_eq!(
-        s.put(&b, &name("fat"), b"x".to_vec(), fat, Precondition::default(), t(2000)),
+        s.put(
+            &b,
+            &name("fat"),
+            b"x".to_vec(),
+            fat,
+            Precondition::default(),
+            t(2000)
+        ),
         Err(StorageError::MetadataTooLarge)
     );
 }

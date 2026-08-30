@@ -393,7 +393,9 @@ async fn respond(
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("content-type", "text/plain; charset=utf-8")
             .header("x-content-type-options", "nosniff")
-            .body(Full::new(Bytes::from_static(b"internal error building response")))
+            .body(Full::new(Bytes::from_static(
+                b"internal error building response",
+            )))
             .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))),
     }
 }

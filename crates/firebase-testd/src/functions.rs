@@ -145,6 +145,20 @@ pub async fn start(
         }
     }
     let manifest = parse_manifest(&manifest_json)?;
+    if callable_trusted_protocol && cfg.functions_manifest.is_some() {
+        // A configured manifest replaces discovery outright, and the callable flag is what
+        // decides whether a request goes through the trust boundary at all: a file that calls
+        // a real `onCall` an `onRequest` would have the proxy forward the raw `Authorization`
+        // and App Check fields to a runner that decodes them without verifying
+        // (`INV-APPCHECK-010`). The runner still discovered the truth, so the two are
+        // reconciled instead of trusted blindly.
+        let discovered = runner
+            .hello()
+            .manifest
+            .clone()
+            .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
+        check_manifest_agrees_on_callables(&manifest, &parse_manifest(&discovered)?)?;
+    }
     check_callable_app_check(
         &manifest,
         runner.hello().app_check.as_ref(),
@@ -177,6 +191,56 @@ pub async fn start(
     let sink_runtime = runtime.clone();
     backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
     Ok(runtime)
+}
+
+/// Refuses a configured manifest that disagrees with discovery about which HTTP functions are
+/// callable.
+///
+/// Only the callable flag is reconciled. Everything else a manifest file overrides -- regions,
+/// timeouts, schedules -- is deployment shape, but the callable flag decides which side of the
+/// trust boundary a request lands on, and the runner is the only thing that actually knows.
+fn check_manifest_agrees_on_callables(
+    configured: &ftd_core_functions::manifest::FunctionManifest,
+    discovered: &ftd_core_functions::manifest::FunctionManifest,
+) -> Result<(), String> {
+    use ftd_core_functions::manifest::Trigger;
+    let callable_in = |m: &ftd_core_functions::manifest::FunctionManifest, name: &str| {
+        m.functions
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| matches!(f.trigger, Trigger::Http { callable: true, .. }))
+    };
+    for f in &configured.functions {
+        if !matches!(f.trigger, Trigger::Http { .. }) {
+            continue;
+        }
+        match callable_in(discovered, &f.name) {
+            Some(discovered_callable)
+                if discovered_callable
+                    == matches!(f.trigger, Trigger::Http { callable: true, .. }) => {}
+            Some(_) => {
+                return Err(format!(
+                    "the configured functions manifest calls {:?} {}, but the codebase declares \
+                     the opposite; App Check for callables cannot trust a manifest that \
+                     disagrees with the code",
+                    f.name,
+                    if matches!(f.trigger, Trigger::Http { callable: true, .. }) {
+                        "callable"
+                    } else {
+                        "an onRequest function"
+                    }
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "the configured functions manifest declares the HTTP function {:?}, which \
+                     the codebase does not export",
+                    f.name
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Fails startup when the callable App Check contract cannot be honoured (specification
@@ -248,6 +312,31 @@ fn check_callable_app_check(
             "the installed firebase-functions debug-feature semantics differ from what the \
              trusted callable protocol requires: {debug_features}"
         ));
+    }
+    // The auth-override fields by their actual values. The proxy strips them by name, so a
+    // renamed one would leave the daemon forwarding a channel that overrides v1 callable auth
+    // context (`INV-APPCHECK-010`). Refusing to start is the only safe answer: the names are
+    // not something the daemon can discover at request time.
+    let honoured = report
+        .get("authHeaders")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            "the functions runner did not report which auth-override headers the installed \
+             firebase-functions honours"
+                .to_owned()
+        })?;
+    for field in honoured {
+        let name = field.as_str().unwrap_or_default();
+        if name.is_empty()
+            || !ftd_adapter_functions::callable::ALWAYS_STRIPPED
+                .iter()
+                .any(|stripped| stripped.eq_ignore_ascii_case(name))
+        {
+            return Err(format!(
+                "the installed firebase-functions honours the auth-override header {name:?}, \
+                 which the callable proxy does not strip"
+            ));
+        }
     }
     if !undetermined.is_empty() {
         return Err(format!(
@@ -346,11 +435,24 @@ mod tests {
     }
 
     fn report(instrumentation: &str, debug_features: &str) -> serde_json::Value {
+        report_with(
+            instrumentation,
+            debug_features,
+            &["x-callable-context-auth", "x-original-auth"],
+        )
+    }
+
+    fn report_with(
+        instrumentation: &str,
+        debug_features: &str,
+        auth_headers: &[&str],
+    ) -> serde_json::Value {
         json!({
             "firebaseFunctionsVersion": "7.3.2",
             "instrumentation": instrumentation,
             "debugFeatures": debug_features,
             "debugMode": true,
+            "authHeaders": auth_headers,
         })
     }
 
@@ -415,11 +517,80 @@ mod tests {
         assert!(e.contains("debug-feature semantics differ"), "{e}");
     }
 
+    /// The proxy strips the auth-override fields by name. A supported minor release that
+    /// renamed one would leave the daemon forwarding a channel that overrides v1 callable auth
+    /// context, so the mismatch has to be fatal rather than silent (`INV-APPCHECK-010`).
+    #[test]
+    fn an_auth_override_header_the_proxy_does_not_strip_fails_startup() {
+        for honoured in [
+            vec!["x-callable-context-auth", "x-firebase-callable-auth"],
+            vec!["x-callable-context-auth"],
+            vec![],
+        ] {
+            let e = check_callable_app_check(
+                &manifest(Some("disabled")),
+                Some(&report_with("ok", "verified", &honoured)),
+                true,
+            );
+            if honoured.iter().all(|h| {
+                ftd_adapter_functions::callable::ALWAYS_STRIPPED
+                    .iter()
+                    .any(|s| s.eq_ignore_ascii_case(h))
+            }) {
+                // A shorter list is not a mismatch: everything it names is stripped.
+                e.expect("every honoured field is stripped");
+            } else {
+                let e = e.expect_err("an unstripped auth-override field is fatal");
+                assert!(e.contains("auth-override header"), "{e}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_runner_that_does_not_report_its_auth_override_headers_fails_startup() {
+        let mut report = report("ok", "verified");
+        report
+            .as_object_mut()
+            .expect("an object")
+            .remove("authHeaders");
+        let e = check_callable_app_check(&manifest(Some("disabled")), Some(&report), true)
+            .expect_err("no report is no evidence");
+        assert!(e.contains("auth-override headers"), "{e}");
+    }
+
     #[test]
     fn a_runner_without_an_app_check_report_fails_startup() {
         let e = check_callable_app_check(&manifest(Some("disabled")), None, true)
             .expect_err("no report is no evidence");
         assert!(e.contains("did not report"), "{e}");
+    }
+
+    /// A configured manifest replaces discovery outright, and the callable flag decides which
+    /// side of the trust boundary a request lands on. A file that calls a real `onCall` an
+    /// `onRequest` would have the proxy forward the raw credentials to a runner that decodes
+    /// them without verifying.
+    #[test]
+    fn a_configured_manifest_that_hides_a_callable_fails_startup() {
+        let discovered = manifest(Some("disabled"));
+        let hidden = parse_manifest(&json!({
+            "functions": [{"name": "guarded", "trigger": {"type": "http", "callable": false}}]
+        }))
+        .expect("the fixture manifest parses");
+        let e = super::check_manifest_agrees_on_callables(&hidden, &discovered)
+            .expect_err("a manifest may not reclassify a callable");
+        assert!(e.contains("guarded"), "{e}");
+        assert!(e.contains("disagrees with the code"), "{e}");
+
+        let invented = parse_manifest(&json!({
+            "functions": [{"name": "ghost", "trigger": {"type": "http", "callable": true}}]
+        }))
+        .expect("the fixture manifest parses");
+        let e = super::check_manifest_agrees_on_callables(&invented, &discovered)
+            .expect_err("a manifest may not invent an HTTP function");
+        assert!(e.contains("does not export"), "{e}");
+
+        super::check_manifest_agrees_on_callables(&discovered, &discovered)
+            .expect("an agreeing manifest starts");
     }
 
     #[test]

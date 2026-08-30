@@ -72,6 +72,7 @@ send({
         "instrumentation": "ok",
         "debugFeatures": "verified",
         "debugMode": os.environ.get("FIREBASE_DEBUG_MODE") == "true",
+        "authHeaders": ["x-callable-context-auth", "x-original-auth"],
     },
     "manifest": {
         "functions": [

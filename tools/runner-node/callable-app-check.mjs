@@ -64,6 +64,7 @@ function unsupported(reason) {
     reason,
     version: null,
     debugFeatures: reason,
+    authHeaders: [],
     optionsOf: () => undefined,
   };
 }
@@ -165,6 +166,15 @@ export function instrumentCallables(sourceDir) {
       };
     }
   }
+  // The *values*, not just the names. These are the fields the callable wrapper honours under
+  // `skipTokenVerification` to override v1 auth context, and the daemon strips them by name
+  // from every forwarded request. If a supported minor release renames one, the daemon's list
+  // silently goes stale, so the daemon compares this report against its own and refuses to
+  // start rather than forwarding a channel it no longer strips.
+  const authHeaders = [
+    loaded.commonHttps.CALLABLE_AUTH_HEADER,
+    loaded.commonHttps.ORIGINAL_AUTH_HEADER,
+  ].map((v) => String(v ?? "").toLowerCase());
 
   const options = new WeakMap();
   const carry = (from, to) => {
@@ -204,6 +214,7 @@ export function instrumentCallables(sourceDir) {
     reason: null,
     version,
     debugFeatures,
+    authHeaders,
     optionsOf: (fn) => options.get(fn),
   };
 }

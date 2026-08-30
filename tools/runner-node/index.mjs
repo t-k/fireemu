@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { instrumentCallables } from "./callable-app-check.mjs";
 
@@ -315,6 +316,15 @@ function v1Context(msg) {
   }
 }
 
+// Constant-time comparison of the per-runner secret.
+function secretMatches(presented, expected) {
+  if (typeof presented !== "string") return false;
+  const a = Buffer.from(presented, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  // `timingSafeEqual` throws on a length mismatch, which would itself be a length oracle.
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 function makeHttpServer(functions, manifest) {
   const require = createRequire(join(sourceDir, "package.json"));
   let express;
@@ -335,8 +345,16 @@ function makeHttpServer(functions, manifest) {
   const project = process.env.GCLOUD_PROJECT || "";
   app.all(route, (req, res, next) => {
     // Only the daemon's proxy may reach this server (it carries the per-runner secret and has
-    // already applied timeouts, concurrency and idle accounting).
-    if (secret && req.get("x-ftd-runner-secret") !== secret) {
+    // already applied timeouts, concurrency and idle accounting). A missing secret refuses
+    // every request instead of waving them through: this server is the one place that decodes
+    // the credentials the daemon prevalidated, and under the trusted callable protocol it also
+    // honours the auth-override headers, so an unguarded runner would be an open
+    // impersonation endpoint for anything else on the loopback interface.
+    if (!secret) {
+      res.status(500).send("FTD_RUNNER_SECRET is required");
+      return;
+    }
+    if (!secretMatches(req.get("x-ftd-runner-secret"), secret)) {
       res.status(403).send("not the firebase-testd proxy");
       return;
     }
@@ -464,6 +482,7 @@ async function main() {
       instrumentation: instrumentation.supported ? "ok" : instrumentation.reason,
       debugFeatures: instrumentation.debugFeatures,
       debugMode: process.env.FIREBASE_DEBUG_MODE === "true",
+      authHeaders: instrumentation.authHeaders,
     },
   });
   readFrames(

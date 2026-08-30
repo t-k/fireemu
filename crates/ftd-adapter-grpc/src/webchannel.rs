@@ -74,9 +74,35 @@ fn trace(what: &str, detail: &str) {
     }
 }
 
-/// 128 random bits (system-keyed hashing of a counter; not derived from the deterministic
-/// runtime seed, so session ids are not guessable across runs).
+/// 128 bits from the operating system CSPRNG.
+///
+/// A channel id was always unguessable-by-construction, but since App Check admits a channel
+/// once and later envelopes ride on that admission (specification section 13.1), knowing one
+/// *is* the capability to use an admitted channel. It is drawn from the same source as the
+/// control token, the runner secret and the project epochs rather than from keyed hashing of a
+/// counter. A failed draw falls back to that keyed hashing rather than to anything predictable:
+/// refusing to open channels because `/dev/urandom` is unreadable would be worse, and the
+/// fallback is exactly the previous behaviour.
 fn random_sid() -> String {
+    use std::fmt::Write as _;
+    use std::io::Read as _;
+    let mut bytes = [0u8; 16];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .is_ok()
+    {
+        let mut out = String::with_capacity(32);
+        for byte in bytes {
+            let _ = write!(out, "{byte:02x}");
+        }
+        return out;
+    }
+    keyed_sid()
+}
+
+/// The fallback of [`random_sid`]: system-keyed hashing of a counter, not derived from the
+/// deterministic runtime seed.
+fn keyed_sid() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let state = std::collections::hash_map::RandomState::new();

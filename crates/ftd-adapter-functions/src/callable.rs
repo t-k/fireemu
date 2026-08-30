@@ -48,7 +48,7 @@ const OWNED_FIELDS: &[&str] = &[
 ];
 
 /// The fields the proxy strips from *every* request it forwards, callable or not.
-pub(crate) const ALWAYS_STRIPPED: &[&str] = &[
+pub const ALWAYS_STRIPPED: &[&str] = &[
     "x-ftd-runner-secret",
     "x-callable-context-auth",
     "x-original-auth",

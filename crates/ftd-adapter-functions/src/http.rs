@@ -56,6 +56,13 @@ pub async fn forward(
     let mut req = format!("{method} {path_and_query} HTTP/1.1\r\n");
     let mut has_host = false;
     for (k, v) in headers {
+        // This writer frames the request by hand. Everything it is handed today comes from
+        // hyper, which already refuses a control character in a field name or value, but the
+        // check belongs at the sink: a future caller that builds a field from anywhere else
+        // would otherwise turn one header into request smuggling.
+        if !is_framable_name(k) || !is_framable_value(v) {
+            return Err(format!("refusing to forward the unframable header {k:?}"));
+        }
         let lower = k.to_ascii_lowercase();
         if matches!(
             lower.as_str(),
@@ -94,6 +101,21 @@ pub async fn forward(
         ));
     }
     parse_response(&raw, method)
+}
+
+/// A field name that cannot break the framing: an RFC 9110 token.
+fn is_framable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&\'*+-.^_`|~".contains(&b))
+}
+
+/// A field value that cannot break the framing: visible ASCII, spaces and tabs only.
+fn is_framable_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|b| b == b'\t' || (0x20..=0x7E).contains(&b))
 }
 
 /// Parses a complete HTTP/1.1 response (`Content-Length`, chunked or close-delimited body)

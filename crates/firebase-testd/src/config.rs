@@ -99,6 +99,125 @@ impl Default for RuntimeConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError(pub String);
 
+/// The services `exec` exports to its child (`--only auth,firestore,storage,functions`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // one flag per service, read independently
+pub struct Selection {
+    /// `FIRESTORE_EMULATOR_HOST`.
+    pub firestore: bool,
+    /// `FIREBASE_AUTH_EMULATOR_HOST`.
+    pub auth: bool,
+    /// `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`.
+    pub storage: bool,
+    /// The functions codebase is loaded and `FTD_FUNCTIONS_HOST` exported.
+    pub functions: bool,
+}
+
+impl Default for Selection {
+    fn default() -> Self {
+        Self {
+            firestore: true,
+            auth: true,
+            storage: true,
+            functions: true,
+        }
+    }
+}
+
+impl Selection {
+    /// Parses the `--only` list (`firebase emulators:exec --only` names).
+    pub fn parse(list: &str) -> Result<Self, ConfigError> {
+        let mut sel = Self {
+            firestore: false,
+            auth: false,
+            storage: false,
+            functions: false,
+        };
+        for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            match name {
+                "firestore" => sel.firestore = true,
+                "auth" => sel.auth = true,
+                "storage" => sel.storage = true,
+                "functions" => sel.functions = true,
+                other => {
+                    return Err(ConfigError(format!(
+                        "--only: unknown service {other:?} (firestore, auth, storage, functions)"
+                    )))
+                }
+            }
+        }
+        Ok(sel)
+    }
+}
+
+impl RuntimeConfig {
+    /// Applies the parts of a `firebase.json` the daemon can honour: `firestore.rules`,
+    /// `firestore.indexes` (also the `index` spelling), `storage.rules`, `emulators.*.port`
+    /// and, when functions are selected, `functions.source` (the first codebase). Paths are
+    /// relative to `base`. Returns the emulator entries it ignored, for a notice.
+    pub fn apply_firebase_json(
+        &mut self,
+        json: &Value,
+        base: &std::path::Path,
+        only: &Selection,
+    ) -> Result<Vec<String>, ConfigError> {
+        let obj = json
+            .as_object()
+            .ok_or_else(|| ConfigError("firebase.json must be an object".to_owned()))?;
+        let file = |v: &Value, key: &str| -> Result<String, ConfigError> {
+            let p = v
+                .as_str()
+                .ok_or_else(|| ConfigError(format!("firebase.json: {key} must be a string")))?;
+            Ok(base.join(p).to_string_lossy().into_owned())
+        };
+        if let Some(fs) = obj.get("firestore") {
+            let fs = fs.as_object().ok_or_else(|| {
+                ConfigError("firebase.json: firestore must be an object".to_owned())
+            })?;
+            if let Some(v) = fs.get("rules") {
+                self.rules_file = Some(file(v, "firestore.rules")?);
+            }
+            if let Some(v) = fs.get("indexes").or_else(|| fs.get("index")) {
+                self.index_file = Some(file(v, "firestore.indexes")?);
+            }
+        }
+        if let Some(v) = obj.get("storage").and_then(|s| s.get("rules")) {
+            self.storage_rules_file = Some(file(v, "storage.rules")?);
+        }
+        if only.functions {
+            let source = match obj.get("functions") {
+                Some(Value::Object(f)) => f.get("source"),
+                Some(Value::Array(codebases)) => codebases.first().and_then(|c| c.get("source")),
+                _ => None,
+            };
+            if let Some(v) = source {
+                self.functions_source = Some(file(v, "functions.source")?);
+            }
+        }
+        let mut ignored = Vec::new();
+        if let Some(emulators) = obj.get("emulators").and_then(Value::as_object) {
+            for (name, entry) in emulators {
+                let port = entry.get("port").and_then(Value::as_u64);
+                let port = match port {
+                    Some(p) => u16::try_from(p).map_err(|_| {
+                        ConfigError(format!("firebase.json: emulators.{name}.port out of range"))
+                    })?,
+                    None => continue,
+                };
+                let addr = format!("127.0.0.1:{port}");
+                match name.as_str() {
+                    "firestore" => self.firestore_addr = addr,
+                    "auth" => self.http_addr = addr,
+                    "storage" => self.storage_addr = addr,
+                    "functions" => self.functions_addr = addr,
+                    _ => ignored.push(format!("emulators.{name}")),
+                }
+            }
+        }
+        Ok(ignored)
+    }
+}
+
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
@@ -425,6 +544,62 @@ mod tests {
             "firestore": {"edition": "standard", "apiMode": "native"},
             "auth": auth,
         }))
+    }
+
+    #[test]
+    fn firebase_json_maps_rules_indexes_ports_and_the_selected_functions() {
+        let json = json!({
+            "firestore": {"rules": "firestore.rules", "index": "firestore.indexes.json"},
+            "storage": {"rules": "storage.rules"},
+            "functions": [{"source": "functions", "codebase": "default"}],
+            "emulators": {
+                "firestore": {"port": 8081},
+                "auth": {"port": 9100},
+                "storage": {"port": 9200},
+                "functions": {"port": 5002},
+                "pubsub": {"port": 8085},
+                "ui": {"enabled": true}
+            }
+        });
+        let base = std::path::Path::new("/proj");
+        let mut cfg = RuntimeConfig::default();
+        let ignored = cfg
+            .apply_firebase_json(&json, base, &Selection::default())
+            .unwrap();
+        assert_eq!(cfg.rules_file.as_deref(), Some("/proj/firestore.rules"));
+        assert_eq!(
+            cfg.index_file.as_deref(),
+            Some("/proj/firestore.indexes.json")
+        );
+        assert_eq!(
+            cfg.storage_rules_file.as_deref(),
+            Some("/proj/storage.rules")
+        );
+        assert_eq!(cfg.functions_source.as_deref(), Some("/proj/functions"));
+        assert_eq!(cfg.firestore_addr, "127.0.0.1:8081");
+        assert_eq!(cfg.http_addr, "127.0.0.1:9100");
+        assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
+        assert_eq!(cfg.functions_addr, "127.0.0.1:5002");
+        assert_eq!(ignored, vec!["emulators.pubsub".to_owned()]);
+        // Functions are loaded only when selected; the `indexes` spelling works too.
+        let mut cfg = RuntimeConfig::default();
+        let only = Selection::parse("auth,firestore,storage").unwrap();
+        cfg.apply_firebase_json(
+            &json!({"firestore": {"indexes": "idx.json"}, "functions": {"source": "fn"}}),
+            base,
+            &only,
+        )
+        .unwrap();
+        assert_eq!(cfg.index_file.as_deref(), Some("/proj/idx.json"));
+        assert_eq!(cfg.functions_source, None);
+        assert!(!only.functions);
+        assert!(Selection::parse("auth,database").is_err());
+        assert_eq!(
+            cfg.apply_firebase_json(&json!({"firestore": {"rules": 1}}), base, &only),
+            Err(ConfigError(
+                "firebase.json: firestore.rules must be a string".to_owned()
+            ))
+        );
     }
 
     #[test]

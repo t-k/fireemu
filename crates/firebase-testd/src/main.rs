@@ -1,13 +1,21 @@
 //! `firebase-testd` command-line entry point.
 //!
 //! ```text
-//! firebase-testd up [--config firebase-testd.json] [--firestore-port 8080] [--http-port 9099] [--storage-port 9199] [--functions-port 5001] [--functions <dir>]
+//! firebase-testd up [options]
+//! firebase-testd exec [options] [--only auth,firestore,storage,functions] -- <command...>
 //! firebase-testd doctor
 //! firebase-testd capabilities
+//!
+//! options: [--config firebase-testd.json] [--firebase-json firebase.json] [--project <id>]
+//!          [--firestore-port 8080] [--http-port 9099] [--storage-port 9199]
+//!          [--functions-port 5001] [--functions <dir>]
 //! ```
 //!
 //! `up` serves the Firestore v1 gRPC API (local execution behind the strict gateway), the
-//! Identity Toolkit REST subset and the control API on loopback until Ctrl-C.
+//! Identity Toolkit REST subset and the control API on loopback until Ctrl-C. `exec` is the
+//! `firebase emulators:exec` equivalent: it serves the same, runs the command with the
+//! emulator host variables once every listener is bound, stops everything when the command
+//! exits and exits with its status (SIGINT / SIGTERM are forwarded to the command).
 
 mod config;
 mod control;
@@ -33,18 +41,35 @@ use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::SplitMix64;
 use ftd_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
 
-use crate::config::RuntimeConfig;
+use crate::config::{RuntimeConfig, Selection};
+
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id>] [--only auth,firestore,storage,functions] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: firebase-testd up [--config <file>] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>]\n       firebase-testd doctor\n       firebase-testd capabilities");
+    eprintln!("usage: firebase-testd up {OPTIONS_USAGE}\n       firebase-testd exec {OPTIONS_USAGE} -- <command...>\n       firebase-testd doctor\n       firebase-testd capabilities");
     ExitCode::from(2)
+}
+
+/// What `exec` runs once the services are up.
+struct ExecPlan {
+    /// Program and arguments.
+    command: Vec<String>,
+    /// Services whose host variables the command receives.
+    only: Selection,
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("up") => match parse_up(&args[1..]) {
-            Ok(cfg) => run_up(cfg),
+        Some("up") => match parse_options(&args[1..]) {
+            Ok((cfg, _)) => run(cfg, None),
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        },
+        Some("exec") => match parse_exec(&args[1..]) {
+            Ok((cfg, plan)) => run(cfg, Some(plan)),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)
@@ -77,8 +102,26 @@ fn main() -> ExitCode {
     }
 }
 
-fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
+/// `exec [options] -- <command...>`.
+fn parse_exec(args: &[String]) -> Result<(RuntimeConfig, ExecPlan), String> {
+    let split = args
+        .iter()
+        .position(|a| a == "--")
+        .ok_or("exec needs `-- <command...>` after its options")?;
+    let command = args[split + 1..].to_vec();
+    if command.is_empty() {
+        return Err("exec needs a command after --".to_owned());
+    }
+    let (cfg, only) = parse_options(&args[..split])?;
+    Ok((cfg, ExecPlan { command, only }))
+}
+
+#[allow(clippy::too_many_lines)]
+fn parse_options(args: &[String]) -> Result<(RuntimeConfig, Selection), String> {
     let mut config_path: Option<PathBuf> = None;
+    let mut firebase_json: Option<PathBuf> = None;
+    let mut project: Option<String> = None;
+    let mut only = Selection::default();
     let mut firestore_port: Option<u16> = None;
     let mut http_port: Option<u16> = None;
     let mut storage_port: Option<u16> = None;
@@ -91,6 +134,21 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
                 config_path = Some(PathBuf::from(
                     args.get(i + 1).ok_or("--config needs a value")?,
                 ));
+                i += 2;
+            }
+            "--firebase-json" => {
+                firebase_json = Some(PathBuf::from(
+                    args.get(i + 1).ok_or("--firebase-json needs a value")?,
+                ));
+                i += 2;
+            }
+            "--project" => {
+                project = Some(args.get(i + 1).ok_or("--project needs a value")?.clone());
+                i += 2;
+            }
+            "--only" => {
+                only = Selection::parse(args.get(i + 1).ok_or("--only needs a list")?)
+                    .map_err(|e| e.to_string())?;
                 i += 2;
             }
             "--firestore-port" => {
@@ -144,6 +202,32 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
         Some(p) => RuntimeConfig::from_file(&p).map_err(|e| e.to_string())?,
         None => RuntimeConfig::default(),
     };
+    if let Some(path) = firebase_json {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("{} does not parse: {e}", path.display()))?;
+        let base = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+        let ignored = cfg
+            .apply_firebase_json(&json, &base, &only)
+            .map_err(|e| e.to_string())?;
+        if !ignored.is_empty() {
+            eprintln!(
+                "note: {} has no equivalent in firebase-testd and is ignored: {}",
+                path.display(),
+                ignored.join(", ")
+            );
+        }
+    }
+    if let Some(project) = project {
+        cfg.auth_project = project;
+    }
+    if !only.functions {
+        cfg.functions_source = None;
+    }
     if let Some(p) = firestore_port {
         cfg.firestore_addr = format!("127.0.0.1:{p}");
     }
@@ -159,7 +243,106 @@ fn parse_up(args: &[String]) -> Result<RuntimeConfig, String> {
     if let Some(dir) = functions_source {
         cfg.functions_source = Some(dir);
     }
-    Ok(cfg)
+    Ok((cfg, only))
+}
+
+/// The environment the `exec` command receives: the canonical emulator host variables of
+/// the selected services, the project, and the control token / URL.
+fn child_environment(
+    cfg: &RuntimeConfig,
+    only: &Selection,
+    grpc_addr: std::net::SocketAddr,
+    http_addr: std::net::SocketAddr,
+    storage_addr: std::net::SocketAddr,
+    functions_addr: Option<std::net::SocketAddr>,
+    control_token: &str,
+) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("GOOGLE_CLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
+        ("GCLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
+        ("FTD_CONTROL_TOKEN".to_owned(), control_token.to_owned()),
+        (
+            "FTD_CONTROL_URL".to_owned(),
+            format!("http://{http_addr}/v1/"),
+        ),
+    ];
+    if only.firestore {
+        env.push(("FIRESTORE_EMULATOR_HOST".to_owned(), grpc_addr.to_string()));
+    }
+    if only.auth {
+        env.push((
+            "FIREBASE_AUTH_EMULATOR_HOST".to_owned(),
+            http_addr.to_string(),
+        ));
+    }
+    if only.storage {
+        env.push((
+            "FIREBASE_STORAGE_EMULATOR_HOST".to_owned(),
+            storage_addr.to_string(),
+        ));
+        env.push((
+            "STORAGE_EMULATOR_HOST".to_owned(),
+            format!("http://{storage_addr}"),
+        ));
+    }
+    if let (true, Some(addr)) = (only.functions, functions_addr) {
+        env.push(("FTD_FUNCTIONS_HOST".to_owned(), addr.to_string()));
+    }
+    env
+}
+
+fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::process::Child, String> {
+    let (program, args) = plan
+        .command
+        .split_first()
+        .ok_or("exec needs a command after --")?;
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args).envs(env.iter().cloned()).kill_on_drop(true);
+    cmd.spawn()
+        .map_err(|e| format!("cannot start {program}: {e}"))
+}
+
+/// Waits for the command when there is one; never resolves otherwise.
+async fn wait_child(
+    child: Option<&mut tokio::process::Child>,
+) -> std::io::Result<std::process::ExitStatus> {
+    match child {
+        Some(child) => child.wait().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Stops the command: SIGTERM (through `kill(1)`; the crate forbids unsafe code), SIGKILL
+/// after ten seconds. Returns the status it would have reported.
+async fn stop_child(child: &mut tokio::process::Child) -> i32 {
+    if let Some(pid) = child.id() {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+    if let Ok(Ok(status)) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await
+    {
+        exit_code(status)
+    } else {
+        let _ = child.kill().await;
+        137
+    }
+}
+
+/// The command's exit code, `128 + signal` when a signal ended it.
+fn exit_code(status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+    1
 }
 
 fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
@@ -239,12 +422,13 @@ async fn bind_listeners(
 
 fn print_banner(
     cfg: &RuntimeConfig,
+    verb: &str,
     grpc_addr: std::net::SocketAddr,
     http_addr: std::net::SocketAddr,
     storage_addr: std::net::SocketAddr,
     functions_addr: Option<std::net::SocketAddr>,
 ) {
-    println!("firebase-testd up");
+    println!("firebase-testd {verb}");
     println!("  firestore (gRPC + REST): {grpc_addr}   FIRESTORE_EMULATOR_HOST={grpc_addr}");
     println!("  auth (REST):      {http_addr}   FIREBASE_AUTH_EMULATOR_HOST={http_addr}");
     println!("  storage (HTTP):   {storage_addr}   FIREBASE_STORAGE_EMULATOR_HOST={storage_addr}   STORAGE_EMULATOR_HOST=http://{storage_addr}");
@@ -361,7 +545,7 @@ fn control_state(
 }
 
 #[allow(clippy::too_many_lines)]
-fn run_up(cfg: RuntimeConfig) -> ExitCode {
+fn run(cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -461,7 +645,14 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             functions_runtime.as_ref(),
             control_token.clone(),
         ));
-        print_banner(&cfg, grpc_addr, http_addr, storage_addr, functions_addr);
+        print_banner(
+            &cfg,
+            if exec.is_some() { "exec" } else { "up" },
+            grpc_addr,
+            http_addr,
+            storage_addr,
+            functions_addr,
+        );
         println!("  control token:    FTD_CONTROL_TOKEN={control_token}   (browser requests to privileged control routes must send Authorization: Bearer <token>)");
         print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
         if let Some(runtime) = &functions_runtime {
@@ -513,27 +704,54 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             ),
             _ => tokio::spawn(std::future::pending()),
         };
+        // Every listener is bound and served: the command may start.
+        let mut child = match &exec {
+            Some(plan) => {
+                let env = child_environment(
+                    &cfg,
+                    &plan.only,
+                    grpc_addr,
+                    http_addr,
+                    storage_addr,
+                    functions_addr,
+                    &control_token,
+                );
+                println!("  running: {}", plan.command.join(" "));
+                Some(spawn_child(plan, &env)?)
+            }
+            None => None,
+        };
         let outcome = tokio::select! {
             r = grpc => Err(format!("gRPC server stopped: {r:?}")),
             r = http => Err(format!("HTTP server stopped: {r:?}")),
             r = storage_server => Err(format!("Storage server stopped: {r:?}")),
             r = functions_server => Err(format!("Functions server stopped: {r:?}")),
+            status = wait_child(child.as_mut()) => match status {
+                Ok(status) => Ok(Some(exit_code(status))),
+                Err(e) => Err(format!("waiting for the command: {e}")),
+            },
             _ = tokio::signal::ctrl_c() => {
                 println!("shutting down");
-                Ok::<(), String>(())
+                Ok::<Option<i32>, String>(None)
             }
             () = terminate_signal() => {
                 println!("shutting down (SIGTERM)");
-                Ok::<(), String>(())
+                Ok::<Option<i32>, String>(None)
             }
+        };
+        // The command stops before the services it uses.
+        let code = match (&outcome, child.as_mut()) {
+            (Ok(Some(code)), _) => *code,
+            (_, Some(child)) => stop_child(child).await,
+            (_, None) => 0,
         };
         if let Some(runtime) = functions_runtime {
             runtime.runner().shutdown().await;
         }
-        outcome
+        outcome.map(|_| code)
     });
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(u8::try_from(code.clamp(0, 255)).unwrap_or(1)),
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE

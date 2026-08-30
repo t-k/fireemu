@@ -437,6 +437,25 @@ fn cases() -> Vec<Case> {
             },
             expect: Some("is declared \"implemented\" while its owner AC-REPLAY-1 is \"unsupported\""),
         },
+        // CC-06: release wording is scoped the same way as the README.
+        Case {
+            name: "scoped-document-leaks-a-deferred-product",
+            mutate: |contract, _, fixture| {
+                fixture.write(
+                    "npm/fireemu/package.json",
+                    &json!({"name": "fireemu", "description": "the whole Emulator Suite, Realtime Database included"}).to_string(),
+                );
+                set(contract, "claim/scopedDocuments", json!(["npm/fireemu/package.json"]));
+            },
+            expect: Some("CC-06: npm/fireemu/package.json:1 names \"Realtime Database\" without saying it is deferred"),
+        },
+        Case {
+            name: "scoped-document-missing",
+            mutate: |contract, _, _| {
+                set(contract, "claim/scopedDocuments", json!(["npm/absent/package.json"]));
+            },
+            expect: Some("CC-06: claim.scopedDocuments names npm/absent/package.json, which cannot be read"),
+        },
         // CC-08: a profile setting a key the canonical schema does not define.
         Case {
             name: "profile-unknown-key",

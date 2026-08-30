@@ -138,7 +138,11 @@
     "documents": [
       "README.md"
     ],
-    "rule": "The claim is version-qualified and product-enumerated. It may not be widened to a complete-suite or unqualified superset claim while any surface in this contract has scope deferred or not-planned."
+    "rule": "The claim is version-qualified and product-enumerated. It may not be widened to a complete-suite or unqualified superset claim while any surface in this contract has scope deferred or not-planned. The documents under scopedDocuments (what a release ships as its description) are held to the same scope rule as the README: a deferred or not-planned product may be named there only with its scope disclaimer.",
+    "scopedDocuments": [
+      "npm/fireemu/package.json",
+      "npm/README.md"
+    ]
   },
   "profiles": {
     "firebase": {

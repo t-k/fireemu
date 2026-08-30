@@ -11,7 +11,7 @@
 //! | `CC-03` | a manifest capability that is `implemented` or `partial` and is not bound to at least one existing executed test or conformance fixture |
 //! | `CC-04` | a manifest entry and the contract that disagree on status, an unknown capability ID, or a manifest entry no claim covers |
 //! | `CC-05` | a README that does not carry the version-qualified claim sentence verbatim |
-//! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest or the README |
+//! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest, the README or a document the claim scopes (`claim.scopedDocuments`: the release's npm descriptions and READMEs) |
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
 //! | `CC-08` | a compatibility profile that sets or declares a configuration key the canonical schema does not define, or a value it does not allow; a declared key without a `hand-written` / `not-implemented` status and a note, or one that is also set; and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
 //! | `CC-09` | a conformance fixture cited as evidence that records unresolved `debt`, unless the claim excludes that step by name with the issue that owns it; a fixture with no `parity` or `documented-divergence` step (so nothing the local oracle answered); a stale exclusion, and a step status the suite does not define |
@@ -560,7 +560,25 @@ fn check_scope_leakage(
         .get("vocabulary")
         .map(|v| strings(v, "scopeDisclaimers"))
         .unwrap_or_default();
-    let readme = fs::read_to_string(root.join(README_PATH)).unwrap_or_default();
+    // The README plus every document the claim scopes (`claim.scopedDocuments`: the npm
+    // package descriptions and READMEs a release ships) are read the same way, so release
+    // wording cannot name a deferred product as supported when the README may not.
+    let mut documents: Vec<(&str, String)> = vec![(
+        README_PATH,
+        fs::read_to_string(root.join(README_PATH)).unwrap_or_default(),
+    )];
+    for document in contract
+        .get("claim")
+        .map(|c| strings(c, "scopedDocuments"))
+        .unwrap_or_default()
+    {
+        match fs::read_to_string(root.join(document)) {
+            Ok(text) => documents.push((document, text)),
+            Err(_) => problems.push(format!(
+                "CC-06: claim.scopedDocuments names {document}, which cannot be read"
+            )),
+        }
+    }
 
     for surface in surfaces {
         let scope = str_field(surface, "scope").unwrap_or("");
@@ -585,19 +603,21 @@ fn check_scope_leakage(
                     }
                 }
             }
-            for (n, line) in readme.lines().enumerate() {
-                let lower = line.to_lowercase();
-                if !lower.contains(&needle) {
-                    continue;
-                }
-                if !disclaimers
-                    .iter()
-                    .any(|d| lower.contains(&d.to_lowercase()))
-                {
-                    problems.push(format!(
-                        "CC-06: {README_PATH}:{} names {term:?} without saying it is {scope}",
-                        n + 1
-                    ));
+            for (document, text) in &documents {
+                for (n, line) in text.lines().enumerate() {
+                    let lower = line.to_lowercase();
+                    if !lower.contains(&needle) {
+                        continue;
+                    }
+                    if !disclaimers
+                        .iter()
+                        .any(|d| lower.contains(&d.to_lowercase()))
+                    {
+                        problems.push(format!(
+                            "CC-06: {document}:{} names {term:?} without saying it is {scope}",
+                            n + 1
+                        ));
+                    }
                 }
             }
         }

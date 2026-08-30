@@ -227,7 +227,17 @@ struct TargetState {
     pending: Vec<pb::ListenResponse>,
 }
 
+/// Maximum targets one `Listen` stream may hold (spec 10.6: queue length caps are explicit,
+/// never a silent drop); the web SDK multiplexes every listener of a client over one stream.
+pub const MAX_LISTEN_TARGETS: usize = 1000;
+
 /// Runs the `Listen` stream.
+///
+/// Back-pressure: responses go out through a bounded channel and the loop awaits it, so a
+/// slow client stalls the loop instead of growing a queue. Commits that land meanwhile
+/// accumulate in the broadcast channel and are coalesced into one refresh (the diff
+/// against the last known state covers every intervening commit), and a lagged broadcast
+/// is the same one refresh.
 pub async fn listen_stream(
     ctx: StreamContext,
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
@@ -246,11 +256,27 @@ pub async fn listen_stream(
                 Some(Ok(req)) => handle_listen_request(&ctx, &mut parent, &mut targets, &req, &mut out).map(|()| true),
             },
             ev = events.recv() => match ev {
-                Ok(CommitEvent { project, database, .. }) => {
-                    let relevant = parent.as_ref().is_some_and(|p| {
-                        p.project.as_str() == project && p.database.as_str() == database
-                    });
-                    if relevant {
+                Ok(first) => {
+                    // Coalesce: every commit already queued behind this one is covered by
+                    // the single refresh below.
+                    let mut relevant = is_relevant(parent.as_ref(), &first);
+                    let mut closed = false;
+                    loop {
+                        match events.try_recv() {
+                            Ok(ev) => relevant |= is_relevant(parent.as_ref(), &ev),
+                            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                                relevant = true;
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                                closed = true;
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                        }
+                    }
+                    if closed {
+                        Ok(false)
+                    } else if relevant {
                         refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out).map(|()| true)
                     } else {
                         Ok(true)
@@ -276,6 +302,11 @@ pub async fn listen_stream(
             }
         }
     }
+}
+
+/// Whether a commit concerns the stream's database.
+fn is_relevant(parent: Option<&Parent>, ev: &CommitEvent) -> bool {
+    parent.is_some_and(|p| p.project.as_str() == ev.project && p.database.as_str() == ev.database)
 }
 
 fn handle_listen_request(
@@ -305,6 +336,11 @@ fn handle_listen_request(
             if targets.contains_key(&id) {
                 return Err(Status::invalid_argument(format!(
                     "target {id} is already active on this stream"
+                )));
+            }
+            if targets.len() >= MAX_LISTEN_TARGETS {
+                return Err(Status::resource_exhausted(format!(
+                    "this Listen stream already holds {MAX_LISTEN_TARGETS} targets"
                 )));
             }
             let kind = decode_target(ctx, parent, target)?;

@@ -111,7 +111,7 @@ pub fn capabilities_manifest() -> Value {
             "FS-WEB-1": {"status": "implemented", "notes": ["WebChannel v8 transport of the browser web SDK (Listen / Write) on the Firestore port; no resume history (targets are RESET on resume)"]},
             "FS-QRY-1": {"status": "implemented", "notes": ["orderBy on missing fields excludes documents", "range filters are type-restricted"]},
             "FS-TXN-1": {"status": "implemented", "precision": "boundary-conformance", "notes": ["serializable: read sets and executed queries are re-validated at commit"]},
-            "FS-LSN-1": {"status": "partial", "implemented": ["query and document targets", "live diffs after every commit", "once", "resume as RESET"], "unimplemented": ["resume history", "existence filters", "back-pressure by target"]},
+            "FS-LSN-1": {"status": "partial", "implemented": ["query and document targets", "live diffs after every commit", "once", "resume as RESET", "back-pressure: bounded response channel, commits coalesced into one refresh while the client is slow, 1000 targets per stream (RESOURCE_EXHAUSTED beyond)"], "unimplemented": ["resume history", "existence filters"]},
             "FS-PIPE-RPC-1": {"status": "unimplemented"},
             "FS-TEXT-VAL-1": {"status": "unimplemented"},
             "AUTH-CORE-1": {"status": "implemented", "implemented": ["accounts:signUp (email, anonymous)", "accounts:signInWithPassword", "accounts:signInWithCustomToken", "accounts:lookup", "accounts:update", "securetoken token (JSON and form)", "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet"], "unimplemented": ["federated providers", "email actions (oob codes)", "phone sign-in"]},

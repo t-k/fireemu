@@ -503,3 +503,71 @@ async fn streams_end_when_the_session_is_reset() {
     );
     handle.abort();
 }
+
+#[tokio::test]
+async fn slow_listeners_get_coalesced_refreshes_and_targets_are_capped() {
+    let (mut client, handle) = start(false).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("open/a", &[("v", s("0"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(1, "open")).await.unwrap();
+    let _ = next_until(&mut responses, "NO_CHANGE[]").await;
+    // 300 commits of a 20 KiB document while the client reads nothing: the HTTP/2 flow
+    // control window and the response channel fill, the loop blocks on the send, and the
+    // commits that land meanwhile are coalesced into few refreshes.
+    let payload = "x".repeat(20 * 1024);
+    for i in 0..300 {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![set_write(
+                    "open/a",
+                    &[("v", s(&format!("{}-{payload}", i + 1)))],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    // Drain until the stream is idle for a while.
+    let mut labels: Vec<String> = Vec::new();
+    while let Ok(Some(item)) =
+        tokio::time::timeout(std::time::Duration::from_millis(700), responses.next()).await
+    {
+        labels.push(describe(&item.unwrap()));
+    }
+    let changes = labels.iter().filter(|l| l.starts_with("CHANGE a")).count();
+    assert!(changes < 300, "{changes} refreshes for 300 commits");
+    assert!(changes >= 1, "{labels:?}");
+    assert_eq!(labels.last().map(String::as_str), Some("NO_CHANGE[]"));
+    // The 1001st target is refused explicitly.
+    for id in 2..=1000 {
+        tx.send(add_documents_target(id, &["open/missing"]))
+            .await
+            .unwrap();
+        let _ = next_until(&mut responses, "NO_CHANGE[]").await;
+    }
+    tx.send(add_documents_target(1001, &["open/missing"]))
+        .await
+        .unwrap();
+    let err = loop {
+        match responses.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => break e,
+            None => panic!("stream ended without an error"),
+        }
+    };
+    assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+    handle.abort();
+}

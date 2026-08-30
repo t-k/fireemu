@@ -227,6 +227,15 @@ pub enum Expr {
         /// Index expression.
         index: Box<Expr>,
     },
+    /// `object[start:end]`: the range index of a list or a string.
+    Slice {
+        /// Object.
+        object: Box<Expr>,
+        /// First index, included.
+        start: Box<Expr>,
+        /// Last index, excluded.
+        end: Box<Expr>,
+    },
     /// `callee(args)`
     Call {
         /// Callee.
@@ -275,3 +284,22 @@ pub enum Expr {
         type_name: String,
     },
 }
+
+/// The type names the `is` operator accepts. The official compiler rejects anything else
+/// with "An unsupported type identifier was used with the 'is' operator", which is a
+/// compile error rather than a `false` answer.
+pub const IS_TYPE_NAMES: &[&str] = &[
+    "bool",
+    "bytes",
+    "duration",
+    "float",
+    "int",
+    "latlng",
+    "list",
+    "map",
+    "number",
+    "path",
+    "set",
+    "string",
+    "timestamp",
+];

@@ -3017,7 +3017,11 @@
       "id": "gen-0082",
       "area": "generated",
       "claim": "([].upper() is number)",
-      "oracle": "compile-error"
+      "oracle": "compile-error",
+      "divergence": {
+        "fireemu": "error",
+        "reason": "The official compiler's static type checker rejects a method that no type of the receiver has (`[].upper()`) while it compiles the file. fireemu type-checks at evaluation time, so the same program loads and the same request is denied, with the error raised one stage later."
+      }
     },
     {
       "id": "gen-0083",
@@ -3263,7 +3267,11 @@
       "id": "gen-0123",
       "area": "generated",
       "claim": "((['a', 'b'] + -2.5).size() is latlng)",
-      "oracle": "compile-error"
+      "oracle": "compile-error",
+      "divergence": {
+        "fireemu": "error",
+        "reason": "Same static type check on an operator rather than a method: the official compiler refuses `['a', 'b'] + -2.5` at load, fireemu raises on it at evaluation."
+      }
     },
     {
       "id": "gen-0124",
@@ -3845,7 +3853,11 @@
       "id": "gen-0220",
       "area": "generated",
       "claim": "(({} is path).toBase64().concat(float(('' % ['a', 'b']))) > null)",
-      "oracle": "compile-error"
+      "oracle": "compile-error",
+      "divergence": {
+        "fireemu": "error",
+        "reason": "Same static type check, reached through `({} is path).toBase64()`: a compile error for the official compiler, an evaluation error for fireemu. The decision is the same in both."
+      }
     },
     {
       "id": "gen-0221",

@@ -358,6 +358,11 @@ fn collect_calls(expr: &Expr, scope: &[usize], from: Option<usize>, out: &mut Ve
             collect_calls(object, scope, from, out);
             collect_calls(index, scope, from, out);
         }
+        Expr::Slice { object, start, end } => {
+            collect_calls(object, scope, from, out);
+            collect_calls(start, scope, from, out);
+            collect_calls(end, scope, from, out);
+        }
         Expr::Unary { expr, .. } | Expr::Is { expr, .. } => collect_calls(expr, scope, from, out),
         Expr::Binary { left, right, .. } => {
             collect_calls(left, scope, from, out);

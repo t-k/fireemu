@@ -154,6 +154,9 @@ struct Flags {
     multi_line: bool,
 }
 
+/// The span of each capturing group in the current match attempt, indexed 1-based.
+type Captures = Vec<Option<(usize, usize)>>;
+
 /// A compiled pattern.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Regex {
@@ -453,7 +456,7 @@ impl Parser<'_> {
                     false
                 };
                 let mut name = String::new();
-                while let Some(c) = self.peek().filter(|c| c.is_ascii_alphanumeric()) {
+                while let Some(c) = self.peek().filter(char::is_ascii_alphanumeric) {
                     name.push(c);
                     self.pos += 1;
                 }
@@ -566,7 +569,7 @@ impl Regex {
                 caps: &caps,
                 flags: self.flags,
             };
-            let mut best: Option<(usize, Vec<Option<(usize, usize)>>)> = None;
+            let mut best: Option<(usize, Captures)> = None;
             let found = match_node(&self.node, &ctx, i, &mut |end| {
                 best = Some((end, caps.borrow().clone()));
                 true
@@ -640,7 +643,7 @@ fn expand(
 struct MatchContext<'a> {
     chars: &'a [char],
     steps: &'a Cell<usize>,
-    caps: &'a RefCell<Vec<Option<(usize, usize)>>>,
+    caps: &'a RefCell<Captures>,
     flags: Flags,
 }
 
@@ -673,7 +676,12 @@ fn chars_equal(a: char, b: char, flags: Flags) -> bool {
 
 /// Backtracking matcher in continuation-passing style: `k(end)` is called for every way
 /// `node` can match starting at `pos`; returns `true` as soon as `k` accepts.
-fn match_node(node: &Node, ctx: &MatchContext, pos: usize, k: &mut dyn FnMut(usize) -> bool) -> bool {
+fn match_node(
+    node: &Node,
+    ctx: &MatchContext,
+    pos: usize,
+    k: &mut dyn FnMut(usize) -> bool,
+) -> bool {
     ctx.steps.set(ctx.steps.get() + 1);
     if ctx.steps.get() > STEP_BUDGET {
         return false;
@@ -739,6 +747,7 @@ fn match_seq(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn match_repeat(
     node: &Node,
     min: usize,

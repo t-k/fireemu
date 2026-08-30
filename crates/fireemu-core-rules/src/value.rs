@@ -20,6 +20,10 @@ pub enum RulesValue {
     String(String),
     /// List.
     List(Vec<RulesValue>),
+    /// `list.toSet()` and the key sets of `map.diff()`: members are unordered and distinct.
+    /// A `set` is deliberately not a `list`, and the official runtime answers `false` to
+    /// every `is` test on one, which [`RulesValue::type_name`] cannot express on its own.
+    Set(Vec<RulesValue>),
     /// Map.
     Map(BTreeMap<String, RulesValue>),
     /// Path (segments without the leading slash).
@@ -116,6 +120,7 @@ impl RulesValue {
             Self::Float(_) => "float",
             Self::String(_) => "string",
             Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
+            Self::Set(_) => "set",
             Self::Map(_) | Self::PartialMap(_) => "map",
             Self::Path(_) => "path",
             Self::Timestamp(_) => "timestamp",
@@ -172,6 +177,16 @@ impl fmt::Display for RulesValue {
                     write!(f, "{item}")?;
                 }
                 f.write_str("]")
+            }
+            Self::Set(items) => {
+                f.write_str("set(")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                f.write_str(")")
             }
             Self::Map(m) => {
                 f.write_str("{")?;

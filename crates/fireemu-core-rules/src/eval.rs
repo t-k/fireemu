@@ -437,16 +437,15 @@ fn build_request(ctx: &RequestContext) -> RulesValue {
         "time".to_owned(),
         RulesValue::Timestamp(ctx.time_unix_nanos),
     );
-    m.insert(
-        "resource".to_owned(),
-        ctx.request_resource.clone().unwrap_or(RulesValue::Null),
-    );
-    // Outside a list request `request.query` is an error in production; undetermined here
-    // has the same effect (the rule cannot be proven).
-    m.insert(
-        "query".to_owned(),
-        ctx.request_query.clone().unwrap_or(RulesValue::Unknown),
-    );
+    // `request.resource` and `request.query` are absent, not null, when the request has no
+    // such thing: reading either on a `get` is a missing-member error in the official
+    // runtime, and `request.keys()` does not list them (recorded, area `detail`).
+    if let Some(resource) = ctx.request_resource.clone() {
+        m.insert("resource".to_owned(), resource);
+    }
+    if let Some(query) = ctx.request_query.clone() {
+        m.insert("query".to_owned(), query);
+    }
     RulesValue::Map(m)
 }
 
@@ -657,7 +656,7 @@ fn undetermined(v: &RulesValue) -> bool {
         | RulesValue::Range(_)
         | RulesValue::OneOf(_)
         | RulesValue::NotOneOf(_) => true,
-        RulesValue::List(items) => items.iter().any(undetermined),
+        RulesValue::List(items) | RulesValue::Set(items) => items.iter().any(undetermined),
         RulesValue::Map(m) => m.values().any(undetermined),
         _ => false,
     }
@@ -837,23 +836,29 @@ impl<'a> Evaluator<'a> {
                     other => V::Float(as_float(other)?.abs()),
                 }
             }
-            ("math", "ceil" | "floor" | "round" | "sqrt") => {
+            ("math", "ceil" | "floor" | "sqrt") => {
                 arity(1)?;
                 let x = float_arg(0)?;
                 V::Float(match name {
                     "ceil" => x.ceil(),
                     "floor" => x.floor(),
-                    "round" => x.round(),
                     _ => x.sqrt(),
                 })
+            }
+            // Alone among them, `round` answers an int, and it rounds a half towards
+            // positive infinity: `math.round(-1.5)` is -1, recorded.
+            ("math", "round") => {
+                arity(1)?;
+                let rounded = (float_arg(0)? + 0.5).floor();
+                if !rounded.is_finite() || rounded < -(2f64.powi(63)) || rounded >= 2f64.powi(63) {
+                    return Err(soft("math.round() out of the int range"));
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                V::Int(rounded as i64)
             }
             ("math", "pow") => {
                 arity(2)?;
                 V::Float(float_arg(0)?.powf(float_arg(1)?))
-            }
-            ("math", "isInfinite") => {
-                arity(1)?;
-                V::Bool(float_arg(0)?.is_infinite())
             }
             ("math", "isNaN") => {
                 arity(1)?;
@@ -872,8 +877,10 @@ impl<'a> Evaluator<'a> {
                     }
                 };
                 V::Bytes(match name {
-                    "crc32" => crate::hash::crc32(&input).to_be_bytes().to_vec(),
-                    "crc32c" => crate::hash::crc32c(&input).to_be_bytes().to_vec(),
+                    // The checksums come back little-endian: `hashing.crc32('abc')` prints
+                    // as `C2412435` where the checksum itself is `0x352441C2`, recorded.
+                    "crc32" => crate::hash::crc32(&input).to_le_bytes().to_vec(),
+                    "crc32c" => crate::hash::crc32c(&input).to_le_bytes().to_vec(),
                     "md5" => crate::hash::md5(&input).to_vec(),
                     _ => crate::hash::sha256(&input).to_vec(),
                 })
@@ -966,6 +973,12 @@ impl<'a> Evaluator<'a> {
                         i.type_name()
                     ))),
                 }
+            }
+            Expr::Slice { object, start, end } => {
+                let obj = self.eval(object)?;
+                let lo = self.eval(start)?;
+                let hi = self.eval(end)?;
+                slice(&obj, &lo, &hi)
             }
             Expr::Call { callee, args, .. } => self.call(callee, args),
             Expr::Unary { op, expr } => {
@@ -1109,13 +1122,29 @@ impl<'a> Evaluator<'a> {
             // evaluation; an undetermined operand (which may be a runtime error for some
             // potential document) makes the whole expression undetermined.
             let stop_on = matches!(op, BinaryOp::Or);
+            // The official runtime absorbs a raised operand: `error || true` is true and
+            // `error && false` is false, because the deciding operand settles the answer
+            // whatever the other one did. A raised operand is therefore remembered rather
+            // than propagated, and only surfaces when nothing decides.
+            //
+            // A budget exhaustion and an unsupported construct are not absorbed: the first
+            // ends the request, and the second is fireemu admitting it cannot evaluate the
+            // operand, which must never be allowed to read as a permissive answer.
+            let mut deferred: Option<EvalError> = None;
             for operand in operands.into_iter().rev() {
-                let b = truthy(&self.eval(operand)?)?;
-                if b == stop_on {
-                    return Ok(RulesValue::Bool(stop_on));
+                match self.eval(operand).and_then(|v| truthy(&v)) {
+                    Ok(b) if b == stop_on => return Ok(RulesValue::Bool(stop_on)),
+                    Ok(_) => {}
+                    Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                        return Err(e)
+                    }
+                    Err(e) => deferred = Some(deferred.map_or(e, |first| first)),
                 }
             }
-            return Ok(RulesValue::Bool(!stop_on));
+            return match deferred {
+                Some(e) => Err(e),
+                None => Ok(RulesValue::Bool(!stop_on)),
+            };
         }
         let l = self.eval(left)?;
         let r = self.eval(right)?;
@@ -1205,7 +1234,7 @@ impl<'a> Evaluator<'a> {
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
             (BinaryOp::Eq, a, b) => V::Bool(values_equal(a, b)),
             (BinaryOp::Ne, a, b) => V::Bool(!values_equal(a, b)),
-            (BinaryOp::In, item, V::List(items)) => {
+            (BinaryOp::In, item, V::List(items) | V::Set(items)) => {
                 V::Bool(items.iter().any(|x| values_equal(x, item)))
             }
             (BinaryOp::In, V::String(k), V::Map(m)) => V::Bool(m.contains_key(k)),
@@ -1356,6 +1385,11 @@ fn values_equal(a: &RulesValue, b: &RulesValue) -> bool {
         (RulesValue::Int(x), RulesValue::Float(y)) | (RulesValue::Float(y), RulesValue::Int(x)) => {
             !y.is_nan() && cmp_int_double(*x, *y) == core::cmp::Ordering::Equal
         }
+        // Two sets are equal when they hold the same members, in whatever order; a set is
+        // never equal to a list.
+        (RulesValue::Set(x), RulesValue::Set(y)) => {
+            x.len() == y.len() && x.iter().all(|i| y.iter().any(|j| values_equal(i, j)))
+        }
         _ => a == b,
     }
 }
@@ -1489,22 +1523,26 @@ fn convert(name: &str, v: RulesValue) -> Result<RulesValue, EvalError> {
     use RulesValue as V;
     Ok(match (name, v) {
         ("int", V::Int(i)) => V::Int(i),
-        ("int", V::String(s)) => V::Int(
-            s.trim()
-                .parse()
-                .map_err(|_| soft("int() of non-numeric string"))?,
-        ),
-        ("int", V::Float(f)) if f.is_finite() && f.fract() == 0.0 => V::Int(f as i64),
+        // No trimming: the official runtime raises on `int(' 12 ')` and on `int('12abc')`,
+        // and it truncates a float rather than requiring a whole one.
+        ("int", V::String(s)) => {
+            V::Int(s.parse().map_err(|_| soft("int() of non-numeric string"))?)
+        }
+        ("int", V::Float(f)) if f.is_finite() && f.trunc().abs() < 2f64.powi(63) => {
+            V::Int(f.trunc() as i64)
+        }
         ("float", V::Int(i)) => V::Float(i as f64),
         ("float", V::Float(f)) => V::Float(f),
         ("float", V::String(s)) => V::Float(
-            s.trim()
-                .parse()
+            s.parse()
                 .map_err(|_| soft("float() of non-numeric string"))?,
         ),
         ("string", V::String(s)) => V::String(s),
         ("string", V::Int(i)) => V::String(i.to_string()),
         ("string", V::Bool(b)) => V::String(b.to_string()),
+        ("string", V::Null) => V::String("null".to_owned()),
+        ("string", V::Float(f)) => V::String(format_float(f)),
+        ("string", V::Path(p)) => V::String(format!("/{}", p.join("/"))),
         ("path", V::String(s)) => V::Path(
             s.trim_start_matches('/')
                 .split('/')
@@ -1526,7 +1564,14 @@ fn method_call(
     // An exact list / map holding an undetermined member, or an undetermined argument,
     // cannot be searched, joined or compared with a definite result (query proofs). The
     // partially known containers have their own arms below.
-    if (matches!(receiver, V::List(_) | V::Map(_)) && undetermined(receiver))
+    //
+    // `keys()` and `size()` of a map are the exception: both read the key set, which an
+    // undetermined *value* leaves fully known. `request.keys()` depends on it, because
+    // `request.auth` is undetermined while a query is being proven.
+    let shape_only = matches!(receiver, V::Map(_)) && matches!(name, "keys" | "size");
+    if (!shape_only
+        && matches!(receiver, V::List(_) | V::Set(_) | V::Map(_))
+        && undetermined(receiver))
         || args.iter().any(undetermined)
     {
         return Err(EvalError::Unknown);
@@ -1645,7 +1690,7 @@ fn method_call(
                 .map_err(|e| EvalError::Unsupported(e.to_string()))?;
             V::String(re.replace_all(s, replacement))
         }
-        (V::List(items), "size") => {
+        (V::List(items) | V::Set(items), "size") => {
             arity(0)?;
             V::Int(i64::try_from(items.len()).unwrap_or(i64::MAX))
         }
@@ -1680,14 +1725,13 @@ fn method_call(
             arity(1)?;
             match &args[0] {
                 V::String(sep) => {
+                    // The official runtime stringifies members rather than requiring
+                    // strings: `[1, 2].join(',')` is `'1,2'`, recorded.
                     let parts: Result<Vec<String>, EvalError> = items
                         .iter()
-                        .map(|i| match i {
-                            V::String(s) => Ok(s.clone()),
-                            other => Err(soft(format!(
-                                "join() on list containing {}",
-                                other.type_name()
-                            ))),
+                        .map(|i| match convert("string", i.clone()) {
+                            Ok(V::String(s)) => Ok(s),
+                            _ => Err(soft(format!("join() on list containing {}", i.type_name()))),
                         })
                         .collect();
                     V::String(parts?.join(sep))
@@ -1698,6 +1742,63 @@ fn method_call(
         (V::List(items), "concat") => {
             arity(1)?;
             V::List(items.iter().cloned().chain(list_arg(&args[0])?).collect())
+        }
+        (V::List(items), "removeAll") => {
+            arity(1)?;
+            let removed = list_arg(&args[0])?;
+            V::List(
+                items
+                    .iter()
+                    .filter(|i| !removed.iter().any(|r| values_equal(i, r)))
+                    .cloned()
+                    .collect(),
+            )
+        }
+        (V::List(items), "toSet") => {
+            arity(0)?;
+            make_set(items.iter().cloned())
+        }
+        // A `set` is its own type: it compares unordered, `is` never recognises it, and its
+        // operations take another set rather than a list.
+        (V::Set(items), "union" | "intersection" | "difference") => {
+            arity(1)?;
+            let V::Set(other) = &args[0] else {
+                return Err(soft(format!(
+                    "{name}() expects a set, got {}",
+                    args[0].type_name()
+                )));
+            };
+            let member = |xs: &[RulesValue], v: &RulesValue| xs.iter().any(|x| values_equal(x, v));
+            match name {
+                "union" => make_set(items.iter().chain(other).cloned()),
+                "intersection" => make_set(
+                    items
+                        .iter()
+                        .filter(|v| member(other, v))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+                _ => make_set(
+                    items
+                        .iter()
+                        .filter(|v| !member(other, v))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+            }
+        }
+        (V::Set(items), "hasAll" | "hasAny" | "hasOnly") => {
+            arity(1)?;
+            let other = match &args[0] {
+                V::Set(xs) => xs.clone(),
+                _ => list_arg(&args[0])?,
+            };
+            let member = |xs: &[RulesValue], v: &RulesValue| xs.iter().any(|x| values_equal(x, v));
+            V::Bool(match name {
+                "hasAll" => other.iter().all(|w| member(items, w)),
+                "hasAny" => other.iter().any(|w| member(items, w)),
+                _ => items.iter().all(|i| member(&other, i)),
+            })
         }
         (V::Map(m), "keys") => {
             arity(0)?;
@@ -1715,12 +1816,68 @@ fn method_call(
             arity(2)?;
             match &args[0] {
                 V::String(k) => m.get(k).cloned().unwrap_or_else(|| args[1].clone()),
+                // A list key walks nested maps: `{'a': {'b': 1}}.get(['a', 'b'], 0)` is 1.
+                V::List(path) => {
+                    let mut current = receiver.clone();
+                    for step in path {
+                        let V::String(k) = step else {
+                            return Err(soft("get() expects string keys in a key path"));
+                        };
+                        match current {
+                            V::Map(ref inner) => match inner.get(k) {
+                                Some(v) => current = v.clone(),
+                                None => return Ok(args[1].clone()),
+                            },
+                            _ => return Ok(args[1].clone()),
+                        }
+                    }
+                    current
+                }
                 _ => return Err(soft("get() expects a string key")),
             }
         }
-        (V::Path(p), "size") => {
-            arity(0)?;
-            V::Int(i64::try_from(p.len()).unwrap_or(i64::MAX))
+        // `path.bind()` fills the `{name}` placeholders of a path literal. Every binding has
+        // to be used: the official runtime raises on one the path does not name, and it has
+        // no `size()` on a path at all.
+        (V::Path(p), "bind") => {
+            arity(1)?;
+            let V::Map(bindings) = &args[0] else {
+                return Err(soft(format!(
+                    "bind() expects a map, got {}",
+                    args[0].type_name()
+                )));
+            };
+            let mut used: Vec<&String> = Vec::new();
+            let mut out = Vec::new();
+            for segment in p {
+                match segment
+                    .strip_prefix('{')
+                    .and_then(|s| s.strip_suffix('}'))
+                    .filter(|s| !s.is_empty())
+                {
+                    Some(placeholder) => {
+                        let Some((key, value)) = bindings.get_key_value(placeholder) else {
+                            return Err(soft(format!("bind() has no value for {{{placeholder}}}")));
+                        };
+                        used.push(key);
+                        out.push(match value {
+                            V::String(s) => s.clone(),
+                            V::Int(i) => i.to_string(),
+                            other => {
+                                return Err(soft(format!(
+                                    "bind() cannot put a {} in a path",
+                                    other.type_name()
+                                )))
+                            }
+                        });
+                    }
+                    None => out.push(segment.clone()),
+                }
+            }
+            if used.len() != bindings.len() {
+                return Err(soft("bind() was given a name the path does not use"));
+            }
+            V::Path(out)
         }
         (V::Timestamp(t), "toMillis") => {
             arity(0)?;
@@ -1792,7 +1949,7 @@ fn method_call(
             else {
                 return Err(soft("distance() expects a latlng"));
             };
-            V::Float(haversine_km(*latitude, *longitude, *lat2, *lng2))
+            V::Float(haversine_metres(*latitude, *longitude, *lat2, *lng2))
         }
         (V::Map(m), "diff") => {
             arity(1)?;
@@ -1841,7 +1998,8 @@ fn method_call(
                     all
                 }
             };
-            V::List(keys.into_iter().map(V::String).collect())
+            // Every one of these is a `set` in the official runtime, not a list.
+            make_set(keys.into_iter().map(V::String))
         }
         (V::Timestamp(t), "seconds") => {
             arity(0)?;
@@ -1872,14 +2030,91 @@ fn method_call(
     })
 }
 
+/// `receiver[start:end]` over a list or a string.
+///
+/// The bounds the official runtime accepts are asymmetric, and measured rather than
+/// guessed (`conformance/rules-matrix.json`, area `slice`): `start` has to be a valid
+/// index, `0 <= start < len`, while `end` has to be a valid *position after* one,
+/// `0 < end <= len`, and `start <= end`. So `[1, 2, 3][1:1]` is the empty list while
+/// `[1, 2, 3][0:0]`, `[1, 2, 3][3:3]` and `[][0:0]` all raise.
+fn slice(
+    receiver: &RulesValue,
+    start: &RulesValue,
+    end: &RulesValue,
+) -> Result<RulesValue, EvalError> {
+    use RulesValue as V;
+    if undetermined(receiver) || undetermined(start) || undetermined(end) {
+        return Err(EvalError::Unknown);
+    }
+    let (V::Int(lo), V::Int(hi)) = (start, end) else {
+        return Err(soft(format!(
+            "a range index takes two ints, got {} and {}",
+            start.type_name(),
+            end.type_name()
+        )));
+    };
+    let len = match receiver {
+        V::List(items) => items.len(),
+        V::String(s) => s.chars().count(),
+        other => {
+            return Err(soft(format!(
+                "{} cannot be range indexed",
+                other.type_name()
+            )))
+        }
+    };
+    let len = i64::try_from(len).unwrap_or(i64::MAX);
+    if *lo < 0 || *lo >= len || *hi <= 0 || *hi > len || lo > hi {
+        return Err(soft(format!("range index [{lo}:{hi}] is out of range")));
+    }
+    let (lo, hi) = (
+        usize::try_from(*lo).unwrap_or(0),
+        usize::try_from(*hi).unwrap_or(0),
+    );
+    Ok(match receiver {
+        V::List(items) => V::List(items[lo..hi].to_vec()),
+        V::String(s) => V::String(s.chars().skip(lo).take(hi - lo).collect()),
+        _ => unreachable!("the length arm already rejected every other receiver"),
+    })
+}
+
 /// Nanoseconds per day.
 const NANOS_PER_DAY: i128 = 86_400_000_000_000;
 
 /// `v is type_name` for a concrete value.
+///
+/// A `set` answers `false` to every type name, `set` included -- measured, not assumed:
+/// `[1, 2].toSet() is set`, `is list` and `is map` are all false in the official runtime.
 fn is_type(v: &RulesValue, type_name: &str) -> bool {
+    if matches!(v, RulesValue::Set(_)) {
+        return false;
+    }
     match type_name {
         "number" => matches!(v, RulesValue::Int(_) | RulesValue::Float(_)),
         t => v.type_name() == t,
+    }
+}
+
+/// A set with each member kept once, in first-seen order.
+fn make_set(items: impl IntoIterator<Item = RulesValue>) -> RulesValue {
+    let mut out: Vec<RulesValue> = Vec::new();
+    for item in items {
+        if !out.iter().any(|x| values_equal(x, &item)) {
+            out.push(item);
+        }
+    }
+    RulesValue::Set(out)
+}
+
+/// `string(float)`: a whole float still prints with no decimal part, as the runtime does
+/// for `string(1.5)` and for the members `join()` stringifies.
+fn format_float(f: f64) -> String {
+    if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e15 {
+        format!("{f:.1}")
+            .strip_suffix(".0")
+            .map_or_else(|| f.to_string(), str::to_owned)
+    } else {
+        f.to_string()
     }
 }
 
@@ -1928,8 +2163,10 @@ fn unanimous(answers: impl Iterator<Item = Result<bool, EvalError>>) -> Result<b
 }
 
 /// Great-circle distance in kilometres (`latlng.distance()`).
-fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
-    const EARTH_RADIUS_KM: f64 = 6_371.0;
+fn haversine_metres(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
+    // `latlng.distance()` answers metres: one degree of latitude measures more than
+    // 111 000 of them and less than 112 000, which is what the official runtime records.
+    const EARTH_RADIUS_KM: f64 = 6_371_000.0;
     let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
     let (dp, dl) = ((lat2 - lat1).to_radians(), (lng2 - lng1).to_radians());
     let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);

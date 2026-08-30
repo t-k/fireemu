@@ -143,6 +143,35 @@ async function probeFireemu(inPath, outPath) {
   return JSON.parse(await readFile(outPath, "utf8"));
 }
 
+/**
+ * Rows where fireemu deliberately answers something else, keyed by claim id. Each names the
+ * answer fireemu gives and why; `check` gates those rows against `fireemu`, so the
+ * divergence is pinned rather than merely tolerated, and an unlisted difference still fails.
+ */
+const DIVERGENCES = {
+  "gen-0082": {
+    fireemu: "error",
+    reason:
+      "The official compiler's static type checker rejects a method that no type of the " +
+      "receiver has (`[].upper()`) while it compiles the file. fireemu type-checks at " +
+      "evaluation time, so the same program loads and the same request is denied, with the " +
+      "error raised one stage later.",
+  },
+  "gen-0123": {
+    fireemu: "error",
+    reason:
+      "Same static type check on an operator rather than a method: the official compiler " +
+      "refuses `['a', 'b'] + -2.5` at load, fireemu raises on it at evaluation.",
+  },
+  "gen-0220": {
+    fireemu: "error",
+    reason:
+      "Same static type check, reached through `({} is path).toBase64()`: a compile error " +
+      "for the official compiler, an evaluation error for fireemu. The decision is the " +
+      "same in both.",
+  },
+};
+
 const claimList = () => [...CLAIMS, ...generated(SEED, GENERATED)];
 
 async function writeClaims(claims, path) {
@@ -172,6 +201,7 @@ async function record() {
       area: c.area,
       claim: c.claim,
       oracle: result.claims[c.id] ?? "not-run",
+      ...(DIVERGENCES[c.id] ? { divergence: DIVERGENCES[c.id] } : {}),
     })),
     diagnostics: result.diagnostics,
   };
@@ -237,12 +267,21 @@ async function check() {
   const result = await probeFireemu(inPath, join(RUN_DIR, "fireemu.json"));
   const byId = new Map(claims.map((c) => [c.id, c]));
   const mismatches = [];
+  let diverged = 0;
   for (const row of matrix.claims) {
     const got = result.claims[row.id] ?? "not-run";
-    if (got !== row.oracle) mismatches.push({ ...row, fireemu: got, node: byId.get(row.id)?.node });
+    const expected = row.divergence ? row.divergence.fireemu : row.oracle;
+    if (got === expected) {
+      if (row.divergence) diverged += 1;
+      continue;
+    }
+    mismatches.push({ ...row, expected, fireemu: got, node: byId.get(row.id)?.node });
   }
   if (mismatches.length === 0) {
-    console.log(`ok: ${matrix.claims.length} claims agree with the recorded oracle`);
+    console.log(
+      `ok: ${matrix.claims.length} claims agree with the recorded oracle ` +
+        `(${diverged} documented divergence${diverged === 1 ? "" : "s"})`,
+    );
     return 0;
   }
   const byArea = new Map();
@@ -250,7 +289,7 @@ async function check() {
   console.error(`${mismatches.length} of ${matrix.claims.length} claims disagree:`);
   for (const [area, n] of [...byArea].sort()) console.error(`  ${area}: ${n}`);
   for (const m of mismatches) {
-    console.error(`  ${m.id} [${m.area}] oracle=${m.oracle} fireemu=${m.fireemu}  ${m.claim}`);
+    console.error(`  ${m.id} [${m.area}] expected=${m.expected} fireemu=${m.fireemu}  ${m.claim}`);
   }
   await writeFile(
     join(RUN_DIR, "mismatches.json"),

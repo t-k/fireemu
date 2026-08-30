@@ -422,7 +422,15 @@ fn undetermined_values_never_prove_a_condition() {
         &rules("resource.data.owner == 'u1' || resource.data.secret == 1"),
         &known
     ));
-    assert!(!allows(&rules("resource.data.secret == 1 || true"), &known));
+    // An operand that decides the answer absorbs an undetermined one on either side, which
+    // is both what the official runtime does with a raised operand and sound for a proof:
+    // whatever the unconstrained field holds, `|| true` is true for every document it could
+    // hold, and `&& false` is false for every one.
+    assert!(allows(&rules("resource.data.secret == 1 || true"), &known));
+    assert!(!allows(
+        &rules("resource.data.secret == 1 && false"),
+        &known
+    ));
     assert!(allows(&rules("true || resource.data.secret == 1"), &known));
     assert!(!allows(
         &rules("resource.data.owner == 'u1' && resource.data.secret == 1"),

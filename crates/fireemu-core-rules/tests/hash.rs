@@ -7,25 +7,32 @@ fn digests_match_the_published_test_vectors() {
     assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     assert_eq!(crc32c(b"123456789"), 0xE306_9283);
     assert_eq!(crc32(b""), 0);
-    assert_eq!(hex(&md5(b"")), "d41d8cd98f00b204e9800998ecf8427e");
-    assert_eq!(hex(&md5(b"abc")), "900150983cd24fb0d6963f7d28e17f72");
     assert_eq!(
-        hex(&md5(b"The quick brown fox jumps over the lazy dog")),
+        hex(&md5(b"")).to_lowercase(),
+        "d41d8cd98f00b204e9800998ecf8427e"
+    );
+    assert_eq!(
+        hex(&md5(b"abc")).to_lowercase(),
+        "900150983cd24fb0d6963f7d28e17f72"
+    );
+    assert_eq!(
+        hex(&md5(b"The quick brown fox jumps over the lazy dog")).to_lowercase(),
         "9e107d9d372bb6826bd81d3542a419d6"
     );
     assert_eq!(
-        hex(&sha256(b"")),
+        hex(&sha256(b"")).to_lowercase(),
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     );
     assert_eq!(
-        hex(&sha256(b"abc")),
+        hex(&sha256(b"abc")).to_lowercase(),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
     // Two blocks.
     assert_eq!(
         hex(&sha256(
             b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
-        )),
+        ))
+        .to_lowercase(),
         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
     );
     assert_eq!(base64(b""), "");
@@ -33,6 +40,14 @@ fn digests_match_the_published_test_vectors() {
     assert_eq!(base64(b"fo"), "Zm8=");
     assert_eq!(base64(b"foo"), "Zm9v");
     assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    // `toHexString()` prints uppercase and `toBase64()` uses the URL-safe alphabet, both
+    // measured against the official runtime (`conformance/rules-matrix.json`, `encoding`).
+    assert_eq!(hex(&md5(b"abc")), "900150983CD24FB0D6963F7D28E17F72");
+    assert_eq!(
+        base64(&sha256(b"abc")),
+        "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0="
+    );
+    assert_eq!(base64(&[0xffu8, 0xfe]), "__4=");
 }
 
 #[test]

@@ -48,7 +48,10 @@ impl std::error::Error for ParseError {}
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Ident(String),
-    Int(i64),
+    /// Widened to `i128` so that `-9223372036854775808` -- which the official compiler
+    /// accepts and which no `i64` literal can hold before its sign is applied -- reaches
+    /// the parser instead of dying in the lexer.
+    Int(i128),
     Float(f64),
     Str(String),
     Punct(&'static str),
@@ -104,7 +107,81 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
         pos: 0,
         expr_depth: 0,
     };
-    p.ruleset()
+    let ruleset = p.ruleset()?;
+    check_literal_patterns(&ruleset)?;
+    Ok(ruleset)
+}
+
+/// The official compiler compiles every literal `matches()` / `replace()` pattern while it
+/// compiles the file, and rejects the file when one of them is not a valid RE2 pattern --
+/// a lookahead, a backreference or an unterminated class never reaches the runtime. This
+/// walk reproduces that, so an unusable pattern is a load failure on both sides.
+fn check_literal_patterns(ruleset: &Ruleset) -> Result<(), ParseError> {
+    // Both walks are worklists rather than recursion: a left-nested `&&` chain is as deep
+    // as it is long, and a recursive visitor would overflow the stack on a source the
+    // parser itself accepts.
+    let mut exprs: Vec<&Expr> = Vec::new();
+    let mut items: Vec<&Item> = ruleset.services.iter().flat_map(|s| &s.items).collect();
+    while let Some(item) = items.pop() {
+        match item {
+            Item::Match(m) => {
+                items.extend(&m.items);
+                exprs.extend(m.allows.iter().filter_map(|a| a.condition.as_ref()));
+                exprs.extend(m.path.iter().filter_map(|s| match s {
+                    PathSegment::Binding(e) => Some(e),
+                    _ => None,
+                }));
+            }
+            Item::Function(f) => {
+                exprs.extend(f.lets.iter().map(|b| &b.value));
+                exprs.push(&f.body);
+            }
+        }
+    }
+    while let Some(e) = exprs.pop() {
+        match e {
+            Expr::Call { callee, args, span } => {
+                if let Expr::Member { name, .. } = callee.as_ref() {
+                    if matches!(name.as_str(), "matches" | "replace") {
+                        if let Some(Expr::Literal(Literal::Str(pattern))) = args.first() {
+                            if crate::regex::Regex::new(pattern).is_err() {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "Invalid regular expression pattern. Pattern: {pattern}."
+                                    ),
+                                    line: span.line,
+                                    column: span.column,
+                                    offset: span.offset,
+                                });
+                            }
+                        }
+                    }
+                }
+                exprs.push(callee);
+                exprs.extend(args);
+            }
+            Expr::Member { object, .. } => exprs.push(object),
+            Expr::Index { object, index } => exprs.extend([object.as_ref(), index.as_ref()]),
+            Expr::Slice { object, start, end } => {
+                exprs.extend([object.as_ref(), start.as_ref(), end.as_ref()]);
+            }
+            Expr::Unary { expr, .. } | Expr::Is { expr, .. } => exprs.push(expr),
+            Expr::Binary { left, right, .. } => exprs.extend([left.as_ref(), right.as_ref()]),
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => exprs.extend([cond.as_ref(), then.as_ref(), otherwise.as_ref()]),
+            Expr::List(list) => exprs.extend(list),
+            Expr::Map(entries) => exprs.extend(entries.iter().map(|(_, v)| v)),
+            Expr::Path(segments) => exprs.extend(segments.iter().filter_map(|s| match s {
+                PathSegment::Binding(e) => Some(e),
+                _ => None,
+            })),
+            Expr::Literal(_) | Expr::Ident(_) => {}
+        }
+    }
+    Ok(())
 }
 
 impl<'a> Parser<'a> {
@@ -223,14 +300,24 @@ impl<'a> Parser<'a> {
         }
         let text = &rest[..end];
         self.pos += end;
+        // An integer literal is never a receiver: the official lexer reads the `.` of
+        // `0.hasAny` as the start of a decimal part and rejects the file, so `0.join(x)` is
+        // a compile error rather than a runtime one. A float has already consumed its
+        // point, so `1.5.toMillis()` parses and raises at evaluation time instead --
+        // both measured (`conformance/rules-matrix.json`, generated area).
+        if !is_float && self.rest().starts_with('.') {
+            return Err(self.error("an integer literal cannot be followed by `.`"));
+        }
         if is_float {
             text.parse::<f64>()
                 .map(Token::Float)
                 .map_err(|_| self.error("invalid float"))
         } else {
-            text.parse::<i64>()
+            text.parse::<i128>()
+                .ok()
+                .filter(|v| *v <= -i128::from(i64::MIN))
                 .map(Token::Int)
-                .map_err(|_| self.error("integer out of range"))
+                .ok_or_else(|| self.error("integer out of range"))
         }
     }
 
@@ -254,6 +341,8 @@ impl<'a> Parser<'a> {
                         'n' => '\n',
                         't' => '\t',
                         'r' => '\r',
+                        '0' => '\0',
+                        'u' | 'x' | 'U' => self.unicode_escape(e)?,
                         '\\' | '\'' | '"' | '/' => e,
                         _ => return Err(self.error(format!("invalid escape `\\{e}`"))),
                     });
@@ -265,6 +354,29 @@ impl<'a> Parser<'a> {
                 c => out.push(c),
             }
         }
+    }
+
+    /// `\xHH`, `\uHHHH` and `\UHHHHHHHH` inside a string literal.
+    fn unicode_escape(&mut self, kind: char) -> Result<char, ParseError> {
+        let width = match kind {
+            'x' => 2,
+            'u' => 4,
+            _ => 8,
+        };
+        let mut digits = String::new();
+        for _ in 0..width {
+            match self.rest().chars().next().filter(char::is_ascii_hexdigit) {
+                Some(c) => {
+                    digits.push(c);
+                    self.pos += c.len_utf8();
+                }
+                None => return Err(self.error(format!("`\\{kind}` needs {width} hex digits"))),
+            }
+        }
+        u32::from_str_radix(&digits, 16)
+            .ok()
+            .and_then(char::from_u32)
+            .ok_or_else(|| self.error(format!("`\\{kind}{digits}` names no character")))
     }
 
     fn expect_punct(&mut self, p: &'static str) -> Result<(), ParseError> {
@@ -619,7 +731,18 @@ impl<'a> Parser<'a> {
                     if w == "in" {
                         matched = Some(BinaryOp::In);
                     } else if w == "is" {
+                        let at = {
+                            self.skip_trivia()?;
+                            self.pos
+                        };
                         let (type_name, _) = self.expect_ident("type name")?;
+                        if !crate::ast::IS_TYPE_NAMES.contains(&type_name.as_str()) {
+                            self.pos = at;
+                            return Err(self.error(format!(
+                                "An unsupported type identifier was used with the 'is' operator. Received {type_name}. Expected one of [{}]",
+                                crate::ast::IS_TYPE_NAMES.join(", ")
+                            )));
+                        }
                         left = Expr::Is {
                             expr: Box::new(left),
                             type_name,
@@ -654,6 +777,17 @@ impl<'a> Parser<'a> {
                 })
             }
             Token::Punct("-") => {
+                // `-9223372036854775808` is one literal to the official compiler, not a
+                // negation of a literal that no `i64` can hold. Folding it here is the only
+                // way to accept it, and it is folded only for that exact value.
+                let after_minus = self.pos;
+                if let Token::Int(v) = self.peek()? {
+                    if v == -i128::from(i64::MIN) {
+                        self.pos = after_minus;
+                        let _ = self.next()?;
+                        return Ok(Expr::Literal(Literal::Int(i64::MIN)));
+                    }
+                }
                 self.enter()?;
                 let e = self.unary();
                 self.expr_depth -= 1;
@@ -683,11 +817,23 @@ impl<'a> Parser<'a> {
                 }
                 Token::Punct("[") => {
                     let index = self.expr()?;
-                    self.expect_punct("]")?;
-                    e = Expr::Index {
-                        object: Box::new(e),
-                        index: Box::new(index),
-                    };
+                    let after_index = self.pos;
+                    if self.next()? == Token::Punct(":") {
+                        let end = self.expr()?;
+                        self.expect_punct("]")?;
+                        e = Expr::Slice {
+                            object: Box::new(e),
+                            start: Box::new(index),
+                            end: Box::new(end),
+                        };
+                    } else {
+                        self.pos = after_index;
+                        self.expect_punct("]")?;
+                        e = Expr::Index {
+                            object: Box::new(e),
+                            index: Box::new(index),
+                        };
+                    }
                 }
                 Token::Punct("(") => {
                     let mut args = Vec::new();
@@ -724,7 +870,12 @@ impl<'a> Parser<'a> {
             return Ok(Expr::Path(self.path(false)?));
         }
         match self.next()? {
-            Token::Int(i) => Ok(Expr::Literal(Literal::Int(i))),
+            Token::Int(i) => i64::try_from(i)
+                .map(|i| Expr::Literal(Literal::Int(i)))
+                .map_err(|_| {
+                    self.pos = at;
+                    self.error("integer out of range")
+                }),
             Token::Float(f) => Ok(Expr::Literal(Literal::Float(f))),
             Token::Str(s) => Ok(Expr::Literal(Literal::Str(s))),
             Token::Ident(w) => Ok(match w.as_str() {

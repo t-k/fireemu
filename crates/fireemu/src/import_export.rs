@@ -1294,7 +1294,12 @@ pub fn clear_export_dir(dir: &Path) -> Result<(), String> {
         .flatten()
     {
         let path = entry.path();
-        let result = if path.is_dir() {
+        // `symlink_metadata` rather than `is_dir`: a symlink that points at a directory must
+        // be unlinked, never descended into. Descending would delete whatever it aims at.
+        let kind = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("cannot inspect {}: {e}", path.display()))?
+            .file_type();
+        let result = if kind.is_dir() {
             std::fs::remove_dir_all(&path)
         } else {
             std::fs::remove_file(&path)

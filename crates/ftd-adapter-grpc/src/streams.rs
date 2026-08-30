@@ -6,9 +6,12 @@
 //! database snapshot; the diff against its last known `(path, version)` set becomes
 //! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
 //! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
-//! the snapshot version. A target added with a resume token is `RESET` before its replay
-//! (resume history is not kept). Security Rules are re-checked on every refresh; a denial
-//! removes the target with a `PERMISSION_DENIED` cause.
+//! the snapshot version. A target added with a resume token (or a read time) replays only
+//! what changed since that version: the store keeps every version, so the target's state
+//! at the token is recomputed and diffed against the current snapshot, followed by an
+//! `ExistenceFilter` with the current count (production's post-resume check). Only an
+//! undecodable or future token falls back to `RESET`. Security Rules are re-checked on
+//! every refresh; a denial removes the target with a `PERMISSION_DENIED` cause.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
@@ -26,7 +29,7 @@ use tokio_stream::StreamExt;
 use tonic::Status;
 
 use crate::decode::{parse_parent, Parent};
-use crate::encode::{decode_write, encode_document, encode_instant};
+use crate::encode::{decode_instant, decode_write, encode_document, encode_instant};
 use crate::gateway::Gateway;
 use crate::local::{CommitEvent, LocalBackend};
 use crate::rules::{write_guard, Principal, RulesEnforcer};
@@ -216,10 +219,22 @@ enum TargetKind {
     Query(Box<Query>),
 }
 
+/// Where a re-added target resumes from.
+enum Resume {
+    /// A version the stream handed out earlier (or a read time).
+    Version(CommitVersion),
+    /// A read time: the version current at that instant.
+    ReadTime(ftd_core_types::time::LogicalInstant),
+    /// Not a token this daemon issued: full replay after a `RESET`.
+    Invalid,
+}
+
 struct TargetState {
     kind: TargetKind,
     parent: Parent,
     known: BTreeMap<DocumentPath, CommitVersion>,
+    /// Pending resume, resolved on the first refresh (it needs the snapshot).
+    resume: Option<Resume>,
     once: bool,
     /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
@@ -350,21 +365,24 @@ fn handle_listen_request(
                 None,
                 None,
             ));
-            if target.resume_type.is_some() {
-                // No resume history is kept: the client drops its cache and replays.
-                out.push(target_change(
-                    pb::target_change::TargetChangeType::Reset,
-                    vec![id],
-                    None,
-                    None,
-                ));
-            }
+            let resume = match &target.resume_type {
+                None => None,
+                Some(pb::target::ResumeType::ResumeToken(bytes)) => Some(
+                    <[u8; 8]>::try_from(bytes.as_slice()).map_or(Resume::Invalid, |b| {
+                        Resume::Version(CommitVersion::from_value(u64::from_be_bytes(b)))
+                    }),
+                ),
+                Some(pb::target::ResumeType::ReadTime(t)) => {
+                    Some(Resume::ReadTime(decode_instant(t)))
+                }
+            };
             targets.insert(
                 id,
                 TargetState {
                     kind,
                     parent: parent.clone(),
                     known: BTreeMap::new(),
+                    resume,
                     once: target.once,
                     current: false,
                     pending: Vec::new(),
@@ -532,6 +550,7 @@ fn refresh_target(
     state: &mut TargetState,
     read_time: prost_types::Timestamp,
 ) -> Result<(), Status> {
+    let resumed = resolve_resume(db, id, state)?;
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => {
             let mut docs = Vec::new();
@@ -595,7 +614,68 @@ fn refresh_target(
         });
     }
     state.known = next_known;
+    if resumed {
+        // Production follows a resume with the current count so the client can verify its
+        // cache; the diff above already made it exact.
+        state.pending.push(pb::ListenResponse {
+            response_type: Some(pb::listen_response::ResponseType::Filter(
+                pb::ExistenceFilter {
+                    target_id: id,
+                    count: i32::try_from(current.len()).unwrap_or(i32::MAX),
+                    unchanged_names: None,
+                },
+            )),
+        });
+    }
     Ok(())
+}
+
+/// Resume: the target's state at the token becomes the known state, so the diff carries
+/// exactly what changed since; a token this daemon cannot honour resets the target.
+/// Returns whether the target resumed.
+fn resolve_resume(
+    db: &ftd_core_firestore::store::FirestoreState,
+    id: i32,
+    state: &mut TargetState,
+) -> Result<bool, Status> {
+    let Some(resume) = state.resume.take() else {
+        return Ok(false);
+    };
+    let version = match resume {
+        Resume::Version(v) => Some(v),
+        Resume::ReadTime(t) => Some(db.version_at(t)),
+        Resume::Invalid => None,
+    }
+    .filter(|v| *v <= db.current_version());
+    if let Some(v) = version {
+        state.known = known_at(db, &state.kind, v)?;
+        return Ok(true);
+    }
+    state.pending.push(target_change(
+        pb::target_change::TargetChangeType::Reset,
+        vec![id],
+        None,
+        None,
+    ));
+    Ok(false)
+}
+
+/// The `(path, version)` set of a target as of `version`.
+fn known_at(
+    db: &ftd_core_firestore::store::FirestoreState,
+    kind: &TargetKind,
+    version: CommitVersion,
+) -> Result<BTreeMap<DocumentPath, CommitVersion>, Status> {
+    let docs: Vec<Document> = match kind {
+        TargetKind::Documents(paths) => paths
+            .iter()
+            .filter_map(|p| db.get_at(p, version).cloned())
+            .collect(),
+        TargetKind::Query(query) => db
+            .run_query(query, Some(version))
+            .map_err(|e| crate::encode::status_from_error(&e))?,
+    };
+    Ok(docs.into_iter().map(|d| (d.path, d.version)).collect())
 }
 
 fn out_change(doc: &Document, id: i32, out: &mut Vec<pb::ListenResponse>) {

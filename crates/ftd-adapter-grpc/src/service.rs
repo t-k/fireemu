@@ -407,10 +407,18 @@ impl Firestore for GatewayService {
 
     async fn partition_query(
         &self,
-        _request: Request<pb::PartitionQueryRequest>,
+        request: Request<pb::PartitionQueryRequest>,
     ) -> Result<Response<pb::PartitionQueryResponse>, Status> {
+        if let Some(local) = self.local_backend() {
+            // An Admin / data-pipeline surface: owner-only while rules are enforced.
+            let caller = self.caller(request.metadata())?;
+            if let Some(rules) = &self.rules {
+                rules.require_owner(&caller.principal, "PartitionQuery")?;
+            }
+            return local.partition_query(request.get_ref()).map(Response::new);
+        }
         Err(Status::unimplemented(
-            "PartitionQuery is not part of FS-GW-1",
+            "PartitionQuery is served by the local backend only",
         ))
     }
 

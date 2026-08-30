@@ -301,6 +301,83 @@ impl LocalBackend {
         })
     }
 
+    /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
+    /// `__name__`, without filters, orderings, limits or cursors) into up to
+    /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.
+    pub fn partition_query(
+        &self,
+        req: &pb::PartitionQueryRequest,
+    ) -> Result<pb::PartitionQueryResponse, Status> {
+        let parent = parse_parent(&req.parent).map_err(status)?;
+        if parent.document.is_some() {
+            return Err(Status::invalid_argument(
+                "PartitionQuery parent must be the database (projects/{p}/databases/{d}/documents)",
+            ));
+        }
+        let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &req.query_type
+        else {
+            return Err(Status::invalid_argument(
+                "PartitionQuery requires a structured_query",
+            ));
+        };
+        let query = self.accepted_query(&parent, sq)?.query;
+        if !query.scope.all_descendants
+            || query.filter.is_some()
+            || !query.order_by.is_empty()
+            || query.limit.is_some()
+            || query.offset != 0
+            || query.start_at.is_some()
+            || query.end_at.is_some()
+        {
+            return Err(Status::invalid_argument(
+                "PartitionQuery requires a collection group query ordered by __name__ only (no filters, order bys, limits, offsets or cursors)",
+            ));
+        }
+        let partition_count = usize::try_from(req.partition_count)
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| Status::invalid_argument("partition_count must be positive"))?;
+        let names: Vec<String> = self.with_db(&parent, |db| {
+            db.run_query(&query, None)
+                .map(|docs| docs.iter().map(|d| d.path.resource_name()).collect())
+                .map_err(|e| status_from_error(&e))
+        })?;
+        // k cut points split n documents into k + 1 ranges; never more than n - 1 cuts.
+        let cuts = partition_count.min(names.len().saturating_sub(1));
+        let cursors: Vec<pb::Cursor> = (1..=cuts)
+            .map(|i| pb::Cursor {
+                values: vec![pb::Value {
+                    value_type: Some(pb::value::ValueType::ReferenceValue(
+                        names[names.len() * i / (cuts + 1)].clone(),
+                    )),
+                }],
+                before: true,
+            })
+            .collect();
+        let start = if req.page_token.is_empty() {
+            0
+        } else {
+            req.page_token
+                .parse::<usize>()
+                .ok()
+                .filter(|s| *s <= cursors.len())
+                .ok_or_else(|| Status::invalid_argument("invalid page_token"))?
+        };
+        let page = usize::try_from(req.page_size)
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(cursors.len().max(1));
+        let end = (start + page).min(cursors.len());
+        Ok(pb::PartitionQueryResponse {
+            partitions: cursors[start..end].to_vec(),
+            next_page_token: if end < cursors.len() {
+                end.to_string()
+            } else {
+                String::new()
+            },
+        })
+    }
+
     /// Current logical time of the backend clock.
     pub fn now(&self) -> ftd_core_types::time::LogicalInstant {
         self.clock

@@ -571,3 +571,205 @@ async fn slow_listeners_get_coalesced_refreshes_and_targets_are_capped() {
     assert_eq!(err.code(), tonic::Code::ResourceExhausted);
     handle.abort();
 }
+
+/// The trace up to `stop` and the resume token of its last boundary.
+async fn trace_and_token<S>(stream: &mut S, stop: &str) -> (Vec<String>, Vec<u8>)
+where
+    S: tokio_stream::Stream<Item = Result<pb::ListenResponse, tonic::Status>> + Unpin,
+{
+    let mut token = Vec::new();
+    let mut trace = Vec::new();
+    loop {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+            .await
+            .expect("listen response within 5 s")
+            .expect("stream open")
+            .unwrap();
+        if let Some(pb::listen_response::ResponseType::TargetChange(t)) = &item.response_type {
+            if !t.resume_token.is_empty() {
+                token.clone_from(&t.resume_token);
+            }
+        }
+        let text = describe(&item);
+        trace.push(text.clone());
+        if text == stop {
+            return (trace, token);
+        }
+    }
+}
+
+#[tokio::test]
+async fn resumed_targets_replay_only_what_changed_since_the_token() {
+    let (mut client, handle) = start(false).await;
+    let commit = |writes| pb::CommitRequest {
+        database: DB.to_owned(),
+        writes,
+        ..Default::default()
+    };
+    client
+        .commit(commit(vec![
+            set_write("r/a", &[("v", s("1"))]),
+            set_write("r/b", &[("v", s("1"))]),
+        ]))
+        .await
+        .unwrap();
+    // First listener: initial snapshot, keep its token.
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    ltx.send(add_query_target(1, "r")).await.unwrap();
+    let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(token.len(), 8);
+    drop(ltx);
+    // Meanwhile: b changes, c is added, a is deleted.
+    client
+        .commit(commit(vec![
+            set_write("r/b", &[("v", s("2"))]),
+            set_write("r/c", &[("v", s("1"))]),
+            delete_write("r/a"),
+        ]))
+        .await
+        .unwrap();
+    // Resume with the token: no RESET, only the changes since, then the existence filter.
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut resumed = add_query_target(2, "r");
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut resumed.target_change {
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(token.clone()));
+    }
+    ltx.send(resumed).await.unwrap();
+    let (trace, latest) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(
+        trace,
+        vec![
+            "ADD[2]",
+            "CHANGE b",
+            "CHANGE c",
+            "DELETE a",
+            "FILTER 2",
+            "CURRENT[2]",
+            "NO_CHANGE[2]",
+            "NO_CHANGE[]"
+        ]
+    );
+    // Nothing changed: a resume replays nothing but the filter and the boundary.
+    let mut again = add_query_target(3, "r");
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut again.target_change {
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(latest));
+    }
+    ltx.send(again).await.unwrap();
+    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(
+        trace,
+        vec![
+            "ADD[3]",
+            "FILTER 2",
+            "CURRENT[3]",
+            "NO_CHANGE[2]",
+            "NO_CHANGE[3]",
+            "NO_CHANGE[]"
+        ]
+    );
+    // A token from the future (or garbage) resets.
+    let mut future = add_query_target(4, "r");
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut future.target_change {
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(
+            u64::MAX.to_be_bytes().to_vec(),
+        ));
+    }
+    ltx.send(future).await.unwrap();
+    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(trace[..4], ["ADD[4]", "RESET[4]", "CHANGE b", "CHANGE c"]);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn partition_query_splits_a_collection_group_by_name() {
+    let (mut client, handle) = start(false).await;
+    let writes: Vec<pb::Write> = (0..10)
+        .map(|i| set_write(&format!("owners/o{i}/items/i{i}"), &[("v", s("x"))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let request = |count: i64, page_size: i32, page_token: &str| pb::PartitionQueryRequest {
+        parent: DOCS.to_owned(),
+        partition_count: count,
+        page_size,
+        page_token: page_token.to_owned(),
+        query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "items".to_owned(),
+                    all_descendants: true,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let name_of = |c: &pb::Cursor| match &c.values[0].value_type {
+        Some(pb::value::ValueType::ReferenceValue(r)) => r.rsplit('/').next().unwrap().to_owned(),
+        other => panic!("{other:?}"),
+    };
+    let r = client
+        .partition_query(request(4, 0, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(r.partitions.len(), 4);
+    assert!(r.partitions.iter().all(|c| c.before));
+    assert_eq!(
+        r.partitions.iter().map(name_of).collect::<Vec<_>>(),
+        ["i2", "i4", "i6", "i8"]
+    );
+    assert!(r.next_page_token.is_empty());
+    // Paged.
+    let first = client
+        .partition_query(request(4, 3, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(first.partitions.len(), 3);
+    assert_eq!(first.next_page_token, "3");
+    let second = client
+        .partition_query(request(4, 3, &first.next_page_token))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        second.partitions.iter().map(name_of).collect::<Vec<_>>(),
+        ["i8"]
+    );
+    assert!(second.next_page_token.is_empty());
+    // More partitions than documents: at most n - 1 cut points.
+    let r = client
+        .partition_query(request(100, 0, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(r.partitions.len(), 9);
+    // A plain collection query is refused.
+    let mut plain = request(2, 0, "");
+    if let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &mut plain.query_type
+    {
+        sq.from[0].all_descendants = false;
+    }
+    assert_eq!(
+        client.partition_query(plain).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    handle.abort();
+}

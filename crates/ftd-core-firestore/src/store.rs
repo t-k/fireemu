@@ -33,6 +33,12 @@ impl CommitVersion {
     pub const fn value(self) -> u64 {
         self.0
     }
+
+    /// A version from its raw value (resume tokens).
+    #[must_use]
+    pub const fn from_value(value: u64) -> Self {
+        Self(value)
+    }
 }
 
 /// A stored document version.

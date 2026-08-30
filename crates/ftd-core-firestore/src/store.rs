@@ -584,17 +584,19 @@ impl FirestoreState {
         self.commit_times.drain(..dropped);
         let mut compactable = core::mem::take(&mut self.compactable);
         compactable.retain(|path| {
-            let emptied = match self.history.get_mut(path) {
-                None => return false,
-                Some(h) => {
-                    // Keep the newest version at or before the floor plus everything after
-                    // it; drop the prefix nothing can observe.
-                    let cut = h.partition_point(|(v, _)| *v <= floor).saturating_sub(1);
-                    if cut > 0 {
-                        h.drain(..cut);
-                    }
-                    h.len() == 1 && h[0].1.is_none() && h[0].0 <= floor
-                }
+            let Some(h) = self.history.get_mut(path) else {
+                return false;
+            };
+            // Keep the newest version at or before the floor plus everything after it; drop
+            // the prefix nothing can observe.
+            let cut = h.partition_point(|(v, _)| *v <= floor).saturating_sub(1);
+            if cut > 0 {
+                h.drain(..cut);
+            }
+            let emptied = match h.as_slice() {
+                [] => true,
+                [(v, None)] => *v <= floor,
+                _ => false,
             };
             if emptied {
                 self.history.remove(path);
@@ -602,7 +604,7 @@ impl FirestoreState {
             }
             self.history
                 .get(path)
-                .is_some_and(|h| h.len() > 1 || h[0].1.is_none())
+                .is_some_and(|h| h.len() > 1 || matches!(h.first(), Some((_, None))))
         });
         self.compactable = compactable;
         floor

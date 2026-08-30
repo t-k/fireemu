@@ -225,13 +225,16 @@ impl Budget {
         Ok(())
     }
 
+    /// One more frame. The budget counts *calls* rather than frames, as the official
+    /// compiler does: a chain of 21 functions is 20 calls and is within a maximum of 20.
     fn enter_call(&mut self) -> Result<(), EvalError> {
         self.depth = self.depth.saturating_add(1);
         self.max_depth_seen = self.max_depth_seen.max(self.depth);
-        if u64::from(self.depth) > self.depth_max {
+        let calls = u64::from(self.depth).saturating_sub(1);
+        if calls > self.depth_max {
             return Err(EvalError::Budget {
                 limit_id: "RULES-FUNCTION-CALL-DEPTH",
-                current: u64::from(self.depth),
+                current: calls,
                 maximum: self.depth_max,
             });
         }

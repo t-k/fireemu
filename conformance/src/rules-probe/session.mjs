@@ -19,7 +19,8 @@ const IN = process.env.RULES_PROBE_IN;
 const OUT = process.env.RULES_PROBE_OUT;
 const CHUNK = Number(process.env.RULES_PROBE_CHUNK ?? 60);
 
-const HEADER = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {";
+const HEADER =
+  "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {";
 const FOOTER = "  }\n}";
 
 /** Renders one chunk and remembers which source line each claim's blocks occupy. */
@@ -75,7 +76,7 @@ function warnings(body) {
 }
 
 async function pooled(items, worker, width = 16) {
-  const results = new Array(items.length);
+  const results = Array.from({ length: items.length });
   let next = 0;
   await Promise.all(
     Array.from({ length: Math.min(width, items.length) }, async () => {

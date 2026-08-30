@@ -15,16 +15,17 @@ import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { CLAIMS, AREA_NAMES } from "./matrix.mjs";
+import { PROGRAMS } from "./programs.mjs";
 import { generated, render, shrink } from "./generate.mjs";
 
 const PROJECT = "demo-rules-matrix";
-const ORACLE_PORT = 32280;
 const TESTD_FIRESTORE_PORT = 32281;
 const TESTD_HTTP_PORT = 32282;
 const SEED = 20260831;
 const GENERATED = Number(process.env.RULES_PROBE_GENERATED ?? 260);
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "rules-probe");
 const MATRIX_JSON = join(CONFORMANCE_DIR, "rules-matrix.json");
+const PROGRAMS_JSON = join(CONFORMANCE_DIR, "rules-programs.json");
 const MATRIX_MD = join(CONFORMANCE_DIR, "RULES-MATRIX.md");
 const GRACE_MS = 8000;
 
@@ -77,7 +78,7 @@ async function runSupervisor({ name, command, args, env, timeoutMs = 900_000 }) 
 }
 
 /** Runs one probe session against the official Firestore emulator. */
-async function probeOracle(inPath, outPath) {
+async function probeOracle(inPath, outPath, script = "src/rules-probe/session.mjs") {
   await runSupervisor({
     name: "oracle",
     command: join(CONFORMANCE_DIR, "node_modules/.bin/firebase"),
@@ -89,7 +90,7 @@ async function probeOracle(inPath, outPath) {
       "rules-probe.firebase.json",
       "--only",
       "firestore",
-      "sh -c 'RULES_PROBE_FIRESTORE_HOST=$FIRESTORE_EMULATOR_HOST node src/rules-probe/session.mjs'",
+      `sh -c 'RULES_PROBE_FIRESTORE_HOST=$FIRESTORE_EMULATOR_HOST node ${script}'`,
     ],
     env: {
       RULES_PROBE_IN: inPath,
@@ -103,7 +104,7 @@ async function probeOracle(inPath, outPath) {
 }
 
 /** Runs one probe session against fireemu. */
-async function probeFireemu(inPath, outPath) {
+async function probeFireemu(inPath, outPath, script = "src/rules-probe/session.mjs") {
   const binary =
     process.env.FIREEMU_BIN ??
     ["target/release/fireemu", "target/debug/fireemu"]
@@ -131,7 +132,7 @@ async function probeFireemu(inPath, outPath) {
       "0",
       "--",
       "node",
-      "src/rules-probe/session.mjs",
+      script,
     ],
     env: {
       RULES_PROBE_IN: inPath,
@@ -214,7 +215,7 @@ async function record() {
 function summarise(matrix) {
   const counts = new Map();
   for (const c of matrix.claims) counts.set(c.oracle, (counts.get(c.oracle) ?? 0) + 1);
-  const parts = [...counts].sort().map(([k, v]) => `${k}=${v}`);
+  const parts = [...counts].toSorted().map(([k, v]) => `${k}=${v}`);
   console.log(`recorded ${matrix.claims.length} claims: ${parts.join(" ")}`);
 }
 
@@ -247,7 +248,7 @@ function renderMarkdown(matrix) {
       `## ${area} (${rows.length})`,
       "",
       [...counts]
-        .sort()
+        .toSorted()
         .map(([k, v]) => `${k}: ${v}`)
         .join(" &middot; "),
       "",
@@ -287,14 +288,11 @@ async function check() {
   const byArea = new Map();
   for (const m of mismatches) byArea.set(m.area, (byArea.get(m.area) ?? 0) + 1);
   console.error(`${mismatches.length} of ${matrix.claims.length} claims disagree:`);
-  for (const [area, n] of [...byArea].sort()) console.error(`  ${area}: ${n}`);
+  for (const [area, n] of [...byArea].toSorted()) console.error(`  ${area}: ${n}`);
   for (const m of mismatches) {
     console.error(`  ${m.id} [${m.area}] expected=${m.expected} fireemu=${m.fireemu}  ${m.claim}`);
   }
-  await writeFile(
-    join(RUN_DIR, "mismatches.json"),
-    `${JSON.stringify(mismatches, null, 2)}\n`,
-  );
+  await writeFile(join(RUN_DIR, "mismatches.json"), `${JSON.stringify(mismatches, null, 2)}\n`);
   await shrinkMismatches(mismatches);
   return 1;
 }
@@ -337,8 +335,113 @@ async function shrinkMismatches(mismatches) {
   }
   await writeFile(
     join(RUN_DIR, "shrunk.json"),
-    `${JSON.stringify([...smallest].map(([of, s]) => ({ of, ...s })), null, 2)}\n`,
+    `${JSON.stringify(
+      [...smallest].map(([of, s]) => ({ of, ...s })),
+      null,
+      2,
+    )}\n`,
   );
+}
+
+/** Programs are recorded and checked as one unit; `rules-programs.json` holds the oracle. */
+async function recordPrograms() {
+  await mkdir(RUN_DIR, { recursive: true });
+  const inPath = join(RUN_DIR, "programs.json");
+  await writeFile(inPath, JSON.stringify(PROGRAMS));
+  const oracle = await probeOracle(
+    inPath,
+    join(RUN_DIR, "programs-oracle.json"),
+    "src/rules-probe/session-programs.mjs",
+  );
+  const provenance = JSON.parse(
+    await readFile(join(CONFORMANCE_DIR, "package.json"), "utf8"),
+  ).dependencies;
+  await writeFile(
+    PROGRAMS_JSON,
+    `${JSON.stringify(
+      {
+        version: 1,
+        recordedAgainst: { firebaseTools: provenance["firebase-tools"] },
+        programs: PROGRAMS.map((p) => ({
+          id: p.id,
+          area: p.area,
+          oracle: oracle[p.id] ?? { missing: true },
+          ...(PROGRAM_DIVERGENCES[p.id] ? { divergence: PROGRAM_DIVERGENCES[p.id] } : {}),
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  console.log(`recorded ${PROGRAMS.length} programs`);
+}
+
+/**
+ * Programs where fireemu deliberately answers something else. `fireemu` holds the answer it
+ * is pinned to, exactly as the claim divergences are.
+ */
+const PROGRAM_DIVERGENCES = {};
+
+async function checkPrograms() {
+  const recorded = JSON.parse(await readFile(PROGRAMS_JSON, "utf8"));
+  await mkdir(RUN_DIR, { recursive: true });
+  const inPath = join(RUN_DIR, "programs.json");
+  await writeFile(inPath, JSON.stringify(PROGRAMS));
+  const got = await probeFireemu(
+    inPath,
+    join(RUN_DIR, "programs-fireemu.json"),
+    "src/rules-probe/session-programs.mjs",
+  );
+  let failures = 0;
+  let messageDrift = 0;
+  for (const row of recorded.programs) {
+    const expected = row.divergence ? row.divergence.fireemu : row.oracle;
+    const actual = got[row.id] ?? { missing: true };
+    if (JSON.stringify(decision(expected)) !== JSON.stringify(decision(actual))) {
+      failures += 1;
+      console.error(`\n${row.id} [${row.area}] disagrees`);
+      console.error(`  expected ${JSON.stringify(decision(expected))}`);
+      console.error(`  fireemu  ${JSON.stringify(decision(actual))}`);
+      continue;
+    }
+    for (const [id, step] of Object.entries(expected.steps ?? {})) {
+      const mine = actual.steps?.[id];
+      if (step.message !== undefined && mine?.message !== step.message) messageDrift += 1;
+    }
+  }
+  if (failures === 0) {
+    console.log(
+      `ok: ${recorded.programs.length} programs agree with the recorded oracle ` +
+        `(${messageDrift} denial messages differ; see the divergence note in README)`,
+    );
+    return 0;
+  }
+  console.error(`\n${failures} of ${recorded.programs.length} programs disagree`);
+  return 1;
+}
+
+/**
+ * What a program probe gates on: the status, the canonical error code and the shape of a
+ * success, for every step, plus whether the ruleset compiled at all.
+ *
+ * The *text* of a denial is deliberately not gated. The official emulator answers
+ * `PERMISSION_DENIED` with a per-`allow` trace of its own evaluation
+ * (`"\nevaluation error at L5:22 for 'get' @ L5, false for 'get' @ L5"`), which is an
+ * internal diagnostic rather than an API contract; fireemu publishes the same information
+ * through `GET /v1/sessions/{s}/rules/requests` on the control API instead, and names the
+ * limit it hit in its own message. Drift in those messages is reported, never a failure.
+ */
+function decision(result) {
+  if (result?.missing) return { missing: true };
+  if (result?.compileError !== undefined) return { compileError: true };
+  return {
+    steps: Object.fromEntries(
+      Object.entries(result?.steps ?? {}).map(([id, step]) => [
+        id,
+        { status: step.status, code: step.code, shape: step.shape },
+      ]),
+    ),
+  };
 }
 
 const mode = process.argv[2] ?? "record";
@@ -349,7 +452,13 @@ if (mode === "record") {
 } else if (mode === "both") {
   await record();
   process.exitCode = await check();
+} else if (mode === "record-programs") {
+  await recordPrograms();
+} else if (mode === "check-programs") {
+  process.exitCode = await checkPrograms();
 } else {
-  console.error(`unknown mode ${mode}; expected record, check or both`);
+  console.error(
+    `unknown mode ${mode}; expected record, check, both, record-programs or check-programs`,
+  );
   process.exitCode = 2;
 }

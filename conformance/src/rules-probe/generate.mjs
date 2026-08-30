@@ -212,7 +212,7 @@ export function shrink(n) {
       out.push(withChildren(n, next));
     }
   }
-  return out.sort((a, b) => size(a) - size(b));
+  return out.toSorted((a, b) => size(a) - size(b));
 }
 
 /**
@@ -230,7 +230,10 @@ export function generated(seed, count, maxDepth = 3) {
   while (out.length < count && guard++ < count * 40) {
     const depth = 1 + Math.floor(r() * maxDepth);
     let node = expr(r, depth);
-    if (!(node.k === "bin" && CMP.concat(["in", "&&", "||"]).includes(node.op)) && node.k !== "is") {
+    if (
+      !(node.k === "bin" && CMP.concat(["in", "&&", "||"]).includes(node.op)) &&
+      node.k !== "is"
+    ) {
       node =
         r() < 0.5
           ? { k: "is", e: node, t: pick(r, TYPES) }

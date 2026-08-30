@@ -966,9 +966,14 @@ fn tighten(mut range: ValueRange, (bound, is_lower): (RangeBound, bool)) -> Opti
     Some(range)
 }
 
-/// `request.query` of a list request: `limit`, `offset` and `orderBy`. `orderBy` is the
-/// explicit ordering rendered as `"field ASC, other DESC"` (the Emulator's form; the
-/// production rendering is not documented) and `null` without one.
+/// `request.query` of a list request: `limit`, `offset` and `orderBy`.
+///
+/// `orderBy` is a **map** from field path to `"ASC"` / `"DESC"`, which is what the pinned
+/// official emulator carries: `request.query.orderBy.keys() == ['n']` and
+/// `request.query.orderBy['n'] == 'ASC'` both hold for a query ordered by `n` ascending,
+/// while `orderBy is list` does not (`conformance/rules-programs.json`,
+/// `query-order-by-shape`). Without an explicit ordering it is `null`, as `limit` is
+/// without a limit.
 fn query_value(query: &Query) -> RulesValue {
     let mut m = BTreeMap::new();
     m.insert(
@@ -986,22 +991,23 @@ fn query_value(query: &Query) -> RulesValue {
         if query.order_by.is_empty() {
             RulesValue::Null
         } else {
-            RulesValue::String(
+            RulesValue::Map(
                 query
                     .order_by
                     .iter()
                     .map(|o| {
-                        format!(
-                            "{} {}",
+                        (
                             o.field.canonical(),
-                            match o.direction {
-                                Direction::Ascending => "ASC",
-                                Direction::Descending => "DESC",
-                            }
+                            RulesValue::String(
+                                match o.direction {
+                                    Direction::Ascending => "ASC",
+                                    Direction::Descending => "DESC",
+                                }
+                                .to_owned(),
+                            ),
                         )
                     })
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                    .collect(),
             )
         },
     );

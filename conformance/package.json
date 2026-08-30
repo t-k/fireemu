@@ -6,6 +6,10 @@
   "scripts": {
     "oracle": "node src/oracle.mjs",
     "check": "node src/check.mjs",
+    "matrix": "node src/rules-probe/run.mjs record",
+    "matrix:check": "node src/rules-probe/run.mjs check",
+    "programs": "node src/rules-probe/run.mjs record-programs",
+    "programs:check": "node src/rules-probe/run.mjs check-programs",
     "corpus": "node src/list.mjs",
     "selftest": "node --test src/diff.test.mjs",
     "lint": "oxlint src functions",

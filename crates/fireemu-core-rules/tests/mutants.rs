@@ -233,18 +233,30 @@ fn function_call_depth_boundary_comes_from_the_catalog() {
             _ => None,
         })
         .unwrap();
-    // `down(n)` makes n + 1 nested calls.
+    // A chain of distinct functions, because a recursive one does not compile at all. `n`
+    // functions make `n - 1` calls once the allow has entered the first.
     let src = |n: u64| {
+        let functions: Vec<String> = (0..n)
+            .map(|i| {
+                let body = if i + 1 < n {
+                    format!("f{}()", i + 1)
+                } else {
+                    "true".to_owned()
+                };
+                format!("function f{i}() {{ return {body}; }}")
+            })
+            .collect();
         format!(
-            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ function down(n) {{ return n == 0 ? true : down(n - 1); }} match /notes/{{id}} {{ allow read: if down({n}); }} }} }}"
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ {} match /notes/{{id}} {{ allow read: if f0(); }} }} }}",
+            functions.join(" ")
         )
     };
-    let at_limit = decide(&src(max - 1), &ctx(Method::Get, &[]));
+    let at_limit = decide(&src(max + 1), &ctx(Method::Get, &[]));
     assert!(
         matches!(at_limit, Decision::Allow),
         "{max} calls: {at_limit:?}"
     );
-    let over = decide(&src(max), &ctx(Method::Get, &[]));
+    let over = decide(&src(max + 2), &ctx(Method::Get, &[]));
     assert!(
         matches!(
             over,

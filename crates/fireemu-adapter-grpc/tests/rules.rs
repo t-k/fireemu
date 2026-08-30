@@ -970,7 +970,7 @@ service cloud.firestore {
     match /posts/{id} { allow list: if resource.data.status in ['published', 'archived']; }
     match /live/{id} { allow list: if resource.data.status != 'deleted'; }
     match /typed/{id} { allow list: if resource.data.kind is string; }
-    match /ordered/{id} { allow list: if request.query.orderBy == 'createdAt DESC'; }
+    match /ordered/{id} { allow list: if request.query.orderBy['createdAt'] == 'DESC'; }
   }
 }",
     )

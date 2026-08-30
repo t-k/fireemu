@@ -525,9 +525,12 @@ fn lint_functions(functions: &[DeclaredFunction<'_>], calls: &[CallSite], ctx: &
         }
     }
     if let Some(root) = deepest_root {
+        // The official compiler counts *calls*, not frames: a chain of 21 functions -- 20
+        // function-to-function calls -- compiles, and one more does not
+        // (`conformance/rules-programs.json`, `recursion-depth-chain-21-calls`).
         ctx.check(
             "RULES-FUNCTION-CALL-DEPTH",
-            deepest,
+            deepest.saturating_sub(1),
             Some(functions[root].decl.span),
             Some(functions[root].decl.name.clone()),
             "function call depth",

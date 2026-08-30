@@ -1,0 +1,376 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "firebaseTools": "15.28.2"
+  },
+  "programs": [
+    {
+      "id": "budget-get-10",
+      "area": "budget",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 404,
+            "code": "NOT_FOUND",
+            "message": "Document (projects/demo-rules-matrix/databases/(default)/documents/probe/x) not found."
+          }
+        }
+      }
+    },
+    {
+      "id": "budget-get-11",
+      "area": "budget",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:22 for 'get' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"budget\"\n  }\n  segments {\n    simple: \"d10\"\n "
+          }
+        }
+      }
+    },
+    {
+      "id": "budget-get-12",
+      "area": "budget",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:22 for 'get' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"budget\"\n  }\n  segments {\n    simple: \"d10\"\n "
+          }
+        }
+      }
+    },
+    {
+      "id": "budget-get-21",
+      "area": "budget",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:22 for 'get' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"budget\"\n  }\n  segments {\n    simple: \"d10\"\n "
+          }
+        }
+      }
+    },
+    {
+      "id": "budget-get-repeated-path",
+      "area": "budget",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 404,
+            "code": "NOT_FOUND",
+            "message": "Document (projects/demo-rules-matrix/databases/(default)/documents/probe/x) not found."
+          }
+        }
+      }
+    },
+    {
+      "id": "budget-get-11-in-a-commit",
+      "area": "budget",
+      "oracle": {
+        "steps": {
+          "commit": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:23 for 'create' @ L5, evaluation error at L5:23 for 'update' @ L5, evaluation error at L5:23 for 'create' @ L5, evaluation error at L5:23 for 'update' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n "
+          }
+        }
+      }
+    },
+    {
+      "id": "error-get-of-a-missing-document",
+      "area": "runtime-error",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:22 for 'get' @ L5, Null value error. for 'get' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "error-undefined-member",
+      "area": "runtime-error",
+      "oracle": {
+        "steps": {
+          "missing-doc": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:22 for 'get' @ L5, Null value error. for 'get' @ L5"
+          },
+          "present-doc": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:22 for 'get' @ L5, Property missing is undefined on object. for 'get' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "error-null-resource-on-a-missing-document",
+      "area": "runtime-error",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:22 for 'get' @ L5, Null value error. for 'get' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "recursion-self-call",
+      "area": "recursion",
+      "oracle": {
+        "compileError": "{\"error\":{\"code\":400,\"message\":\"Error compiling rules:\\nL4:14 Recursive call is not allowed.\",\"status\":\"INVALID_ARGUMENT\"}}"
+      }
+    },
+    {
+      "id": "recursion-depth-chain",
+      "area": "recursion",
+      "oracle": {
+        "steps": {
+          "read": {
+            "status": 404,
+            "code": "NOT_FOUND",
+            "message": "Document (projects/demo-rules-matrix/databases/(default)/documents/probe/x) not found."
+          }
+        }
+      }
+    },
+    {
+      "id": "recursion-depth-chain-21-calls",
+      "area": "recursion",
+      "oracle": {
+        "compileError": "{\"error\":{\"code\":400,\"message\":\"Error compiling rules:\\nL25:14 Maximum allowed call depth of 20 is reached for [h0->h1->h2->h3->h4->h5->h6->h7->h8->h9->h10->h11->h12->h13->h14->h15->h16->h17->h18->h19->h20] call stack.\",\"status\":\"INVALID_ARGUMENT\"}}"
+      }
+    },
+    {
+      "id": "query-order-by-shape",
+      "area": "query",
+      "oracle": {
+        "steps": {
+          "o1": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "o2": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "o3": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L6"
+          },
+          "o4": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "o5": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "o6": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L9"
+          }
+        }
+      }
+    },
+    {
+      "id": "recursion-depth-chain-60",
+      "area": "recursion",
+      "oracle": {
+        "compileError": "{\"error\":{\"code\":400,\"message\":\"Error compiling rules:\\nL25:14 Maximum allowed call depth of 20 is reached for [g0->g1->g2->g3->g4->g5->g6->g7->g8->g9->g10->g11->g12->g13->g14->g15->g16->g17->g18->g19->g20] call stack.\",\"status\":\"INVALID_ARGUMENT\"}}"
+      }
+    },
+    {
+      "id": "query-shape",
+      "area": "query",
+      "oracle": {
+        "steps": {
+          "q1": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L4"
+          },
+          "q2": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "q3": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "q4": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "q5": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "q6": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L9"
+          }
+        }
+      }
+    },
+    {
+      "id": "getafter-without-the-other-write",
+      "area": "atomic-write",
+      "oracle": {
+        "steps": {
+          "mirror-never-written": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nevaluation error at L5:23 for 'create' @ L5, evaluation error at L5:23 for 'update' @ L5, Null value error. for 'create' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "query-limit",
+      "area": "query",
+      "oracle": {
+        "steps": {
+          "limit-5": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 0 documents)"
+          },
+          "limit-50": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L5"
+          },
+          "no-limit": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nUnsupported operation error. Received: null <= int. Expected: string <= string, bytes <= bytes, int <= int, float <= float, duration <= duration, timestamp <= timestamp, constraint <= any, any <= constraint. for 'list' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "query-order-by",
+      "area": "query",
+      "oracle": {
+        "steps": {
+          "ordered": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L5"
+          },
+          "unordered": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "query-resource-proof",
+      "area": "query",
+      "oracle": {
+        "steps": {
+          "constrained": {
+            "status": 200,
+            "code": "OK",
+            "shape": "stream(1 entries, 1 documents)"
+          },
+          "unconstrained": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nProperty owner is undefined on object. for 'list' @ L5"
+          },
+          "wrongly-constrained": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'list' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "query-single-get-is-not-a-list",
+      "area": "query",
+      "oracle": {
+        "steps": {
+          "get": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nProperty query is undefined on object. for 'get' @ L5, Property query is undefined on object. for 'get' @ L5"
+          }
+        }
+      }
+    },
+    {
+      "id": "getafter-in-a-commit",
+      "area": "atomic-write",
+      "oracle": {
+        "steps": {
+          "both-written": {
+            "status": 200,
+            "code": "OK",
+            "shape": "commit(2 results)"
+          },
+          "mirror-missing": {
+            "status": 200,
+            "code": "OK",
+            "shape": "commit(1 results)"
+          }
+        }
+      }
+    },
+    {
+      "id": "create-update-delete-methods",
+      "area": "methods",
+      "oracle": {
+        "steps": {
+          "create-ok": {
+            "status": 200,
+            "code": "OK",
+            "shape": "document"
+          },
+          "update-ok": {
+            "status": 200,
+            "code": "OK",
+            "shape": "document"
+          },
+          "update-again-denied": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'create' @ L5, evaluation error at L6:24 for 'update' @ L6, false for 'update' @ L6"
+          },
+          "delete-denied": {
+            "status": 403,
+            "code": "PERMISSION_DENIED",
+            "message": "\nfalse for 'delete' @ L7"
+          }
+        }
+      }
+    }
+  ]
+}

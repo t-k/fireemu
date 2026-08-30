@@ -907,7 +907,7 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
     }
 }
 
-/// Standard base64 with padding (the encoding the Pub/Sub CloudEvent `data` field carries).
+/// Standard base64 with padding (the encoding the `PubSub` `CloudEvent` `data` field carries).
 fn base64_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);

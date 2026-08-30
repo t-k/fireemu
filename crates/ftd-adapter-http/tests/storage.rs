@@ -1384,3 +1384,35 @@ fn storage_tokens_are_bound_to_the_buckets_project() {
         assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     }
 }
+
+#[test]
+fn drop_connection_faults_mark_the_response_for_the_server_to_close() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
+    let mut s = state(None);
+    let registry = Arc::new(ftd_core_session::fault::FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "storage.read".into(),
+                nth: Some(1),
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::DropConnection,
+        }],
+    });
+    s.faults = Some(registry);
+    let path = format!("/v0/b/{BUCKET}/o/f.txt?alt=media");
+    let r = handle(&s, &req("GET", &path, &[("authorization", "Bearer owner")], b""));
+    assert!(r
+        .headers
+        .iter()
+        .any(|(k, v)| k == ftd_adapter_http::storage::DROP_CONNECTION_HEADER && v == "1"));
+    let r = handle(&s, &req("GET", &path, &[("authorization", "Bearer owner")], b""));
+    assert_eq!(r.status, 404);
+    assert!(!r
+        .headers
+        .iter()
+        .any(|(k, _)| k == ftd_adapter_http::storage::DROP_CONNECTION_HEADER));
+}

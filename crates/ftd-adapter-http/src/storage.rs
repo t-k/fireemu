@@ -107,6 +107,10 @@ impl StorageState {
     }
 }
 
+/// Header a `dropConnection` fault sets on its response: the server closes the connection
+/// instead of sending it.
+pub const DROP_CONNECTION_HEADER: &str = "x-ftd-drop-connection";
+
 /// The fault plan's answer for `operation`: an error response, or nothing (a delay moved
 /// the clock).
 fn fault_response(
@@ -135,11 +139,16 @@ fn fault_response(
                 ))
             }
             FaultAction::DropConnection => {
-                return Some(error_response(
+                // The server closes the connection instead of sending this response.
+                let mut response = error_response(
                     dialect,
                     503,
                     &format!("fault plan: connection dropped during {operation}"),
-                ))
+                );
+                response
+                    .headers
+                    .push((DROP_CONNECTION_HEADER.to_owned(), "1".to_owned()));
+                return Some(response);
             }
             FaultAction::TransactionConflict => {
                 return Some(error_response(

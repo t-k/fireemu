@@ -104,10 +104,25 @@ fn status_name(code: Code) -> &'static str {
 #[must_use]
 pub fn error_response(status: &Status) -> RestResponse {
     let code = status.code();
+    let mut body = json!({"error": {"code": http_status(code), "message": status.message(), "status": status_name(code)}});
+    if status
+        .metadata()
+        .contains_key(crate::local::DROP_CONNECTION_KEY)
+    {
+        // The server drops the connection instead of sending this body.
+        body["error"]["ftdDropConnection"] = json!(true);
+    }
     RestResponse {
         status: http_status(code),
-        body: json!({"error": {"code": http_status(code), "message": status.message(), "status": status_name(code)}}),
+        body,
     }
+}
+
+/// Whether a response stands for a `dropConnection` fault (the connection is closed
+/// without it).
+#[must_use]
+pub fn drops_connection(response: &RestResponse) -> bool {
+    response.body["error"]["ftdDropConnection"] == json!(true)
 }
 
 fn ok(body: Value) -> RestResponse {

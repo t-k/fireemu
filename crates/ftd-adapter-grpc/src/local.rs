@@ -67,6 +67,10 @@ pub struct LocalBackend {
 /// Synchronous observer of commits (see [`LocalBackend::set_change_sink`]).
 pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
 
+/// Metadata key a `dropConnection` fault sets on its status: the server closes the
+/// connection (or resets the stream) instead of delivering the response.
+pub const DROP_CONNECTION_KEY: &str = "ftd-drop-connection";
+
 /// A session's Firestore snapshot: its databases, and the auto-ID generator when the
 /// session owns it (the default one).
 #[derive(Debug, Clone)]
@@ -476,9 +480,16 @@ impl LocalBackend {
                     )))
                 }
                 FaultAction::DropConnection => {
-                    return Err(Status::unavailable(format!(
+                    // The transport layer closes the connection instead of answering
+                    // (see `DROP_CONNECTION_KEY`); the status is what a client that
+                    // still gets an answer (WebChannel) sees.
+                    let mut status = Status::unavailable(format!(
                         "fault plan: connection dropped during {operation}"
-                    )))
+                    ));
+                    if let Ok(v) = "1".parse() {
+                        status.metadata_mut().insert(DROP_CONNECTION_KEY, v);
+                    }
+                    return Err(status);
                 }
                 FaultAction::Delay { seconds } => {
                     if let Ok(mut clock) = self.clock.lock() {

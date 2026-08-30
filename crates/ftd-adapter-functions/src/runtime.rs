@@ -1149,9 +1149,10 @@ impl FunctionsRuntime {
                         "fault plan: the runner crashed while serving {function}"
                     )));
                 }
-                FaultAction::DeadLetter
-                | FaultAction::TransactionConflict
-                | FaultAction::DropConnection => {
+                FaultAction::DropConnection => {
+                    answer = Some(Err(DROP_CONNECTION.to_owned()));
+                }
+                FaultAction::DeadLetter | FaultAction::TransactionConflict => {
                     answer = Some(Err(format!("fault plan: {action}")));
                 }
                 FaultAction::Duplicate { .. } => {}
@@ -1405,6 +1406,10 @@ impl FunctionsRuntime {
         self.wake.notify_one();
     }
 }
+
+/// The error an HTTP invocation reports for a `dropConnection` fault: the functions port
+/// closes the client's connection instead of answering.
+pub const DROP_CONNECTION: &str = "fault plan: connection dropped";
 
 /// An HTTP status from a number or a gRPC code name (fault plan `returnError`).
 fn http_status(code: &str) -> u16 {

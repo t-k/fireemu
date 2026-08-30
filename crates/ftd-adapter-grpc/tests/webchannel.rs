@@ -135,6 +135,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("database", DB), ("VER", "8"), ("RID", "1"), ("CVER", "22")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: None,
         body: form(&[
             ("headers", "X-Goog-Api-Client:test\r\n"),
@@ -167,6 +168,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
             ("TYPE", "xmlhttp"),
         ]),
         authorization: None,
+        app_check: Vec::new(),
         origin: None,
         body: String::new(),
     }) else {
@@ -188,6 +190,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("SID", &sid), ("RID", "2"), ("AID", "1")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: None,
         body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &second)]),
     }));
@@ -215,6 +218,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("SID", &sid), ("RID", "3"), ("AID", "4")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: None,
         body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &second)]),
     }));
@@ -224,6 +228,7 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         method: "POST".to_owned(),
         params: params(&[("SID", "nope"), ("RID", "4"), ("AID", "0")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: None,
         body: String::new(),
     }));
@@ -241,6 +246,7 @@ async fn rules_denials_reach_the_browser_as_target_removals() {
         method: "POST".to_owned(),
         params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: None,
         body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
     }));
@@ -262,6 +268,7 @@ async fn rules_denials_reach_the_browser_as_target_removals() {
             ("TYPE", "xmlhttp"),
         ]),
         authorization: None,
+        app_check: Vec::new(),
         origin: None,
         body: String::new(),
     }) else {
@@ -301,6 +308,7 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
         method: "POST".to_owned(),
         params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: Some("http://localhost:5173".to_owned()),
         body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
     }));
@@ -317,6 +325,7 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
         method: "POST".to_owned(),
         params: params(&[("SID", &sid), ("RID", "2"), ("AID", "0")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: Some("http://localhost:9999".to_owned()),
         body: form(&[("count", "0"), ("ofs", "1")]),
     }));
@@ -326,6 +335,7 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
         method: "POST".to_owned(),
         params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: Some("https://evil.example".to_owned()),
         body: String::new(),
     }));
@@ -339,6 +349,7 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
         method: "POST".to_owned(),
         params: params(&[("SID", &sid), ("RID", "3"), ("AID", "0")]),
         authorization: None,
+        app_check: Vec::new(),
         origin: Some("http://localhost:5173".to_owned()),
         body: form(&[("count", "1"), ("ofs", ofs), ("req0___data__", data)]),
     };
@@ -356,6 +367,7 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
             ("TYPE", "xmlhttp"),
         ]),
         authorization: None,
+        app_check: Vec::new(),
         origin: Some("http://localhost:5173".to_owned()),
         body: String::new(),
     }) else {

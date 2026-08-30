@@ -129,19 +129,7 @@ impl GatewayService {
         let Some(policy) = &self.app_check else {
             return Ok(());
         };
-        // Every instance, in wire order, so a duplicate can be refused (spec 7.3). A binary
-        // entry cannot be one: gRPC binary keys end in `-bin`, and `as_str` includes that
-        // suffix, so such a key is never the App Check field. A value that is not renderable
-        // as text becomes an empty string, which classifies as malformed.
-        let values: Vec<&str> = metadata
-            .iter()
-            .filter_map(|entry| match entry {
-                tonic::metadata::KeyAndValueRef::Ascii(name, value) => {
-                    is_app_check_header(name.as_str()).then(|| value.to_str().unwrap_or_default())
-                }
-                tonic::metadata::KeyAndValueRef::Binary(_, _) => None,
-            })
-            .collect();
+        let values = app_check_values(metadata);
         let header = classify_app_check_header(&values);
         let authorization = metadata.get("authorization").and_then(|v| v.to_str().ok());
         let now = self
@@ -229,16 +217,36 @@ impl GatewayService {
                 "streaming RPCs are only served by the local backend",
             ));
         };
+        let authorization = metadata.get("authorization").and_then(|v| v.to_str().ok());
+        // The opening metadata is classified once, here; the decision it produces is taken
+        // when the first request names the database, and holds for the stream's whole life
+        // (specification section 13.1).
+        let app_check = self.app_check.as_ref().map(|policy| {
+            crate::streams::StreamAdmission::new(
+                policy.clone(),
+                &app_check_values(metadata),
+                if is_owner_credential(authorization) {
+                    PrivilegedBypass::FirestoreOwner
+                } else {
+                    PrivilegedBypass::None
+                },
+                "grpc",
+            )
+        });
         Ok(crate::streams::StreamContext {
             local: local.clone(),
             gateway: self.gateway.clone(),
             rules: self.rules.clone(),
-            principal: self.principal(metadata)?,
-            authorization: metadata
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned),
+            // A stream cannot decide App Check before its first request names the database,
+            // and section 7.4 puts the Firebase Auth credential after that decision. So a
+            // credential that does not resolve is not reported here: `refresh_principal`
+            // re-derives it on every message, which is what actually gates the stream, and it
+            // runs after admission. Resolving it here would let a bad Auth token answer an
+            // enforced stream that never presented an App Check token at all.
+            principal: self.principal(metadata).unwrap_or(Principal::Anonymous),
+            authorization: authorization.map(str::to_owned),
             epoch: local.epoch(),
+            app_check,
         })
     }
 
@@ -682,6 +690,26 @@ pub fn project_of_resource(resource: &str) -> &str {
         .strip_prefix("projects/")
         .and_then(|rest| rest.split('/').next())
         .unwrap_or("")
+}
+
+/// Every `x-firebase-appcheck` metadata value, in wire order (specification section 7.3).
+///
+/// Duplicates survive so the classifier can refuse them; no caller selects one of several. A
+/// binary entry can never be the App Check field, because gRPC binary keys end in `-bin` and
+/// `as_str` includes that suffix. A value that is not renderable as text becomes an empty
+/// string, which classifies as malformed.
+#[must_use]
+pub fn app_check_values(metadata: &tonic::metadata::MetadataMap) -> Vec<String> {
+    metadata
+        .iter()
+        .filter_map(|entry| match entry {
+            tonic::metadata::KeyAndValueRef::Ascii(name, value) => {
+                is_app_check_header(name.as_str())
+                    .then(|| value.to_str().unwrap_or_default().to_owned())
+            }
+            tonic::metadata::KeyAndValueRef::Binary(_, _) => None,
+        })
+        .collect()
 }
 
 /// The gRPC shape of an App Check denial (specification section 17): `PERMISSION_DENIED`

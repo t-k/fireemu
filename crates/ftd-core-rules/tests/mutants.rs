@@ -394,3 +394,215 @@ fn values_display_and_loaded_rules_report_their_state() {
     assert!(!LoadedRules::default().is_loaded());
     assert!(LoadedRules::from_source("nonsense").is_err());
 }
+
+fn range_ctx(lower: Option<(i64, bool)>, upper: Option<(i64, bool)>) -> RequestContext {
+    use ftd_core_rules::value::{RangeBound, ValueRange};
+    let bound = |b: (i64, bool)| RangeBound {
+        value: Box::new(RulesValue::Int(b.0)),
+        inclusive: b.1,
+    };
+    let mut data = BTreeMap::new();
+    data.insert(
+        "age".to_owned(),
+        RulesValue::Range(ValueRange {
+            lower: lower.map(bound),
+            upper: upper.map(bound),
+        }),
+    );
+    let mut resource = BTreeMap::new();
+    resource.insert("data".to_owned(), RulesValue::PartialMap(data));
+    resource.insert("id".to_owned(), RulesValue::Unknown);
+    RequestContext {
+        service: RulesService::Firestore,
+        method: Method::List,
+        path: "/databases/(default)/documents/notes/ftd-placeholder".to_owned(),
+        auth: None,
+        resource: Some(RulesValue::Map(resource)),
+        request_resource: None,
+        time_unix_nanos: 0,
+        abstract_path: true,
+        request_query: None,
+    }
+}
+
+#[test]
+fn range_relation_truth_table_for_every_operator_and_bound_kind() {
+    let proves = |ctx: &RequestContext, cond: &str| {
+        matches!(decide(&rules("list", cond), ctx), Decision::Allow)
+    };
+    // 18 <= age < 65
+    let r = range_ctx(Some((18, true)), Some((65, false)));
+    for provable in [
+        "!(resource.data.age == 10)",
+        "!(resource.data.age == 65)",
+        "!(resource.data.age == 100)",
+        "resource.data.age != 10",
+        "resource.data.age != 65",
+        "resource.data.age < 100",
+        "resource.data.age < 65",
+        "!(resource.data.age < 18)",
+        "!(resource.data.age < 10)",
+        "resource.data.age <= 65",
+        "resource.data.age <= 100",
+        "!(resource.data.age <= 10)",
+        "resource.data.age > 10",
+        "resource.data.age > 17",
+        "!(resource.data.age > 65)",
+        "!(resource.data.age > 100)",
+        "resource.data.age >= 18",
+        "resource.data.age >= 17",
+        "!(resource.data.age >= 65)",
+        "!(resource.data.age >= 100)",
+        "!(resource.data.age == 'x')",
+        "resource.data.age != 'x'",
+        "10 < resource.data.age",
+        "65 > resource.data.age",
+        "18 <= resource.data.age",
+        "100 >= resource.data.age",
+    ] {
+        assert!(proves(&r, provable), "{provable}");
+    }
+    for unprovable in [
+        "resource.data.age == 30",
+        "resource.data.age != 30",
+        "resource.data.age < 30",
+        "resource.data.age < 64",
+        "resource.data.age <= 18",
+        "resource.data.age <= 64",
+        "resource.data.age > 18",
+        "resource.data.age > 30",
+        "resource.data.age >= 19",
+        "resource.data.age >= 30",
+        "resource.data.age == 18",
+    ] {
+        assert!(!proves(&r, unprovable), "{unprovable}");
+    }
+    // 18 < age <= 65: exclusive lower, inclusive upper.
+    let r = range_ctx(Some((18, false)), Some((65, true)));
+    for provable in [
+        "!(resource.data.age == 18)",
+        "resource.data.age != 18",
+        "resource.data.age > 18",
+        "!(resource.data.age <= 18)",
+        "resource.data.age <= 65",
+        "!(resource.data.age > 65)",
+        "resource.data.age >= 18",
+        "!(resource.data.age < 18)",
+    ] {
+        assert!(proves(&r, provable), "{provable}");
+    }
+    for unprovable in [
+        "resource.data.age < 65",
+        "resource.data.age >= 19",
+        "resource.data.age == 65",
+        "resource.data.age != 65",
+        "resource.data.age >= 65",
+        "resource.data.age > 64",
+    ] {
+        assert!(!proves(&r, unprovable), "{unprovable}");
+    }
+    // Pinned: 18 <= age <= 18 is the value itself.
+    let r = range_ctx(Some((18, true)), Some((18, true)));
+    for provable in [
+        "resource.data.age == 18",
+        "!(resource.data.age != 18)",
+        "resource.data.age <= 18 && resource.data.age >= 18",
+        "!(resource.data.age < 18) && !(resource.data.age > 18)",
+    ] {
+        assert!(proves(&r, provable), "{provable}");
+    }
+    // Unbounded above: nothing above is decided.
+    let r = range_ctx(Some((18, true)), None);
+    assert!(!proves(&r, "resource.data.age < 1000000"));
+    assert!(!proves(&r, "resource.data.age <= 1000000"));
+    assert!(proves(&r, "!(resource.data.age <= 17)"));
+}
+
+#[test]
+fn integer_double_ordering_is_exact_at_every_boundary() {
+    for ok in [
+        "5 < 5.5 && 5.5 > 5",
+        "5 > 4.5 && 4.5 < 5",
+        "-5 > -5.5 && -5.5 < -5",
+        "-5 < -4.5 && -4.5 > -5",
+        "5 == 5.0 && !(5 < 5.0) && !(5 > 5.0)",
+        "9223372036854775807 < 10000000000000000000000.0",
+        "-9223372036854775807 > -10000000000000000000000.0",
+        "9223372036854775807 < 1.0 / 0.0",
+        "-9223372036854775807 > -1.0 / 0.0",
+        "1.0 / 0.0 > 5 && -1.0 / 0.0 < 5",
+        "9223372036854775807 < 9223372036854775808.0",
+        "!(0.0 / 0.0 == 0.0 / 0.0)",
+        "0.0 / 0.0 != 1",
+        "1.5 < 2.5 && !(2.5 < 1.5) && 2.5 >= 2.5",
+        "9007199254740993 > 9007199254740992.0",
+        "9007199254740993 != 9007199254740992.0",
+    ] {
+        assert!(allowed(ok), "{ok}");
+    }
+    for err in ["0.0 / 0.0 < 1", "0.0 / 0.0 >= 1", "1 < 0.0 / 0.0"] {
+        assert!(!allowed(err), "{err}");
+    }
+    // Bytes order bytewise.
+    let bytes = ctx(
+        Method::Get,
+        &[
+            ("a", RulesValue::Bytes(vec![1, 2])),
+            ("b", RulesValue::Bytes(vec![1, 3])),
+        ],
+    );
+    assert!(matches!(
+        decide(
+            &rules(
+                "read",
+                "resource.data.a < resource.data.b && !(resource.data.b < resource.data.a)"
+            ),
+            &bytes
+        ),
+        Decision::Allow
+    ));
+}
+
+#[test]
+fn proof_captures_partial_map_get_and_absent_resource_reporting() {
+    let list = |cond: &str| rules("list", cond);
+    let proves =
+        |ctx: &RequestContext, cond: &str| matches!(decide(&list(cond), ctx), Decision::Allow);
+    let r = range_ctx(Some((18, true)), None);
+    // A multi-segment capture that consumed only concrete segments is known; one that
+    // swallowed the placeholder is not.
+    let prefixed = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /{{prefix=**}}/notes/{{id}} {{ allow list: if {cond}; }} match /{{all=**}} {{ allow list: if {cond}; }} }}")
+    };
+    assert!(matches!(
+        decide(&prefixed("prefix.size() == 3"), &r),
+        Decision::Allow
+    ));
+    assert!(!matches!(
+        decide(&prefixed("all.size() == 5"), &r),
+        Decision::Allow
+    ));
+    // PartialMap.get: known key decides, unknown key stays open, non-string key errors.
+    let known = {
+        let mut c = range_ctx(Some((18, true)), None);
+        if let Some(RulesValue::Map(m)) = &mut c.resource {
+            if let Some(RulesValue::PartialMap(d)) = m.get_mut("data") {
+                d.insert("owner".into(), RulesValue::String("u1".into()));
+            }
+        }
+        c
+    };
+    assert!(proves(&known, "resource.data.get('owner', 'x') == 'u1'"));
+    assert!(!proves(&known, "resource.data.get('missing', 0) == 0"));
+    assert!(!proves(&known, "resource.data.get(1, 0) == 0"));
+    // A create rule that reads `resource` (absent) is reported as such.
+    let mut create = ctx(Method::Create, &[]);
+    create.resource = None;
+    let report = evaluate_request(
+        &parse_ruleset(&rules("create", "resource == null || true")).unwrap(),
+        &create,
+    );
+    assert!(report.absent_resource_used, "{report:?}");
+    let report = evaluate_request(&parse_ruleset(&rules("create", "true")).unwrap(), &create);
+    assert!(!report.absent_resource_used);
+}

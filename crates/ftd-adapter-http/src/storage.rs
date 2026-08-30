@@ -1293,23 +1293,27 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let json_api_privileged =
         matches!(dialect, Dialect::Gcs) && authorization.is_none_or(|a| a.starts_with("Bearer "));
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
-    let bypass = storage_bypass(
-        state,
-        dialect,
-        &route,
-        &req.method,
-        &params,
-        json_api_privileged,
-    );
-    if let Some(denial) = app_check_denial(
-        state,
-        &req.app_check,
-        dialect,
-        &bucket_project,
-        operation,
-        bypass,
-    ) {
-        return denial;
+    if state.app_check_policy.is_some() {
+        // The bypass classification reads the object store for a download-token URL, so it
+        // runs only when a policy exists: an `off` service does no work at all (spec 12.1).
+        let bypass = storage_bypass(
+            state,
+            dialect,
+            &route,
+            &req.method,
+            &params,
+            json_api_privileged,
+        );
+        if let Some(denial) = app_check_denial(
+            state,
+            &req.app_check,
+            dialect,
+            &bucket_project,
+            operation,
+            bypass,
+        ) {
+            return denial;
+        }
     }
     if let Some(refused) = fault_response(state, dialect, &bucket_project, operation) {
         return refused;

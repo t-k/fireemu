@@ -8,7 +8,7 @@
 //! fireemu capabilities
 //!
 //! options: [--config <file>] [--firebase-json firebase.json] [--project <id|alias>]
-//!          [--only auth,firestore,storage,functions,appcheck]
+//!          [--only auth,firestore,storage,functions,pubsub,appcheck]
 //!          [--firestore-port 8080] [--http-port 9099] [--storage-port 9199]
 //!          [--functions-port 5001] [--functions <dir>] [--ui-port 4000] [--hub-port 4400]
 //!          [--inspect-functions [port]] [--log-verbosity quiet|info|debug]
@@ -68,7 +68,7 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
@@ -354,6 +354,7 @@ struct RawOptions {
     http_port: Option<u16>,
     storage_port: Option<u16>,
     functions_port: Option<u16>,
+    pubsub_port: Option<u16>,
     hub_port: Option<u16>,
     ui_port: Option<u16>,
     functions_source: Option<String>,
@@ -428,6 +429,10 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
             }
             "--http-port" => {
                 raw.http_port = Some(port_arg(args, i, "--http-port")?);
+                i += 2;
+            }
+            "--pubsub-port" => {
+                raw.pubsub_port = Some(port_arg(args, i, "--pubsub-port")?);
                 i += 2;
             }
             "--functions-port" => {
@@ -538,6 +543,10 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
+    }
+    if let Some(p) = raw.pubsub_port {
+        cfg.pubsub_addr = with_port(&cfg.pubsub_addr, p);
+        cfg.pubsub_enabled = true;
     }
     if let Some(p) = raw.hub_port {
         cfg.hub_addr = with_port(&cfg.hub_addr, p);
@@ -720,6 +729,8 @@ struct BoundAddrs {
     storage: Option<std::net::SocketAddr>,
     /// Functions HTTP.
     functions: Option<std::net::SocketAddr>,
+    /// Pub/Sub gRPC.
+    pubsub: Option<std::net::SocketAddr>,
     /// The Emulator Hub, when its port could be bound.
     hub: Option<std::net::SocketAddr>,
     /// The Emulator UI, when it is enabled and its port could be bound.
@@ -794,6 +805,11 @@ fn child_environment(
         // Cloud Tasks' variable carries no scheme, unlike Eventarc's.
         env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), addr.to_string()));
     }
+    if let Some(addr) = addrs.pubsub {
+        // The canonical variable the Google client libraries read to reach a Pub/Sub emulator;
+        // it carries host:port with no scheme (`emulator.ts` `PUBSUB_EMULATOR_HOST`).
+        env.push(("PUBSUB_EMULATOR_HOST".to_owned(), addr.to_string()));
+    }
     if let Some(addr) = addrs.hub {
         env.push(("FIREBASE_EMULATOR_HUB".to_owned(), addr.to_string()));
     }
@@ -823,7 +839,7 @@ fn child_environment(
 /// command's environment, so a shell configured for other emulators cannot leak into it.
 /// `FIREBASE_DATABASE_EMULATOR_HOST` is on the list although fireemu never sets it: an
 /// inherited one would point a Realtime Database client at something fireemu does not serve.
-const OWNED_VARIABLES: [&str; 12] = [
+const OWNED_VARIABLES: [&str; 13] = [
     "FIRESTORE_EMULATOR_HOST",
     "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
     "FIREBASE_AUTH_EMULATOR_HOST",
@@ -834,6 +850,7 @@ const OWNED_VARIABLES: [&str; 12] = [
     "FIREEMU_FUNCTIONS_HOST",
     "CLOUD_EVENTARC_EMULATOR_HOST",
     "CLOUD_TASKS_EMULATOR_HOST",
+    "PUBSUB_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_JWKS_URL",
 ];
@@ -1009,6 +1026,7 @@ struct Listeners {
     auth_selected: bool,
     storage: Option<tokio::net::TcpListener>,
     functions: Option<tokio::net::TcpListener>,
+    pubsub: Option<tokio::net::TcpListener>,
     hub: Option<tokio::net::TcpListener>,
 }
 
@@ -1042,6 +1060,13 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
+    // Like the official suite, Pub/Sub starts only when it was configured or explicitly asked
+    // for, rather than binding port 8085 on every run.
+    let pubsub = if only.pubsub && (cfg.pubsub_enabled || only.explicit) {
+        Some(bind(&cfg.pubsub_addr).await?)
+    } else {
+        None
+    };
     let hub = hub::bind(&cfg.hub_addr, cfg.hub_addr_explicit).await?;
     Ok(Listeners {
         firestore,
@@ -1049,6 +1074,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         auth_selected: only.auth,
         storage,
         functions,
+        pubsub,
         hub,
     })
 }
@@ -1063,6 +1089,7 @@ fn hub_emulators(addrs: BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("pubsub", addrs.pubsub),
         ("hub", addrs.hub),
         ("ui", addrs.ui),
     ]
@@ -1096,6 +1123,12 @@ fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: BoundAddrs) {
         None => {
             println!("  functions:        not configured (functions.source or --functions <dir>)");
         }
+    }
+    match addrs.pubsub {
+        Some(a) => println!("  pubsub (gRPC):    {a}   PUBSUB_EMULATOR_HOST={a}"),
+        None => println!(
+            "  pubsub:           not started (configure emulators.pubsub / --pubsub-port, or --only pubsub)"
+        ),
     }
     match addrs.hub {
         Some(a) => println!(
@@ -1461,6 +1494,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+            pubsub: pubsub_listener,
             hub: hub_listener,
         } = bind_listeners(&cfg, &only).await?;
         let grpc_addr = match grpc_listener.as_ref() {
@@ -1475,6 +1509,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let functions_addr = functions_listener
             .as_ref()
             .and_then(|l| l.local_addr().ok());
+        let pubsub_addr = pubsub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let hub_addr = hub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let (ui_listener, ui_note) = match ui::bind().await? {
             ui::Ui::Bound(listener) => (Some(listener), None),
@@ -1487,6 +1522,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
             functions: functions_addr,
+            pubsub: pubsub_addr,
             hub: hub_addr,
             ui: ui_addr,
             control: http_addr,
@@ -1536,6 +1572,23 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ),
             None => None,
         };
+        // The Pub/Sub broker: real topic/subscription state served over gRPC. Its seed is the
+        // daemon seed with a fixed tag so its message and ack ids never coincide with another
+        // subsystem's stream. A published message also reaches subscribed Cloud Functions
+        // through the bridge (EVTINFRA-02), when a functions runtime is loaded.
+        let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
+            cfg.seed ^ 0x5053_5542,
+        )));
+        let pubsub_bridge: Option<Arc<dyn fireemu_adapter_pubsub::TopicDelivery>> =
+            functions_runtime.as_ref().map(|r| {
+                Arc::new(functions::PubSubBridge::new(r.clone()))
+                    as Arc<dyn fireemu_adapter_pubsub::TopicDelivery>
+            });
+        let pubsub_handle = fireemu_adapter_pubsub::PubSubHandle::new(
+            pubsub_state.clone(),
+            clock.clone(),
+            pubsub_bridge,
+        );
         let auth_policy = service_admission(
             app_check_gate.as_ref(),
             "auth",
@@ -1774,6 +1827,12 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ),
             _ => tokio::spawn(std::future::pending()),
         };
+        let pubsub_server = match pubsub_listener {
+            Some(listener) => {
+                tokio::spawn(fireemu_adapter_pubsub::serve_pubsub(listener, pubsub_handle))
+            }
+            None => tokio::spawn(std::future::pending()),
+        };
         let ui_server = match (ui_listener, ui_addr) {
             (Some(listener), Some(addr)) => {
                 let state = ui::state(ui::Parts {
@@ -1817,6 +1876,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             r = http => Err(format!("HTTP server stopped: {r:?}")),
             r = storage_server => Err(format!("Storage server stopped: {r:?}")),
             r = functions_server => Err(format!("Functions server stopped: {r:?}")),
+            r = pubsub_server => Err(format!("Pub/Sub server stopped: {r:?}")),
             r = ui_server => Err(format!("UI server stopped: {r:?}")),
             r = hub_server => Err(format!("Emulator Hub stopped: {r:?}")),
             status = wait_child(child.as_mut()) => match status {

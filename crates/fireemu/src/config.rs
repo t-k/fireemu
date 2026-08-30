@@ -139,6 +139,13 @@ pub struct RuntimeConfig {
     pub rules_enforced: bool,
     /// Functions HTTP bind address.
     pub functions_addr: String,
+    /// Pub/Sub gRPC bind address (`emulators.pubsub`, `daemon.pubsubPort`). The official
+    /// emulator default port is 8085.
+    pub pubsub_addr: String,
+    /// Whether Pub/Sub was configured (`emulators.pubsub`, `daemon.pubsubPort`, `--pubsub-port`).
+    /// Like the official suite, the Pub/Sub emulator starts only when it is configured or when
+    /// `--only pubsub` asks for it, rather than binding port 8085 on every run.
+    pub pubsub_enabled: bool,
     /// Emulator Hub bind address (`emulators.hub`, `--hub-port`). The official default port
     /// is 4400; binding it is best effort unless it was asked for explicitly.
     pub hub_addr: String,
@@ -339,6 +346,8 @@ impl Default for RuntimeConfig {
             storage_rules_file: None,
             rules_enforced: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
+            pubsub_addr: "127.0.0.1:8085".to_owned(),
+            pubsub_enabled: false,
             hub_addr: format!("127.0.0.1:{DEFAULT_HUB_PORT}"),
             hub_addr_explicit: false,
             ui_addr: format!("127.0.0.1:{DEFAULT_UI_PORT}"),
@@ -378,7 +387,14 @@ const AUTH_KEYS: [&str; 5] = [
 pub struct ConfigError(pub String);
 
 /// The service emulators fireemu serves, in `--only` spelling.
-pub const SERVED_SERVICES: [&str; 5] = ["auth", "firestore", "storage", "functions", "appcheck"];
+pub const SERVED_SERVICES: [&str; 6] = [
+    "auth",
+    "firestore",
+    "storage",
+    "functions",
+    "pubsub",
+    "appcheck",
+];
 
 /// Official Local Emulator Suite service emulators fireemu does not serve, each with the
 /// scope decision that explains it. Selecting one is an error rather than a silent no-op:
@@ -386,7 +402,7 @@ pub const SERVED_SERVICES: [&str; 5] = ["auth", "firestore", "storage", "functio
 ///
 /// `deferred` products have an open compatibility issue and no implementation; `planned`
 /// products are on the active list; `not planned` is a closed product decision.
-pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 8] = [
+pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 7] = [
     (
         "database",
         "deferred: the Realtime Database emulator is not in the active supported surface",
@@ -399,7 +415,6 @@ pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 8] = [
         "apphosting",
         "deferred: the App Hosting emulator is not in the active supported surface",
     ),
-    ("pubsub", "planned: the Pub/Sub emulator is not implemented yet (fireemu publishes to Pub/Sub triggers through its control API instead)"),
     (
         "eventarc",
         "planned: the Eventarc emulator is not implemented yet",
@@ -444,6 +459,8 @@ pub struct Selection {
     pub storage: bool,
     /// The functions codebase is loaded and `FIREEMU_FUNCTIONS_HOST` exported.
     pub functions: bool,
+    /// The Pub/Sub gRPC emulator is served and `PUBSUB_EMULATOR_HOST` exported.
+    pub pubsub: bool,
     /// App Check: a logical selection, because the exchange and the JWKS share the
     /// Auth/control listener. Exports `FIREEMU_APP_CHECK_EMULATOR_HOST` and
     /// `FIREEMU_APP_CHECK_JWKS_URL`.
@@ -464,6 +481,7 @@ impl Default for Selection {
             auth: true,
             storage: true,
             functions: true,
+            pubsub: true,
             appcheck: true,
             explicit: false,
             functions_codebase: None,
@@ -483,6 +501,7 @@ impl Selection {
             auth: false,
             storage: false,
             functions: false,
+            pubsub: false,
             appcheck: false,
             explicit: true,
             functions_codebase: None,
@@ -511,6 +530,7 @@ impl Selection {
                 "auth" => sel.auth = true,
                 "storage" => sel.storage = true,
                 "functions" => sel.functions = true,
+                "pubsub" => sel.pubsub = true,
                 "appcheck" => sel.appcheck = true,
                 other => {
                     if let Some(why) = unserved_official_service(other) {
@@ -714,6 +734,10 @@ impl RuntimeConfig {
                     }
                     "functions" => {
                         self.functions_addr = emulator_addr(entry, name, &self.functions_addr)?;
+                    }
+                    "pubsub" => {
+                        self.pubsub_addr = emulator_addr(entry, name, &self.pubsub_addr)?;
+                        self.pubsub_enabled = true;
                     }
                     "hub" => {
                         self.hub_addr = emulator_addr(entry, name, &self.hub_addr)?;
@@ -1155,6 +1179,7 @@ impl RuntimeConfig {
                 "storagePort",
                 "httpPort",
                 "functionsPort",
+                "pubsubPort",
                 "hubPort",
                 "uiPort",
                 "clockStart",
@@ -1186,6 +1211,10 @@ impl RuntimeConfig {
         }
         if let Some(port) = d.get("functionsPort").and_then(Value::as_u64) {
             cfg.functions_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("pubsubPort").and_then(Value::as_u64) {
+            cfg.pubsub_addr = format!("127.0.0.1:{port}");
+            cfg.pubsub_enabled = true;
         }
         if let Some(start) = d.get("clockStart").and_then(Value::as_str) {
             cfg.clock_start_pinned = true;
@@ -2160,7 +2189,7 @@ mod tests {
                 "auth": {"port": 9100},
                 "storage": {"port": 9200},
                 "functions": {"port": 5002},
-                "pubsub": {"port": 8085},
+                "pubsub": {"port": 8090},
                 "ui": {"enabled": true}
             }
         });
@@ -2183,12 +2212,9 @@ mod tests {
         assert_eq!(cfg.http_addr, "127.0.0.1:9100");
         assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
         assert_eq!(cfg.functions_addr, "127.0.0.1:5002");
-        assert_eq!(report.notices.len(), 1);
-        assert!(
-            report.notices[0].starts_with("emulators.pubsub: fireemu does not serve"),
-            "{:?}",
-            report.notices
-        );
+        // Pub/Sub is now a served service: its port is applied and no notice is raised.
+        assert_eq!(cfg.pubsub_addr, "127.0.0.1:8090");
+        assert!(report.notices.is_empty(), "{:?}", report.notices);
         // Functions are loaded only when selected; the `indexes` spelling works too.
         let mut cfg = RuntimeConfig::default();
         let only = Selection::parse("auth,firestore,storage").unwrap();

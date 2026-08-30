@@ -14,6 +14,8 @@
     "firestore:check": "node src/firestore-probe/run.mjs check",
     "storage-probe": "node src/storage-probe/run.mjs record",
     "storage-probe:check": "node src/storage-probe/run.mjs check",
+    "pubsub-probe": "node src/pubsub-probe/run.mjs record",
+    "pubsub-probe:check": "node src/pubsub-probe/run.mjs check",
     "corpus": "node src/list.mjs",
     "selftest": "node --test src/diff.test.mjs",
     "lint": "oxlint src functions",
@@ -25,7 +27,8 @@
     "firebase-admin": "14.3.0",
     "firebase-functions": "7.3.2",
     "firebase-tools": "15.28.2",
-    "neverthrow": "8.2.0"
+    "neverthrow": "8.2.0",
+    "@google-cloud/pubsub": "4.11.0"
   },
   "devDependencies": {
     "oxfmt": "0.65.0",

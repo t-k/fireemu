@@ -25,6 +25,13 @@ suite) needs, and what leaves the other smokes working without attaching a token
   `awaitIdle` and the virtual clock; start the daemon with
   `--config tools/sdk-smoke/fireemu.smoke.json --functions tools/sdk-smoke/functions-project --functions-port 5001` (the config pins the virtual clock; schedule counts depend on it) and set
   `FIREEMU_FUNCTIONS_HOST=127.0.0.1:5001`. Run it on a fresh daemon (it fills the database).
+- `pubsub.mjs`: the real `@google-cloud/pubsub` client against the Pub/Sub emulator over gRPC
+  (`PUBSUB_EMULATOR_HOST`): create topic and subscription, publish, pull and ack with
+  attributes, a subscription filter, ordering keys, and a message published through the wire
+  protocol that reaches the `onMessagePublished` (v2) and `topic().onPublish` (v1) Cloud
+  Functions in `functions-project/` (EVTINFRA-01 / EVTINFRA-02). Start the daemon serving
+  Firestore, Functions and Pub/Sub:
+  `fireemu exec --config tools/sdk-smoke/fireemu.pubsub.json --only firestore,functions,pubsub --functions tools/sdk-smoke/functions-project --functions-port 5001 --pubsub-port 8085 -- node tools/sdk-smoke/pubsub.mjs`.
 - `appcheck.mjs`: `firebase/app-check` `initializeAppCheck` with a `CustomProvider` that
   exchanges a registered local debug secret, then Firestore, Storage, Auth and an
   `enforceAppCheck` callable with the token attached; start the daemon with

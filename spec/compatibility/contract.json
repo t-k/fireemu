@@ -134,7 +134,7 @@
     "upgradePolicy": "Bumping the pin in conformance/package.json and re-recording turns every newly detected difference into a debt row in conformance/DEBT.md, because a row can only become a documented divergence once a human writes it into conformance/divergences.json. Any surface the new baseline adds is absent from this contract, so compat-check fails until it is enumerated with a scope; until then the claim sentence names the old version and is therefore false, which is the intended fail-closed behaviour."
   },
   "claim": {
-    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase and Cloud Functions, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting and App Hosting are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Pub/Sub, Eventarc, Cloud Tasks and Data Connect remain open gaps.",
+    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting and App Hosting are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Eventarc, Cloud Tasks and Data Connect remain open gaps.",
     "documents": [
       "README.md"
     ],
@@ -1737,22 +1737,68 @@
         "downloadable",
         "supportedByFunctions"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: topic triggers are delivered through the control API, but the Pub/Sub wire emulator the official suite downloads is not served.",
+      "state": "claimed",
+      "decision": "Active supported surface. The google.pubsub.v1 wire emulator is served over gRPC on port 8085; parity is claimed for the documented subset the official Pub/Sub emulator implements.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite",
+        "https://cloud.google.com/pubsub/docs/emulator",
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
-      "notes": [],
-      "gaps": [
-        "the Pub/Sub gRPC and REST surface on port 8085",
-        "publishing through a real Pub/Sub client rather than POST /v1/sessions/{s}/pubsub/topics/{t}:publish"
+      "notes": [
+        "not yet implemented and reported UNIMPLEMENTED: snapshots (CreateSnapshot / GetSnapshot / ListSnapshots / DeleteSnapshot and seek-to-snapshot), push delivery to an endpoint (pull and streaming pull are the delivery paths), UpdateTopic, and REST/JSON transcoding on the port (the surface is gRPC-only, which is what the @google-cloud/pubsub and firebase-admin clients speak through PUBSUB_EMULATOR_HOST)"
       ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "PUBSUB-CLAIM-WIRE",
+          "statement": "The google.pubsub.v1 wire emulator on port 8085 is served over gRPC: a real @google-cloud/pubsub or firebase-admin client creates, gets, lists and deletes topics and subscriptions, publishes, pulls (unary and streaming), acknowledges, extends and nacks ack deadlines, and seeks to a timestamp, with ordering keys, subscription filters and dead-letter forwarding; and a message published through the client protocol reaches subscribed onMessagePublished (v2) and topic().onPublish (v1) Cloud Functions.",
+          "capabilities": [
+            {
+              "id": "PUBSUB-WIRE-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "publish_pull_ack_round_trip",
+              "redelivery_after_ack_deadline_on_virtual_clock",
+              "streaming_pull_delivers_and_acks"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-pubsub/tests/grpc.rs",
+              "conformance/pubsub-matrix.json"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official Pub/Sub emulator supports no IAM operations",
+            "message retention is not configurable: all messages are retained indefinitely, and subscriptions do not expire",
+            "only Avro schemas are supported; protocol-buffer schemas are not",
+            "BigQuery and Cloud Storage subscriptions can be created but deliver nothing, and Single Message Transforms do not transform",
+            "UpdateTopic and UpdateSnapshot are not supported, and seek to a timestamp is not supported for ordered subscriptions"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "ack deadlines and redelivery run on the virtual clock rather than wall-clock time, so a redelivery is deterministic and awaitIdle replaces sleeping; message ids and ack ids are reproducible under the daemon seed",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a subscription seeked to a timestamp before a message was published replays that message even after it was acknowledged and even when retainAckedMessages is false; the official emulator replays it only when retainAckedMessages is set (conformance pubsub-probe/seek-to-time#replayed). A seek therefore never returns fewer messages than the official emulator",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "resource names, message attributes and ordering keys are rejected when they carry a NUL byte, which the official emulator admits; identifiers can never smuggle a NUL into a trace, a JSON document or a function payload",
+              "precision": "strict-validation-only"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "eventarc",

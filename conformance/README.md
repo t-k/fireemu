@@ -15,6 +15,8 @@ pnpm -C conformance run oracle     # records fixtures/, ORACLE.md and DEBT.md (n
 pnpm -C conformance run check      # replays fireemu and diffs; fails the process on drift
 pnpm -C conformance run storage-probe        # records storage-matrix.json (needs Java)
 pnpm -C conformance run storage-probe:check  # replays fireemu against the recorded matrix
+pnpm -C conformance run pubsub-probe         # records pubsub-matrix.json (needs Java)
+pnpm -C conformance run pubsub-probe:check   # replays fireemu against the recorded matrix
 ```
 
 The **storage probe** (`src/storage-probe/`) is the Cloud Storage sibling of the rules
@@ -26,6 +28,16 @@ session. `record` folds the two runs into `storage-matrix.json` with the same
 parity / documented-divergence / debt classification as the fixtures (annotations come
 from `divergences.json`, keyed `storage-probe/<program>#<step>`), and `check` replays
 fireemu alone against the recorded matrix.
+
+The **Pub/Sub probe** (`src/pubsub-probe/`) is the Cloud Pub/Sub sibling: 9 programs run
+identically through the real `@google-cloud/pubsub` client against the official Pub/Sub
+emulator (the `pubsub-emulator-0.8.35` firebase-tools downloads) and against fireemu — topic
+and subscription lifecycle and validation, publish / pull / ack with attributes, a
+subscription filter, ordering keys, nack redelivery, seek-to-time and the publish error
+codes. Observations are normalized so they never depend on server-assigned message ids or
+wall-clock timing. `record` folds the two runs into `pubsub-matrix.json` (22 parity, 1
+documented divergence: seek replays acknowledged messages that the official emulator drops
+unless `retainAckedMessages` is set), and `check` replays fireemu alone against it.
 
 `check` needs `cargo build -p fireemu` first (or `FIREEMU_BIN=/path/to/fireemu`).
 `CONFORMANCE_VERBOSE=1` streams both supervisors' output.
@@ -177,6 +189,6 @@ ORACLE.md DEBT.md                  generated
 ## Not in this slice
 
 Browser / WebChannel, Android, Apple, Unity, Java, Python and Go SDKs; import and export;
-Realtime Database, Hosting, App Hosting, Extensions, Pub/Sub and Data Connect; Windows and Linux
+Realtime Database, Hosting, App Hosting, Extensions and Data Connect; Windows and Linux
 matrix rows; and any production oracle. `DEBT.md` and the two issues under
 `docs.local/issues/open/` track the rest.

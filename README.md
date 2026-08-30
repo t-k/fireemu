@@ -18,7 +18,7 @@ deterministic state machine that:
 
 ## Compatibility
 
-fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase and Cloud Functions, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting and App Hosting are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Pub/Sub, Eventarc, Cloud Tasks and Data Connect remain open gaps.
+fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting and App Hosting are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Eventarc, Cloud Tasks and Data Connect remain open gaps.
 
 `spec/compatibility/contract.json` is that sentence in machine-readable form: it pins the baseline (`firebase-tools@15.28.2`, its lockfile integrity, its bundled emulator versions and the 2026-08-30 audit date), enumerates every emulator the pinned release ships, and binds each parity claim to the capability manifest entries it depends on and the tests and conformance fixtures that execute it. `cargo run -p compat-check` fails when the manifest, this README and the contract disagree; `docs/compatibility-contract.md` explains the rules.
 
@@ -31,7 +31,7 @@ fireemu is compatible with the listed Local Emulator Suite products as shipped b
 | Emulator Suite UI | `ui` | active | open gap: fireemu serves its own UI, no workflow parity is claimed |
 | Emulator Hub | `hub` | active | open gap: the discovery API on port 4400 is not served |
 | Emulator logging | `logging` | active | open gap: the log stream on port 4500 is not served |
-| Cloud Pub/Sub | `pubsub` | active | open gap: topic triggers only, no wire emulator |
+| Cloud Pub/Sub | `pubsub` | active | parity claimed for the documented gRPC subset |
 | Eventarc | `eventarc` | active | open gap |
 | Cloud Tasks | `tasks` | active | open gap |
 | Firebase Data Connect | `dataconnect` | active | open gap |
@@ -175,7 +175,7 @@ SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signa
 | `emulators:export <dir>` | write an export directory from a running suite (see [Import and export](#import-and-export)) |
 | `doctor`, `capabilities` | versions and catalogs; the Capability Manifest |
 
-Flags, in the official spellings: `--only`, `--project` / `-P`, `--config`, `--import`, `--export-on-exit`, `--inspect-functions [port]` and `--log-verbosity quiet|info|debug`, next to fireemu's `--firebase-json`, `--firestore-port`, `--http-port`, `--storage-port`, `--functions-port`, `--functions`, `--ui-port` and `--hub-port`. `--inspect-functions` inserts Node's `--inspect=<port>` (default 9229) before the runner script; a configured `functions.runner` that is not Node is refused rather than started without the inspector.
+Flags, in the official spellings: `--only`, `--project` / `-P`, `--config`, `--import`, `--export-on-exit`, `--inspect-functions [port]` and `--log-verbosity quiet|info|debug`, next to fireemu's `--firebase-json`, `--firestore-port`, `--http-port`, `--storage-port`, `--functions-port`, `--pubsub-port`, `--functions`, `--ui-port` and `--hub-port`. `--inspect-functions` inserts Node's `--inspect=<port>` (default 9229) before the runner script; a configured `functions.runner` that is not Node is refused rather than started without the inspector.
 
 Exit codes: the command's own status from `exec`, `128 + signal` when a signal ended it, `1` for a startup failure or a refused configuration, `2` for a usage error. A refusal never binds a listener and never runs the command.
 
@@ -186,7 +186,7 @@ Exit codes: the command's own status from `exec`, `128 + signal` when a signal e
 ```text
 error: --only: "database" is an official Local Emulator Suite service that fireemu does not serve
        (deferred: the Realtime Database emulator is not in the active supported surface);
-       fireemu serves auth, firestore, storage, functions, appcheck
+       fireemu serves auth, firestore, storage, functions, pubsub, appcheck
 ```
 
 `--only functions:<codebase>` picks one codebase out of a multi-codebase `firebase.json`, as the official CLI spells it.
@@ -208,6 +208,7 @@ Names and formats follow the pinned `firebase-tools@15.28.2` `src/emulator/env.t
 | `FIREEMU_FUNCTIONS_HOST` | a codebase is loaded | `host:port` |
 | `CLOUD_EVENTARC_EMULATOR_HOST` | a codebase is loaded | `http://host:port` (the functions port; it serves `publishEvents`) |
 | `CLOUD_TASKS_EMULATOR_HOST` | a codebase is loaded | `host:port` (the functions port; it serves the queue routes) |
+| `PUBSUB_EMULATOR_HOST` | `pubsub` selected | `host:port` (the Pub/Sub gRPC port) |
 | `FIREEMU_APP_CHECK_EMULATOR_HOST`, `FIREEMU_APP_CHECK_JWKS_URL` | App Check active | `host:port`, URL |
 | `FIREEMU_CONTROL_TOKEN`, `FIREEMU_CONTROL_URL` | always | token, URL |
 | `GCLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT`, `FIREBASE_CONFIG` | always | project ID, project ID, JSON |
@@ -470,6 +471,16 @@ initializeAppCheck(app, {
 The Firestore, Storage, Auth and Functions SDKs then attach the token themselves. `tools/sdk-smoke/appcheck.mjs` runs exactly this against `tools/sdk-smoke/fireemu.appcheck.json`. Use a clearly fake local debug secret and never a production App Check debug token.
 
 **What is not supported.** Apps can only be registered in configuration, and adding one needs a daemon restart; the Emulator UI page manages debug tokens, not apps. Observations are polled rather than streamed, and the table of per-project rings is bounded in turn: at most 256 projects hold one at once, because a target project is resolved from a request path before anything validates it. Limited-use tokens are unsupported: `limitedUse: true` fails closed with `501 APP_CHECK_REPLAY_UNSUPPORTED` and never returns a reusable token. Production attestation providers (Play Integrity, App Attest, DeviceCheck, reCAPTCHA) are out of scope; a local token proves nothing about device integrity. Precision is `boundary-conformance`: the exact wire messages are the ones documented here, not a recording of the real services. `GET /v1/capabilities` states the exact status of all nine `APPCHECK-*` capabilities.
+
+### Pub/Sub
+
+The Pub/Sub emulator serves the `google.pubsub.v1` `Publisher` and `Subscriber` gRPC services on a loopback port (the official default is 8085). Like the official suite it starts only when it is configured (`emulators.pubsub`, `daemon.pubsubPort`, `--pubsub-port`) or asked for with `--only pubsub`, and `fireemu exec` then exports the canonical `PUBSUB_EMULATOR_HOST=host:port`, which the `@google-cloud/pubsub` and `firebase-admin` clients read with no other configuration.
+
+It reproduces the documented subset the official Pub/Sub emulator implements: topics and subscriptions (create, get, list, delete, and `ListTopicSubscriptions`), publish, both unary `Pull` and `StreamingPull`, `Acknowledge`, `ModifyAckDeadline` (a deadline of zero nacks a message for immediate redelivery), ordering keys, subscription filters over attributes (`=`, `!=`, `:` existence, `hasPrefix`, `NOT` / `AND` / `OR`), dead-letter forwarding after `maxDeliveryAttempts`, and `Seek` to a timestamp. Ack deadlines and redelivery run on the virtual clock, so a test advances the control clock instead of sleeping and `await-idle` stays deterministic, and message ids and ack ids are reproducible under the daemon seed. A message published through the wire protocol also reaches subscribed Cloud Functions (`onMessagePublished` v2, `topic().onPublish` v1), so a Pub/Sub trigger now flows through real topic and subscription state; the control publish route (`POST /v1/sessions/{s}/pubsub/topics/{t}:publish`) still works, so nothing that relied on it regresses.
+
+Resource names are validated against the documented Pub/Sub rules (3..=255 characters, a leading letter, the `[A-Za-z0-9._~%+-]` alphabet, no `goog` prefix), message size and attribute counts are bounded, and a NUL byte in an attribute or ordering key is refused (a local hardening the official emulator does not make); topics, subscriptions and retained messages are bounded so a client cannot exhaust memory. The listener binds loopback only and takes no credential, exactly like the official emulator and the other fireemu services.
+
+Not served, and reported `UNIMPLEMENTED` where a client asks for them: snapshots (`CreateSnapshot` and seek-to-snapshot), push delivery to an endpoint (pull and streaming pull are the delivery paths), `UpdateTopic`, REST/JSON transcoding (the surface is gRPC-only), and schemas or BigQuery / Cloud Storage subscription delivery. The differential `pubsub-probe` (`conformance/pubsub-matrix.json`) records 22 parity steps and one documented divergence against the pinned official `pubsub-emulator` 0.8.35: fireemu retains acknowledged messages for a seek even when `retainAckedMessages` is false, so a seek never returns fewer messages than the official emulator returns.
 
 ### Storage
 

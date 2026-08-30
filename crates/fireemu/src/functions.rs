@@ -870,6 +870,67 @@ impl FunctionsHook for Hook {
     }
 }
 
+/// Bridges the real Pub/Sub broker to the Functions runtime: a message published through the
+/// `google.pubsub.v1` wire surface is also delivered to any Cloud Function subscribed to that
+/// topic (EVTINFRA-02), through the same `FunctionsRuntime::publish` path the control publish
+/// route uses, so the topic-trigger behaviour is unchanged and the new broker state is purely
+/// additive.
+pub struct PubSubBridge(Arc<FunctionsRuntime>);
+
+impl PubSubBridge {
+    /// Wraps the functions runtime.
+    #[must_use]
+    pub fn new(runtime: Arc<FunctionsRuntime>) -> Self {
+        Self(runtime)
+    }
+}
+
+impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
+    fn deliver(&self, topic: &str, messages: &[fireemu_adapter_pubsub::BridgeMessage]) {
+        // The runtime consumes the same `{data: <base64>, attributes, orderingKey}` message
+        // shape the control publish route produces (`pubsub_event` reads `data` verbatim as the
+        // CloudEvent body).
+        let values: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                let mut value = serde_json::json!({
+                    "data": base64_encode(&m.data),
+                    "attributes": m.attributes,
+                });
+                if !m.ordering_key.is_empty() {
+                    value["orderingKey"] = serde_json::Value::String(m.ordering_key.clone());
+                }
+                value
+            })
+            .collect();
+        let _ = self.0.publish(topic, &values);
+    }
+}
+
+/// Standard base64 with padding (the encoding the `PubSub` `CloudEvent` `data` field carries).
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        out.push(ALPHABET[(b0 >> 2) as usize] as char);
+        out.push(ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(b2 & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::check_callable_app_check;

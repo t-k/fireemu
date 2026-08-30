@@ -16,7 +16,7 @@ use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
 use ftd_core_events::outbox::Outbox;
 use ftd_core_events::retry::RetryPolicy;
 use ftd_core_events::state::{EventState, FailureOutcome};
-use ftd_core_functions::cron::{fixed_offset_seconds, Schedule};
+use ftd_core_functions::cron::Schedule;
 use ftd_core_functions::manifest::{FunctionManifest, FunctionSpec, ObjectEvent, Trigger};
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_storage::store::StorageEvent;
@@ -68,15 +68,46 @@ pub struct FunctionsConfig {
     pub max_catch_up_runs: usize,
     /// Secret the runner's HTTP server requires (`x-ftd-runner-secret`).
     pub runner_secret: String,
+    /// Overlap policy of schedules.
+    pub overlap: OverlapPolicy,
 }
 
 struct ScheduledJob {
     function: String,
     region: String,
     schedule: Schedule,
-    offset_seconds: i64,
+    zone: crate::zone::SharedZone,
     /// Runs strictly after this instant are due.
     cursor: LogicalInstant,
+}
+
+/// What happens when a schedule comes due while a previous run of the same function is
+/// still running or queued (spec 11.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverlapPolicy {
+    /// Enqueue anyway (production behaviour).
+    #[default]
+    Allow,
+    /// Drop the due run (recorded in the history as skipped).
+    Skip,
+    /// Enqueue, but never run two invocations of the function at once.
+    Queue,
+    /// Treat the overlap as a test failure: the run is dead-lettered and counted.
+    Reject,
+}
+
+impl OverlapPolicy {
+    /// Parses the configuration value.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "allow" => Some(Self::Allow),
+            "skip" => Some(Self::Skip),
+            "queue" => Some(Self::Queue),
+            "reject" => Some(Self::Reject),
+            _ => None,
+        }
+    }
 }
 
 /// A recorded invocation (status output, tests).
@@ -106,6 +137,8 @@ struct Inner {
     dead_letters: Vec<InvocationRecord>,
     /// Schedule runs became due beyond the catch-up cap and still have to be enqueued.
     catch_up_pending: bool,
+    /// Schedule runs refused by the `reject` overlap policy.
+    overlap_rejected: u64,
 }
 
 /// The runtime.
@@ -143,7 +176,8 @@ impl FunctionsRuntime {
                 function: f.name.clone(),
                 region: f.region.clone(),
                 schedule: schedule.clone(),
-                offset_seconds: fixed_offset_seconds(tz).unwrap_or(0),
+                zone: crate::zone::resolve(tz)
+                    .unwrap_or_else(|_| Arc::new(ftd_core_functions::cron::FixedOffset(0))),
                 cursor: now,
             })
             .collect();
@@ -176,6 +210,7 @@ impl FunctionsRuntime {
                 history: Vec::new(),
                 dead_letters: Vec::new(),
                 catch_up_pending: false,
+                overlap_rejected: 0,
             }),
             wake: Notify::new(),
             idle: Arc::new(Notify::new()),
@@ -363,10 +398,10 @@ impl FunctionsRuntime {
             .jobs
             .iter_mut()
             .flat_map(|job| {
-                let runs = job.schedule.runs_between(
+                let runs = job.schedule.runs_between_in(
                     job.cursor,
                     now,
-                    job.offset_seconds,
+                    &*job.zone,
                     cap.saturating_add(1),
                 );
                 if runs.len() > cap {
@@ -390,6 +425,9 @@ impl FunctionsRuntime {
             .collect();
         inner.catch_up_pending = pending;
         for (function, region, at) in runs {
+            if !self.admit_scheduled_run(&mut inner, &function) {
+                continue;
+            }
             let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
             let payload = schedule_event(&id, &self.config.project, &region, &function, at);
             Self::enqueue(
@@ -416,6 +454,39 @@ impl FunctionsRuntime {
         }
     }
 
+    /// Applies the overlap policy to a due run of `function`: `true` when it may be
+    /// enqueued. `queue` always enqueues (dispatch serialises it); `skip` and `reject`
+    /// refuse while a run of the function is queued or running.
+    fn admit_scheduled_run(&self, inner: &mut Inner, function: &str) -> bool {
+        let busy = inner.running.values().any(|f| f == function)
+            || inner.payloads.values().any(|(f, _)| f == function);
+        match self.config.overlap {
+            OverlapPolicy::Skip if busy => {
+                inner.history.push(InvocationRecord {
+                    event_id: 0,
+                    function: function.to_owned(),
+                    attempt: 0,
+                    outcome: "skipped: overlap".to_owned(),
+                });
+                false
+            }
+            OverlapPolicy::Reject if busy => {
+                inner.overlap_rejected += 1;
+                inner.dead_letters.push(InvocationRecord {
+                    event_id: 0,
+                    function: function.to_owned(),
+                    attempt: 0,
+                    outcome: "rejected: overlap".to_owned(),
+                });
+                false
+            }
+            OverlapPolicy::Allow
+            | OverlapPolicy::Queue
+            | OverlapPolicy::Skip
+            | OverlapPolicy::Reject => true,
+        }
+    }
+
     /// Runs a scheduled function now (manual trigger).
     pub fn run_schedule(&self, function: &str) -> Result<(), String> {
         let f = self
@@ -429,6 +500,12 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return Err("runtime poisoned".into());
         };
+        if !self.admit_scheduled_run(&mut inner, function) {
+            return Err(format!(
+                "a run of {function:?} is already queued or running (scheduler.overlap = {:?})",
+                self.config.overlap
+            ));
+        }
         let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
         let payload = schedule_event(&id, &self.config.project, &f.region, function, now);
         Self::enqueue(
@@ -536,6 +613,8 @@ impl FunctionsRuntime {
             "succeeded": succeeded,
             "deadLettered": dead,
             "catchUpPending": inner.catch_up_pending,
+            "overlapRejected": inner.overlap_rejected,
+            "timeZoneDatabase": crate::zone::database_version(),
             "runnerAlive": self.runner().is_alive(),
             "epoch": inner.epoch.value(),
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
@@ -705,7 +784,14 @@ impl FunctionsRuntime {
                 .values()
                 .filter(|f| **f == function_name)
                 .count();
-            if running_here >= spec.concurrency as usize {
+            let limit = if self.config.overlap == OverlapPolicy::Queue
+                && matches!(spec.trigger, Trigger::Schedule { .. })
+            {
+                1
+            } else {
+                spec.concurrency as usize
+            };
+            if running_here >= limit {
                 continue;
             }
             let Ok(record) = inner.outbox.record_mut(id) else {

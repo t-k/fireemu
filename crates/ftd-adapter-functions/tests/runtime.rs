@@ -51,6 +51,12 @@ fn commit(changes: Vec<DocumentChange>) -> CommitEvent {
 }
 
 async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with(ftd_adapter_functions::runtime::OverlapPolicy::Allow).await
+}
+
+async fn start_with(
+    overlap: ftd_adapter_functions::runtime::OverlapPolicy,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -72,6 +78,7 @@ async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
             retry_attempts: 4,
             max_catch_up_runs: 1000,
             runner_secret: "s".into(),
+            overlap,
         },
         clock.clone(),
         Arc::new(runner),
@@ -227,7 +234,7 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
     for bad in [
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "nope", "document": "a/{b}"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "a"}}]}),
-        json!({"functions": [{"name": "x", "trigger": {"type": "schedule", "schedule": "* * * * *", "timeZone": "America/New_York"}}]}),
+        json!({"functions": [{"name": "x", "trigger": {"type": "schedule", "schedule": "* * * * *", "timeZone": "Mars/Olympus"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "pubsub"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "http"}}, {"name": "x", "trigger": {"type": "http"}}]}),
         json!({"nope": 1}),
@@ -322,4 +329,86 @@ fn http_responses_are_parsed_with_every_body_framing() {
     assert_eq!(parse_response(closed, "GET").unwrap().body, b"whole body");
     assert!(parse_response(b"garbage", "GET").is_err());
     assert!(parse_response(b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nshort", "GET").is_err());
+}
+
+#[test]
+fn iana_zones_follow_daylight_saving_time() {
+    use ftd_adapter_functions::zone::resolve;
+    use ftd_core_functions::cron::Schedule;
+    let t = |s: &str| LogicalInstant::parse_rfc3339(s).unwrap();
+    let ny = resolve(Some("America/New_York")).unwrap();
+    let nine = Schedule::parse("0 9 * * *").unwrap();
+    // EST (UTC-5) in January, EDT (UTC-4) in July.
+    assert_eq!(
+        nine.next_after_in(t("2026-01-10T00:00:00Z"), &*ny).unwrap(),
+        t("2026-01-10T14:00:00Z")
+    );
+    assert_eq!(
+        nine.next_after_in(t("2026-07-10T00:00:00Z"), &*ny).unwrap(),
+        t("2026-07-10T13:00:00Z")
+    );
+    // 2026-03-08: clocks jump from 02:00 to 03:00; a 02:30 schedule has no run that day.
+    let half_past_two = Schedule::parse("30 2 * * *").unwrap();
+    assert_eq!(
+        half_past_two
+            .next_after_in(t("2026-03-08T00:00:00Z"), &*ny)
+            .unwrap(),
+        t("2026-03-09T06:30:00Z"),
+        "the gap day is skipped; 02:30 EDT on the 9th is 06:30Z"
+    );
+    // 2026-11-01: 01:30 happens twice; the schedule runs once, at the first occurrence.
+    let half_past_one = Schedule::parse("30 1 * * *").unwrap();
+    let runs = half_past_one.runs_between_in(
+        t("2026-11-01T00:00:00Z"),
+        t("2026-11-02T00:00:00Z"),
+        &*ny,
+        10,
+    );
+    assert_eq!(runs, vec![t("2026-11-01T05:30:00Z")]);
+    // Fixed-offset aliases and unknown zones.
+    assert!(resolve(Some("Asia/Tokyo")).is_ok());
+    assert!(resolve(Some("Mars/Olympus")).is_err());
+    assert!(!ftd_adapter_functions::zone::database_version().is_empty());
+}
+
+#[tokio::test]
+async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
+    use ftd_adapter_functions::runtime::OverlapPolicy;
+    // reject: a second due run while the first is queued is a counted dead letter.
+    let (runtime, _clock) = start_with(OverlapPolicy::Reject).await;
+    runtime.run_schedule("tick").unwrap();
+    let second = runtime.run_schedule("tick");
+    assert!(second.is_err(), "{second:?}");
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert_eq!(runtime.status()["overlapRejected"], 1);
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|r| r.function == "tick" && r.outcome == "rejected: overlap"));
+    runtime.runner().shutdown().await;
+    // skip: the second run is dropped and recorded.
+    let (runtime, _clock) = start_with(OverlapPolicy::Skip).await;
+    runtime.run_schedule("tick").unwrap();
+    assert!(runtime.run_schedule("tick").is_err());
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "tick" && r.outcome == "skipped: overlap"));
+    assert_eq!(runtime.status()["overlapRejected"], 0);
+    runtime.runner().shutdown().await;
+    // queue: both runs happen, one after the other.
+    let (runtime, _clock) = start_with(OverlapPolicy::Queue).await;
+    runtime.run_schedule("tick").unwrap();
+    runtime.run_schedule("tick").unwrap();
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count(),
+        2
+    );
+    runtime.runner().shutdown().await;
 }

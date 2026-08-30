@@ -131,6 +131,8 @@ pub async fn start(
         retry_attempts: cfg.events_max_attempts,
         max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
         runner_secret: runner_secret.to_owned(),
+        overlap: ftd_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
+            .unwrap_or_default(),
     };
     let runtime = FunctionsRuntime::new(
         manifest,

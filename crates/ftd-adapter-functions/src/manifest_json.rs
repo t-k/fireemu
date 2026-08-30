@@ -12,7 +12,7 @@
 //! ]}
 //! ```
 
-use ftd_core_functions::cron::{fixed_offset_seconds, Schedule};
+use ftd_core_functions::cron::Schedule;
 use ftd_core_functions::manifest::{
     DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger, DEFAULT_CONCURRENCY,
     DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
@@ -97,8 +97,8 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
             let schedule = Schedule::parse(&text)
                 .map_err(|e| format!("manifest: function {name:?}: schedule: {e}"))?;
             let time_zone = s(trigger, "timeZone").filter(|z| !z.is_empty());
-            fixed_offset_seconds(time_zone.as_deref())
-                .map_err(|e| format!("manifest: function {name:?}: {e}"))?;
+            crate::zone::resolve(time_zone.as_deref())
+                .map_err(|e| format!("manifest: function {name:?}: time zone: {e}"))?;
             Trigger::Schedule {
                 schedule,
                 time_zone,

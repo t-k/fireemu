@@ -58,6 +58,8 @@ pub struct RuntimeConfig {
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
     pub scheduler_default_time_zone: Option<String>,
+    /// Overlap policy of schedules (`scheduler.overlap`).
+    pub scheduler_overlap: String,
 }
 
 impl Default for RuntimeConfig {
@@ -85,6 +87,7 @@ impl Default for RuntimeConfig {
             events_max_attempts: 4,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
+            scheduler_overlap: "allow".to_owned(),
         }
     }
 }
@@ -226,11 +229,16 @@ impl RuntimeConfig {
                 return Err(ConfigError(format!("unknown config key scheduler.{key}")));
             }
         }
-        for (key, allowed) in [
-            ("clock", "virtual"),
-            ("catchUp", "all"),
-            ("overlap", "allow"),
-        ] {
+        if let Some(v) = s.get("overlap") {
+            let text = v.as_str().unwrap_or("");
+            if !["allow", "skip", "queue", "reject"].contains(&text) {
+                return Err(ConfigError(
+                    "scheduler.overlap must be one of allow, skip, queue, reject".into(),
+                ));
+            }
+            text.clone_into(&mut cfg.scheduler_overlap);
+        }
+        for (key, allowed) in [("clock", "virtual"), ("catchUp", "all")] {
             match s.get(key).and_then(Value::as_str) {
                 None => {}
                 Some(v) if v == allowed => {}
@@ -253,7 +261,7 @@ impl RuntimeConfig {
             cfg.scheduler_max_catch_up_runs = usize::try_from(n).unwrap_or(1000);
         }
         if let Some(tz) = s.get("defaultTimeZone").and_then(Value::as_str) {
-            ftd_core_functions::cron::fixed_offset_seconds(Some(tz))
+            ftd_adapter_functions::zone::resolve(Some(tz))
                 .map_err(|e| ConfigError(format!("scheduler.defaultTimeZone: {e}")))?;
             cfg.scheduler_default_time_zone = Some(tz.to_owned());
         }

@@ -134,10 +134,108 @@ function describe(name, fn) {
   }
   const t = fn.__trigger;
   if (t) {
+    // firebase-functions v1: legacy trigger metadata.
+    if (t.timeout) base.timeoutSeconds = Number(String(t.timeout).replace(/s$/, "")) || undefined;
+    if (t.regions?.length) base.region = t.regions[0];
     if (t.httpsTrigger) return { ...base, trigger: { type: "http", callable: !!t.labels?.["deployment-callable"] } };
-    return { ...base, unsupported: "v1 event / schedule functions (use the v2 API)" };
+    const et = t.eventTrigger;
+    if (et) {
+      const resource = String(et.resource || "");
+      const type = String(et.eventType || "");
+      base.retry = !!et.failurePolicy || !!t.failurePolicy;
+      const v1 = { v1: true };
+      const fsMatch = type.match(/^providers\/cloud\.firestore\/eventTypes\/document\.(create|update|delete|write)$/);
+      if (fsMatch) {
+        const docIndex = resource.indexOf("/documents/");
+        const dbMatch = resource.match(/\/databases\/([^/]+)\//);
+        return {
+          ...base,
+          ...v1,
+          trigger: {
+            type: "firestore",
+            eventType: `google.cloud.firestore.document.v1.${{ create: "created", update: "updated", delete: "deleted", write: "written" }[fsMatch[1]]}`,
+            database: dbMatch ? dbMatch[1] : "(default)",
+            document: docIndex >= 0 ? resource.slice(docIndex + "/documents/".length) : undefined,
+          },
+        };
+      }
+      const stMatch = type.match(/^google\.storage\.object\.(finalize|delete|metadataUpdate|archive)$/);
+      if (stMatch) {
+        const bucketMatch = resource.match(/\/buckets\/([^/]+)/);
+        return {
+          ...base,
+          ...v1,
+          trigger: {
+            type: "storage",
+            eventType: `google.cloud.storage.object.v1.${{ finalize: "finalized", delete: "deleted", metadataUpdate: "metadataUpdated", archive: "archived" }[stMatch[1]]}`,
+            bucket: bucketMatch ? bucketMatch[1] : undefined,
+          },
+        };
+      }
+      if (type === "google.pubsub.topic.publish" && t.schedule) {
+        return {
+          ...base,
+          ...v1,
+          retry: Number(t.schedule.retryConfig?.retryCount || 0) > 0,
+          trigger: { type: "schedule", schedule: t.schedule.schedule, timeZone: t.schedule.timeZone || undefined },
+        };
+      }
+      return { ...base, unsupported: `v1 event type ${type}` };
+    }
+    return { ...base, unsupported: "unknown v1 trigger shape" };
   }
   return { ...base, unsupported: "not a Firebase function" };
+}
+
+// v1 functions are called as (data, context) with the legacy event shapes.
+function isV1(fn) {
+  return !(fn.__endpoint && Object.keys(fn.__endpoint).length > 0) && !!fn.__trigger;
+}
+
+function v1Context(msg) {
+  const event = msg.event;
+  switch (msg.trigger) {
+    case "firestore": {
+      const legacy = {
+        "google.cloud.firestore.document.v1.created": "providers/cloud.firestore/eventTypes/document.create",
+        "google.cloud.firestore.document.v1.updated": "providers/cloud.firestore/eventTypes/document.update",
+        "google.cloud.firestore.document.v1.deleted": "providers/cloud.firestore/eventTypes/document.delete",
+        "google.cloud.firestore.document.v1.written": "providers/cloud.firestore/eventTypes/document.write",
+      }[event.type];
+      return {
+        eventId: event.id,
+        timestamp: event.time,
+        eventType: legacy,
+        resource: event.source,
+        params: event.params || {},
+      };
+    }
+    case "storage": {
+      const o = event.data;
+      return {
+        eventId: event.id,
+        timestamp: event.time,
+        eventType: {
+          "google.cloud.storage.object.v1.finalized": "google.storage.object.finalize",
+          "google.cloud.storage.object.v1.deleted": "google.storage.object.delete",
+          "google.cloud.storage.object.v1.metadataUpdated": "google.storage.object.metadataUpdate",
+          "google.cloud.storage.object.v1.archived": "google.storage.object.archive",
+        }[event.type],
+        resource: { service: "storage.googleapis.com", name: `projects/_/buckets/${o.bucket}/objects/${o.name}#${o.generation}` },
+        params: {},
+      };
+    }
+    case "schedule":
+      return {
+        eventId: event.id,
+        timestamp: event.time,
+        eventType: "google.pubsub.topic.publish",
+        resource: { service: "pubsub.googleapis.com", name: event.data.jobName },
+        params: {},
+      };
+    default:
+      return { eventId: event.id, timestamp: event.time, eventType: event.type, resource: event.source, params: {} };
+  }
 }
 
 function makeHttpServer(functions, manifest) {
@@ -199,7 +297,12 @@ function makeHttpServer(functions, manifest) {
 async function invoke(functions, msg) {
   const fn = functions.get(msg.entryPoint) || functions.get(msg.function);
   if (!fn) throw new Error(`unknown function ${msg.function}`);
-  const origLog = console.log;
+  if (isV1(fn)) {
+    const context = v1Context(msg);
+    const data = msg.trigger === "schedule" ? {} : msg.event.data;
+    await fn(data, context);
+    return;
+  }
   switch (msg.trigger) {
     case "schedule": {
       const run = fn.run || fn;

@@ -96,6 +96,23 @@ try {
   const attempts = (await db.doc("flakyAttempts/f1").get()).data();
   check("retry succeeded on the third attempt", attempts?.attempts === 3, attempts);
 
+  // firebase-functions v1 API: (data, context) handlers with legacy event shapes.
+  await db.doc("v1todos/a").set({ title: "legacy" });
+  await bucket.file("v1/pic.png").save(Buffer.from("12345"), { contentType: "image/png" });
+  await awaitIdle();
+  const v1mirror = (await db.doc("v1mirror/a").get()).data();
+  check(
+    "v1 firestore onCreate receives a snapshot and context.params",
+    v1mirror?.title === "legacy" && v1mirror?.eventType === "google.firestore.document.create" && String(v1mirror?.resource).endsWith("/documents/v1todos/a"),
+    v1mirror,
+  );
+  const v1upload = (await db.doc("v1uploads/v1_pic.png").get()).data();
+  check("v1 storage onFinalize receives the object", v1upload?.size === 5 && v1upload?.eventType === "google.storage.object.finalize", v1upload);
+  await advanceClock(10 * 60);
+  await awaitIdle();
+  const v1ticks = (await db.doc("stats/v1ticks").get()).data();
+  check("v1 pubsub.schedule onRun runs on the virtual clock", (v1ticks?.count ?? 0) >= 1 && v1ticks?.eventType === "google.pubsub.topic.publish", v1ticks);
+
   // HTTP and callable.
   const echo = await fetch(`http://${functionsHost}/${project}/us-central1/echo/some/path?x=1`, {
     method: "POST",

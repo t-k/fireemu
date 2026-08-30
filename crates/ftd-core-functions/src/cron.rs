@@ -223,11 +223,22 @@ impl Schedule {
     }
 
     /// The first run strictly after `after` in the zone with `offset_seconds` from UTC.
-    /// Intervals are anchored at the Unix epoch; cron fields are searched over the next
-    /// eight years (a leap-day schedule waits at most that long), after which the schedule
-    /// is treated as unsatisfiable.
     #[must_use]
     pub fn next_after(&self, after: LogicalInstant, offset_seconds: i64) -> Option<LogicalInstant> {
+        self.next_after_in(after, &FixedOffset(offset_seconds))
+    }
+
+    /// The first run strictly after `after` in `zone`. Intervals are anchored at the Unix
+    /// epoch; cron fields are matched in the zone's civil time and searched over the next
+    /// eight years (a leap-day schedule waits at most that long), after which the schedule
+    /// is treated as unsatisfiable. A civil minute that does not exist (a daylight-saving
+    /// gap) is skipped; an ambiguous one (a fall-back hour) runs at its first occurrence.
+    #[must_use]
+    pub fn next_after_in(
+        &self,
+        after: LogicalInstant,
+        zone: &dyn ZoneRules,
+    ) -> Option<LogicalInstant> {
         let after_secs = after.as_nanos().div_euclid(1_000_000_000);
         let after_secs = i64::try_from(after_secs).ok()?;
         if let Some(interval) = self.interval_seconds {
@@ -235,7 +246,7 @@ impl Schedule {
             return Some(LogicalInstant::from_unix_seconds(next));
         }
         // Start at the next whole minute of local time.
-        let mut local = (after_secs + offset_seconds).div_euclid(60) * 60 + 60;
+        let mut local = zone.local_of(after_secs).div_euclid(60) * 60 + 60;
         let limit = local + 8 * 366 * 86_400;
         while local < limit {
             let c = Civil::from_unix(local);
@@ -266,8 +277,13 @@ impl Schedule {
                 continue;
             }
             if self.matches(&c) {
-                let utc = local - offset_seconds;
-                return Some(LogicalInstant::from_unix_seconds(utc));
+                if let Some(utc) = zone.utc_of(local) {
+                    // A run must be strictly after `after` in UTC too (a fall-back hour can
+                    // map a later civil minute to an earlier instant).
+                    if utc > after_secs {
+                        return Some(LogicalInstant::from_unix_seconds(utc));
+                    }
+                }
             }
             local += 60;
         }
@@ -283,10 +299,27 @@ impl Schedule {
         offset_seconds: i64,
         max: usize,
     ) -> Vec<LogicalInstant> {
+        self.runs_between_in(
+            from_exclusive,
+            to_inclusive,
+            &FixedOffset(offset_seconds),
+            max,
+        )
+    }
+
+    /// [`Self::runs_between`] in `zone`.
+    #[must_use]
+    pub fn runs_between_in(
+        &self,
+        from_exclusive: LogicalInstant,
+        to_inclusive: LogicalInstant,
+        zone: &dyn ZoneRules,
+        max: usize,
+    ) -> Vec<LogicalInstant> {
         let mut out = Vec::new();
         let mut cursor = from_exclusive;
         while out.len() < max {
-            match self.next_after(cursor, offset_seconds) {
+            match self.next_after_in(cursor, zone) {
                 Some(t) if t.as_nanos() <= to_inclusive.as_nanos() => {
                     out.push(t);
                     cursor = t;
@@ -342,6 +375,30 @@ fn app_engine_to_cron(text: &str) -> Result<String, ScheduleError> {
             Ok(format!("{m} {h} * * {dow}"))
         }
         _ => Err(malformed()),
+    }
+}
+
+/// Conversion between UTC seconds and a zone's civil time (spec 11.4: daylight-saving
+/// rules live in an audited adapter; the core only knows this interface).
+pub trait ZoneRules {
+    /// Civil seconds (UTC seconds plus the offset in force at that instant).
+    fn local_of(&self, utc_secs: i64) -> i64;
+    /// UTC seconds of a civil time; `None` when the civil time does not exist (a gap),
+    /// the earliest occurrence when it exists twice (a fall-back hour).
+    fn utc_of(&self, local_secs: i64) -> Option<i64>;
+}
+
+/// A zone with one fixed offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedOffset(pub i64);
+
+impl ZoneRules for FixedOffset {
+    fn local_of(&self, utc_secs: i64) -> i64 {
+        utc_secs + self.0
+    }
+
+    fn utc_of(&self, local_secs: i64) -> Option<i64> {
+        Some(local_secs - self.0)
     }
 }
 

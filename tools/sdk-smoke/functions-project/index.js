@@ -74,6 +74,28 @@ exports.echo = onRequest((req, res) => {
   res.status(200).json({ method: req.method, path: req.path, query: req.query, body: req.body, header: req.get("x-smoke") });
 });
 
+// firebase-functions v1 API (legacy (data, context) handlers).
+const functionsV1 = require("firebase-functions/v1");
+
+exports.v1Mirror = functionsV1.firestore.document("v1todos/{todoId}").onCreate(async (snap, context) => {
+  await db.doc(`v1mirror/${context.params.todoId}`).set({
+    title: snap.data().title,
+    eventType: context.eventType,
+    resource: context.resource.name,
+  });
+});
+
+exports.v1Upload = functionsV1.storage.object().onFinalize(async (object, context) => {
+  await db.doc(`v1uploads/${object.name.replace(/\//g, "_")}`).set({
+    size: Number(object.size),
+    eventType: context.eventType,
+  });
+});
+
+exports.v1Tick = functionsV1.pubsub.schedule("every 10 minutes").onRun(async (context) => {
+  await db.doc("stats/v1ticks").set({ count: FieldValue.increment(1), eventType: context.eventType }, { merge: true });
+});
+
 exports.add = onCall((request) => {
   const { a, b } = request.data || {};
   if (typeof a !== "number" || typeof b !== "number") {

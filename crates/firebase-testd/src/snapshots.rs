@@ -1,12 +1,19 @@
 //! Session snapshot parts: one [`SnapshotHook`] per adapter, each capturing a copy of what
 //! the session owns and putting it back on restore (spec 14.3, in memory). Shared parts
 //! (the clock, rules, functions) belong to the default session only.
+//!
+//! Every hook is fallible in all three phases of the restore protocol. `validate` says
+//! whether the part is this hook's and whether the store can be written, without touching
+//! it; `capture` copies the store (the control route also uses it to take the pre-image a
+//! failed restore rolls back to); `restore` writes it back. A poisoned lock is reported
+//! rather than turned into an empty part: a snapshot that silently captured nothing would
+//! wipe the session the next time it was restored.
 
 use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_adapter_functions::runtime::FunctionsRuntime;
 use ftd_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
-use ftd_adapter_http::control::{SnapshotHook, SnapshotPart};
+use ftd_adapter_http::control::{SnapshotHook, SnapshotPart, TransitionFailure};
 use ftd_core_auth::store::{AuthRegistry, AuthStore};
 use ftd_core_firestore::text_index::TextIndexCatalog;
 use ftd_core_rules::runtime::LoadedRules;
@@ -15,6 +22,16 @@ use ftd_core_session::fault::{FaultRegistry, FaultState};
 use ftd_core_session::tenancy::Scope;
 use ftd_core_types::determinism::Clock;
 
+/// The failure of a part whose captured value is not the shape the hook stores.
+fn wrong_shape(part: &'static str) -> TransitionFailure {
+    TransitionFailure::new(part, "the captured part is not this hook's")
+}
+
+/// The failure of a part whose store cannot be locked.
+fn poisoned(part: &'static str, what: &str) -> TransitionFailure {
+    TransitionFailure::new(part, format!("{what} is poisoned"))
+}
+
 /// The session's Firestore databases (and the auto-ID generator for the default one).
 pub struct Firestore(pub Arc<LocalBackend>);
 
@@ -22,13 +39,18 @@ impl SnapshotHook for Firestore {
     fn name(&self) -> &'static str {
         "firestore"
     }
-    fn capture(&self, scope: &Scope) -> SnapshotPart {
-        Arc::new(self.0.snapshot_scope(scope))
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        Ok(Arc::new(self.0.snapshot_scope(scope)))
     }
-    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), String> {
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<FirestoreSnapshot>()
+            .map(|_| ())
+            .ok_or_else(|| wrong_shape(self.name()))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let snapshot = part
             .downcast_ref::<FirestoreSnapshot>()
-            .ok_or("not a Firestore snapshot")?;
+            .ok_or_else(|| wrong_shape(self.name()))?;
         self.0.restore_scope(scope, snapshot);
         Ok(())
     }
@@ -47,17 +69,32 @@ impl SnapshotHook for Storage {
     fn name(&self) -> &'static str {
         "storage"
     }
-    fn capture(&self, scope: &Scope) -> SnapshotPart {
-        Arc::new(self.0.store.lock().map_or_else(
-            |_| ftd_core_storage::store::StorageState::new(0),
-            |s| s.capture_buckets(self.owned(scope)),
-        ))
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let store = self
+            .0
+            .store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the object store"))?;
+        Ok(Arc::new(store.capture_buckets(self.owned(scope))))
     }
-    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), String> {
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<ftd_core_storage::store::StorageState>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .store
+            .lock()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the object store"))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let captured = part
             .downcast_ref::<ftd_core_storage::store::StorageState>()
-            .ok_or("not a Storage snapshot")?;
-        let mut store = self.0.store.lock().map_err(|_| "store poisoned")?;
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        let mut store = self
+            .0
+            .store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the object store"))?;
         store.restore_buckets(self.owned(scope), captured, scope.is_default());
         Ok(())
     }
@@ -67,10 +104,12 @@ impl SnapshotHook for Storage {
 pub struct Auth(pub Arc<AuthRegistry>);
 
 impl Auth {
-    fn store(&self, scope: &Scope) -> Option<Arc<Mutex<AuthStore>>> {
+    fn store(&self, scope: &Scope) -> Result<Arc<Mutex<AuthStore>>, TransitionFailure> {
         match scope {
-            Scope::Project(p) => self.0.store_for(p),
-            Scope::AllExcept(_) => Some(self.0.default_store()),
+            Scope::Project(p) => self.0.store_for(p).ok_or_else(|| {
+                TransitionFailure::new("auth", format!("project {p:?} has no reachable Auth store"))
+            }),
+            Scope::AllExcept(_) => Ok(self.0.default_store()),
         }
     }
 }
@@ -79,20 +118,30 @@ impl SnapshotHook for Auth {
     fn name(&self) -> &'static str {
         "auth"
     }
-    fn capture(&self, scope: &Scope) -> SnapshotPart {
-        let store = self
-            .store(scope)
-            .and_then(|s| s.lock().map(|s| s.clone()).ok());
-        Arc::new(store)
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let store = self.store(scope)?;
+        let copy = store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?
+            .clone();
+        Ok(Arc::new(copy))
     }
-    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), String> {
+    fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<AuthStore>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.store(scope)?
+            .lock()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the Auth store"))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let copy = part
-            .downcast_ref::<Option<AuthStore>>()
-            .ok_or("not an Auth snapshot")?
-            .as_ref()
-            .ok_or("the Auth snapshot was taken from a poisoned or missing store")?;
-        let store = self.store(scope).ok_or("the session has no Auth store")?;
-        let mut store = store.lock().map_err(|_| "auth store poisoned")?;
+            .downcast_ref::<AuthStore>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        let store = self.store(scope)?;
+        let mut store = store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
         *store = copy.clone();
         Ok(())
     }
@@ -111,17 +160,30 @@ impl SnapshotHook for Faults {
     fn name(&self) -> &'static str {
         "faults"
     }
-    fn capture(&self, scope: &Scope) -> SnapshotPart {
-        Arc::new(self.state(scope).lock().map(|f| f.clone()).ok())
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let copy = self
+            .state(scope)
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the fault state"))?
+            .clone();
+        Ok(Arc::new(copy))
     }
-    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), String> {
+    fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<FaultState>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.state(scope)
+            .lock()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the fault state"))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let copy = part
-            .downcast_ref::<Option<FaultState>>()
-            .ok_or("not a fault plan snapshot")?
-            .as_ref()
-            .ok_or("the fault plan snapshot was taken from a poisoned state")?;
+            .downcast_ref::<FaultState>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
         let state = self.state(scope);
-        let mut state = state.lock().map_err(|_| "fault state poisoned")?;
+        let mut state = state
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the fault state"))?;
         *state = copy.clone();
         Ok(())
     }
@@ -134,19 +196,29 @@ impl SnapshotHook for TextIndexes {
     fn name(&self) -> &'static str {
         "text indexes"
     }
-    fn capture(&self, scope: &Scope) -> SnapshotPart {
-        Arc::new(
-            self.0
-                .lock()
-                .map(|c| c.extract(|p| scope.owns_project(p)))
-                .unwrap_or_default(),
-        )
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let catalog = self
+            .0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the text index catalog"))?;
+        Ok(Arc::new(catalog.extract(|p| scope.owns_project(p))))
     }
-    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), String> {
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<TextIndexCatalog>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .lock()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the text index catalog"))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let captured = part
             .downcast_ref::<TextIndexCatalog>()
-            .ok_or("not a text index snapshot")?;
-        let mut catalog = self.0.lock().map_err(|_| "text index catalog poisoned")?;
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        let mut catalog = self
+            .0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the text index catalog"))?;
         catalog.replace(|p| scope.owns_project(p), captured);
         Ok(())
     }
@@ -162,15 +234,30 @@ impl SnapshotHook for SessionClock {
     fn shared(&self) -> bool {
         true
     }
-    fn capture(&self, _: &Scope) -> SnapshotPart {
-        Arc::new(self.0.lock().map(|c| c.now()).ok())
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let at = self
+            .0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the clock"))?
+            .now();
+        Ok(Arc::new(at))
     }
-    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), String> {
-        let at = part
-            .downcast_ref::<Option<ftd_core_types::time::LogicalInstant>>()
-            .ok_or("not a clock snapshot")?
-            .ok_or("the clock snapshot was taken from a poisoned clock")?;
-        let mut clock = self.0.lock().map_err(|_| "clock poisoned")?;
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<ftd_core_types::time::LogicalInstant>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .lock()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the clock"))
+    }
+    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let at = *part
+            .downcast_ref::<ftd_core_types::time::LogicalInstant>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        let mut clock = self
+            .0
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the clock"))?;
         clock.set_allow_backwards(at);
         Ok(())
     }
@@ -186,14 +273,30 @@ impl SnapshotHook for Rules {
     fn shared(&self) -> bool {
         true
     }
-    fn capture(&self, _: &Scope) -> SnapshotPart {
-        Arc::new(self.1.read().map(|r| r.clone()).unwrap_or_default())
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let copy = self
+            .1
+            .read()
+            .map_err(|_| poisoned(self.name(), "the ruleset"))?
+            .clone();
+        Ok(Arc::new(copy))
     }
-    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), String> {
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<LoadedRules>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.1
+            .write()
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the ruleset"))
+    }
+    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let rules = part
             .downcast_ref::<LoadedRules>()
-            .ok_or("not a rules snapshot")?;
-        let mut slot = self.1.write().map_err(|_| "rules poisoned")?;
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        let mut slot = self
+            .1
+            .write()
+            .map_err(|_| poisoned(self.name(), "the ruleset"))?;
         *slot = rules.clone();
         Ok(())
     }
@@ -210,10 +313,13 @@ impl SnapshotHook for Functions {
     fn shared(&self) -> bool {
         true
     }
-    fn capture(&self, _: &Scope) -> SnapshotPart {
-        Arc::new(())
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        Ok(Arc::new(()))
     }
-    fn restore(&self, _: &Scope, _: &SnapshotPart) -> Result<(), String> {
+    fn validate(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
+        Ok(())
+    }
+    fn restore(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
         self.0.reset();
         Ok(())
     }

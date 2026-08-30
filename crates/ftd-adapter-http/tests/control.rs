@@ -3,10 +3,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use ftd_adapter_http::control::{handle, handle_with, ControlState};
+use ftd_adapter_http::control::{
+    handle, handle_with, ControlState, SnapshotHook, SnapshotPart, TransitionFailure,
+    MAX_SNAPSHOTS_PER_SESSION,
+};
 use ftd_adapter_http::identity_toolkit::RequestHeaders;
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
+use ftd_core_session::tenancy::Scope;
 use ftd_core_types::edition::FirestoreEdition;
 use ftd_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
@@ -159,18 +163,18 @@ impl ftd_adapter_http::control::SnapshotHook for Slot {
     fn name(&self) -> &'static str {
         "slot"
     }
-    fn capture(
-        &self,
-        _: &ftd_core_session::tenancy::Scope,
-    ) -> ftd_adapter_http::control::SnapshotPart {
-        Arc::new(self.0.lock().unwrap().clone())
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        Ok(Arc::new(self.0.lock().unwrap().clone()))
     }
-    fn restore(
-        &self,
-        _: &ftd_core_session::tenancy::Scope,
-        part: &ftd_adapter_http::control::SnapshotPart,
-    ) -> Result<(), String> {
-        let value = part.downcast_ref::<String>().ok_or("not a string")?;
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<String>()
+            .map(|_| ())
+            .ok_or_else(|| TransitionFailure::new("slot", "not a string"))
+    }
+    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let value = part
+            .downcast_ref::<String>()
+            .ok_or_else(|| TransitionFailure::new("slot", "not a string"))?;
         self.0.lock().unwrap().clone_from(value);
         Ok(())
     }
@@ -487,47 +491,79 @@ fn text_index_definitions_are_loaded_listed_and_lifecycle_actions_are_unimplemen
 /// A part only the default session carries.
 struct SharedSlot;
 
-impl ftd_adapter_http::control::SnapshotHook for SharedSlot {
+impl SnapshotHook for SharedSlot {
     fn name(&self) -> &'static str {
         "shared"
     }
     fn shared(&self) -> bool {
         true
     }
-    fn capture(
-        &self,
-        _: &ftd_core_session::tenancy::Scope,
-    ) -> ftd_adapter_http::control::SnapshotPart {
-        Arc::new(())
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        Ok(Arc::new(()))
     }
-    fn restore(
-        &self,
-        _: &ftd_core_session::tenancy::Scope,
-        _: &ftd_adapter_http::control::SnapshotPart,
-    ) -> Result<(), String> {
+    fn validate(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
+        Ok(())
+    }
+    fn restore(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
         Ok(())
     }
 }
 
-struct ProjectLog(Mutex<Vec<String>>);
+/// Records what the control routes asked of the project hooks; `fails` makes the next
+/// `reset_scope` or `remove` report the named store instead of doing the work.
+struct ProjectLog(Mutex<Vec<String>>, Mutex<Option<&'static str>>);
+
+impl ProjectLog {
+    fn new() -> Self {
+        Self(Mutex::new(Vec::new()), Mutex::new(None))
+    }
+
+    /// Every store transition asked of it, in order.
+    fn entries(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+
+    /// Makes every later lifecycle call report `part` and change nothing.
+    fn fail_on(&self, part: &'static str) {
+        *self.1.lock().unwrap() = Some(part);
+    }
+
+    /// Lets the lifecycle calls work again.
+    fn recover(&self) {
+        *self.1.lock().unwrap() = None;
+    }
+
+    fn failure(&self) -> Result<(), TransitionFailure> {
+        match *self.1.lock().unwrap() {
+            Some(part) => Err(TransitionFailure::new(part, "the store is poisoned")),
+            None => Ok(()),
+        }
+    }
+}
 
 impl ftd_adapter_http::control::ProjectHooks for ProjectLog {
     fn create(&self, project: &str) -> Result<(), String> {
         self.0.lock().unwrap().push(format!("create {project}"));
         Ok(())
     }
-    fn reset_scope(&self, scope: &ftd_core_session::tenancy::Scope) {
+    fn reset_scope(&self, scope: &Scope) -> Result<(), TransitionFailure> {
+        // A store that refuses the wipe is reported before anything is wiped, so the log
+        // records nothing.
+        self.failure()?;
         let what = scope.project().map_or("default".to_owned(), str::to_owned);
         self.0.lock().unwrap().push(format!("reset {what}"));
+        Ok(())
     }
-    fn remove(&self, project: &str) {
+    fn remove(&self, project: &str) -> Result<(), TransitionFailure> {
+        self.failure()?;
         self.0.lock().unwrap().push(format!("remove {project}"));
+        Ok(())
     }
 }
 
 #[test]
 fn sessions_are_created_listed_reset_and_deleted_per_project() {
-    let log = Arc::new(ProjectLog(Mutex::new(Vec::new())));
+    let log = Arc::new(ProjectLog::new());
     let counter = Arc::new(AtomicUsize::new(0));
     let mut s = state(counter.clone());
     s.project_hooks = Some(log.clone());
@@ -594,7 +630,7 @@ fn sessions_are_created_listed_reset_and_deleted_per_project() {
         404
     );
     assert_eq!(
-        *log.0.lock().unwrap(),
+        log.entries(),
         vec![
             "create demo-b",
             "reset demo-b",
@@ -608,7 +644,7 @@ fn sessions_are_created_listed_reset_and_deleted_per_project() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn sessions_scope_resets_snapshots_fault_plans_and_text_indexes_per_project() {
-    let log = Arc::new(ProjectLog(Mutex::new(Vec::new())));
+    let log = Arc::new(ProjectLog::new());
     let mut s = state(Arc::new(AtomicUsize::new(0)));
     s.project_hooks = Some(log.clone());
     s.edition = FirestoreEdition::Enterprise;
@@ -665,7 +701,7 @@ fn sessions_scope_resets_snapshots_fault_plans_and_text_indexes_per_project() {
         200
     );
     assert_eq!(
-        log.0.lock().unwrap().as_slice(),
+        log.entries().as_slice(),
         [
             "create demo-b",
             "reset demo-b",
@@ -815,7 +851,7 @@ fn sessions_scope_resets_snapshots_fault_plans_and_text_indexes_per_project() {
 #[test]
 fn functions_routes_belong_to_the_default_session() {
     let mut s = state(Arc::new(AtomicUsize::new(0)));
-    s.project_hooks = Some(Arc::new(ProjectLog(Mutex::new(Vec::new()))));
+    s.project_hooks = Some(Arc::new(ProjectLog::new()));
     assert_eq!(
         handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
         200
@@ -832,4 +868,500 @@ fn functions_routes_belong_to_the_default_session() {
             .unwrap()
             .starts_with("FAILED_PRECONDITION"));
     }
+}
+
+/// Which phase of a session-state transition a hook refuses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Refuse {
+    /// Nothing: the hook works.
+    Nothing,
+    /// The capture (also the pre-image a restore takes).
+    Capture,
+    /// The validation that runs before any hook applies.
+    Validate,
+    /// The apply itself.
+    Apply,
+}
+
+/// A hook whose state is a string, that refuses one phase deterministically, and that
+/// records every value it applied. Several of them stand in for the adapters at the
+/// multi-adapter seam of a snapshot restore.
+struct Injected {
+    name: &'static str,
+    value: Mutex<String>,
+    refuse: Mutex<Refuse>,
+    applied: Arc<Mutex<Vec<String>>>,
+}
+
+impl Injected {
+    fn new(name: &'static str, value: &str, applied: &Arc<Mutex<Vec<String>>>) -> Arc<Self> {
+        Arc::new(Self {
+            name,
+            value: Mutex::new(value.to_owned()),
+            refuse: Mutex::new(Refuse::Nothing),
+            applied: applied.clone(),
+        })
+    }
+
+    fn value(&self) -> String {
+        self.value.lock().unwrap().clone()
+    }
+
+    fn set(&self, value: &str) {
+        value.clone_into(&mut self.value.lock().unwrap());
+    }
+
+    fn refuse(&self, what: Refuse) {
+        *self.refuse.lock().unwrap() = what;
+    }
+
+    fn refuses(&self, what: Refuse) -> Result<(), TransitionFailure> {
+        if *self.refuse.lock().unwrap() == what {
+            return Err(TransitionFailure::new(self.name, "the store refused"));
+        }
+        Ok(())
+    }
+}
+
+impl SnapshotHook for Injected {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        self.refuses(Refuse::Capture)?;
+        Ok(Arc::new(self.value()))
+    }
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<String>()
+            .ok_or_else(|| TransitionFailure::new(self.name, "not a string"))?;
+        self.refuses(Refuse::Validate)
+    }
+    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        self.refuses(Refuse::Apply)?;
+        let value = part
+            .downcast_ref::<String>()
+            .ok_or_else(|| TransitionFailure::new(self.name, "not a string"))?;
+        self.applied
+            .lock()
+            .unwrap()
+            .push(format!("{}={value}", self.name));
+        self.set(value);
+        Ok(())
+    }
+}
+
+/// A control state whose snapshot hooks can be made to refuse a phase, the hooks
+/// themselves, and the log of every value they applied.
+type InjectedState = (ControlState, Vec<Arc<Injected>>, Arc<Mutex<Vec<String>>>);
+
+/// Three hooks standing in for three adapters, seeded with their first values.
+fn injected_state() -> InjectedState {
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    let hooks: Vec<Arc<Injected>> = ["first", "second", "third"]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| Injected::new(name, &format!("{name}-{i}"), &applied))
+        .collect();
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.snapshot_hooks = hooks
+        .iter()
+        .map(|h| h.clone() as Arc<dyn SnapshotHook>)
+        .collect();
+    (s, hooks, applied)
+}
+
+/// SESSION-ATOMIC-01: a store that cannot be copied refuses the whole capture, at every
+/// position, and the snapshot the session already retains is untouched.
+#[test]
+fn a_capture_that_fails_at_any_position_retains_no_snapshot() {
+    for position in 0..3 {
+        let (s, hooks, _) = injected_state();
+        let base = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots",
+            &json!({"name": "base"}),
+        );
+        assert_eq!(base.status, 200, "{}", base.body);
+        for h in &hooks {
+            h.set("moved");
+        }
+        hooks[position].refuse(Refuse::Capture);
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots",
+            &json!({"name": "later"}),
+        );
+        assert_eq!(r.status, 500, "position {position}: {}", r.body);
+        let message = r.body["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(hooks[position].name) && message.contains("was not taken"),
+            "position {position}: {message}"
+        );
+        // Only the snapshot taken before the failure is retained, and it still holds the
+        // values it captured.
+        let list = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+        assert_eq!(list.body["retained"], 1, "position {position}");
+        assert_eq!(list.body["snapshots"][0]["name"], "base");
+        hooks[position].refuse(Refuse::Nothing);
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/base:restore",
+            &json!({}),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        for (i, h) in hooks.iter().enumerate() {
+            assert_eq!(h.value(), format!("{}-{i}", h.name), "position {position}");
+        }
+    }
+}
+
+/// SESSION-ATOMIC-02: every hook is validated before any hook applies, so a part that the
+/// last adapter rejects leaves the first ones alone.
+#[test]
+fn restore_validation_completes_before_any_hook_applies() {
+    for position in 0..3 {
+        let (s, hooks, applied) = injected_state();
+        assert_eq!(
+            handle(
+                &s,
+                "POST",
+                "/v1/sessions/default/snapshots",
+                &json!({"name": "base"})
+            )
+            .status,
+            200
+        );
+        for h in &hooks {
+            h.set("moved");
+        }
+        applied.lock().unwrap().clear();
+        hooks[position].refuse(Refuse::Validate);
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/base:restore",
+            &json!({}),
+        );
+        assert_eq!(r.status, 500, "position {position}: {}", r.body);
+        let message = r.body["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(hooks[position].name) && message.contains("nothing was restored"),
+            "position {position}: {message}"
+        );
+        assert!(
+            applied.lock().unwrap().is_empty(),
+            "position {position}: a hook applied before validation finished"
+        );
+        for h in &hooks {
+            assert_eq!(h.value(), "moved", "position {position}");
+        }
+    }
+}
+
+/// SESSION-ATOMIC-02 / SESSION-ATOMIC-05: a hook that refuses the apply rolls the hooks
+/// before it back to the pre-image, at every position, so no request sees a session that
+/// is half of one snapshot and half of another.
+#[test]
+fn a_restore_that_fails_at_any_position_rolls_the_earlier_hooks_back() {
+    for position in 0..3 {
+        let (s, hooks, applied) = injected_state();
+        assert_eq!(
+            handle(
+                &s,
+                "POST",
+                "/v1/sessions/default/snapshots",
+                &json!({"name": "base"})
+            )
+            .status,
+            200
+        );
+        for (i, h) in hooks.iter().enumerate() {
+            h.set(&format!("live-{i}"));
+        }
+        applied.lock().unwrap().clear();
+        hooks[position].refuse(Refuse::Apply);
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/base:restore",
+            &json!({}),
+        );
+        assert_eq!(r.status, 500, "position {position}: {}", r.body);
+        let message = r.body["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(hooks[position].name) && message.contains("rolled back"),
+            "position {position}: {message}"
+        );
+        // Every hook holds the value it had when the restore started, whether it was
+        // applied and rolled back or never reached.
+        for (i, h) in hooks.iter().enumerate() {
+            assert_eq!(h.value(), format!("live-{i}"), "position {position}");
+        }
+        // The hooks before the failure were applied and then put back; the ones after it
+        // were never touched.
+        let log = applied.lock().unwrap().clone();
+        assert_eq!(log.len(), position * 2, "position {position}: {log:?}");
+        // The snapshot survives the failed restore and can still be applied.
+        hooks[position].refuse(Refuse::Nothing);
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/base:restore",
+            &json!({}),
+        );
+        assert_eq!(r.status, 200, "position {position}: {}", r.body);
+        for (i, h) in hooks.iter().enumerate() {
+            assert_eq!(h.value(), format!("{}-{i}", h.name), "position {position}");
+        }
+    }
+}
+
+/// SESSION-ATOMIC-03 / SESSION-ATOMIC-05: a Storage or Auth store that refuses the wipe is
+/// reported, and the session keeps its registration, its snapshots and its data.
+#[test]
+fn session_reset_and_deletion_report_the_store_that_refused() {
+    let log = Arc::new(ProjectLog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut s = state(counter.clone());
+    s.project_hooks = Some(log.clone());
+    s.snapshot_hooks = vec![Arc::new(Slot(Mutex::new("kept".to_owned())))];
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        200
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/demo-b/snapshots",
+            &json!({"name": "b1"})
+        )
+        .status,
+        200
+    );
+    let before = log.entries();
+    log.fail_on("storage");
+    // A reset that a store refuses is a failure, not a success with a note.
+    for session in ["default", "demo-b"] {
+        let r = handle(
+            &s,
+            "POST",
+            &format!("/v1/sessions/{session}/reset"),
+            &json!({}),
+        );
+        assert_eq!(r.status, 500, "{session}: {}", r.body);
+        let message = r.body["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("storage") && message.contains("no store was wiped"),
+            "{session}: {message}"
+        );
+    }
+    // The default session's shared hooks belong to the same transition: a refused wipe
+    // does not run them.
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    // The deletion is refused too, and the session is still there with its snapshot.
+    let r = handle(&s, "DELETE", "/v1/sessions/demo-b", &json!({}));
+    assert_eq!(r.status, 500, "{}", r.body);
+    assert!(r.body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("the session is unchanged"));
+    assert_eq!(log.entries(), before);
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/demo-b", &json!({})).status,
+        200
+    );
+    assert!(s.tenancy.read().unwrap().is_registered("demo-b"));
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/demo-b/snapshots", &json!({})).body["retained"],
+        1
+    );
+    // A creation whose wipe is refused registers nothing.
+    let r = handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-c"}));
+    assert_eq!(r.status, 500, "{}", r.body);
+    assert!(!s.tenancy.read().unwrap().is_registered("demo-c"));
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/demo-c", &json!({})).status,
+        404
+    );
+    // Once the store takes part again the session deletes normally.
+    log.recover();
+    let r = handle(&s, "DELETE", "/v1/sessions/demo-b", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!s.tenancy.read().unwrap().is_registered("demo-b"));
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({})).body["retained"],
+        0
+    );
+}
+
+/// A captured part that counts its own drops.
+struct Tracked(Arc<AtomicUsize>);
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// A hook whose parts count their drops, so a test can prove that replacing or deleting a
+/// snapshot releases what it retained.
+struct Counted(Arc<AtomicUsize>);
+
+impl SnapshotHook for Counted {
+    fn name(&self) -> &'static str {
+        "counted"
+    }
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        Ok(Arc::new(Tracked(self.0.clone())))
+    }
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<Tracked>()
+            .map(|_| ())
+            .ok_or_else(|| TransitionFailure::new("counted", "not a tracked part"))
+    }
+    fn restore(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
+        Ok(())
+    }
+}
+
+/// SNAP-MEM-01 / SNAP-MEM-04: unique names are bounded per session, the refusal is stable
+/// and leaves the retained set alone, and a name the session already holds is still
+/// admitted.
+#[test]
+fn snapshot_names_are_bounded_per_session() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.snapshot_hooks = vec![Arc::new(Slot(Mutex::new("value".to_owned())))];
+    for i in 0..MAX_SNAPSHOTS_PER_SESSION {
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots",
+            &json!({"name": format!("s{i}")}),
+        );
+        assert_eq!(r.status, 200, "{i}: {}", r.body);
+        assert_eq!(r.body["retained"], i + 1);
+        assert_eq!(r.body["limit"], MAX_SNAPSHOTS_PER_SESSION);
+    }
+    // The budget is a stable refusal, not an out-of-memory: the same request is refused
+    // the same way twice and changes nothing.
+    for _ in 0..2 {
+        let r = handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots",
+            &json!({"name": "one-too-many"}),
+        );
+        assert_eq!(r.status, 429, "{}", r.body);
+        assert!(r.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_EXHAUSTED"));
+    }
+    let list = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(list.body["retained"], MAX_SNAPSHOTS_PER_SESSION);
+    assert_eq!(list.body["remaining"], 0);
+    assert_eq!(
+        list.body["snapshots"].as_array().unwrap().len(),
+        MAX_SNAPSHOTS_PER_SESSION
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/one-too-many:restore",
+            &json!({})
+        )
+        .status,
+        404
+    );
+    // A name the session already holds is a replacement, not an admission.
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "s0"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["replaced"], true);
+    assert_eq!(r.body["retained"], MAX_SNAPSHOTS_PER_SESSION);
+    // Deleting one makes room again.
+    let r = handle(
+        &s,
+        "DELETE",
+        "/v1/sessions/default/snapshots/s0",
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["retained"], MAX_SNAPSHOTS_PER_SESSION - 1);
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots",
+            &json!({"name": "one-too-many"})
+        )
+        .status,
+        200
+    );
+}
+
+/// SNAP-MEM-02: replacing a name releases what it held, and so do deleting it and deleting
+/// the session that took it.
+#[test]
+fn replacing_and_deleting_a_snapshot_release_what_it_retained() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.snapshot_hooks = vec![Arc::new(Counted(dropped.clone()))];
+    let capture = |name: &str| {
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots",
+            &json!({"name": name}),
+        )
+    };
+    assert_eq!(capture("base").status, 200);
+    assert_eq!(dropped.load(Ordering::SeqCst), 0);
+    // Capturing over the name drops the part the previous capture held.
+    assert_eq!(capture("base").body["replaced"], true);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(capture("other").status, 200);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        handle(
+            &s,
+            "DELETE",
+            "/v1/sessions/default/snapshots/base",
+            &json!({})
+        )
+        .status,
+        200
+    );
+    assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    // Deleting the session that took a snapshot drops what it retained.
+    s.project_hooks = Some(Arc::new(ProjectLog::new()));
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        200
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/demo-b/snapshots",
+            &json!({"name": "b1"})
+        )
+        .status,
+        200
+    );
+    assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        handle(&s, "DELETE", "/v1/sessions/demo-b", &json!({})).status,
+        200
+    );
+    assert_eq!(dropped.load(Ordering::SeqCst), 3);
 }

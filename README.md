@@ -27,17 +27,119 @@ The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChann
 ```sh
 cargo run -p fireemu -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
 #   optional: --config fireemu.json  (see spec/config/fireemu.schema.json)
+#   optional: --config firebase.json  (a file without `schemaVersion` is a firebase.json)
 #   optional: --functions ./functions --functions-port 5001   (a firebase-functions v2 codebase)
 #   optional: --firebase-json firebase.json --project my-app   (rules, indexes, ports from a Firebase project)
+#   optional: --hub-port 4400   (the Emulator Hub; 0 turns it off)
 ```
 
-`fireemu exec` is the `firebase emulators:exec` equivalent: it serves the same, runs a command once every listener is bound, stops everything when the command exits and exits with its status.
+`fireemu exec` is the `firebase emulators:exec` equivalent: it serves the same, runs a command once every listener is bound, stops everything when the command exits and exits with its status. `emulators:start` and `emulators:exec` are exact aliases of `up` and `exec`, so an existing script keeps its command name.
 
 ```sh
-fireemu exec --firebase-json firebase.json --project my-app --only auth,firestore,storage -- vitest run
+fireemu exec --config firebase.json --project my-app --only auth,firestore,storage -- vitest run
 ```
 
-The command receives `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST` (those named by `--only`; every service listens regardless), `FIREEMU_FUNCTIONS_HOST` when a functions codebase is loaded, `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`, and `FIREEMU_CONTROL_TOKEN` / `FIREEMU_CONTROL_URL` for the control API. SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signal`) and nothing is left listening or running. `--firebase-json` maps `firestore.rules`, `firestore.indexes`, `storage.rules`, `emulators.*.port` and, when `functions` is selected, `functions.source`; entries without an equivalent (`emulators.pubsub`, `database`, ...) are named in a notice and ignored. Ports given on the command line override it.
+SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signal`) and nothing is left listening or running.
+
+### Command surface
+
+| command | what it does |
+| --- | --- |
+| `up`, `emulators:start` | serve until Ctrl-C |
+| `exec`, `emulators:exec` | serve, run `-- <command...>`, exit with its status |
+| `emulators:export <dir>` | refused: there is no on-disk export artifact yet (capture state with `POST /v1/sessions/{s}/snapshots`) |
+| `doctor`, `capabilities` | versions and catalogs; the Capability Manifest |
+
+Flags, in the official spellings: `--only`, `--project` / `-P`, `--config`, `--import`, `--export-on-exit`, `--inspect-functions [port]` and `--log-verbosity quiet|info|debug`, next to fireemu's `--firebase-json`, `--firestore-port`, `--http-port`, `--storage-port`, `--functions-port`, `--functions`, `--ui-port` and `--hub-port`. `--import` and `--export-on-exit` parse and then fail with a precise "not supported yet" message, so a run never half-starts without the data it was told to load. `--inspect-functions` inserts Node's `--inspect=<port>` (default 9229) before the runner script; a configured `functions.runner` that is not Node is refused rather than started without the inspector.
+
+Exit codes: the command's own status from `exec`, `128 + signal` when a signal ended it, `1` for a startup failure or a refused configuration, `2` for a usage error. A refusal never binds a listener and never runs the command.
+
+### `--only` decides what runs
+
+`--only` is a lifecycle switch, not only an environment one: a service it leaves out binds **no listener at all**, so its port stays free and no client can reach a product this run is not serving. Selecting an official service fireemu does not serve fails immediately with the reason:
+
+```text
+error: --only: "database" is an official Local Emulator Suite service that fireemu does not serve
+       (deferred: the Realtime Database emulator is not in the active supported surface);
+       fireemu serves auth, firestore, storage, functions, appcheck
+```
+
+`--only functions:<codebase>` picks one codebase out of a multi-codebase `firebase.json`, as the official CLI spells it.
+
+The one shared socket is the Identity Toolkit's: it also carries the control API, the App Check exchange and the Emulator UI's API. When `auth` is not selected the control plane moves to an ephemeral loopback port (printed in the banner, exported as `FIREEMU_CONTROL_URL`) and the configured Auth port is left free.
+
+### Environment the command receives
+
+Names and formats follow the pinned `firebase-tools@15.28.2` `src/emulator/env.ts`.
+
+| variable | when | format |
+| --- | --- | --- |
+| `FIRESTORE_EMULATOR_HOST` | `firestore` selected | `host:port` |
+| `FIREBASE_FIRESTORE_EMULATOR_ADDRESS` | `firestore` selected | `host:port` |
+| `FIREBASE_AUTH_EMULATOR_HOST` | `auth` selected | `host:port` |
+| `FIREBASE_STORAGE_EMULATOR_HOST` | `storage` selected | `host:port` |
+| `STORAGE_EMULATOR_HOST` | `storage` selected | `http://host:port` |
+| `FIREBASE_EMULATOR_HUB` | the Hub is bound | `host:port` |
+| `FIREEMU_FUNCTIONS_HOST` | a codebase is loaded | `host:port` |
+| `FIREEMU_APP_CHECK_EMULATOR_HOST`, `FIREEMU_APP_CHECK_JWKS_URL` | App Check active | `host:port`, URL |
+| `FIREEMU_CONTROL_TOKEN`, `FIREEMU_CONTROL_URL` | always | token, URL |
+| `GCLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT`, `FIREBASE_CONFIG` | always | project ID, project ID, JSON |
+
+There is no `CLOUD_STORAGE_EMULATOR_HOST` variable: the `firebase-tools` constant of that name emits `STORAGE_EMULATOR_HOST`, which is the one above. `FIREBASE_DATABASE_EMULATOR_HOST` is never set, because fireemu serves no Realtime Database.
+
+Two deliberate differences from the official CLI, both published in the Capability Manifest under `CLI-02`:
+
+- fireemu also sets `GOOGLE_CLOUD_PROJECT` (the official CLI sets only `GCLOUD_PROJECT`), because the Google client libraries read either one;
+- fireemu **removes** the variables of unselected services from the command's environment. The official CLI only adds, so a stale `FIRESTORE_EMULATOR_HOST` in your shell survives `--only auth` and silently points the suite at whatever used to run there.
+
+### Emulator Hub
+
+The Hub is the discovery surface official tooling looks for. It listens on the official default port 4400 (`emulators.hub`, `--hub-port`, `daemon.hubPort`), best effort like the UI port: a busy default only disables discovery, while a port asked for explicitly must be free. `--hub-port 0` turns it off.
+
+```text
+GET  /                                       the locator plus this listener's host and port
+GET  /emulators                              every running emulator, keyed by name
+PUT  /functions/disableBackgroundTriggers    {"enabled": false}
+PUT  /functions/enableBackgroundTriggers     {"enabled": true}
+```
+
+Each `/emulators` entry carries `name`, `host`, `port`, `pid` and its `listen` specs, and only services that actually bound a listener appear. The Hub also writes `hub-<project>.json` into the OS temp directory at start (`{"version", "origins", "pid"}`) and removes it at exit, so `@firebase/rules-unit-testing` and the Firebase CLI find a running suite the way they always do:
+
+```js
+// no projectId, no host, no port: everything comes from the hub
+const env = await initializeTestEnvironment({});
+```
+
+`tools/sdk-smoke/rules-unit-testing.mjs` is that script end to end. Two things a suite moving from the official emulator has to do until the matching Auth gaps close, both because fireemu verifies ID tokens where the official emulator does not:
+
+- pass an `iat` to `authenticatedContext` — `createMockUserToken` defaults to `iat: 0`, so `exp` is `3600` and the token expired in 1970, which fireemu's virtual clock rightly refuses;
+- create the users the contexts stand for, because fireemu resolves an ID token's subject against the project's Auth store.
+
+**Background triggers.** Disabling them **drops** the Firestore, Storage, Pub/Sub and Auth events that arrive while they are off; nothing is held and nothing is replayed when they come back. That is what the official emulator does (its background-trigger route answers `204` and discards the body), and it is the property the switch exists for: seeding data must not fire the triggers a later assertion depends on. HTTP and callable invocations, manual `functions/{name}:run` requests and virtual-clock schedule runs keep working throughout, and events already accepted are still delivered and retried.
+
+The Logging emulator stream (the official port 4500) is **out of scope for this release**; an `emulators.logging` entry is reported and nothing is served on that port. The functions log stream the UI consumes lives on the control API instead.
+
+### `firebase.json` and `.firebaserc`
+
+`--firebase-json` (or `--config` with a file that has no `schemaVersion`) reads the sections fireemu can honour, relative to that file's directory:
+
+- **`firestore`** in object or array (named-database) form: `rules` and `indexes` (the legacy `index` spelling too) of the `(default)` database;
+- **`storage`** in object or array form: the `rules` of the entry without a `target`;
+- **`functions`** in object or array (multi-codebase) form: `source`, `codebase`, `runtime`, `ignore`;
+- **`emulators.<name>.host` / `.port`** for `firestore`, `auth`, `storage`, `functions`, `hub` and `ui`, plus `emulators.ui.enabled` and `emulators.singleProjectMode`. Only loopback hosts are accepted: the daemon serves without a control token, so a routable host is refused rather than exposing a product to the network.
+
+`--project` resolves through `.firebaserc`: a defined alias becomes its project ID, no `--project` uses the `default` alias, and a value that is not an alias is taken as a project ID — exactly what `firebase --project` does. Ports given on the command line override `firebase.json`, which overrides the canonical configuration.
+
+Nothing is silently dropped. An `emulators.<name>` entry for a product fireemu does not serve is an **error** when `--only` named that product and a **notice** otherwise; anything fireemu applies only in part says so on stderr:
+
+```text
+note: firebase.json: firestore[1]: the named Firestore database reports is served, but its own
+      rules and indexes are not loaded; only the (default) database's are
+```
+
+Applied in part, and reported each time: a named Firestore database's own rules and indexes (only `(default)`'s are loaded), a per-target Storage ruleset (one ruleset covers every bucket), and a second Functions codebase — fireemu runs one runner, so a multi-codebase project names its codebase with `--only functions:<codebase>`. `emulators.singleProjectMode` is recorded and published rather than enforced separately: fireemu already isolates every project into its own session, which is stricter.
+
+The subset is written down in `spec/config/firebase-json.schema.json`, with a valid and an invalid corpus under `spec/config/firebase-json-examples/` and `spec/config/firebase-json-invalid-examples/` that `cargo run -p config-schema-check` validates and a unit test replays through the loader itself.
 
 The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`). Storage rules load from `storage.rules` in the config or `PUT /v1/storage/rules`. Security Rules come from `rules.source` in the config file or at runtime:
 
@@ -309,6 +411,17 @@ process that closed or redirected those handles, so tests that start daemons or 
 a process census (`crates/fireemu/tests/census/mod.rs`);
 `crates/fireemu/tests/leak_fixture.rs` proves both, by running intentional-leak fixtures
 through a nested nextest in their own process group and reaping them unconditionally.
+
+The SDK smokes run the real SDKs against a release build; `tools/sdk-smoke/README.md` has the
+full list. The discovery one is:
+
+```sh
+cargo build --release -p fireemu
+./target/release/fireemu exec --config tools/sdk-smoke/fireemu.rules-unit-testing.json \
+  --project demo-app --firestore-port 28180 --http-port 29199 --storage-port 29299 \
+  --functions-port 25101 --ui-port 0 --hub-port 24400 \
+  -- sh -c 'cd tools/sdk-smoke && node rules-unit-testing.mjs'
+```
 
 TLC needs Java 21 and TLA+ Tools 1.8.0
 (`sha256 eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a`).

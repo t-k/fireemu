@@ -805,6 +805,87 @@
           "conformance/src/normalize.mjs"
         ]
       }
+    },
+    {
+      "id": "CLI-CONFIG-001",
+      "statement": "A firebase.json fireemu accepts is one the daemon can load, and one it refuses is refused with the path that is wrong and no partial startup.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "partial",
+      "note": "spec/config/firebase-json.schema.json and the two corpora under spec/config/firebase-json-examples and spec/config/firebase-json-invalid-examples are validated by tools/config-schema-check and replayed through RuntimeConfig::apply_firebase_json by the_firebase_json_corpus_agrees_with_the_loader, so the schema and the loader cannot drift. crates/fireemu/tests/cli.rs drives the shipped binary over a real project directory: a_project_alias_from_firebaserc_resolves_the_project, config_accepts_a_firebase_json_as_well_as_the_canonical_configuration, a_multi_codebase_functions_section_names_the_codebase_to_load, a_named_firestore_database_is_reported_rather_than_folded_into_the_default_one, a_routable_emulator_host_is_refused and a_command_line_port_overrides_the_one_in_firebase_json. Partial: a named Firestore database's own rules and indexes, a per-target Storage ruleset and a second Functions codebase are reported rather than loaded.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/cli.rs",
+          "crates/fireemu/src/config.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLI-SELECT-001",
+      "statement": "A service --only did not name binds no listener and exports no variable, and a service it did name exports exactly the canonical variables of the official CLI.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "an_unselected_service_binds_no_listener_at_all probes each configured port from inside the running command, so silence is asserted while the daemon is serving rather than inferred. every_selection_exports_exactly_the_canonical_variables_of_its_services pins the names and the formats against firebase-tools@15.28.2 src/emulator/env.ts, including that STORAGE_EMULATOR_HOST carries a scheme and FIREBASE_STORAGE_EMULATOR_HOST does not, and that FIREBASE_DATABASE_EMULATOR_HOST is never set. an_occupied_port_of_a_selected_service_fails_before_the_command_runs is the negative case: a busy port of a selected service refuses the run, and the same port is usable when that service was left out. the_control_plane_leaves_the_auth_port_free_when_auth_is_not_selected covers the one shared socket, and inherited_emulator_variables_do_not_reach_the_command_unless_selected covers the clearing.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/exec.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLI-UNSUPPORTED-001",
+      "statement": "An official Local Emulator Suite service fireemu does not serve is never silently ignored: selecting it fails with its scope status before anything binds.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "an_official_service_fireemu_does_not_serve_is_refused_with_its_status (crates/fireemu/tests/exec.rs) covers all eight products and checks that the command never ran, and that hub, ui and logging are refused as non-service names. a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it (crates/fireemu/tests/cli.rs) covers the other half of the rule, that an emulators.<name> entry alone is a notice rather than a failure. the_only_list_names_services_and_at_most_one_functions_codebase drives the same table through the parser, iterating the UNSERVED_OFFICIAL_SERVICES constant itself so a product added there without a status fails the test.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/exec.rs",
+          "crates/fireemu/tests/cli.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLI-HUB-001",
+      "statement": "Official tooling discovers the running suite through the Emulator Hub without being told a single host or port.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "the_hub_publishes_every_running_emulator_in_the_official_shape drives GET /emulators, GET /, the 404 and 501 routes and the loopback-Host guard over a real socket, and asserts that nothing which is not running is advertised. the_locator_file_is_written_at_start_and_removed_at_exit covers the locator's life, exec_exports_the_hub_address_to_its_command the exported variable's format, and a_daemon_that_could_not_bind_the_hub_serves_the_suite_anyway the best-effort port rule. tools/sdk-smoke/rules-unit-testing.mjs is the end-to-end proof: @firebase/rules-unit-testing 5.0.2 with an empty configuration reaches Firestore through the Hub alone, and exercises withSecurityRulesDisabled and clearFirestore there.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/hub.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLI-TRIGGERS-001",
+      "statement": "While background triggers are disabled no data-change event is delivered, and re-enabling them delivers nothing retroactively.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "the drop-rather-than-hold semantics match firebase-tools@15.28.2 functionsEmulator.ts, whose background-trigger route answers 204 and discards the body while the producing emulators keep posting. the_hub_switches_background_triggers_and_says_so covers the routes and their bodies with and without a functions codebase; tools/sdk-smoke/rules-unit-testing.mjs covers the behaviour, writing a document while triggers are off, waiting for the runtime to go idle, and asserting the trigger neither ran then nor after the switch came back, with a later write proving the triggers really returned.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/hub.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLI-EXIT-001",
+      "statement": "The command surface reports what happened: the exec command's status is propagated, a signal becomes 128 + signal, a refused configuration or an unsupported feature exits 1 without starting anything, and a usage error exits 2.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "the_official_command_names_are_aliases_of_the_short_ones, export_is_refused_precisely_rather_than_reported_as_unknown, import_and_export_on_exit_fail_before_anything_starts, log_verbosity_decides_whether_the_banner_is_printed and inspect_functions_passes_the_node_inspector_through_to_the_runner (crates/fireemu/tests/cli.rs) pin the codes and check that a refusal leaves no marker behind. The signal half is covered by sigterm_stops_the_command_and_the_services_without_leaving_processes and sigint_keeps_its_identity_when_forwarded (crates/fireemu/tests/exec.rs), which also assert that nothing is left listening or running.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/cli.rs",
+          "crates/fireemu/tests/exec.rs"
+        ]
+      }
     }
   ]
 }

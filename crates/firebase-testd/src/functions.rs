@@ -520,14 +520,17 @@ mod tests {
     /// callable as disabled would run it without replay protection.
     #[test]
     fn a_manifest_cannot_override_the_app_check_options_the_runner_observed() {
-        let e = check_manifest_agrees_on_callables(
+        let e = super::check_manifest_agrees_on_callables(
             &manifest(Some("disabled")),
             &manifest(Some("enabled")),
         )
         .expect_err("the manifest disagrees with the code");
         assert!(e.contains("cannot override"), "{e}");
-        check_manifest_agrees_on_callables(&manifest(Some("enabled")), &manifest(Some("enabled")))
-            .expect("agreeing manifests reconcile");
+        super::check_manifest_agrees_on_callables(
+            &manifest(Some("enabled")),
+            &manifest(Some("enabled")),
+        )
+        .expect("agreeing manifests reconcile");
     }
 
     #[test]

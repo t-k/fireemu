@@ -63,7 +63,8 @@
         "integration": [
           "crates/ftd-core-events/tests/state_machine.rs"
         ]
-      }
+      },
+      "note": "terminal_event_rejects_every_transition builds a real event, so it allocates: on macOS with Kani 0.67 it hits the known 'malloc with missing definition' limitation recorded in the README and only verifies where the allocator is modelled."
     },
     {
       "id": "INV-IDLE-001",

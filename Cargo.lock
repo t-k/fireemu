@@ -484,6 +484,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftd-core-app-check"
+version = "0.1.0"
+dependencies = [
+ "ftd-core-auth",
+ "ftd-core-types",
+]
+
+[[package]]
 name = "ftd-core-auth"
 version = "0.1.0"
 dependencies = [

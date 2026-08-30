@@ -43,6 +43,8 @@ pub trait FunctionsHook: Send + Sync {
     /// Publishes Pub/Sub messages (`{data, attributes, orderingKey}` each) on `topic`;
     /// returns the message IDs.
     fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String>;
+    /// The project the functions belong to (the Pub/Sub REST path must name it).
+    fn project(&self) -> String;
 }
 
 /// One adapter's part of a session snapshot: an opaque copy of its state.
@@ -174,8 +176,14 @@ pub fn handle_with(
                 .strip_suffix(":publish")
                 .and_then(|r| r.split_once("/topics/"))
             {
-                Some((_, topic)) if !topic.is_empty() && !topic.contains('/') => {
-                    publish_route(state, topic, body)
+                Some((project, topic)) if !topic.is_empty() && !topic.contains('/') => {
+                    match &state.functions {
+                        Some(f) if f.project() != project => error(
+                            404,
+                            &format!("NOT_FOUND : this runtime serves project {}", f.project()),
+                        ),
+                        _ => publish_route(state, topic, body),
+                    }
                 }
                 _ => error(404, "NOT_FOUND"),
             }
@@ -580,12 +588,24 @@ fn publish_route(state: &ControlState, topic: &str, body: &Value) -> JsonRespons
         };
         let mut msg = m.clone();
         match (obj.get("data"), obj.get("json")) {
-            (Some(Value::String(_)), _) => {}
+            (Some(Value::String(data)), _) => {
+                if !is_base64(data) {
+                    return error(400, "INVALID_ARGUMENT : data must be base64");
+                }
+            }
             (None | Some(Value::Null), Some(json)) => {
                 msg["data"] = Value::String(base64_encode(json.to_string().as_bytes()));
             }
             (None | Some(Value::Null), None) => msg["data"] = Value::String(String::new()),
             _ => return error(400, "INVALID_ARGUMENT : data must be a base64 string"),
+        }
+        if let Some(key) = obj.get("orderingKey") {
+            if !key.is_null() && key.as_str().is_none_or(|k| k.len() > 1024) {
+                return error(
+                    400,
+                    "INVALID_ARGUMENT : orderingKey must be a string of at most 1024 bytes",
+                );
+            }
         }
         if let Some(attrs) = obj.get("attributes") {
             if !attrs.is_null()
@@ -605,6 +625,17 @@ fn publish_route(state: &ControlState, topic: &str, body: &Value) -> JsonRespons
         Ok(ids) => ok(json!({"messageIds": ids})),
         Err(e) => error(400, &format!("INVALID_ARGUMENT : {e}")),
     }
+}
+
+/// Whether `s` is standard base64 (padding optional, correct length).
+fn is_base64(s: &str) -> bool {
+    let body = s.trim_end_matches('=');
+    let padding = s.len() - body.len();
+    padding <= 2
+        && (body.len() + padding) % 4 == 0
+        && body
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
 }
 
 /// Standard base64 with padding.

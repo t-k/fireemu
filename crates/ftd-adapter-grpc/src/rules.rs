@@ -734,13 +734,16 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                         RulesValue::PartialList(vec![rules_value(value)]),
                     );
                 }
+                // The array holds at least one of the values, not all of them.
                 FieldOp::ArrayContainsAny => {
                     if let Value::Array(items) = value {
-                        set_nested(
-                            &mut data,
-                            field,
-                            RulesValue::PartialList(items.iter().map(rules_value).collect()),
-                        );
+                        if !items.is_empty() {
+                            set_nested(
+                                &mut data,
+                                field,
+                                RulesValue::PartialListAny(items.iter().map(rules_value).collect()),
+                            );
+                        }
                     }
                 }
                 // One of the candidates (an empty `in` matches nothing; left undetermined).

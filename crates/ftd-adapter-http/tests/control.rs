@@ -9,7 +9,7 @@ use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::edition::FirestoreEdition;
 use ftd_core_types::time::LogicalInstant;
-use serde_json::json;
+use serde_json::{json, Value};
 
 fn state(counter: Arc<AtomicUsize>) -> ControlState {
     ControlState {
@@ -279,4 +279,94 @@ fn fault_plans_are_validated_installed_reported_and_removed() {
     assert_eq!(r.status, 200);
     let r = handle(&s, "GET", "/v1/sessions/default/faultPlan", &json!({}));
     assert!(r.body["plan"].is_null());
+}
+
+struct FakeFunctions(Mutex<Vec<(String, Vec<Value>)>>);
+
+impl ftd_adapter_http::control::FunctionsHook for FakeFunctions {
+    fn on_clock_changed(&self) {}
+    fn run_schedule(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn is_idle(&self) -> bool {
+        true
+    }
+    fn idle_notify(&self) -> Arc<tokio::sync::Notify> {
+        Arc::new(tokio::sync::Notify::new())
+    }
+    fn status(&self) -> Value {
+        json!({})
+    }
+    fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((topic.to_owned(), messages.to_vec()));
+        Ok(messages.iter().map(|_| "m".to_owned()).collect())
+    }
+    fn project(&self) -> String {
+        "demo-app".to_owned()
+    }
+}
+
+#[test]
+fn pubsub_publish_routes_check_the_project_and_the_message_shape() {
+    let published = Arc::new(FakeFunctions(Mutex::new(Vec::new())));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.functions = Some(published.clone());
+    let ok =
+        json!({"messages": [{"data": "aGVsbG8=", "attributes": {"k": "v"}, "orderingKey": "k1"}]});
+    assert_eq!(
+        handle(&s, "POST", "/v1/projects/demo-app/topics/jobs:publish", &ok).status,
+        200
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/projects/other-app/topics/jobs:publish",
+            &ok
+        )
+        .status,
+        404
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/pubsub/topics/jobs:publish",
+            &ok
+        )
+        .status,
+        200
+    );
+    for bad in [
+        json!({"messages": [{"data": "not base64!"}]}),
+        json!({"messages": [{"data": "aGVsbG8=", "orderingKey": 5}]}),
+        json!({"messages": [{"data": "aGVsbG8=", "attributes": {"k": 1}}]}),
+        json!({"messages": "x"}),
+    ] {
+        assert_eq!(
+            handle(
+                &s,
+                "POST",
+                "/v1/projects/demo-app/topics/jobs:publish",
+                &bad
+            )
+            .status,
+            400,
+            "{bad}"
+        );
+    }
+    // A `json` value is encoded for the function.
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/projects/demo-app/topics/jobs:publish",
+        &json!({"messages": [{"json": {"a": 1}}]}),
+    );
+    assert_eq!(r.status, 200);
+    let calls = published.0.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[2].1[0]["data"], "eyJhIjoxfQ==");
 }

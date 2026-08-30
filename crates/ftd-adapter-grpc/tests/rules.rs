@@ -1177,3 +1177,69 @@ service cloud.firestore {
     assert!(err.message().contains("getAfter()"), "{}", err.message());
     h.handle.abort();
 }
+
+#[tokio::test]
+async fn array_contains_any_queries_are_proven_soundly() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /tagged/{id} { allow list: if resource.data.tags.hasAny(['x', 'y']); }
+    match /strict/{id} { allow list: if resource.data.tags.hasAll(['x', 'y']); }
+  }
+}",
+    )
+    .unwrap();
+    // Every candidate is accepted by the rule: proven.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "tagged",
+                "tags",
+                Op::ArrayContainsAny,
+                arr(vec![s("x"), s("y")]),
+                None
+            )
+        )
+        .await,
+        Ok(())
+    );
+    // A candidate the rule does not accept: a document holding only `z` would be denied.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "tagged",
+                "tags",
+                Op::ArrayContainsAny,
+                arr(vec![s("x"), s("z")]),
+                None
+            )
+        )
+        .await,
+        Err(tonic::Code::PermissionDenied)
+    );
+    // `hasAll` is never proven by array-contains-any (the array may hold one of them).
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "strict",
+                "tags",
+                Op::ArrayContainsAny,
+                arr(vec![s("x"), s("y")]),
+                None
+            )
+        )
+        .await,
+        Err(tonic::Code::PermissionDenied)
+    );
+    h.handle.abort();
+}

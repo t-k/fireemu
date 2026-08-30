@@ -262,6 +262,12 @@ impl FunctionsRuntime {
         &self.manifest
     }
 
+    /// The project the functions belong to.
+    #[must_use]
+    pub fn project(&self) -> &str {
+        &self.config.project
+    }
+
     /// The current runner.
     #[must_use]
     pub fn runner(&self) -> Arc<Runner> {
@@ -544,54 +550,122 @@ impl FunctionsRuntime {
     }
 
     /// Enqueues the schedule runs that became due up to the current virtual time according
-    /// to the catch-up policy (`all` capped at `maxCatchUpRuns`, `latest`, `none`) and
-    /// releases due retries.
+    /// to the catch-up policy and releases due retries. `all` enqueues every run into the
+    /// vacant catch-up capacity (the remainder stays due and keeps the session busy);
+    /// `latest` enqueues one run per job, the most recent; `none` enqueues nothing. Runs
+    /// the policy drops are recorded as skipped (at most the cap of them, then a summary).
+    #[allow(clippy::too_many_lines)]
     pub fn on_clock_changed(&self) {
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
         let mut enqueued = false;
-        // Runs are enqueued only into vacant capacity: the outstanding scheduled work never
-        // exceeds the cap, whatever the number of completions that refill it.
+        let policy = self.config.catch_up;
         let cap = self.config.max_catch_up_runs.max(1);
         let room = cap.saturating_sub(inner.payloads.len());
-        if room == 0 && inner.catch_up_pending {
+        if policy == CatchUpPolicy::All && room == 0 && inner.catch_up_pending {
             return;
         }
-        let cap = room.max(1);
+        let chunk = room.max(1);
         let mut pending = false;
-        let runs: Vec<(String, String, LogicalInstant)> = inner
-            .jobs
-            .iter_mut()
-            .flat_map(|job| {
-                let runs = job.schedule.runs_between_in(
-                    job.cursor,
-                    now,
-                    &*job.zone,
-                    cap.saturating_add(1),
-                );
-                if runs.len() > cap {
-                    // Beyond the cap: enqueue `cap` runs now and leave the cursor at the last
-                    // one so the rest stays due (keeping the session busy) instead of vanishing.
-                    let kept: Vec<LogicalInstant> = runs.into_iter().take(cap).collect();
-                    job.cursor = kept.last().copied().unwrap_or(job.cursor);
-                    pending = true;
-                    kept.into_iter()
-                        .map(|t| (job.function.clone(), job.region.clone(), t))
-                        .collect::<Vec<_>>()
-                } else {
+        let mut runs: Vec<(String, String, LogicalInstant)> = Vec::new();
+        let mut skipped: Vec<(String, u64)> = Vec::new();
+        for job in &mut inner.jobs {
+            match policy {
+                CatchUpPolicy::All => {
+                    let due = job.schedule.runs_between_in(
+                        job.cursor,
+                        now,
+                        &*job.zone,
+                        chunk.saturating_add(1),
+                    );
+                    if due.len() > chunk {
+                        // Beyond the cap: enqueue `chunk` runs now and leave the cursor at
+                        // the last one so the rest stays due instead of vanishing.
+                        let kept: Vec<LogicalInstant> = due.into_iter().take(chunk).collect();
+                        job.cursor = kept.last().copied().unwrap_or(job.cursor);
+                        pending = true;
+                        runs.extend(
+                            kept.into_iter()
+                                .map(|t| (job.function.clone(), job.region.clone(), t)),
+                        );
+                    } else {
+                        if now.as_nanos() > job.cursor.as_nanos() {
+                            job.cursor = now;
+                        }
+                        runs.extend(
+                            due.into_iter()
+                                .map(|t| (job.function.clone(), job.region.clone(), t)),
+                        );
+                    }
+                }
+                CatchUpPolicy::Latest | CatchUpPolicy::None => {
+                    // Walk the due runs in bounded chunks; keep the last one under `latest`.
+                    let mut last: Option<LogicalInstant> = None;
+                    let mut dropped: u64 = 0;
+                    loop {
+                        let due = job.schedule.runs_between_in(
+                            job.cursor,
+                            now,
+                            &*job.zone,
+                            cap.saturating_add(1),
+                        );
+                        if due.is_empty() {
+                            break;
+                        }
+                        let more = due.len() > cap;
+                        let taken: Vec<LogicalInstant> = due.into_iter().take(cap).collect();
+                        job.cursor = taken.last().copied().unwrap_or(job.cursor);
+                        if last.take().is_some() {
+                            dropped += 1;
+                        }
+                        dropped += (taken.len() as u64).saturating_sub(1);
+                        last = taken.last().copied();
+                        if !more {
+                            break;
+                        }
+                    }
                     if now.as_nanos() > job.cursor.as_nanos() {
                         job.cursor = now;
                     }
-                    runs.into_iter()
-                        .map(|t| (job.function.clone(), job.region.clone(), t))
-                        .collect::<Vec<_>>()
+                    match (policy, last) {
+                        (CatchUpPolicy::Latest, Some(t)) => {
+                            runs.push((job.function.clone(), job.region.clone(), t));
+                        }
+                        (CatchUpPolicy::None, Some(_)) => dropped += 1,
+                        _ => {}
+                    }
+                    if dropped > 0 {
+                        skipped.push((job.function.clone(), dropped));
+                    }
                 }
-            })
-            .collect();
+            }
+        }
         inner.catch_up_pending = pending;
-        let runs = self.apply_catch_up_policy(&mut inner, runs);
+        let label = match policy {
+            CatchUpPolicy::Latest => "latest",
+            _ => "none",
+        };
+        for (function, count) in skipped {
+            let listed = count.min(cap as u64);
+            for _ in 0..listed {
+                inner.history.push(InvocationRecord {
+                    event_id: 0,
+                    function: function.clone(),
+                    attempt: 0,
+                    outcome: format!("skipped: catch-up {label}"),
+                });
+            }
+            if count > listed {
+                inner.history.push(InvocationRecord {
+                    event_id: 0,
+                    function,
+                    attempt: 0,
+                    outcome: format!("skipped: catch-up {label} (+{} more)", count - listed),
+                });
+            }
+        }
         for (function, region, at) in runs {
             if !self.admit_scheduled_run(&mut inner, &function) {
                 continue;
@@ -672,42 +746,6 @@ impl FunctionsRuntime {
             }
         }
         (outcome, crash)
-    }
-
-    /// Applies the catch-up policy to the runs that became due: `latest` keeps the last run
-    /// of each job, `none` keeps nothing; the dropped runs are recorded as skipped.
-    fn apply_catch_up_policy(
-        &self,
-        inner: &mut Inner,
-        runs: Vec<(String, String, LogicalInstant)>,
-    ) -> Vec<(String, String, LogicalInstant)> {
-        match self.config.catch_up {
-            CatchUpPolicy::All => runs,
-            CatchUpPolicy::Latest | CatchUpPolicy::None => {
-                let mut kept: Vec<(String, String, LogicalInstant)> = Vec::new();
-                let mut iter = runs.into_iter().peekable();
-                while let Some(run) = iter.next() {
-                    let last_of_job = iter.peek().is_none_or(|next| next.0 != run.0);
-                    if last_of_job && self.config.catch_up == CatchUpPolicy::Latest {
-                        kept.push(run);
-                    } else {
-                        inner.history.push(InvocationRecord {
-                            event_id: 0,
-                            function: run.0,
-                            attempt: 0,
-                            outcome: format!(
-                                "skipped: catch-up {}",
-                                match self.config.catch_up {
-                                    CatchUpPolicy::Latest => "latest",
-                                    _ => "none",
-                                }
-                            ),
-                        });
-                    }
-                }
-                kept
-            }
-        }
     }
 
     /// Applies the overlap policy to a due run of `function`: `true` when it may be

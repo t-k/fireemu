@@ -216,6 +216,7 @@ fn handle_write_request(
 // Listen stream
 // ---------------------------------------------------------------------------------------
 
+#[derive(Debug)]
 enum TargetKind {
     Documents(Vec<DocumentPath>),
     Query(Box<Query>),
@@ -367,13 +368,19 @@ fn handle_listen_request(
                 None,
                 None,
             ));
+            // A token is honoured only for the epoch, database and target it was issued
+            // for: after a reset (or on another database / target) the version numbers
+            // start over and would silently line up with unrelated history.
+            let binding = TokenBinding {
+                epoch: ctx.local.epoch(),
+                database: database_hash(parent),
+                target: target_hash(&kind),
+            };
             let resume = match &target.resume_type {
                 None => None,
-                Some(pb::target::ResumeType::ResumeToken(bytes)) => Some(
-                    <[u8; 8]>::try_from(bytes.as_slice()).map_or(Resume::Invalid, |b| {
-                        Resume::Version(CommitVersion::from_value(u64::from_be_bytes(b)))
-                    }),
-                ),
+                Some(pb::target::ResumeType::ResumeToken(bytes)) => {
+                    Some(parse_resume_token(bytes, &binding))
+                }
                 Some(pb::target::ResumeType::ReadTime(t)) => {
                     Some(Resume::ReadTime(decode_instant(t)))
                 }
@@ -417,7 +424,11 @@ fn decode_target(
         Some(pb::target::TargetType::Documents(d)) => {
             let mut paths = Vec::with_capacity(d.documents.len());
             for name in &d.documents {
-                paths.push(LocalBackend::check_database(parent, name)?);
+                let path = LocalBackend::check_database(parent, name)?;
+                // A name listed twice is one document (one change, one in the count).
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
             }
             Ok(TargetKind::Documents(paths))
         }
@@ -444,6 +455,7 @@ fn decode_target(
 /// Refreshes every target against one snapshot, then emits the global boundary. Targets
 /// whose rules now deny are removed with a cause; `once` targets are removed after their
 /// first consistent snapshot.
+#[allow(clippy::too_many_lines)]
 fn refresh_all(
     ctx: &StreamContext,
     parent: Option<&Parent>,
@@ -471,7 +483,12 @@ fn refresh_all(
             return Err(Status::aborted("the session was reset"));
         }
         let read_time = encode_instant(read_at);
-        let token = version.value().to_be_bytes().to_vec();
+        let binding = TokenBinding {
+            epoch: local.epoch(),
+            database: database_hash(parent),
+            target: 0,
+        };
+        let token = resume_token(version, &binding);
         let mut removed = Vec::new();
         for (id, state) in targets.iter_mut() {
             match refresh_target(ctx, &principal, db, *id, state, read_time) {
@@ -479,10 +496,14 @@ fn refresh_all(
                     out.append(&mut state.pending);
                     if !state.current {
                         state.current = true;
+                        let bound = TokenBinding {
+                            target: target_hash(&state.kind),
+                            ..binding
+                        };
                         out.push(target_change(
                             pb::target_change::TargetChangeType::Current,
                             vec![*id],
-                            Some(token.clone()),
+                            Some(resume_token(version, &bound)),
                             Some(read_time),
                         ));
                     }
@@ -494,9 +515,9 @@ fn refresh_all(
                 }
             }
         }
-        Ok((read_time, token, removed))
+        Ok((read_time, token, removed, version, binding))
     });
-    let (read_time, token, removed) = match snapshot.and_then(|r| r) {
+    let (read_time, token, removed, version, binding) = match snapshot.and_then(|r| r) {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -512,11 +533,15 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    for id in targets.keys() {
+    for (id, state) in &*targets {
+        let bound = TokenBinding {
+            target: target_hash(&state.kind),
+            ..binding
+        };
         out.push(target_change(
             pb::target_change::TargetChangeType::NoChange,
             vec![*id],
-            Some(token.clone()),
+            Some(resume_token(version, &bound)),
             Some(read_time),
         ));
     }
@@ -660,6 +685,63 @@ fn resolve_resume(
         None,
     ));
     Ok(false)
+}
+
+/// What a resume token is bound to besides its version.
+#[derive(Debug, Clone, Copy)]
+struct TokenBinding {
+    /// Backend reset epoch.
+    epoch: u64,
+    /// Hash of the project / database.
+    database: u64,
+    /// Hash of the target definition; `0` in the global boundary that applies to every
+    /// target.
+    target: u64,
+}
+
+/// FNV-1a over `text`.
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+fn database_hash(parent: &Parent) -> u64 {
+    fnv(&format!(
+        "{}/{}",
+        parent.project.as_str(),
+        parent.database.as_str()
+    ))
+}
+
+fn target_hash(kind: &TargetKind) -> u64 {
+    fnv(&format!("{kind:?}"))
+}
+
+/// 32 bytes: version, epoch, database hash, target hash (big-endian).
+fn resume_token(version: CommitVersion, binding: &TokenBinding) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32);
+    out.extend_from_slice(&version.value().to_be_bytes());
+    out.extend_from_slice(&binding.epoch.to_be_bytes());
+    out.extend_from_slice(&binding.database.to_be_bytes());
+    out.extend_from_slice(&binding.target.to_be_bytes());
+    out
+}
+
+/// A token this daemon issued for this epoch, database and target (or for every target).
+fn parse_resume_token(bytes: &[u8], binding: &TokenBinding) -> Resume {
+    let Ok(raw) = <[u8; 32]>::try_from(bytes) else {
+        return Resume::Invalid;
+    };
+    let word = |i: usize| u64::from_be_bytes(raw[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
+    let (version, epoch, database, target) = (word(0), word(1), word(2), word(3));
+    if epoch != binding.epoch
+        || database != binding.database
+        || (target != 0 && target != binding.target)
+    {
+        return Resume::Invalid;
+    }
+    Resume::Version(CommitVersion::from_value(version))
 }
 
 /// The `(path, version)` set of a target as of `version`.

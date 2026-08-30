@@ -198,4 +198,8 @@ impl FunctionsHook for Hook {
         }
         Ok(self.0.publish(topic, messages))
     }
+
+    fn project(&self) -> String {
+        self.0.project().to_owned()
+    }
 }

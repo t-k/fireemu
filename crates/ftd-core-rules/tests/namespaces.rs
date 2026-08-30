@@ -328,3 +328,27 @@ fn set_valued_fields_prove_equality_membership_and_types() {
     assert!(!allow("resource.data.status is string", &c));
     assert!(!allow("resource.data.status in ['public', 'deleted']", &c));
 }
+
+#[test]
+fn array_contains_any_proves_only_what_every_candidate_satisfies() {
+    let s = |v: &str| RulesValue::String(v.into());
+    let field =
+        |members: &[RulesValue]| ctx(&[("tags", RulesValue::PartialListAny(members.to_vec()))]);
+    let allow = |cond: &str, c: &RequestContext| matches!(decide(cond, c), Decision::Allow);
+    // The array holds a or b (not necessarily both).
+    let c = field(&[s("a"), s("b")]);
+    assert!(allow("resource.data.tags.hasAny(['a', 'b'])", &c));
+    assert!(allow("resource.data.tags.hasAny(['a', 'b', 'c'])", &c));
+    assert!(allow("resource.data.tags is list", &c));
+    assert!(
+        !allow("resource.data.tags.hasAny(['a'])", &c),
+        "may hold only b"
+    );
+    assert!(!allow("resource.data.tags.hasAll(['a', 'b'])", &c));
+    assert!(!allow("'a' in resource.data.tags", &c));
+    assert!(!allow("resource.data.tags.size() == 2", &c));
+    // A single candidate is certain.
+    let one = field(&[s("a")]);
+    assert!(allow("'a' in resource.data.tags", &one));
+    assert!(allow("resource.data.tags.hasAny(['a'])", &one));
+}

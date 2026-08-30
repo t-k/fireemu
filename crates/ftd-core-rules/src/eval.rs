@@ -653,6 +653,7 @@ fn undetermined(v: &RulesValue) -> bool {
         RulesValue::Unknown
         | RulesValue::PartialMap(_)
         | RulesValue::PartialList(_)
+        | RulesValue::PartialListAny(_)
         | RulesValue::Range(_)
         | RulesValue::OneOf(_)
         | RulesValue::NotOneOf(_) => true,
@@ -1055,13 +1056,19 @@ impl<'a> Evaluator<'a> {
                     RulesValue::NotOneOf(_)
                         | RulesValue::PartialMap(_)
                         | RulesValue::PartialList(_)
+                        | RulesValue::PartialListAny(_)
                 ) {
                     return match type_name.as_str() {
                         // A partially known container is at least a container of its kind.
                         "map" if matches!(v, RulesValue::PartialMap(_)) => {
                             Ok(RulesValue::Bool(true))
                         }
-                        "list" if matches!(v, RulesValue::PartialList(_)) => {
+                        "list"
+                            if matches!(
+                                v,
+                                RulesValue::PartialList(_) | RulesValue::PartialListAny(_)
+                            ) =>
+                        {
                             Ok(RulesValue::Bool(true))
                         }
                         _ => Err(EvalError::Unknown),
@@ -1116,6 +1123,15 @@ impl<'a> Evaluator<'a> {
             // Membership in a partially known container is provable only positively.
             (BinaryOp::In, item, V::PartialList(known)) if !undetermined(item) => {
                 if known.iter().any(|x| values_equal(x, item)) {
+                    V::Bool(true)
+                } else {
+                    return Err(EvalError::Unknown);
+                }
+            }
+            // At least one candidate is present: membership is certain only when every
+            // candidate is the item.
+            (BinaryOp::In, item, V::PartialListAny(candidates)) if !undetermined(item) => {
+                if !candidates.is_empty() && candidates.iter().all(|c| values_equal(c, item)) {
                     V::Bool(true)
                 } else {
                     return Err(EvalError::Unknown);
@@ -1545,6 +1561,20 @@ fn method_call(
                 return Err(EvalError::Unknown);
             }
         }
+        (V::PartialListAny(candidates), "hasAny") => {
+            arity(1)?;
+            let wanted = list_arg(&args[0])?;
+            // Whichever candidate the document holds, it is among `wanted`.
+            if !candidates.is_empty()
+                && candidates
+                    .iter()
+                    .all(|c| wanted.iter().any(|w| values_equal(c, w)))
+            {
+                V::Bool(true)
+            } else {
+                return Err(EvalError::Unknown);
+            }
+        }
         (V::PartialList(known), "hasAll") => {
             arity(1)?;
             let wanted = list_arg(&args[0])?;
@@ -1567,7 +1597,9 @@ fn method_call(
                 _ => return Err(soft("get() expects a string key")),
             }
         }
-        (V::Unknown | V::PartialList(_) | V::PartialMap(_), _) => return Err(EvalError::Unknown),
+        (V::Unknown | V::PartialList(_) | V::PartialListAny(_) | V::PartialMap(_), _) => {
+            return Err(EvalError::Unknown)
+        }
         (V::String(s), "size") => {
             arity(0)?;
             V::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))

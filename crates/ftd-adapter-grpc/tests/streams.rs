@@ -622,7 +622,11 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
         .into_inner();
     ltx.send(add_query_target(1, "r")).await.unwrap();
     let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
-    assert_eq!(token.len(), 8);
+    assert_eq!(
+        token.len(),
+        32,
+        "version, epoch, database and target binding"
+    );
     drop(ltx);
     // Meanwhile: b changes, c is added, a is deleted.
     client
@@ -743,7 +747,11 @@ async fn partition_query_splits_a_collection_group_by_name() {
         .unwrap()
         .into_inner();
     assert_eq!(first.partitions.len(), 3);
-    assert_eq!(first.next_page_token, "3");
+    assert!(
+        first.next_page_token.ends_with(":3"),
+        "{}",
+        first.next_page_token
+    );
     let second = client
         .partition_query(request(4, 3, &first.next_page_token))
         .await
@@ -769,6 +777,160 @@ async fn partition_query_splits_a_collection_group_by_name() {
     }
     assert_eq!(
         client.partition_query(plain).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
+    let (mut client, handle) = start(false).await;
+    let commit = |writes| pb::CommitRequest {
+        database: DB.to_owned(),
+        writes,
+        ..Default::default()
+    };
+    client
+        .commit(commit(vec![set_write("rt/a", &[("v", s("1"))])]))
+        .await
+        .unwrap();
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    ltx.send(add_query_target(1, "rt")).await.unwrap();
+    // The per-target boundary carries a token bound to the target (the global one is
+    // accepted by every target, as the SDKs apply it to all of them).
+    let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[1]").await;
+    let _ = next_until(&mut listen, "NO_CHANGE[]").await;
+    // The token of the `rt` target does not resume an `other` target: full replay.
+    let mut other = add_query_target(2, "other");
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut other.target_change {
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(token.clone()));
+    }
+    ltx.send(other).await.unwrap();
+    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(trace[..2], ["ADD[2]", "RESET[2]"]);
+    drop(ltx);
+    // After a reset the same versions come around again: the old token must not line up
+    // with the new history.
+    BACKEND.with(|b| b.borrow().as_ref().unwrap().reset());
+    client
+        .commit(commit(vec![set_write("rt/b", &[("v", s("1"))])]))
+        .await
+        .unwrap();
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut resumed = add_query_target(3, "rt");
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut resumed.target_change {
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
+    }
+    ltx.send(resumed).await.unwrap();
+    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(trace[..3], ["ADD[3]", "RESET[3]", "CHANGE b"]);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn partition_pages_stay_consistent_while_documents_change() {
+    let (mut client, handle) = start(false).await;
+    let writes: Vec<pb::Write> = (0..8)
+        .map(|i| set_write(&format!("owners/o{i}/parts/p{i}"), &[("v", s("x"))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let request = |count: i64, page_size: i32, page_token: &str| pb::PartitionQueryRequest {
+        parent: DOCS.to_owned(),
+        partition_count: count,
+        page_size,
+        page_token: page_token.to_owned(),
+        query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "parts".to_owned(),
+                    all_descendants: true,
+                }],
+                order_by: vec![sq::Order {
+                    field: Some(sq::FieldReference {
+                        field_path: "__name__".to_owned(),
+                    }),
+                    direction: sq::Direction::Ascending as i32,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let name_of = |c: &pb::Cursor| match &c.values[0].value_type {
+        Some(pb::value::ValueType::ReferenceValue(r)) => r.rsplit('/').next().unwrap().to_owned(),
+        other => panic!("{other:?}"),
+    };
+    let first = client
+        .partition_query(request(3, 2, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        first.partitions.iter().map(name_of).collect::<Vec<_>>(),
+        ["p2", "p4"]
+    );
+    // Documents inserted before the next page do not shift the cuts of this partitioning.
+    let writes: Vec<pb::Write> = (0..8)
+        .map(|i| set_write(&format!("owners/n{i}/parts/a{i}"), &[("v", s("y"))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let second = client
+        .partition_query(request(3, 2, &first.next_page_token))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        second.partitions.iter().map(name_of).collect::<Vec<_>>(),
+        ["p6"]
+    );
+    // A fresh partitioning sees the new documents; a token for another count is refused.
+    let fresh = client
+        .partition_query(request(3, 0, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        fresh.partitions.iter().map(name_of).collect::<Vec<_>>(),
+        ["a4", "p0", "p4"]
+    );
+    assert_eq!(
+        client
+            .partition_query(request(4, 2, &first.next_page_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::InvalidArgument
+    );
+    assert_eq!(
+        client
+            .partition_query(request(3, -1, ""))
+            .await
+            .unwrap_err()
+            .code(),
         tonic::Code::InvalidArgument
     );
     handle.abort();

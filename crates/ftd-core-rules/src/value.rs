@@ -42,6 +42,9 @@ pub enum RulesValue {
     PartialMap(BTreeMap<String, RulesValue>),
     /// A list known to contain the listed members plus an unknown remainder.
     PartialList(Vec<RulesValue>),
+    /// A list known to contain at least one of the listed candidates plus an unknown
+    /// remainder (query proofs: an `array-contains-any` filter).
+    PartialListAny(Vec<RulesValue>),
     /// A value known only to lie within a range of one comparable type (query proofs: a
     /// field constrained by inequality filters). Ordered comparisons and equality with a
     /// concrete value are decided when every value of the range agrees.
@@ -112,7 +115,7 @@ impl RulesValue {
             Self::Int(_) => "int",
             Self::Float(_) => "float",
             Self::String(_) => "string",
-            Self::List(_) | Self::PartialList(_) => "list",
+            Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
             Self::Map(_) | Self::PartialMap(_) => "map",
             Self::Path(_) => "path",
             Self::Timestamp(_) => "timestamp",
@@ -201,6 +204,7 @@ impl fmt::Display for RulesValue {
             Self::NotOneOf(items) => write!(f, "not_one_of({} values)", items.len()),
             Self::PartialMap(m) => write!(f, "map({} known keys, ...)", m.len()),
             Self::PartialList(l) => write!(f, "list({} known members, ...)", l.len()),
+            Self::PartialListAny(l) => write!(f, "list(one of {} candidates, ...)", l.len()),
             Self::Range(r) => {
                 f.write_str("range(")?;
                 match &r.lower {

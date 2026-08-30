@@ -717,3 +717,42 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
     assert!(on_gone.iter().any(|o| o == "ok"), "{on_gone:?}");
     assert!(runtime.runner_alive());
 }
+
+#[tokio::test]
+async fn catch_up_latest_and_none_stay_idle_beyond_the_cap() {
+    use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for (policy, expected_runs) in [(CatchUpPolicy::Latest, 1), (CatchUpPolicy::None, 0)] {
+        let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
+        // A day: 288 "every 5 minutes" runs, far beyond a small cap of the test config
+        // (1000) only in principle; use a week to exceed it: 2016 runs.
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(7 * 24 * 3600))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert!(
+            runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
+            "{policy:?}: {}",
+            runtime.status()
+        );
+        let history = runtime.history();
+        let runs = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count();
+        assert_eq!(runs, expected_runs, "{policy:?}");
+        let skipped = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
+            .count();
+        assert!(skipped >= 1000, "{policy:?}: {skipped}");
+        assert!(
+            history
+                .iter()
+                .any(|r| r.function == "tick" && r.outcome.contains("more)")),
+            "{policy:?}"
+        );
+        assert_eq!(runtime.status()["catchUpPending"], false);
+    }
+}

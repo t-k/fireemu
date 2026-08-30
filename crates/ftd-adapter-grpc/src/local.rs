@@ -451,8 +451,12 @@ impl LocalBackend {
     }
 
     /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
-    /// `__name__`, without filters, orderings, limits or cursors) into up to
+    /// `__name__`, without filters, other orderings, limits or cursors) into up to
     /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.
+    /// The cuts are computed at one version (the `read_time` selector's, else the version
+    /// current at the first page) that the page token carries, so later pages see the same
+    /// partitioning whatever was written in between; the token is bound to the query.
+    #[allow(clippy::too_many_lines)]
     pub fn partition_query(
         &self,
         req: &pb::PartitionQueryRequest,
@@ -470,9 +474,13 @@ impl LocalBackend {
             ));
         };
         let query = self.accepted_query(&parent, sq)?.query;
+        let name_ascending_only = query.order_by.iter().all(|o| {
+            o.field.is_document_name()
+                && o.direction == ftd_core_firestore::query::Direction::Ascending
+        });
         if !query.scope.all_descendants
             || query.filter.is_some()
-            || !query.order_by.is_empty()
+            || !name_ascending_only
             || query.limit.is_some()
             || query.offset != 0
             || query.start_at.is_some()
@@ -486,9 +494,65 @@ impl LocalBackend {
             .ok()
             .filter(|n| *n > 0)
             .ok_or_else(|| Status::invalid_argument("partition_count must be positive"))?;
-        let names: Vec<String> = self.with_db(&parent, |db| {
-            db.run_query(&query, None)
-                .map(|docs| docs.iter().map(|d| d.path.resource_name()).collect())
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("page_size must not be negative"));
+        }
+        let read_time = req.consistency_selector.as_ref().map(
+            |pb::partition_query_request::ConsistencySelector::ReadTime(t)| {
+                crate::encode::decode_instant(t)
+            },
+        );
+        // Fingerprint of everything a page token must agree with.
+        let fingerprint = {
+            let text = format!(
+                "{}|{}|{}|{:?}",
+                req.parent,
+                query.scope.collection_id.as_str(),
+                partition_count,
+                read_time.map(ftd_core_types::time::LogicalInstant::as_nanos)
+            );
+            text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
+        // The page token: `<version>:<fingerprint>:<index>`.
+        let (token_version, start) = if req.page_token.is_empty() {
+            (None, 0usize)
+        } else {
+            let parts: Vec<&str> = req.page_token.split(':').collect();
+            let parsed = match parts.as_slice() {
+                [v, f, i] => v
+                    .parse::<u64>()
+                    .ok()
+                    .zip(f.parse::<u64>().ok())
+                    .zip(i.parse::<usize>().ok())
+                    .filter(|((_, f), _)| *f == fingerprint)
+                    .map(|((v, _), i)| (v, i)),
+                _ => None,
+            };
+            let (v, i) = parsed.ok_or_else(|| {
+                Status::invalid_argument(
+                    "invalid page_token (not issued for this query, count and read time)",
+                )
+            })?;
+            (Some(CommitVersion::from_value(v)), i)
+        };
+        let (names, version): (Vec<String>, CommitVersion) = self.with_db(&parent, |db| {
+            let version = match (token_version, read_time) {
+                (Some(v), _) => v,
+                (None, Some(t)) => db.version_at(t),
+                (None, None) => db.current_version(),
+            };
+            if version > db.current_version() {
+                return Err(Status::invalid_argument("invalid page_token"));
+            }
+            db.run_query(&query, Some(version))
+                .map(|docs| {
+                    (
+                        docs.iter().map(|d| d.path.resource_name()).collect(),
+                        version,
+                    )
+                })
                 .map_err(|e| status_from_error(&e))
         })?;
         // k cut points split n documents into k + 1 ranges; never more than n - 1 cuts.
@@ -503,15 +567,9 @@ impl LocalBackend {
                 before: true,
             })
             .collect();
-        let start = if req.page_token.is_empty() {
-            0
-        } else {
-            req.page_token
-                .parse::<usize>()
-                .ok()
-                .filter(|s| *s <= cursors.len())
-                .ok_or_else(|| Status::invalid_argument("invalid page_token"))?
-        };
+        if start > cursors.len() {
+            return Err(Status::invalid_argument("invalid page_token"));
+        }
         let page = usize::try_from(req.page_size)
             .ok()
             .filter(|n| *n > 0)
@@ -520,7 +578,7 @@ impl LocalBackend {
         Ok(pb::PartitionQueryResponse {
             partitions: cursors[start..end].to_vec(),
             next_page_token: if end < cursors.len() {
-                end.to_string()
+                format!("{}:{fingerprint}:{end}", version.value())
             } else {
                 String::new()
             },

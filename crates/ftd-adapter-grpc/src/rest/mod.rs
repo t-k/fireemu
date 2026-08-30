@@ -193,20 +193,48 @@ fn classify(resource: &str) -> Result<Target, Status> {
     }
 }
 
+/// The caller of a REST request: its principal plus the reset epoch the request started in
+/// (read before the token is verified; the guards refuse a caller from an earlier epoch).
+pub struct Caller {
+    principal: Principal,
+    epoch: u64,
+}
+
+impl std::ops::Deref for Caller {
+    type Target = Principal;
+    fn deref(&self) -> &Principal {
+        &self.principal
+    }
+}
+
 impl RestState {
-    fn principal(&self, authorization: Option<&str>) -> Result<Principal, Status> {
-        match &self.rules {
-            Some(r) => r.principal_from_authorization(authorization),
-            None => Ok(Principal::Owner),
-        }
+    fn principal(&self, authorization: Option<&str>) -> Result<Caller, Status> {
+        let epoch = self.local.barrier().epoch();
+        let principal = match &self.rules {
+            Some(r) => r.principal_from_authorization(authorization)?,
+            None => Principal::Owner,
+        };
+        Ok(Caller { principal, epoch })
     }
 
-    fn write_guard<'a>(&'a self, principal: &'a Principal) -> rules::BoxedWriteGuard<'a> {
-        rules::write_guard(self.rules.as_ref(), principal)
+    fn write_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedWriteGuard<'a> {
+        let inner = rules::write_guard(self.rules.as_ref(), &caller.principal);
+        let barrier = self.local.barrier();
+        let epoch = caller.epoch;
+        Box::new(move |db, writes, now| {
+            rules::same_epoch(&barrier, epoch)?;
+            inner(db, writes, now)
+        })
     }
 
-    fn read_guard<'a>(&'a self, principal: &'a Principal) -> rules::BoxedReadGuard<'a> {
-        rules::read_guard(self.rules.as_ref(), principal)
+    fn read_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedReadGuard<'a> {
+        let inner = rules::read_guard(self.rules.as_ref(), &caller.principal);
+        let barrier = self.local.barrier();
+        let epoch = caller.epoch;
+        Box::new(move |db, version, check| {
+            rules::same_epoch(&barrier, epoch)?;
+            inner(db, version, check)
+        })
     }
 
     /// Handles one request.
@@ -262,7 +290,7 @@ impl RestState {
 
     fn get(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         name: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
@@ -297,7 +325,7 @@ impl RestState {
 
     fn list(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         parent: &str,
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
@@ -345,7 +373,7 @@ impl RestState {
 
     fn create(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         parent: &str,
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
@@ -369,7 +397,7 @@ impl RestState {
 
     fn patch(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         name: &str,
         params: &BTreeMap<String, Vec<String>>,
         body: &Value,
@@ -403,7 +431,7 @@ impl RestState {
 
     fn delete(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         name: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
@@ -419,7 +447,7 @@ impl RestState {
 
     fn custom_method(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         action: &str,
         body: &Value,
@@ -481,7 +509,7 @@ impl RestState {
 
     fn commit(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -498,7 +526,7 @@ impl RestState {
 
     fn batch_write(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -518,7 +546,7 @@ impl RestState {
 
     fn batch_get(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -586,7 +614,7 @@ impl RestState {
 
     fn run_query(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {
@@ -644,7 +672,7 @@ impl RestState {
 
     fn run_aggregation_query(
         &self,
-        principal: &Principal,
+        principal: &Caller,
         resource: &str,
         body: &Value,
     ) -> Result<RestResponse, Status> {

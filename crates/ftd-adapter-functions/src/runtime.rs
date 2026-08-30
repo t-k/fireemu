@@ -528,12 +528,14 @@ impl FunctionsRuntime {
     /// and schedules restart from now. Dispatch resumes when the new runner is up.
     pub fn reset(self: &Arc<Self>) {
         let now = self.now();
-        self.runner().kill_now();
         let mut generation = None;
         if let Ok(mut inner) = self.inner.lock() {
             inner.epoch = inner.epoch.next().unwrap_or(inner.epoch);
             let epoch = inner.epoch;
             generation = Some(epoch);
+            // Killed under the same lock the restart installs under: a replacement from an
+            // earlier reset cannot slip in between the bump and the kill.
+            self.runner().kill_now();
             inner.outbox.discard_stale(epoch);
             inner.payloads.clear();
             inner.running.clear();
@@ -549,15 +551,23 @@ impl FunctionsRuntime {
                     Ok(runner) => {
                         // A later reset supersedes this restart: its own replacement is
                         // the runner of record and this one must not outlive the kill.
-                        let current = runtime.inner.lock().ok().map(|i| i.epoch);
-                        if current != generation {
-                            runner.kill_now();
-                            return;
+                        // Checked and installed under the runtime lock (the lock a reset
+                        // bumps the epoch and kills under), so the two cannot interleave.
+                        let installed = match runtime.inner.lock() {
+                            Ok(inner) if Some(inner.epoch) == generation => {
+                                if let Ok(mut slot) = runtime.runner.write() {
+                                    *slot = Arc::new(runner);
+                                }
+                                true
+                            }
+                            _ => {
+                                runner.kill_now();
+                                false
+                            }
+                        };
+                        if installed {
+                            runtime.wake.notify_one();
                         }
-                        if let Ok(mut slot) = runtime.runner.write() {
-                            *slot = Arc::new(runner);
-                        }
-                        runtime.wake.notify_one();
                     }
                     Err(e) => eprintln!("[functions] runner restart failed: {e}"),
                 }

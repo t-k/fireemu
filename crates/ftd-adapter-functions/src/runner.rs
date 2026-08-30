@@ -146,10 +146,16 @@ impl Runner {
     /// into the reset state). Waiters learn it through the reader task's exit.
     pub fn kill_now(&self) {
         self.alive.store(false, Ordering::SeqCst);
-        if let Ok(mut child) = self.child.try_lock() {
-            if let Some(child) = child.as_mut() {
+        if let Ok(mut slot) = self.child.try_lock() {
+            if let Some(mut child) = slot.take() {
                 let _ = child.start_kill();
                 kill_process_group(child.id());
+                // Reaped in the background: a killed runner must not linger as a zombie.
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let _ = child.wait().await;
+                    });
+                }
             }
         }
         if let Ok(mut stdin) = self.stdin.try_lock() {
@@ -317,10 +323,12 @@ impl Runner {
         let hello = match tokio::time::timeout(hello_timeout, hello_rx).await {
             Ok(Ok(h)) => h,
             Ok(Err(_)) => {
+                kill_process_group(child.id());
                 let _ = child.kill().await;
                 return Err("functions runner exited before its hello".to_owned());
             }
             Err(_) => {
+                kill_process_group(child.id());
                 let _ = child.kill().await;
                 return Err(format!(
                     "functions runner sent no hello within {}s",
@@ -431,14 +439,24 @@ impl Runner {
 
     /// Asks the runner to exit, then kills it.
     pub async fn shutdown(&self) {
-        if let Some(stdin) = self.stdin.lock().await.as_mut() {
-            let _ = write_frame(stdin, &json!({"type": "shutdown"})).await;
-        }
-        if let Some(mut child) = self.child.lock().await.take() {
+        // The polite part is bounded: a stalled runner or a full pipe must not keep the
+        // daemon alive.
+        let polite = async {
+            if let Some(stdin) = self.stdin.lock().await.as_mut() {
+                let _ = write_frame(stdin, &json!({"type": "shutdown"})).await;
+            }
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(2), polite).await;
+        let child = tokio::time::timeout(Duration::from_secs(2), self.child.lock())
+            .await
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(mut child) = child {
             let pid = child.id();
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             let _ = child.kill().await;
             kill_process_group(pid);
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         }
         eprintln!("{} stopped", self.label);
     }

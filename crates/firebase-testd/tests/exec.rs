@@ -211,3 +211,85 @@ fn exec_needs_a_command() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("-- <command...>"));
 }
+
+#[test]
+fn a_background_job_the_command_leaves_behind_is_swept() {
+    // Off a terminal the command leads its own process group; the group is killed once
+    // the command has exited, so `sleep` does not outlive the supervisor.
+    let dir = scratch("orphan");
+    let pidfile = dir.join("pid");
+    let output = daemon()
+        .args(["--", "sh", "-c"])
+        .arg(format!(
+            "sleep 300 & echo $! > {}; exit 0",
+            pidfile.display()
+        ))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let sleeper = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    let gone = Instant::now();
+    while alive(&sleeper) && gone.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !alive(&sleeper),
+        "the background job survived the supervisor"
+    );
+}
+
+#[test]
+fn inherited_emulator_variables_do_not_reach_the_command_unless_selected() {
+    let dir = scratch("scrub");
+    let out = dir.join("env.txt");
+    let output = daemon()
+        .env("FIRESTORE_EMULATOR_HOST", "leaked.example:1")
+        .env("STORAGE_EMULATOR_HOST", "http://leaked.example:2")
+        .env("FTD_FUNCTIONS_HOST", "leaked.example:3")
+        .args(["--only", "auth", "--", "sh", "-c"])
+        .arg(format!("env > {}", out.display()))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let env = env_file(&out);
+    assert!(env.contains_key("FIREBASE_AUTH_EMULATOR_HOST"));
+    for key in [
+        "FIRESTORE_EMULATOR_HOST",
+        "STORAGE_EMULATOR_HOST",
+        "FIREBASE_STORAGE_EMULATOR_HOST",
+        "FTD_FUNCTIONS_HOST",
+    ] {
+        assert!(!env.contains_key(key), "{key} leaked into the command");
+    }
+}
+
+#[test]
+fn sigint_keeps_its_identity_when_forwarded() {
+    let dir = scratch("int");
+    let pidfile = dir.join("pid");
+    let supervisor = daemon()
+        .args(["--", "sh", "-c"])
+        .arg(format!("echo $$ > {}; exec sleep 30", pidfile.display()))
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    while !pidfile.exists() && started.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let child_pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    assert!(alive(&child_pid));
+    assert!(Command::new("kill")
+        .args(["-INT", &supervisor.id().to_string()])
+        .status()
+        .unwrap()
+        .success());
+    let output = supervisor.wait_with_output().unwrap();
+    // `sleep` ended by SIGINT: 128 + 2.
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!alive(&child_pid));
+}

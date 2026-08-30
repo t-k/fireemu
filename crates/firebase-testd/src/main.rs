@@ -291,15 +291,56 @@ fn child_environment(
     env
 }
 
+/// The emulator variables `exec` owns: those not selected by `--only` are removed from the
+/// command's environment, so a shell configured for other emulators cannot leak into it.
+const OWNED_VARIABLES: [&str; 5] = [
+    "FIRESTORE_EMULATOR_HOST",
+    "FIREBASE_AUTH_EMULATOR_HOST",
+    "FIREBASE_STORAGE_EMULATOR_HOST",
+    "STORAGE_EMULATOR_HOST",
+    "FTD_FUNCTIONS_HOST",
+];
+
+/// The command runs in its own process group when the supervisor is not on a terminal
+/// (CI, a script), so a signal reaches its whole tree; on a terminal it stays in the
+/// foreground group so it keeps the terminal and receives Ctrl-C itself.
+fn own_process_group() -> bool {
+    use std::io::IsTerminal as _;
+    !std::io::stdin().is_terminal()
+}
+
 fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::process::Child, String> {
     let (program, args) = plan
         .command
         .split_first()
         .ok_or("exec needs a command after --")?;
     let mut cmd = tokio::process::Command::new(program);
-    cmd.args(args).envs(env.iter().cloned()).kill_on_drop(true);
+    cmd.args(args).kill_on_drop(true);
+    for name in OWNED_VARIABLES {
+        cmd.env_remove(name);
+    }
+    cmd.envs(env.iter().cloned());
+    if own_process_group() {
+        cmd.process_group(0);
+    }
     cmd.spawn()
         .map_err(|e| format!("cannot start {program}: {e}"))
+}
+
+/// Sends `signal` to the command: to its process group when it leads one, else to it.
+fn signal_child(child: &tokio::process::Child, signal: &str) {
+    let Some(pid) = child.id() else {
+        return;
+    };
+    let target = if own_process_group() {
+        format!("-{pid}")
+    } else {
+        pid.to_string()
+    };
+    let _ = std::process::Command::new("kill")
+        .args([signal, "--", &target])
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 /// Waits for the command when there is one; never resolves otherwise.
@@ -312,19 +353,22 @@ async fn wait_child(
     }
 }
 
-/// Stops the command: SIGTERM (through `kill(1)`; the crate forbids unsafe code), SIGKILL
-/// after ten seconds. Returns the status it would have reported.
-async fn stop_child(child: &mut tokio::process::Child) -> i32 {
-    if let Some(pid) = child.id() {
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status();
+/// Stops the command after the supervisor received `signal` (`-INT` / `-TERM`): the signal
+/// is forwarded with its identity (through `kill(1)`; the crate forbids unsafe code) unless
+/// the terminal already delivered it to the command's own group, then SIGKILL to the whole
+/// group after ten seconds. Returns the status the command reported.
+async fn stop_child(child: &mut tokio::process::Child, signal: &str) -> i32 {
+    let terminal_delivered = signal == "-INT" && !own_process_group();
+    if !terminal_delivered {
+        signal_child(child, signal);
     }
     if let Ok(Ok(status)) =
         tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await
     {
+        signal_child(child, "-KILL");
         exit_code(status)
     } else {
+        signal_child(child, "-KILL");
         let _ = child.kill().await;
         137
     }
@@ -721,6 +765,7 @@ fn run(cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             }
             None => None,
         };
+        let mut terminated = false;
         let outcome = tokio::select! {
             r = grpc => Err(format!("gRPC server stopped: {r:?}")),
             r = http => Err(format!("HTTP server stopped: {r:?}")),
@@ -736,13 +781,21 @@ fn run(cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             }
             () = terminate_signal() => {
                 println!("shutting down (SIGTERM)");
+                terminated = true;
                 Ok::<Option<i32>, String>(None)
             }
         };
-        // The command stops before the services it uses.
+        // The command stops before the services it uses. When it exited by itself its
+        // group is still swept (a background job it left behind must not keep running).
         let code = match (&outcome, child.as_mut()) {
-            (Ok(Some(code)), _) => *code,
-            (_, Some(child)) => stop_child(child).await,
+            (Ok(Some(code)), Some(child)) => {
+                signal_child(child, "-KILL");
+                *code
+            }
+            (Ok(Some(code)), None) => *code,
+            (_, Some(child)) => {
+                stop_child(child, if terminated { "-TERM" } else { "-INT" }).await
+            }
             (_, None) => 0,
         };
         if let Some(runtime) = functions_runtime {

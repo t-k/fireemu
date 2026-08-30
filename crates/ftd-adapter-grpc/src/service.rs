@@ -19,7 +19,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::decode::{decode_structured_query, parse_parent};
 use crate::gateway::{Gateway, Rejection};
 use crate::local::LocalBackend;
-use crate::rules::{Principal, RulesEnforcer};
+use crate::rules::{same_epoch, Principal, RulesEnforcer};
 
 /// Boxed response stream.
 pub type BoxStream<T> = tonic::codegen::BoxStream<T>;
@@ -161,6 +161,39 @@ impl GatewayService {
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
                 "RunQuery requires a structured_query",
+            ));
+        };
+        let query =
+            decode_structured_query(&parent, sq).map_err(|e| Rejection::Decode(e).to_status())?;
+        let accepted = self
+            .gateway
+            .validate_query(&query)
+            .map_err(|r| r.to_status())?;
+        Ok(accepted.warnings)
+    }
+}
+
+impl GatewayService {
+    /// The aggregation's underlying query goes through the gateway before it is forwarded
+    /// (a missing composite index is refused here, never by the upstream).
+    fn validate_run_aggregation_query(
+        &self,
+        req: &pb::RunAggregationQueryRequest,
+    ) -> Result<Vec<String>, Status> {
+        let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+        let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+            aggregation,
+        )) = &req.query_type
+        else {
+            return Err(Status::invalid_argument(
+                "RunAggregationQuery requires a structured_aggregation_query",
+            ));
+        };
+        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
+            &aggregation.query_type
+        else {
+            return Err(Status::invalid_argument(
+                "structured_aggregation_query requires a structured_query",
             ));
         };
         let query =
@@ -365,10 +398,10 @@ impl Firestore for GatewayService {
             let stream: Vec<Result<pb::RunAggregationQueryResponse, Status>> = vec![Ok(response)];
             return Ok(Response::new(Box::pin(tokio_stream::iter(stream))));
         }
-        let response = self
-            .client()?
-            .run_aggregation_query(request.into_inner())
-            .await?;
+        let req = request.into_inner();
+        let warnings = self.validate_run_aggregation_query(&req)?;
+        let response = self.client()?.run_aggregation_query(req).await?;
+        let response = with_warnings(response, &warnings);
         Ok(Response::new(Box::pin(response.into_inner())))
     }
 
@@ -460,20 +493,6 @@ impl Firestore for GatewayService {
 struct Caller {
     principal: Principal,
     epoch: u64,
-}
-
-/// Refuses work admitted into a later epoch than the one the caller started in.
-fn same_epoch(
-    barrier: &ftd_core_session::barrier::AdmissionBarrier,
-    epoch: u64,
-) -> Result<(), Status> {
-    if barrier.epoch() == epoch {
-        Ok(())
-    } else {
-        Err(Status::unavailable(
-            "the session was reset while the request was in flight; retry against the new session",
-        ))
-    }
 }
 
 #[cfg(test)]

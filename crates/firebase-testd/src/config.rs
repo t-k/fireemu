@@ -95,6 +95,15 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// The keys of the `auth` section (spec/config/firebase-testd.schema.json).
+const AUTH_KEYS: [&str; 5] = [
+    "enabled",
+    "projectIssuer",
+    "idTokenSigning",
+    "totp",
+    "secretMaterialization",
+];
+
 /// Configuration errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError(pub String);
@@ -509,7 +518,7 @@ impl RuntimeConfig {
                 .as_object()
                 .ok_or_else(|| ConfigError("auth must be an object".to_owned()))?;
             for key in auth.keys() {
-                if !["enabled", "projectIssuer", "idTokenSigning", "totp"].contains(&key.as_str()) {
+                if !AUTH_KEYS.contains(&key.as_str()) {
                     return Err(ConfigError(format!("unknown config key auth.{key}")));
                 }
             }

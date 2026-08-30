@@ -896,3 +896,18 @@ pub fn resource_value(doc: &Document) -> RulesValue {
     );
     RulesValue::Map(m)
 }
+
+/// Refuses work admitted into a later reset epoch than the one the caller started in: the
+/// caller's token was verified against the previous session's Auth store.
+pub fn same_epoch(
+    barrier: &ftd_core_session::barrier::AdmissionBarrier,
+    epoch: u64,
+) -> Result<(), Status> {
+    if barrier.epoch() == epoch {
+        Ok(())
+    } else {
+        Err(Status::unavailable(
+            "the session was reset while the request was in flight; retry against the new session",
+        ))
+    }
+}

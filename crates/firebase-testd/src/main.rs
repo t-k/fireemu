@@ -931,9 +931,11 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
                 // never evaluates a rule: it exists to verify the ID token against the target
                 // project's users on the virtual clock, which is required whether or not
                 // Security Rules are enforced at all.
+                // The service label is the core's own constant: counters group callable
+                // observations by function name for exactly this label (section 15).
                 let policy = service_admission(
                     Some(gate),
-                    "functions",
+                    ftd_core_app_check::observe::FUNCTIONS_SERVICE,
                     ftd_core_app_check::verify::BaselineMode::Unenforced,
                 )
                 .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;

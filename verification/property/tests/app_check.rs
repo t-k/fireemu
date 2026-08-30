@@ -395,7 +395,11 @@ proptest! {
 
         // AC-OBS-001: every classified request leaves exactly one secret-free observation,
         // and an unverified identity aggregates into the bounded bucket.
-        let observed = gate.registry().read().expect("readable").observations();
+        let observed = gate
+            .registry()
+            .read()
+            .expect("readable")
+            .observations("demo-app");
         prop_assert_eq!(observed.len(), 1);
         let o = &observed[0];
         prop_assert_eq!(o.service, service);

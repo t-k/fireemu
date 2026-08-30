@@ -625,6 +625,11 @@ fn conflicting_session(
 /// body carries the stable failure reasons that public responses deliberately collapse. App
 /// IDs come from the observations, which already aggregate an unverified identity into the
 /// bounded `unknown` bucket, so no caller-supplied text becomes a counter label.
+///
+/// The registry keeps one ring and one set of counters per project, and this route reads the
+/// session's project alone: another project's traffic can neither be read here nor push this
+/// project's recent observations out of the window. The counters count every observation
+/// recorded since the project was last reset, including the ones the ring has since dropped.
 fn app_check_observations(
     state: &ControlState,
     method: &str,
@@ -670,28 +675,20 @@ fn app_check_observations(
     let Ok(registry) = gate.registry().read() else {
         return error(500, "INTERNAL");
     };
-    let observations: Vec<ftd_core_app_check::observe::Observation> = registry
-        .observations()
-        .into_iter()
-        .filter(|o| o.project_id == project)
-        .collect();
-    // Counters by service, verified app ID, category and outcome; nothing else is a label.
-    let mut counters: std::collections::BTreeMap<(&str, String, &str, bool), u64> =
-        std::collections::BTreeMap::new();
-    for o in &observations {
-        *counters
-            .entry((o.service, o.app_id.clone(), o.category.as_str(), o.admitted))
-            .or_insert(0) += 1;
-    }
+    // The session's own project ring and its own counters: a project is never served another
+    // project's observations, and no filter here is what makes that true.
+    let observations = registry.observations(&project);
+    let counters = registry.observation_counters(&project);
     ok(json!({
         "session": session,
         "project": project,
         "policyGeneration": registry.policy_generation(&project),
-        "counters": counters.into_iter().map(|((service, app_id, category, admitted), count)| json!({
-            "service": service,
-            "appId": app_id,
-            "category": category,
-            "outcome": if admitted { "admitted" } else { "denied" },
+        "counters": counters.into_iter().map(|(key, count)| json!({
+            "service": key.service,
+            "appId": key.app_id,
+            "function": key.function,
+            "category": key.category.as_str(),
+            "outcome": key.outcome(),
             "count": count,
         })).collect::<Vec<_>>(),
         "observations": observations.iter().map(|o| json!({

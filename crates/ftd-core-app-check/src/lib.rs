@@ -34,7 +34,7 @@ pub use claims::AppCheckClaims;
 pub use crypto::{AppCheckSigner, ConstantTimeEq, DebugTokenHasher};
 pub use exchange::{canonical_debug_token, ExchangeOutcome, ExchangeRequest};
 pub use header::{classify_app_check_header, HeaderClassification, APP_CHECK_HEADER};
-pub use observe::{CredentialCategory, Observation};
+pub use observe::{CredentialCategory, Observation, ObservationCounterKey};
 pub use registry::{
     AppCheckRegistry, AppRegistration, DebugTokenDigest, DebugTokenRecord, DynamicDebugTokens,
     ProjectEpoch, RegisteredApp, RegistryError,

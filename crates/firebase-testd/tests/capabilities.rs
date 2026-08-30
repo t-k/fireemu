@@ -40,9 +40,11 @@ const APP_CHECK_CAPABILITIES: [(&str, &str, &str); 9] = [
         "implemented",
         "boundary-conformance",
     ),
-    // Partial while the retained observations are one ring for the runtime, not one per
-    // project. The Emulator UI page of milestone AC3 exists.
-    ("APPCHECK-OBSERVE-1", "partial", "exact-for-local-semantics"),
+    (
+        "APPCHECK-OBSERVE-1",
+        "implemented",
+        "exact-for-local-semantics",
+    ),
     ("APPCHECK-SDK-WEB-1", "implemented", "boundary-conformance"),
     ("APPCHECK-REPLAY-1", "unsupported", "unsupported"),
     (
@@ -317,10 +319,10 @@ fn the_local_divergences_and_the_observation_surface_are_published() {
         "the JWKS caching divergence is published: {jwks}"
     );
 
-    // Milestone AC3: the observation surface, including the Emulator UI page, and the one
-    // thing that keeps the capability partial.
+    // The observation surface, including the Emulator UI page and the per-project scoping
+    // that makes what one session reads independent of what another session did.
     let observe = &capabilities["APPCHECK-OBSERVE-1"];
-    assert_eq!(observe["status"], "partial");
+    assert_eq!(observe["status"], "implemented");
     let observe_text = text_of(observe);
     for claim in [
         "/v1/sessions/{session}/appCheck/observations",
@@ -328,6 +330,7 @@ fn the_local_divergences_and_the_observation_surface_are_published() {
         "/ui/api/appcheck/config",
         "Cache-Control: no-store",
         "unknown bucket",
+        "callable function name for the functions service",
     ] {
         assert!(
             observe_text.contains(claim),
@@ -335,8 +338,12 @@ fn the_local_divergences_and_the_observation_surface_are_published() {
         );
     }
     assert!(
-        observe_text.contains("one bounded ring for the runtime"),
-        "the entry says why it is still partial: {observe_text}"
+        observe_text.contains("one bounded ring and one set of counters per project"),
+        "the entry states the per-project scoping: {observe_text}"
+    );
+    assert!(
+        observe_text.contains("at most 256 projects hold a ring at once"),
+        "the entry states the bound on the table of rings: {observe_text}"
     );
     assert!(
         observe_text.contains("never in a list, a log, window.__FTD__ or an observation"),

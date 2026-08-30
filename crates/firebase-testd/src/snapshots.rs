@@ -432,7 +432,7 @@ mod tests {
             gate.registry()
                 .read()
                 .expect("readable")
-                .observations()
+                .observed_projects()
                 .is_empty(),
             "counters reset with the state they described"
         );

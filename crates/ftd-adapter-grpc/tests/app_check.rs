@@ -328,12 +328,13 @@ impl Harness {
             .expect("the fixture clock moves forward");
     }
 
+    /// The observation ring of the fixture's project. The registry keeps one per project.
     fn observations(&self) -> Vec<ftd_core_app_check::observe::Observation> {
         self.gate
             .registry()
             .read()
             .expect("readable")
-            .observations()
+            .observations("demo-app")
     }
 
     /// A REST request with the given credentials.

@@ -12,6 +12,9 @@ use ftd_core_app_check::admission::{
     AdmissionRequest, AppCheckGate, PrivilegedBypass, ServiceAdmission,
 };
 use ftd_core_app_check::header::HeaderClassification;
+use ftd_core_app_check::limits::{
+    MAX_OBSERVED_PROJECTS, MAX_OBSERVED_PROJECT_ID_BYTES, MAX_RETAINED_OBSERVATIONS_PER_PROJECT,
+};
 use ftd_core_app_check::observe::CredentialCategory;
 use ftd_core_app_check::registry::AppCheckRegistry;
 use ftd_core_app_check::verify::{AppCheckFailure, BaselineMode};
@@ -34,6 +37,18 @@ fn valid_token(gate: &AppCheckGate) -> String {
         .issue_claims("demo-app", DEMO_APP_ID, NOW)
         .expect("the fixture app may exchange");
     ftd_core_app_check::jwt::encode(&claims, gate.signer().as_ref())
+}
+
+/// A request against the fixture's second project, which shares the registry with the first.
+fn other_project_request(operation: &str) -> AdmissionRequest<'_> {
+    AdmissionRequest {
+        project_id: "demo-other",
+        transport: "http",
+        operation,
+        bypass: PrivilegedBypass::None,
+        header: &HeaderClassification::Missing,
+        now: NOW,
+    }
 }
 
 fn request(header: &HeaderClassification, bypass: PrivilegedBypass) -> AdmissionRequest<'_> {
@@ -163,7 +178,7 @@ fn an_explicit_privileged_bypass_is_admitted_without_parsing_the_header() {
         .registry()
         .read()
         .expect("readable")
-        .observations();
+        .observations("demo-app");
     assert_eq!(
         observed.last().map(|o| o.category),
         Some(CredentialCategory::Bypass)
@@ -192,7 +207,11 @@ fn every_classified_request_records_one_secret_free_observation() {
         header: &HeaderClassification::Malformed,
         now: NOW,
     });
-    let observed = gate.registry().read().expect("readable").observations();
+    let observed = gate
+        .registry()
+        .read()
+        .expect("readable")
+        .observations("demo-app");
     assert_eq!(observed.len(), 2);
     assert_eq!(observed[0].service, "storage");
     assert_eq!(observed[0].category, CredentialCategory::Valid);
@@ -357,7 +376,8 @@ fn restoring_a_capture_replaces_the_dynamic_debug_tokens_of_that_scope() {
     );
 }
 
-/// Section 14: observation counters reset with the project state they describe.
+/// Section 14: observation counters reset with the project state they describe, and a reset
+/// of one project leaves every other project's ring and counters exactly as they were.
 #[test]
 fn clearing_observations_touches_only_the_named_scope() {
     let gate = gate(fixture_registry());
@@ -367,19 +387,275 @@ fn clearing_observations_touches_only_the_named_scope() {
         &HeaderClassification::Missing,
         PrivilegedBypass::None,
     ));
-    let _ = policy.admit(&AdmissionRequest {
-        project_id: "demo-other",
-        transport: "http",
-        operation: "accounts:signUp",
-        bypass: PrivilegedBypass::None,
-        header: &HeaderClassification::Missing,
-        now: NOW,
-    });
+    let _ = policy.admit(&other_project_request("accounts:signUp"));
     gate.registry()
         .read()
         .expect("readable")
         .clear_observations(|project| project == "demo-app");
-    let left = gate.registry().read().expect("readable").observations();
+    let registry = gate.registry().read().expect("readable");
+    assert!(
+        registry.observations("demo-app").is_empty(),
+        "the reset project keeps no observation"
+    );
+    assert!(
+        registry.observation_counters("demo-app").is_empty(),
+        "and no counter either: counters reset with the project state"
+    );
+    let left = registry.observations("demo-other");
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].project_id, "demo-other");
+    assert_eq!(
+        registry
+            .observation_counters("demo-other")
+            .iter()
+            .map(|(_, count)| *count)
+            .sum::<u64>(),
+        1,
+        "the untouched project keeps its counters"
+    );
+    assert_eq!(
+        registry.observed_projects(),
+        vec!["demo-other".to_owned()],
+        "the reset project's ring is gone, not emptied in place"
+    );
+}
+
+/// A project's ring is created on first use and dropped when its session is deleted: after
+/// the drop the project is not observed at all, and a later request opens a fresh ring.
+#[test]
+fn deleting_a_project_drops_its_ring_and_a_later_request_opens_a_fresh_one() {
+    let gate = gate(fixture_registry());
+    let policy =
+        ServiceAdmission::new(gate.clone(), "auth", BaselineMode::Unenforced).expect("mode");
+    assert!(
+        gate.registry()
+            .read()
+            .expect("readable")
+            .observed_projects()
+            .is_empty(),
+        "no request, no ring"
+    );
+    let _ = policy.admit(&request(
+        &HeaderClassification::Missing,
+        PrivilegedBypass::None,
+    ));
+    assert_eq!(
+        gate.registry()
+            .read()
+            .expect("readable")
+            .observed_projects(),
+        vec!["demo-app".to_owned()]
+    );
+    gate.clear_observations(|project| project == "demo-app");
+    assert!(
+        gate.registry()
+            .read()
+            .expect("readable")
+            .observed_projects()
+            .is_empty(),
+        "deletion drops the ring itself"
+    );
+    let _ = policy.admit(&request(
+        &HeaderClassification::Missing,
+        PrivilegedBypass::None,
+    ));
+    let registry = gate.registry().read().expect("readable");
+    assert_eq!(registry.observations("demo-app").len(), 1);
+    assert_eq!(
+        registry
+            .observation_counters("demo-app")
+            .iter()
+            .map(|(_, count)| *count)
+            .sum::<u64>(),
+        1,
+        "the fresh ring starts its counters from zero"
+    );
+}
+
+/// The point of the per-project ring: a project that fills its own window many times over
+/// evicts nothing but its own history.
+#[test]
+fn heavy_traffic_to_one_project_never_evicts_another_projects_observations() {
+    let gate = gate(fixture_registry());
+    let policy = ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Unenforced)
+        .expect("unenforced classifies");
+    let _ = policy.admit(&other_project_request("first"));
+    for _ in 0..(MAX_RETAINED_OBSERVATIONS_PER_PROJECT * 3) {
+        let _ = policy.admit(&request(
+            &HeaderClassification::Missing,
+            PrivilegedBypass::None,
+        ));
+    }
+    let _ = policy.admit(&other_project_request("last"));
+    let registry = gate.registry().read().expect("readable");
+    let noisy = registry.observations("demo-app");
+    assert_eq!(
+        noisy.len(),
+        MAX_RETAINED_OBSERVATIONS_PER_PROJECT,
+        "a project's own ring is still bounded"
+    );
+    let quiet = registry.observations("demo-other");
+    assert_eq!(
+        quiet
+            .iter()
+            .map(|o| o.operation.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "last"],
+        "the quiet project keeps both of its observations"
+    );
+}
+
+/// Counters are not derived from what the ring still holds: an evicted observation is still
+/// counted, so a busy project's totals stay honest.
+#[test]
+fn counters_outlive_the_observations_the_ring_evicted() {
+    let gate = gate(fixture_registry());
+    let policy = ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Unenforced)
+        .expect("unenforced classifies");
+    let rounds = MAX_RETAINED_OBSERVATIONS_PER_PROJECT + 10;
+    for _ in 0..rounds {
+        let _ = policy.admit(&request(
+            &HeaderClassification::Missing,
+            PrivilegedBypass::None,
+        ));
+    }
+    let registry = gate.registry().read().expect("readable");
+    assert_eq!(
+        registry.observations("demo-app").len(),
+        MAX_RETAINED_OBSERVATIONS_PER_PROJECT
+    );
+    let counters = registry.observation_counters("demo-app");
+    assert_eq!(counters.len(), 1, "one bounded key: {counters:?}");
+    let (key, count) = &counters[0];
+    assert_eq!(key.service, "firestore");
+    assert_eq!(key.app_id, "unknown");
+    assert_eq!(key.function, None);
+    assert_eq!(key.category, CredentialCategory::Missing);
+    assert_eq!(key.outcome(), "admitted");
+    assert_eq!(*count, rounds as u64);
+}
+
+/// Callable observations are grouped per callable; every other service's operation stays out
+/// of the counter key, because only a callable name is a label the daemon itself declared.
+#[test]
+fn callable_counters_group_by_function_and_other_services_do_not() {
+    let gate = gate(fixture_registry());
+    let callables = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
+        .expect("unenforced classifies");
+    for operation in ["addMessage", "addMessage", "deleteMessage"] {
+        let _ = callables.admit(&AdmissionRequest {
+            project_id: "demo-app",
+            transport: "http",
+            operation,
+            bypass: PrivilegedBypass::None,
+            header: &HeaderClassification::Missing,
+            now: NOW,
+        });
+    }
+    let storage = ServiceAdmission::new(gate.clone(), "storage", BaselineMode::Unenforced)
+        .expect("unenforced classifies");
+    for operation in ["upload", "download"] {
+        let _ = storage.admit(&AdmissionRequest {
+            project_id: "demo-app",
+            transport: "http",
+            operation,
+            bypass: PrivilegedBypass::None,
+            header: &HeaderClassification::Missing,
+            now: NOW,
+        });
+    }
+    let counters = gate
+        .registry()
+        .read()
+        .expect("readable")
+        .observation_counters("demo-app");
+    let functions: Vec<(Option<String>, u64)> = counters
+        .iter()
+        .filter(|(key, _)| key.service == "functions")
+        .map(|(key, count)| (key.function.clone(), *count))
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            (Some("addMessage".to_owned()), 2),
+            (Some("deleteMessage".to_owned()), 1)
+        ]
+    );
+    let storage_counters: Vec<(Option<String>, u64)> = counters
+        .iter()
+        .filter(|(key, _)| key.service == "storage")
+        .map(|(key, count)| (key.function.clone(), *count))
+        .collect();
+    assert_eq!(
+        storage_counters,
+        vec![(None, 2)],
+        "storage operations are not counter labels"
+    );
+}
+
+/// The table of rings is bounded too, and a project the registry knows is never crowded out
+/// of it by traffic naming projects it does not.
+#[test]
+fn an_unregistered_project_never_displaces_a_registered_ones_ring() {
+    let gate = gate(fixture_registry());
+    let policy = ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Unenforced)
+        .expect("unenforced classifies");
+    for i in 0..MAX_OBSERVED_PROJECTS {
+        let project = format!("nobody-{i}");
+        let _ = policy.admit(&AdmissionRequest {
+            project_id: &project,
+            transport: "http",
+            operation: "get",
+            bypass: PrivilegedBypass::None,
+            header: &HeaderClassification::Missing,
+            now: NOW,
+        });
+    }
+    let observed = gate
+        .registry()
+        .read()
+        .expect("readable")
+        .observed_projects();
+    assert_eq!(
+        observed.len(),
+        MAX_OBSERVED_PROJECTS,
+        "the table is bounded"
+    );
+    let _ = policy.admit(&request(
+        &HeaderClassification::Missing,
+        PrivilegedBypass::None,
+    ));
+    let registry = gate.registry().read().expect("readable");
+    assert_eq!(registry.observations("demo-app").len(), 1);
+    assert_eq!(
+        registry.observed_projects().len(),
+        MAX_OBSERVED_PROJECTS,
+        "one unregistered ring made room for the registered one"
+    );
+}
+
+/// A project ID no session could ever name is never allocated a ring: the observation would
+/// be unreachable through the control API, and the table has to stay bounded.
+#[test]
+fn an_unnameable_project_id_opens_no_ring() {
+    let gate = gate(fixture_registry());
+    let policy = ServiceAdmission::new(gate.clone(), "firestore", BaselineMode::Unenforced)
+        .expect("unenforced classifies");
+    let too_long = "d".repeat(MAX_OBSERVED_PROJECT_ID_BYTES + 1);
+    for project in ["", too_long.as_str()] {
+        let _ = policy.admit(&AdmissionRequest {
+            project_id: project,
+            transport: "http",
+            operation: "get",
+            bypass: PrivilegedBypass::None,
+            header: &HeaderClassification::Missing,
+            now: NOW,
+        });
+    }
+    assert!(gate
+        .registry()
+        .read()
+        .expect("readable")
+        .observed_projects()
+        .is_empty());
 }

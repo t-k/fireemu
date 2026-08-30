@@ -783,7 +783,9 @@ const fbMetadata = {
         body: text(
           JSON.stringify({
             contentDisposition: "attachment",
-            contentEncoding: "gzip",
+            // Not gzip: the official emulator would then stamp Content-Encoding: gzip on
+            // this JSON response and every HTTP client chokes decoding it.
+            contentEncoding: "identity",
             cacheControl: "max-age=1",
             contentLanguage: "en",
           }),
@@ -1062,12 +1064,20 @@ const rulesRequestModel = {
   id: "rules-request-model",
   area: "rules",
   async run(ctx) {
+    // Every write in this program is anonymous: owner credentials would bypass the rules
+    // under test on both sides.
+    const anonMedia = (name, body, contentType = "text/plain") =>
+      ctx.http({
+        method: "POST",
+        path: fbBucket(ctx),
+        query: { name },
+        headers: { "content-type": contentType },
+        body,
+      });
     await ctx.step("size-under-limit", () =>
-      fbMedia(ctx, "gated/size/small.txt", Buffer.alloc(50, 65)),
+      anonMedia("gated/size/small.txt", Buffer.alloc(50, 65)),
     );
-    await ctx.step("size-over-limit", () =>
-      fbMedia(ctx, "gated/size/big.txt", Buffer.alloc(150, 65)),
-    );
+    await ctx.step("size-over-limit", () => anonMedia("gated/size/big.txt", Buffer.alloc(150, 65)));
     await ctx.step("size-over-limit-not-published", () =>
       ctx.http({ method: "GET", path: fbObject(ctx, "gated/size/big.txt"), headers: OWNER }),
     );
@@ -1075,10 +1085,10 @@ const rulesRequestModel = {
       ctx.http({ method: "DELETE", path: fbObject(ctx, "gated/size/small.txt") }),
     );
     await ctx.step("type-image", () =>
-      fbMedia(ctx, "gated/type/a.png", Buffer.from("png"), "image/png"),
+      anonMedia("gated/type/a.png", Buffer.from("png"), "image/png"),
     );
     await ctx.step("type-text", () =>
-      fbMedia(ctx, "gated/type/a.txt", Buffer.from("txt"), "text/plain"),
+      anonMedia("gated/type/a.txt", Buffer.from("txt"), "text/plain"),
     );
     await ctx.step("type-defaulted-when-absent", async () => {
       const part = ctx.multipart({ name: "gated/type/untyped" }, "image/png", Buffer.from("x"));
@@ -1627,11 +1637,14 @@ const gcsUpdateAndList = {
   area: "json-api",
   async run(ctx) {
     const name = "open/gcsu/doc.txt";
+    // The official emulator registers PATCH only on the short `/b/...` spelling; the
+    // `/storage/v1/...` spelling falls through to its 501 catch-all (pinned below).
+    const shortObject = (n) => `/b/${ctx.bucket}/o/${ctx.enc(n)}`;
     await gcsMedia(ctx, name, text("doc"));
     await ctx.step("patch", () =>
       ctx.http({
         method: "PATCH",
-        path: gcsObject(ctx, name),
+        path: shortObject(name),
         headers: { ...OWNER, "content-type": "application/json" },
         body: text(
           JSON.stringify({
@@ -1648,7 +1661,7 @@ const gcsUpdateAndList = {
     await ctx.step("patch-remove-custom-key", () =>
       ctx.http({
         method: "PATCH",
-        path: gcsObject(ctx, name),
+        path: shortObject(name),
         headers: { ...OWNER, "content-type": "application/json" },
         body: text(JSON.stringify({ metadata: { a: null }, contentDisposition: null })),
       }),
@@ -1656,15 +1669,23 @@ const gcsUpdateAndList = {
     await ctx.step("patch-missing", () =>
       ctx.http({
         method: "PATCH",
-        path: gcsObject(ctx, "open/gcsu/missing.txt"),
+        path: shortObject("open/gcsu/missing.txt"),
         headers: { ...OWNER, "content-type": "application/json" },
         body: text("{}"),
+      }),
+    );
+    await ctx.step("patch-storage-v1-spelling", () =>
+      ctx.http({
+        method: "PATCH",
+        path: gcsObject(ctx, name),
+        headers: { ...OWNER, "content-type": "application/json" },
+        body: text(JSON.stringify({ cacheControl: "no-store" })),
       }),
     );
     await ctx.step("put-update", () =>
       ctx.http({
         method: "PUT",
-        path: gcsObject(ctx, name),
+        path: shortObject(name),
         headers: { ...OWNER, "content-type": "application/json" },
         body: text(JSON.stringify({ contentType: "text/x-put" })),
       }),
@@ -1785,8 +1806,10 @@ const gcsCopyRewrite = {
         body: part.body,
       });
     });
+    // The official emulator registers its copy routes only on the short `/b/...` spelling;
+    // the `/storage/v1/...` spelling falls through to its 501 catch-all (pinned below).
     const copyPath = (verb, dst) =>
-      `/storage/v1/b/${ctx.bucket}/o/${ctx.enc(src)}/${verb}/b/${ctx.bucket}/o/${ctx.enc(dst)}`;
+      `/b/${ctx.bucket}/o/${ctx.enc(src)}/${verb}/b/${ctx.bucket}/o/${ctx.enc(dst)}`;
     await ctx.step("copy-to", () =>
       ctx.http({
         method: "POST",
@@ -1830,15 +1853,15 @@ const gcsCopyRewrite = {
     await ctx.step("copy-missing-source", () =>
       ctx.http({
         method: "POST",
-        path: `/storage/v1/b/${ctx.bucket}/o/${ctx.enc("open/copy/missing.txt")}/copyTo/b/${ctx.bucket}/o/${ctx.enc("open/copy/x.txt")}`,
+        path: `/b/${ctx.bucket}/o/${ctx.enc("open/copy/missing.txt")}/copyTo/b/${ctx.bucket}/o/${ctx.enc("open/copy/x.txt")}`,
         headers: { ...OWNER, "content-type": "application/json" },
         body: text("{}"),
       }),
     );
-    await ctx.step("copy-short-route", () =>
+    await ctx.step("copy-storage-v1-spelling", () =>
       ctx.http({
         method: "POST",
-        path: `/b/${ctx.bucket}/o/${ctx.enc(src)}/copyTo/b/${ctx.bucket}/o/${ctx.enc("open/copy/short.txt")}`,
+        path: `/storage/v1/b/${ctx.bucket}/o/${ctx.enc(src)}/copyTo/b/${ctx.bucket}/o/${ctx.enc("open/copy/long.txt")}`,
         headers: { ...OWNER, "content-type": "application/json" },
         body: text("{}"),
       }),
@@ -2069,11 +2092,16 @@ const triggers = {
   id: "triggers",
   area: "triggers",
   async run(ctx) {
-    ctx.drainEvents();
+    // Warm the functions runtime first: the official emulator cold-starts it and then
+    // flushes the delivery backlog of every earlier program in one burst. Each step below
+    // filters events to its own object, so a straggler can only be dropped, never recorded.
+    await fbMedia(ctx, "open/trig/warmup.txt", text("warmup"));
+    await ctx.events(2, 120_000, "open/trig/warmup.txt");
+    await ctx.quiesceEvents(3_000, 60_000);
     const name = "open/trig/doc.txt";
     await ctx.step("finalize-on-firebase-media-upload", async () => {
       const r = await fbMedia(ctx, name, text("trigger me"));
-      return { status: r.status, events: await ctx.events(2, 20_000) };
+      return { status: r.status, events: await ctx.events(2, 60_000, name) };
     });
     await ctx.step("metadata-update-on-patch", async () => {
       const r = await ctx.http({
@@ -2082,24 +2110,24 @@ const triggers = {
         headers: { ...OWNER, "content-type": "application/json; charset=utf-8" },
         body: text(JSON.stringify({ cacheControl: "max-age=7", metadata: { touched: "yes" } })),
       });
-      return { status: r.status, events: await ctx.events(2, 10_000) };
+      return { status: r.status, events: await ctx.events(2, 15_000, name) };
     });
     await ctx.step("finalize-on-overwrite", async () => {
       const r = await fbMedia(ctx, name, text("trigger me again"));
-      return { status: r.status, events: await ctx.events(2, 10_000) };
+      return { status: r.status, events: await ctx.events(2, 15_000, name) };
     });
     await ctx.step("finalize-on-json-api-copy", async () => {
       const r = await ctx.http({
         method: "POST",
-        path: `/storage/v1/b/${ctx.bucket}/o/${ctx.enc(name)}/copyTo/b/${ctx.bucket}/o/${ctx.enc("open/trig/copy.txt")}`,
+        path: `/b/${ctx.bucket}/o/${ctx.enc(name)}/copyTo/b/${ctx.bucket}/o/${ctx.enc("open/trig/copy.txt")}`,
         headers: { ...OWNER, "content-type": "application/json" },
         body: text("{}"),
       });
-      return { status: r.status, events: await ctx.events(2, 10_000) };
+      return { status: r.status, events: await ctx.events(2, 15_000, "open/trig/copy.txt") };
     });
     await ctx.step("delete", async () => {
       const r = await ctx.http({ method: "DELETE", path: fbObject(ctx, name), headers: OWNER });
-      return { status: r.status, events: await ctx.events(2, 10_000) };
+      return { status: r.status, events: await ctx.events(2, 15_000, name) };
     });
     await ctx.step("no-event-on-denied-upload", async () => {
       const r = await ctx.http({
@@ -2109,7 +2137,7 @@ const triggers = {
         headers: { "content-type": "text/plain" },
         body: text("denied"),
       });
-      return { status: r.status, events: await ctx.events(1, 2_000) };
+      return { status: r.status, events: await ctx.events(1, 2_000, "closed/trig/denied.txt") };
     });
     await ctx.step("no-event-on-missing-delete", async () => {
       const r = await ctx.http({
@@ -2117,7 +2145,7 @@ const triggers = {
         path: fbObject(ctx, "open/trig/missing.txt"),
         headers: OWNER,
       });
-      return { status: r.status, events: await ctx.events(1, 2_000) };
+      return { status: r.status, events: await ctx.events(1, 2_000, "open/trig/missing.txt") };
     });
     await ctx.step("metadata-update-on-token-creation", async () => {
       const r = await ctx.http({
@@ -2126,7 +2154,7 @@ const triggers = {
         query: { create_token: "true" },
         headers: OWNER,
       });
-      return { status: r.status, events: await ctx.events(2, 10_000) };
+      return { status: r.status, events: await ctx.events(2, 15_000, "open/trig/copy.txt") };
     });
     await ctx.step("json-api-resumable-finalize", async () => {
       const start = await ctx.http({
@@ -2144,7 +2172,7 @@ const triggers = {
         headers: { ...OWNER, "content-type": "application/octet-stream" },
         body: Buffer.alloc(3, 1),
       });
-      return { status: r.status, events: await ctx.events(2, 10_000) };
+      return { status: r.status, events: await ctx.events(2, 15_000, "open/trig/resumable.bin") };
     });
   },
 };

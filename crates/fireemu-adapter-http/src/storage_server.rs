@@ -212,6 +212,7 @@ const FORWARDED_HEADERS: &[&str] = &[
     "x-goog-upload-protocol",
     "x-goog-upload-command",
     "x-goog-upload-offset",
+    "x-http-method-override",
     "x-goog-upload-header-content-type",
     "x-goog-upload-header-content-length",
     "x-upload-content-type",

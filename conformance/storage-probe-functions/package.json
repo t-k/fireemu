@@ -3,11 +3,11 @@
   "private": true,
   "description": "Storage-triggered Cloud Functions codebase loaded by both sides of the storage probe.",
   "main": "index.js",
-  "engines": {
-    "node": "22"
-  },
   "dependencies": {
     "firebase-admin": "*",
     "firebase-functions": "*"
+  },
+  "engines": {
+    "node": "22"
   }
 }

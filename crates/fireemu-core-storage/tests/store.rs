@@ -94,7 +94,9 @@ fn generations_metagenerations_and_preconditions() {
             &n,
             &MetadataPatch {
                 content_type: Some(Some("text/plain".into())),
-                custom: Some(BTreeMap::from([("k".to_owned(), Some("v".to_owned()))])),
+                custom: Some(fireemu_core_storage::store::CustomMetadataPatch::Merge(
+                    BTreeMap::from([("k".to_owned(), Some("v".to_owned()))]),
+                )),
                 ..MetadataPatch::default()
             },
             Precondition::default(),
@@ -460,11 +462,11 @@ fn custom_metadata_budget_is_exact_on_put_update_and_upload_start() {
     let custom = |value_len: usize| BTreeMap::from([("k".to_owned(), "v".repeat(value_len))]);
     // 1 byte of key + 8191 bytes of value = exactly the budget.
     let ok = NewMetadata {
-        custom: custom(8191),
+        custom: Some(custom(8191)),
         ..NewMetadata::default()
     };
     let over = NewMetadata {
-        custom: custom(8192),
+        custom: Some(custom(8192)),
         ..NewMetadata::default()
     };
     assert!(s
@@ -496,7 +498,9 @@ fn custom_metadata_budget_is_exact_on_put_update_and_upload_start() {
         .begin_upload(&b, &n, ok, Precondition::default(), None, t(1))
         .is_ok());
     let patch = MetadataPatch {
-        custom: Some(BTreeMap::from([("k2".to_owned(), Some("v".to_owned()))])),
+        custom: Some(fireemu_core_storage::store::CustomMetadataPatch::Merge(
+            BTreeMap::from([("k2".to_owned(), Some("v".to_owned()))]),
+        )),
         ..MetadataPatch::default()
     };
     assert_eq!(
@@ -504,7 +508,9 @@ fn custom_metadata_budget_is_exact_on_put_update_and_upload_start() {
         Err(StorageError::MetadataTooLarge)
     );
     let shrink = MetadataPatch {
-        custom: Some(BTreeMap::from([("k".to_owned(), None)])),
+        custom: Some(fireemu_core_storage::store::CustomMetadataPatch::Merge(
+            BTreeMap::from([("k".to_owned(), None)]),
+        )),
         ..MetadataPatch::default()
     };
     let m = s
@@ -567,10 +573,10 @@ fn hashes_etag_tokens_and_bucket_scans() {
             &name("seeded"),
             b"s".to_vec(),
             NewMetadata {
-                custom: BTreeMap::from([(
+                custom: Some(BTreeMap::from([(
                     "firebaseStorageDownloadTokens".to_owned(),
                     "tok-a,tok-b,tok-a".to_owned(),
-                )]),
+                )])),
                 ..NewMetadata::default()
             },
             Precondition::default(),

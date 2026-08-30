@@ -59,8 +59,21 @@ pub struct NewMetadata {
     pub content_language: Option<String>,
     /// `Cache-Control`.
     pub cache_control: Option<String>,
-    /// Custom key/value metadata.
-    pub custom: BTreeMap<String, String>,
+    /// Custom key/value metadata. `None` and `Some` of an empty map differ the way they
+    /// differ upstream: the Firebase dialect's metadata JSON carries a `metadata` key only
+    /// when custom metadata was ever defined, even when it is empty.
+    pub custom: Option<BTreeMap<String, String>>,
+}
+
+/// What a patch does to custom metadata, mirroring the official emulator's `update()`:
+/// `metadata: null` clears everything, an object merges per key (a `null` value removes
+/// that key).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CustomMetadataPatch {
+    /// `metadata: null`: every custom key goes and the map becomes undefined.
+    Clear,
+    /// Merge: keys mapped to `None` are removed, others inserted.
+    Merge(BTreeMap<String, Option<String>>),
 }
 
 /// Metadata patch: `Some(None)` clears a field, `None` keeps it.
@@ -76,8 +89,8 @@ pub struct MetadataPatch {
     pub content_language: Option<Option<String>>,
     /// `Cache-Control`.
     pub cache_control: Option<Option<String>>,
-    /// Custom metadata: keys mapped to `None` are removed; `Some(map)` merges.
-    pub custom: Option<BTreeMap<String, Option<String>>>,
+    /// Custom metadata change; `None` keeps what is stored.
+    pub custom: Option<CustomMetadataPatch>,
 }
 
 /// Stored object metadata (one generation).
@@ -105,6 +118,10 @@ pub struct ObjectMetadata {
     pub cache_control: Option<String>,
     /// Custom metadata.
     pub custom: BTreeMap<String, String>,
+    /// Whether custom metadata is defined at all: an empty-but-defined map and no map
+    /// serialize differently on the Firebase dialect, exactly as upstream keeps
+    /// `customMetadata` as `{}` or `undefined`.
+    pub custom_defined: bool,
     /// MD5 of the data.
     pub md5: [u8; 16],
     /// CRC32C of the data.
@@ -162,6 +179,9 @@ pub struct ImportedObject {
     pub cache_control: Option<String>,
     /// Custom metadata.
     pub custom: BTreeMap<String, String>,
+    /// Whether the artifact's metadata JSON carried a `customMetadata` member at all (the
+    /// official emulator serializes an empty-but-defined map and no map differently).
+    pub custom_defined: bool,
     /// The creation time the artifact recorded.
     pub time_created: LogicalInstant,
     /// The update time the artifact recorded.
@@ -310,6 +330,22 @@ enum UploadState {
     Receiving,
     Committed(Box<ObjectMetadata>),
     Aborted,
+    /// Finalization ran and Security Rules refused it: terminal like `Committed`, and the
+    /// received byte count stays observable, as the official emulator keeps it.
+    Denied,
+}
+
+/// What a status query observes about a resumable upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UploadPhase {
+    /// Still receiving bytes.
+    Active(u64),
+    /// Committed; the exact generation the upload produced.
+    Finalized(Box<ObjectMetadata>),
+    /// Cancelled (or aborted by a failed size or checksum check).
+    Cancelled(u64),
+    /// Finalized and refused by Security Rules; no object was published.
+    Denied(u64),
 }
 
 /// The app a resumable upload session was admitted for.
@@ -610,6 +646,14 @@ impl StorageState {
         self.token()
     }
 
+    /// The generation the next commit will draw, for the `request.resource` a rules
+    /// evaluation sees before the commit exists (the official emulator builds the whole
+    /// prospective object, generation included, before its rules run).
+    #[must_use]
+    pub fn next_generation_preview(&self) -> u64 {
+        self.next_generation + 1
+    }
+
     /// Object metadata.
     #[must_use]
     pub fn get(&self, bucket: &BucketName, name: &ObjectName) -> Option<&ObjectMetadata> {
@@ -644,9 +688,10 @@ impl StorageState {
         // key and are lifted out of it, exactly as the official emulator's
         // `setDownloadTokensFromCustomMetadata` does. A new generation carries only the
         // tokens its own upload declared: the previous generation's tokens die with it.
-        let mut metadata = metadata;
-        let download_tokens = extract_download_tokens(&mut metadata.custom, Vec::new());
-        if custom_metadata_size(&metadata.custom) > MAX_CUSTOM_METADATA_BYTES {
+        let custom_defined = metadata.custom.is_some();
+        let mut custom = metadata.custom.unwrap_or_default();
+        let download_tokens = extract_download_tokens(&mut custom, Vec::new());
+        if custom_metadata_size(&custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
         let key = (bucket.clone(), name.clone());
@@ -667,7 +712,8 @@ impl StorageState {
             content_encoding: metadata.content_encoding,
             content_language: metadata.content_language,
             cache_control: metadata.cache_control,
-            custom: metadata.custom,
+            custom,
+            custom_defined,
             md5: md5(&bytes),
             crc32c: crc32c(&bytes),
             time_created: now,
@@ -803,7 +849,7 @@ impl StorageState {
             content_encoding: src.content_encoding.clone(),
             content_language: src.content_language.clone(),
             cache_control: src.cache_control.clone(),
-            custom: src.custom.clone(),
+            custom: src.custom_defined.then(|| src.custom.clone()),
         });
         self.put(dst_bucket, dst_name, bytes, metadata, pre, now)
     }
@@ -950,6 +996,7 @@ impl StorageState {
             content_language: object.content_language,
             cache_control: object.cache_control,
             custom: object.custom,
+            custom_defined: object.custom_defined,
             md5,
             crc32c: crc,
             time_created: object.time_created,
@@ -1013,7 +1060,11 @@ impl StorageState {
         if options.total.is_some_and(|t| t > MAX_OBJECT_BYTES) {
             return Err(StorageError::TooLarge);
         }
-        if custom_metadata_size(&metadata.custom) > MAX_CUSTOM_METADATA_BYTES {
+        if metadata
+            .custom
+            .as_ref()
+            .is_some_and(|c| custom_metadata_size(c) > MAX_CUSTOM_METADATA_BYTES)
+        {
             return Err(StorageError::MetadataTooLarge);
         }
         self.sweep_uploads(now);
@@ -1115,8 +1166,41 @@ impl StorageState {
         let u = self.upload_mut(id, now)?;
         Ok(match &u.state {
             UploadState::Committed(m) => (m.size, Some((**m).clone())),
-            UploadState::Receiving | UploadState::Aborted => (u.received.len() as u64, None),
+            UploadState::Receiving | UploadState::Aborted | UploadState::Denied => {
+                (u.received.len() as u64, None)
+            }
         })
+    }
+
+    /// The full lifecycle phase of an upload, for the status queries the protocols answer.
+    pub fn upload_phase(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<UploadPhase, StorageError> {
+        let u = self.upload_mut(id, now)?;
+        Ok(match &u.state {
+            UploadState::Receiving => UploadPhase::Active(u.received.len() as u64),
+            UploadState::Committed(m) => UploadPhase::Finalized(m.clone()),
+            UploadState::Aborted => UploadPhase::Cancelled(u.received.len() as u64),
+            UploadState::Denied => UploadPhase::Denied(u.received.len() as u64),
+        })
+    }
+
+    /// Marks an upload whose finalization Security Rules refused: terminal like a commit,
+    /// but no object was published, and the received byte count stays observable — the
+    /// official emulator answers a repeated finalize of such a session with the refusal it
+    /// gave the first time.
+    pub fn mark_upload_denied(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<(), StorageError> {
+        let u = self.upload_mut(id, now)?;
+        if u.state == UploadState::Receiving {
+            u.state = UploadState::Denied;
+        }
+        Ok(())
     }
 
     /// Declares (or confirms) the total size of an upload; a different total than the one
@@ -1151,7 +1235,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted => {
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
                 return Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving => {}
@@ -1193,7 +1277,7 @@ impl StorageState {
     ) -> Result<u64, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted => {
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
                 return Err(StorageError::UploadFinalized)
             }
             UploadState::Receiving => {}
@@ -1224,7 +1308,9 @@ impl StorageState {
     ) -> Result<PendingUpload<'_>, StorageError> {
         let u = self.upload_mut(id, now)?;
         match u.state {
-            UploadState::Committed(_) | UploadState::Aborted => Err(StorageError::UploadFinalized),
+            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
+                Err(StorageError::UploadFinalized)
+            }
             UploadState::Receiving => Ok(PendingUpload {
                 bucket: &u.bucket,
                 name: &u.name,
@@ -1259,7 +1345,7 @@ impl StorageState {
         let (bucket, name, metadata, precondition, bytes) = {
             let u = self.upload_mut(id, now)?;
             match u.state {
-                UploadState::Committed(_) | UploadState::Aborted => {
+                UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied => {
                     return Err(StorageError::UploadFinalized)
                 }
                 UploadState::Receiving => {}
@@ -1335,16 +1421,42 @@ impl StorageState {
         })
     }
 
-    /// Cancels an upload.
+    /// Cancels an upload. A finalized session (committed, or refused by rules at
+    /// finalization) is not cancellable, as the official emulator answers.
     pub fn cancel_upload(
         &mut self,
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<(), StorageError> {
         let u = self.upload_mut(id, now)?;
+        match u.state {
+            UploadState::Committed(_) | UploadState::Denied => {
+                return Err(StorageError::UploadFinalized)
+            }
+            UploadState::Receiving | UploadState::Aborted => {}
+        }
         u.state = UploadState::Aborted;
         u.received = Vec::new();
         Ok(())
+    }
+
+    /// Applies the Firebase dialect's post-commit `contentDisposition: "inline"` default to
+    /// a stored object, exactly as the official emulator mutates the stored metadata after
+    /// its rules ran and after the finalize event was built: no metageneration bump and no
+    /// event. Returns the updated metadata.
+    pub fn default_content_disposition_inline(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let meta = self
+            .objects
+            .get_mut(&(bucket.clone(), name.clone()))
+            .ok_or(StorageError::NotFound)?;
+        if meta.content_disposition.is_none() {
+            meta.content_disposition = Some("inline".to_owned());
+        }
+        Ok(meta.clone())
     }
 }
 
@@ -1388,16 +1500,25 @@ impl MetadataPatch {
         if let Some(v) = &self.cache_control {
             next.cache_control.clone_from(v);
         }
-        if let Some(custom) = &self.custom {
-            for (k, v) in custom {
-                match v {
-                    Some(v) => {
-                        next.custom.insert(k.clone(), v.clone());
-                    }
-                    None => {
-                        next.custom.remove(k);
+        match &self.custom {
+            None => {}
+            Some(CustomMetadataPatch::Clear) => {
+                next.custom.clear();
+                next.custom_defined = false;
+            }
+            Some(CustomMetadataPatch::Merge(entries)) => {
+                for (k, v) in entries {
+                    match v {
+                        Some(v) => {
+                            next.custom.insert(k.clone(), v.clone());
+                        }
+                        None => {
+                            next.custom.remove(k);
+                        }
                     }
                 }
+                // Upstream drops the map entirely when the merge leaves no keys.
+                next.custom_defined = !next.custom.is_empty();
             }
         }
         next

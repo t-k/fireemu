@@ -166,9 +166,18 @@ await new Promise((resolve, reject) => {
 /** The events the handlers reported, sorted by API and type so delivery order is not a row. */
 const eventKey = (e) => `${e.api}|${e.type ?? e.eventType}|${e.data?.name ?? ""}`;
 
-async function awaitEvents(count, timeoutMs) {
+async function awaitEvents(count, timeoutMs, objectName = null) {
+  const matches = (e) => objectName === null || String(e?.data?.name ?? "") === objectName;
   const deadline = Date.now() + timeoutMs;
-  while (received.length < count && Date.now() < deadline) {
+  const collect = () => {
+    const mine = received.filter(matches);
+    // Whatever does not belong to this step is dropped: the official functions runtime
+    // cold-starts slowly and can flush a backlog of earlier deliveries at any moment.
+    received.splice(0);
+    return mine;
+  };
+  let events = [];
+  while (events.length + received.filter(matches).length < count && Date.now() < deadline) {
     await new Promise((resolve) => {
       waiters.push(resolve);
       setTimeout(resolve, Math.min(250, Math.max(1, deadline - Date.now())));
@@ -177,8 +186,25 @@ async function awaitEvents(count, timeoutMs) {
   // A quiet period so a straggler shows up as an extra event rather than leaking into the
   // next step.
   await new Promise((resolve) => setTimeout(resolve, 400));
-  const events = received.splice(0).toSorted((a, b) => (eventKey(a) < eventKey(b) ? -1 : 1));
-  return events;
+  events = collect();
+  return events.toSorted((a, b) => (eventKey(a) < eventKey(b) ? -1 : 1));
+}
+
+/** Waits until no event has arrived for `quietMs` (or `maxMs` passed), dropping them all. */
+async function quiesceEvents(quietMs, maxMs) {
+  const deadline = Date.now() + maxMs;
+  let lastCount = received.length;
+  let quietSince = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (received.length !== lastCount) {
+      lastCount = received.length;
+      quietSince = Date.now();
+    } else if (Date.now() - quietSince >= quietMs) {
+      break;
+    }
+  }
+  received.splice(0);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -206,7 +232,10 @@ async function http({ method, path, query, headers = {}, body }) {
     // every JSON body (the object etag is compared inside the body), and content-length
     // restates a body the record already carries.
     if ((name.startsWith("access-control-") || name === "vary") && !sentOrigin) continue;
-    if (name === "etag" && contentType.includes("application/json")) continue;
+    // The object's own ETag rides on media responses (next to x-goog-generation); on
+    // everything else express stamps a weak hash of whatever body it sent, which is a
+    // framework artifact, not a protocol row.
+    if (name === "etag" && response.headers.get("x-goog-generation") === null) continue;
     if (name === "content-length") continue;
     const value = response.headers.get(name);
     if (value !== null) recorded[name] = value;
@@ -327,13 +356,20 @@ function createContext() {
       order.push(id);
       return value;
     },
-    /** Waits for `count` trigger events (or the timeout) and returns them sorted. */
-    events(count, timeoutMs = 10_000) {
-      return awaitEvents(count, timeoutMs);
+    /**
+     * Waits for `count` trigger events for exactly `objectName` (or the timeout) and
+     * returns them sorted; everything else that arrives meanwhile is dropped.
+     */
+    events(count, timeoutMs = 10_000, objectName = null) {
+      return awaitEvents(count, timeoutMs, objectName);
     },
     /** Drops whatever events arrived so far. */
     drainEvents() {
       received.splice(0);
+    },
+    /** Waits until deliveries go quiet (the official runtime flushes cold-start backlogs). */
+    quiesceEvents(quietMs = 3_000, maxMs = 60_000) {
+      return quiesceEvents(quietMs, maxMs);
     },
   };
   return { ctx, steps, order };

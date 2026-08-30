@@ -34,6 +34,7 @@ fn imported(name: &str, bytes: &[u8]) -> ImportedObject {
         content_language: None,
         cache_control: Some("public, max-age=60".to_owned()),
         custom: BTreeMap::from([("custom".to_owned(), "value".to_owned())]),
+        custom_defined: true,
         time_created: t(-10_000),
         updated: t(-5_000),
         download_tokens: vec!["kept-token".to_owned()],

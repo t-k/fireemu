@@ -123,8 +123,19 @@ pub fn object_json(m: &ObjectMetadata) -> Value {
         "timeCreated": rfc3339(m.time_created),
         "updated": rfc3339(m.updated),
         "timeStorageClassUpdated": rfc3339(m.time_created),
-        "metadata": m.custom,
     });
+    // Download tokens ride inside `metadata.firebaseStorageDownloadTokens`, and the member
+    // is dropped when there is nothing to carry, exactly as the object resource is served.
+    let mut metadata = m.custom.clone();
+    if !m.download_tokens.is_empty() {
+        metadata.insert(
+            "firebaseStorageDownloadTokens".to_owned(),
+            m.download_tokens.join(","),
+        );
+    }
+    if !metadata.is_empty() {
+        v["metadata"] = json!(metadata);
+    }
     for (k, val) in [
         ("cacheControl", &m.cache_control),
         ("contentDisposition", &m.content_disposition),

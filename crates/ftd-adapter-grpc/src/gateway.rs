@@ -107,6 +107,9 @@ impl Gateway {
         let mut warnings = Vec::new();
         match &decision {
             IndexDecision::UseIndex { .. } => {}
+            IndexDecision::AssumedIndex { .. } => {
+                warnings.push("FS_EMULATOR_INDEX_ASSUMED".to_owned());
+            }
             IndexDecision::FullScanAllowed { plan } => {
                 warnings.extend(plan.diagnostics.iter().map(|d| (*d).to_owned()));
             }

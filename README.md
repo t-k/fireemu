@@ -41,6 +41,13 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/reset   # drop Firestore 
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
 
+### Composite indexes
+
+`firestore.indexValidationPolicy` decides what happens to a query whose composite index is not in `firestore.indexFile`:
+
+- `conservative` (default) and `firebase`: the query is refused with `FAILED_PRECONDITION` and the `firestore.indexes.json` fragment production would need, before it runs.
+- `emulator`: the query runs as if the index existed, which is what the Firebase Emulator Suite does; the gateway records an `FS_EMULATOR_INDEX_ASSUMED` warning. Use it for projects that never maintained an index file; it says nothing about production index conformance.
+
 ### ID tokens
 
 `auth.idTokenSigning` picks the token format:

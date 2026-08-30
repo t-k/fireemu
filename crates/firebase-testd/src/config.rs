@@ -341,6 +341,7 @@ impl RuntimeConfig {
                 cfg.index_policy = match p {
                     "firebase" => IndexValidationPolicy::Firebase,
                     "conservative" => IndexValidationPolicy::Conservative,
+                    "emulator" => IndexValidationPolicy::Emulator,
                     other => {
                         return Err(ConfigError(format!(
                             "unknown firestore.indexValidationPolicy {other:?}"

@@ -253,6 +253,8 @@ impl DocumentAccess for NoDocumentAccess {
 }
 
 struct Evaluator<'a> {
+    /// Current `eval` recursion depth.
+    nesting: u32,
     request: RulesValue,
     resource: RulesValue,
     /// `get()` / `exists()` provider (`None` = unsupported).
@@ -276,6 +278,10 @@ pub fn evaluate_request(ruleset: &Ruleset, ctx: &RequestContext) -> EvaluationRe
 }
 
 /// Evaluates a request against a ruleset; `access` serves `get()` / `exists()` within the
+/// Maximum `eval` recursion depth (stack safety; parenthesised nesting is bounded by the
+/// parser, left-nested operator chains are bounded here).
+pub const MAX_EVAL_NESTING: u32 = 64;
+
 /// `RULES-DOC-ACCESS-SINGLE` budget.
 #[must_use]
 pub fn evaluate_request_with(
@@ -316,6 +322,7 @@ pub fn evaluate_request_with(
         let request_value = build_request(ctx);
         let resource_value = ctx.resource.clone().unwrap_or(RulesValue::Null);
         let mut ev = Evaluator {
+            nesting: 0,
             request: request_value,
             resource: resource_value,
             access,
@@ -677,8 +684,21 @@ impl<'a> Evaluator<'a> {
             .copied()
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Evaluates `expr` behind a recursion guard: a tree deeper than
+    /// [`MAX_EVAL_NESTING`] (left-nested chains are not flattened, unlike `&&` / `||`) is
+    /// refused instead of exhausting the stack.
     fn eval(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
+        if self.nesting >= MAX_EVAL_NESTING {
+            return Err(soft("expression nesting exceeds the evaluator budget"));
+        }
+        self.nesting += 1;
+        let result = self.eval_inner(expr);
+        self.nesting -= 1;
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn eval_inner(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
         self.budget.charge()?;
         match expr {
             Expr::Literal(l) => Ok(match l {

@@ -543,10 +543,17 @@ impl Hub {
                 header: &header,
                 now: self.state.local.now(),
             });
-        let replacement = decision.identity().map(|identity| ChannelApp {
-            app_id: identity.app_id.clone(),
-            epoch: epoch.unwrap_or(bound.epoch),
-        });
+        // A verified identity always comes with a known epoch — verification checks the token
+        // against it — but the pair is required explicitly rather than defaulted, so a future
+        // change that separates them fails closed instead of comparing against the channel's
+        // own epoch and matching itself.
+        let replacement = match (decision.identity(), epoch) {
+            (Some(identity), Some(epoch)) => Some(ChannelApp {
+                app_id: identity.app_id.clone(),
+                epoch,
+            }),
+            _ => None,
+        };
         if replacement.as_ref() == Some(bound) {
             return Ok(());
         }

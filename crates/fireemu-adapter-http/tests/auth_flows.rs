@@ -75,6 +75,17 @@ fn claims(id_token: &str) -> Value {
     serde_json::from_str(&decode_unsigned(id_token).unwrap().payload_json).unwrap()
 }
 
+/// Marks the address verified through the Admin route: the pinned official emulator refuses
+/// phone-factor enrollment for an unverified password user (`UNVERIFIED_EMAIL`).
+fn verify_email(state: &AuthState, local_id: &str) {
+    let (status, body) = admin(
+        state,
+        "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:update",
+        &json!({"localId": local_id, "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
 #[test]
 fn password_reset_goes_through_an_oob_code_the_test_can_read() {
     let s = state();
@@ -503,11 +514,77 @@ fn percent(s: &str) -> String {
     out
 }
 
+/// Measured against the pinned official emulator (`auth/mfa-error-shapes` and
+/// `auth/mfa-enrollment-eligibility`): an unverified password user is refused with
+/// `UNVERIFIED_EMAIL`, an anonymous session with `UNSUPPORTED_FIRST_FACTOR`, and neither
+/// refusal creates a verification code (`AUTH-MFA-EMAIL-01`, `-02`, `-04`).
+#[test]
+fn phone_enrollment_needs_a_verified_eligible_first_factor_and_refuses_without_side_effect() {
+    let s = state();
+    let user = sign_up(&s, "unverified@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    let enrol = |token: &str| {
+        post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+        )
+    };
+    let (status, refused) = enrol(&id_token);
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors."
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    assert_eq!(codes["verificationCodes"].as_array().map(Vec::len), Some(0));
+    // The finalize step checks the session before anything about the account (measured:
+    // auth/mfa-error-shapes#finalize-enrolment-with-an-unknown-session), and consumes no code.
+    let (status, refused) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "phoneVerificationInfo": {"sessionInfo": "x", "code": "000000"}}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+    // An anonymous first factor cannot carry a second factor at all.
+    let (_, anonymous) = post(&s, &format!("{V1}/accounts:signUp"), &json!({}));
+    let (status, refused) = enrol(anonymous["idToken"].as_str().unwrap());
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor."
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    assert_eq!(codes["verificationCodes"].as_array().map(Vec::len), Some(0));
+    // Verified, the same user can start enrollment.
+    verify_email(&s, user["localId"].as_str().unwrap());
+    let (status, started) = enrol(&id_token);
+    assert_eq!(status, 200, "{started}");
+    assert!(started["phoneSessionInfo"]["sessionInfo"].is_string());
+    // The same number cannot be enrolled twice on one account.
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"].as_str().unwrap();
+    let (status, _) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "phoneVerificationInfo": {"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": code}}),
+    );
+    assert_eq!(status, 200);
+    let (status, again) = enrol(&id_token);
+    assert_eq!(status, 400, "{again}");
+    assert!(again["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("SECOND_FACTOR_EXISTS"));
+}
+
 #[test]
 fn phone_second_factor_enrollment_and_sign_in() {
     let s = state();
     let user = sign_up(&s, "mfa@example.com");
     let id_token = user["idToken"].as_str().unwrap().to_owned();
+    verify_email(&s, user["localId"].as_str().unwrap());
     let (status, start) = post(
         &s,
         &format!("{V2}/accounts/mfaEnrollment:start"),
@@ -529,10 +606,14 @@ fn phone_second_factor_enrollment_and_sign_in() {
         &json!({"idToken": id_token, "displayName": "my phone", "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
     );
     assert_eq!(status, 200, "{done}");
-    let enrollment_id = done["mfaEnrollmentId"].as_str().unwrap().to_owned();
     let c = claims(done["idToken"].as_str().unwrap());
     assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
-    assert_eq!(c["firebase"]["second_factor_identifier"], enrollment_id);
+    // The finalize response carries only the tokens (measured against the pinned official
+    // emulator); the enrollment id is read from the second-factor claim.
+    let enrollment_id = c["firebase"]["second_factor_identifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     // Password sign-in now stops at the second factor.
     let (status, pending) = post(
         &s,
@@ -541,7 +622,9 @@ fn phone_second_factor_enrollment_and_sign_in() {
     );
     assert_eq!(status, 200, "{pending}");
     assert!(pending.get("idToken").is_none());
-    assert_eq!(pending["mfaInfo"][0]["phoneInfo"], "+15559876543");
+    // Before the second factor is verified the number is obfuscated to its last four
+    // digits, as the official emulator's pending-credential response does.
+    assert_eq!(pending["mfaInfo"][0]["phoneInfo"], "+*******6543");
     assert_eq!(pending["mfaInfo"][0]["displayName"], "my phone");
     let credential = pending["mfaPendingCredential"].as_str().unwrap().to_owned();
     let (status, started) = post(
@@ -688,6 +771,7 @@ fn second_factors_gate_every_sign_in_route() {
     let s = state();
     let user = sign_up(&s, "gated@example.com");
     let id_token = user["idToken"].as_str().unwrap().to_owned();
+    verify_email(&s, user["localId"].as_str().unwrap());
     let (_, start) = post(
         &s,
         &format!("{V2}/accounts/mfaEnrollment:start"),

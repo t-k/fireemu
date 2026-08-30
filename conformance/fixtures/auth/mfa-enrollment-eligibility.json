@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 1,
+  "id": "auth/mfa-enrollment-eligibility",
+  "product": "auth",
+  "title": "Which first factors may enrol a phone second factor, and the enrolment and sign-in shapes",
+  "sdks": [
+    "rest",
+    "firebase-admin"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 11,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "an-anonymous-session-cannot-enrol",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor.",
+                "reason": "invalid"
+              }
+            ],
+            "message": "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor."
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "a-phone-session-cannot-enrol",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor.",
+                "reason": "invalid"
+              }
+            ],
+            "message": "UNSUPPORTED_FIRST_FACTOR : MFA is not available for the given first factor."
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "a-verified-password-user-may-start",
+      "status": "parity",
+      "value": {
+        "keys": [
+          "phoneSessionInfo"
+        ],
+        "status": 200
+      }
+    },
+    {
+      "id": "finalize-with-the-wrong-code",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "INVALID_CODE",
+                "reason": "invalid"
+              }
+            ],
+            "message": "INVALID_CODE"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "finalize-with-the-emulator-code",
+      "status": "parity",
+      "value": {
+        "keys": [
+          "idToken",
+          "refreshToken"
+        ],
+        "status": 200
+      }
+    },
+    {
+      "id": "the-same-number-cannot-be-enrolled-twice",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account.",
+                "reason": "invalid"
+              }
+            ],
+            "message": "SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account."
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "the-account-record-carries-the-factor",
+      "status": "parity",
+      "value": [
+        {
+          "displayName": "work phone",
+          "factorId": "phone",
+          "hasEnrollmentTime": true,
+          "phoneNumber": "+15555550123",
+          "uidLength": 28
+        }
+      ]
+    },
+    {
+      "id": "password-sign-in-stops-at-the-second-factor",
+      "status": "parity",
+      "value": {
+        "hints": [
+          {
+            "displayName": "work phone",
+            "keys": [
+              "displayName",
+              "enrolledAt",
+              "mfaEnrollmentId",
+              "phoneInfo"
+            ],
+            "phoneInfo": "+*******0123"
+          }
+        ],
+        "keys": [
+          "email",
+          "kind",
+          "localId",
+          "mfaInfo",
+          "<auto-id>",
+          "registered"
+        ],
+        "status": 200
+      }
+    },
+    {
+      "id": "second-factor-start-with-an-unknown-enrolment",
+      "status": "parity",
+      "value": {
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": "MFA_ENROLLMENT_NOT_FOUND",
+                "reason": "invalid"
+              }
+            ],
+            "message": "MFA_ENROLLMENT_NOT_FOUND"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "id": "second-factor-sign-in-completes",
+      "status": "parity",
+      "value": {
+        "keys": [
+          "idToken",
+          "refreshToken"
+        ],
+        "secondFactor": "phone",
+        "status": 200
+      }
+    },
+    {
+      "id": "withdraw-the-factor",
+      "status": "parity",
+      "value": {
+        "factorsLeft": 0,
+        "keys": [
+          "expiresIn",
+          "idToken",
+          "refreshToken"
+        ],
+        "status": 200
+      }
+    }
+  ]
+}

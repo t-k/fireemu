@@ -135,7 +135,20 @@ await check("fixture identity provider sign-in and admin lookup", async () => {
 
 await check("phone second factor: enrol, then sign in through the resolver", async () => {
   const cred = await createUserWithEmailAndPassword(auth, "mfa@example.com", "hunter22");
-  const idToken = await cred.user.getIdToken();
+  // The Auth emulator refuses second-factor enrolment for an unverified password user
+  // (UNVERIFIED_EMAIL); real apps verify the address first, a test does it as an admin.
+  let refused = null;
+  try {
+    await rest("v2/accounts/mfaEnrollment:start", {
+      idToken: await cred.user.getIdToken(),
+      phoneEnrollmentInfo: { phoneNumber: "+15559990000", recaptchaToken: "fake-token" },
+    });
+  } catch (e) {
+    refused = String(e.message);
+  }
+  assert(refused?.includes("UNVERIFIED_EMAIL"), `unverified enrolment was not refused: ${refused}`);
+  await adminAuth.updateUser(cred.user.uid, { emailVerified: true });
+  const idToken = await cred.user.getIdToken(true);
   const start = await rest("v2/accounts/mfaEnrollment:start", {
     idToken,
     phoneEnrollmentInfo: { phoneNumber: "+15559990000", recaptchaToken: "fake-token" },
@@ -146,7 +159,7 @@ await check("phone second factor: enrol, then sign in through the resolver", asy
     displayName: "my phone",
     phoneVerificationInfo: { sessionInfo: start.phoneSessionInfo.sessionInfo, code: sms.code },
   });
-  assert(done.mfaEnrollmentId, "enrolled");
+  assert(done.idToken && done.refreshToken, "enrolled (the finalize response carries only the tokens)");
   await signOut(auth);
   let resolver;
   try {

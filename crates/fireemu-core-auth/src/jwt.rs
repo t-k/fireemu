@@ -192,8 +192,16 @@ impl fmt::Debug for dyn IdTokenSigner {
 /// Encodes claims with `signer`, or unsigned (`alg: none`) without one.
 #[must_use]
 pub fn encode_with(claims: &IdTokenClaims, signer: Option<&dyn IdTokenSigner>) -> String {
+    encode_payload_with(&claims.canonical_json(), signer)
+}
+
+/// Encodes an already serialized JSON payload with `signer`, or unsigned without one (a
+/// session cookie is an ID token's claims under another issuer and lifetime).
+#[must_use]
+pub fn encode_payload_with(payload_json: &str, signer: Option<&dyn IdTokenSigner>) -> String {
     let Some(signer) = signer else {
-        return encode_unsigned(claims);
+        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+        return format!("{header}.{}.", base64url_encode(payload_json.as_bytes()));
     };
     let header = format!(
         r#"{{"alg":"{}","kid":"{}","typ":"JWT"}}"#,
@@ -203,7 +211,7 @@ pub fn encode_with(claims: &IdTokenClaims, signer: Option<&dyn IdTokenSigner>) -
     let signing_input = format!(
         "{}.{}",
         base64url_encode(header.as_bytes()),
-        base64url_encode(claims.canonical_json().as_bytes())
+        base64url_encode(payload_json.as_bytes())
     );
     let signature = signer.sign(signing_input.as_bytes());
     format!("{signing_input}.{}", base64url_encode(&signature))

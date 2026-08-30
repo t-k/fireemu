@@ -10,28 +10,21 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 5,
+    "parity": 8,
     "documented-divergence": 0,
-    "debt": 3,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
     {
       "id": "sign-up",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "email": "conf-auth-signin-primary@example.com",
         "emailVerified": false,
         "isAnonymous": false,
         "providerId": "password",
         "uidLength": 28
-      },
-      "testd": {
-        "email": "conf-auth-signin-primary@example.com",
-        "emailVerified": false,
-        "isAnonymous": false,
-        "providerId": "password",
-        "uidLength": 21
       }
     },
     {
@@ -63,30 +56,20 @@
     },
     {
       "id": "sign-in-with-the-wrong-password",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "thrown": true,
         "code": "auth/wrong-password",
         "message": "Firebase: Error (auth/wrong-password)."
-      },
-      "testd": {
-        "thrown": true,
-        "code": "auth/invalid-credential",
-        "message": "Firebase: Error (auth/invalid-credential)."
       }
     },
     {
       "id": "sign-in-as-an-unknown-user",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "thrown": true,
         "code": "auth/user-not-found",
         "message": "Firebase: Error (auth/user-not-found)."
-      },
-      "testd": {
-        "thrown": true,
-        "code": "auth/invalid-credential",
-        "message": "Firebase: Error (auth/invalid-credential)."
       }
     },
     {

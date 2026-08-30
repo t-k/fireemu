@@ -85,7 +85,9 @@ fn sign_up_sign_in_lookup_and_refresh() {
         &json!({"email": "a@example.com", "password": "nope"}),
     );
     assert_eq!(status, 400);
-    assert_eq!(wrong["error"]["message"], "INVALID_LOGIN_CREDENTIALS");
+    // The default (non-private) mode distinguishes a wrong password from an unknown email,
+    // as the pinned official emulator does (auth/identity-toolkit-error-shapes).
+    assert_eq!(wrong["error"]["message"], "INVALID_PASSWORD");
     let (status, ok) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -210,7 +212,6 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
         &json!({"idToken": id_token, "totpVerificationInfo": {"sessionInfo": session, "verificationCode": format!("{good:06}")}}),
     );
     assert_eq!(status, 200, "{done}");
-    let enrollment_id = done["mfaEnrollmentId"].as_str().unwrap().to_owned();
     let decoded =
         fireemu_core_auth::jwt::decode_unsigned(done["idToken"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -221,6 +222,15 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
             .and_then(|v| v.as_str()),
         Some("totp")
     );
+    // The finalize response carries only the tokens (measured against the pinned official
+    // emulator); the enrollment id is read from the second-factor claim.
+    let enrollment_id = decoded
+        .payload
+        .get("firebase")
+        .and_then(|f| f.get("second_factor_identifier"))
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_owned();
 
     // Password sign-in now returns a pending credential instead of a token.
     let later = advance(&s, 120);
@@ -474,7 +484,8 @@ fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_projec
         "/identitytoolkit.googleapis.com/v1/projects//accounts:delete",
         &json!({"localId": "x"}),
     );
-    assert_eq!(status, 400);
+    // An empty project segment is no route at all.
+    assert_eq!(status, 404);
     assert_eq!(
         handle_with(&s, "POST", &format!("{ADMIN}/accounts"), &local, &body).status,
         200
@@ -503,7 +514,10 @@ fn admin_create_is_atomic_and_typed() {
         &json!({"localId": ["u-alice"]}),
     );
     assert_eq!(status, 200);
-    assert_eq!(body["users"].as_array().map(Vec::len), Some(0));
+    assert!(
+        body.get("users").is_none(),
+        "no match is an absent users, as the official emulator answers"
+    );
     // Wrong JSON types are rejected instead of being treated as absent.
     let (status, _) = admin(
         &s,
@@ -637,7 +651,8 @@ fn admin_password_change_revokes_sessions_and_update_is_atomic() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": uid}),
     );
-    assert_eq!(looked["users"][0]["customAttributes"], "{}");
+    // No claims is an absent customAttributes, as the official record has it.
+    assert!(looked["users"][0]["customAttributes"].is_null());
     let (status, _) = admin(
         &s,
         "POST",
@@ -755,8 +770,8 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         &json!({"localId": ["custom-2", "custom-3"]}),
     );
     assert_eq!(
-        looked["users"].as_array().map(Vec::len),
-        Some(0),
+        looked.get("users").map(|u| u.as_array().map(Vec::len)),
+        None,
         "rejected tokens create nobody"
     );
 }
@@ -878,7 +893,9 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
         u["validSince"].as_str().is_some(),
         "tokensValidAfterTime source"
     );
-    assert_eq!(u["providerUserInfo"].as_array().map(Vec::len), Some(2));
+    // An address without a password credential lists no `password` provider (the official
+    // record's rule), so only the phone entry remains.
+    assert_eq!(u["providerUserInfo"].as_array().map(Vec::len), Some(1));
     // deleteProvider phone clears the number; federated lookups match nobody; an admin
     // lookup without identifiers is an error rather than an ID-token lookup.
     assert_eq!(
@@ -899,7 +916,7 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
     );
     assert_eq!(
         looked.get("users").map(|u| u.as_array().map(Vec::len)),
-        Some(Some(0))
+        None
     );
     assert_eq!(
         admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &json!({})).0,

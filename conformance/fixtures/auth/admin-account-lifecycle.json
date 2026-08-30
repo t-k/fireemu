@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "id": "auth/admin-account-lifecycle",
+  "product": "auth",
+  "title": "Admin SDK account management: create, read, update, claims, list, import, delete, cookies, custom tokens",
+  "sdks": [
+    "firebase-admin",
+    "firebase/auth"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 20,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "create-a-user-with-every-field",
+      "status": "parity",
+      "value": {
+        "customClaims": null,
+        "disabled": false,
+        "displayName": "Alice",
+        "email": "conf-auth-admin-alice@example.com",
+        "emailVerified": true,
+        "hasCreationTime": true,
+        "phoneNumber": "+15555550001",
+        "photoURL": "https://example.com/alice.png",
+        "providerIds": [
+          "password",
+          "phone"
+        ],
+        "uid": "conf-admin-alice"
+      }
+    },
+    {
+      "id": "create-a-duplicate-uid",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/uid-already-exists",
+        "message": "The user with the provided uid already exists."
+      }
+    },
+    {
+      "id": "create-a-duplicate-email",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/email-already-exists",
+        "message": "The email address is already in use by another account."
+      }
+    },
+    {
+      "id": "create-a-duplicate-phone-number",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/phone-number-already-exists",
+        "message": "The user with the provided phone number already exists."
+      }
+    },
+    {
+      "id": "look-up-by-email-and-phone",
+      "status": "parity",
+      "value": {
+        "byEmail": "conf-admin-alice",
+        "byPhone": "conf-admin-alice"
+      }
+    },
+    {
+      "id": "look-up-an-unknown-user",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/user-not-found",
+        "message": "There is no user record corresponding to the provided identifier."
+      }
+    },
+    {
+      "id": "get-users-by-mixed-identifiers",
+      "status": "parity",
+      "value": {
+        "found": [
+          "conf-admin-alice"
+        ],
+        "notFound": [
+          "email"
+        ]
+      }
+    },
+    {
+      "id": "update-profile-and-disable",
+      "status": "parity",
+      "value": {
+        "customClaims": null,
+        "disabled": true,
+        "displayName": "Alice Updated",
+        "email": "conf-auth-admin-alice@example.com",
+        "emailVerified": true,
+        "hasCreationTime": true,
+        "phoneNumber": "+15555550001",
+        "photoURL": null,
+        "providerIds": [
+          "password",
+          "phone"
+        ],
+        "uid": "conf-admin-alice"
+      }
+    },
+    {
+      "id": "a-disabled-user-cannot-sign-in",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/user-disabled",
+        "message": "Firebase: Error (auth/user-disabled)."
+      }
+    },
+    {
+      "id": "set-and-read-custom-claims",
+      "status": "parity",
+      "value": {
+        "inToken": {
+          "role": "admin",
+          "tier": 3
+        },
+        "signInProvider": "password",
+        "stored": {
+          "role": "admin",
+          "tier": 3
+        }
+      }
+    },
+    {
+      "id": "a-reserved-claim-is-refused",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/reserved-claim",
+        "message": "Developer claim \"sub\" is reserved and cannot be specified."
+      }
+    },
+    {
+      "id": "list-users",
+      "status": "parity",
+      "value": {
+        "hasPageToken": false,
+        "mine": [
+          "conf-admin-alice"
+        ]
+      }
+    },
+    {
+      "id": "import-users",
+      "status": "parity",
+      "value": {
+        "errors": [
+          {
+            "code": "auth/invalid-user-import",
+            "index": 1
+          }
+        ],
+        "failureCount": 1,
+        "imported": {
+          "customClaims": {
+            "tier": "gold"
+          },
+          "disabled": false,
+          "displayName": "Imported",
+          "email": "conf-auth-admin-import-1@example.com",
+          "emailVerified": true,
+          "hasCreationTime": true,
+          "phoneNumber": null,
+          "photoURL": null,
+          "providerIds": [
+            "google.com"
+          ],
+          "uid": "conf-admin-import-1"
+        },
+        "successCount": 1
+      }
+    },
+    {
+      "id": "import-a-user-with-a-phone-second-factor",
+      "status": "parity",
+      "value": {
+        "factors": [
+          {
+            "factorId": "phone",
+            "phoneNumber": "+15555550077",
+            "uid": "conf-admin-import-mfa-factor"
+          }
+        ],
+        "failureCount": 0,
+        "successCount": 1
+      }
+    },
+    {
+      "id": "session-cookie-shape",
+      "status": "parity",
+      "value": {
+        "alg": "none",
+        "aud": "demo-conformance",
+        "iss": "https://session.firebase.google.com/demo-conformance",
+        "lifetime": 3600,
+        "signInProvider": "password",
+        "sub": "conf-admin-alice"
+      }
+    },
+    {
+      "id": "a-session-cookie-lifetime-out-of-range-is-refused",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/invalid-session-cookie-duration",
+        "message": "The session cookie duration must be a valid number in milliseconds between 5 minutes and 2 weeks."
+      }
+    },
+    {
+      "id": "custom-token-round-trip",
+      "status": "parity",
+      "value": {
+        "plan": "pro",
+        "providerIds": [],
+        "signInProvider": "custom",
+        "uid": "conf-admin-custom"
+      }
+    },
+    {
+      "id": "revoke-refresh-tokens",
+      "status": "parity",
+      "value": {
+        "movedOrSameSecond": true,
+        "recorded": true
+      }
+    },
+    {
+      "id": "delete-a-user-and-look-it-up",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/user-not-found",
+        "message": "There is no user record corresponding to the provided identifier."
+      }
+    },
+    {
+      "id": "delete-users-in-bulk",
+      "status": "parity",
+      "value": {
+        "failureCount": 0,
+        "left": [
+          "conf-admin-import-mfa"
+        ],
+        "successCount": 3
+      }
+    }
+  ]
+}

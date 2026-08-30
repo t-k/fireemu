@@ -9,9 +9,9 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 4,
+    "parity": 5,
     "documented-divergence": 0,
-    "debt": 1,
+    "debt": 0,
     "pending": 1
   },
   "steps": [
@@ -25,8 +25,8 @@
     },
     {
       "id": "start-enrolment-without-a-verified-email",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "body": {
           "error": {
             "code": 400,
@@ -41,14 +41,6 @@
           }
         },
         "status": 400
-      },
-      "testd": {
-        "body": {
-          "phoneSessionInfo": {
-            "sessionInfo": "sms-3235199f792bbcf70012"
-          }
-        },
-        "status": 200
       }
     },
     {

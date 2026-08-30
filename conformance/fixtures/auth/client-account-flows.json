@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "id": "auth/client-account-flows",
+  "product": "auth",
+  "title": "Client SDK account flows: anonymous upgrade, profile and password updates, deletion, email privacy",
+  "sdks": [
+    "firebase/auth",
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 14,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "anonymous-sign-in",
+      "status": "parity",
+      "value": {
+        "isAnonymous": true,
+        "providerIds": [],
+        "uidLength": 28
+      }
+    },
+    {
+      "id": "link-a-password-to-the-anonymous-user",
+      "status": "parity",
+      "value": {
+        "email": "conf-auth-client-upgrade@example.com",
+        "emailVerified": false,
+        "isAnonymous": false,
+        "providerIds": [
+          "password"
+        ],
+        "signInProvider": "password"
+      }
+    },
+    {
+      "id": "update-the-profile",
+      "status": "parity",
+      "value": {
+        "displayName": "Upgraded",
+        "photoURL": "https://example.com/u.png"
+      }
+    },
+    {
+      "id": "change-the-password-and-keep-the-session",
+      "status": "parity",
+      "value": {
+        "hasToken": true,
+        "stillSignedIn": true
+      }
+    },
+    {
+      "id": "sign-in-with-the-new-password",
+      "status": "parity",
+      "value": {
+        "displayName": "Upgraded",
+        "email": "conf-auth-client-upgrade@example.com"
+      }
+    },
+    {
+      "id": "sign-in-methods-for-the-email",
+      "status": "parity",
+      "value": [
+        "password"
+      ]
+    },
+    {
+      "id": "reset-for-an-unknown-email-reveals-it-by-default",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/user-not-found",
+        "message": "Firebase: Error (auth/user-not-found)."
+      }
+    },
+    {
+      "id": "enable-improved-email-privacy",
+      "status": "parity",
+      "value": {
+        "body": {
+          "emailPrivacyConfig": {
+            "enableImprovedEmailPrivacy": true
+          },
+          "signIn": {
+            "allowDuplicateEmails": false
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "with-privacy-a-reset-for-an-unknown-email-is-silent",
+      "status": "parity",
+      "value": {
+        "codesForGhost": 0,
+        "sent": true
+      }
+    },
+    {
+      "id": "with-privacy-a-wrong-password-is-undistinguished",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/invalid-credential",
+        "message": "Firebase: Error (auth/invalid-credential)."
+      }
+    },
+    {
+      "id": "with-privacy-an-unknown-user-is-undistinguished",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/invalid-credential",
+        "message": "Firebase: Error (auth/invalid-credential)."
+      }
+    },
+    {
+      "id": "with-privacy-sign-in-methods-are-hidden",
+      "status": "parity",
+      "value": []
+    },
+    {
+      "id": "restore-the-default-privacy",
+      "status": "parity",
+      "value": {
+        "body": {
+          "emailPrivacyConfig": {
+            "enableImprovedEmailPrivacy": false
+          },
+          "signIn": {
+            "allowDuplicateEmails": false
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "id": "delete-the-account",
+      "status": "parity",
+      "value": {
+        "thrown": true,
+        "code": "auth/user-not-found",
+        "message": "Firebase: Error (auth/user-not-found)."
+      }
+    }
+  ]
+}

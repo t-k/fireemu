@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_functions::runtime::FunctionsRuntime;
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_adapter_http::control::{SnapshotHook, SnapshotPart, TransitionFailure};
-use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+use fireemu_core_auth::store::{AuthRegistry, AuthSnapshot, AuthStore};
 use fireemu_core_firestore::text_index::TextIndexCatalog;
 use fireemu_core_rules::runtime::LoadedRules;
 use fireemu_core_session::clock::VirtualClock;
@@ -100,7 +100,12 @@ impl SnapshotHook for Storage {
     }
 }
 
-/// The session's users, credentials, codes and tokens.
+/// The session's users, credentials, codes and tokens -- captured as an
+/// [`AuthSnapshot`], which holds no TOTP secret material (`INV-AUTH-003`, ADR-034): enrolled
+/// TOTP factors are kept with a detached secret and rebound on restore to the secret the
+/// live store still holds; a factor whose secret is gone by then is dropped from the
+/// restored account and reported on stderr rather than restored unusable or claimed
+/// faithful.
 pub struct Auth(pub Arc<AuthRegistry>);
 
 impl Auth {
@@ -120,14 +125,15 @@ impl SnapshotHook for Auth {
     }
     fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
         let store = self.store(scope)?;
-        let copy = store
+        let guard = store
             .lock()
-            .map_err(|_| poisoned(self.name(), "the Auth store"))?
-            .clone();
-        Ok(Arc::new(copy))
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
+        let snapshot = AuthSnapshot::capture(&guard);
+        debug_assert!(snapshot.holds_no_totp_secret());
+        Ok(Arc::new(snapshot))
     }
     fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
-        part.downcast_ref::<AuthStore>()
+        part.downcast_ref::<AuthSnapshot>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         self.store(scope)?
             .lock()
@@ -135,14 +141,21 @@ impl SnapshotHook for Auth {
             .map_err(|_| poisoned(self.name(), "the Auth store"))
     }
     fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
-        let copy = part
-            .downcast_ref::<AuthStore>()
+        let snapshot = part
+            .downcast_ref::<AuthSnapshot>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         let store = self.store(scope)?;
         let mut store = store
             .lock()
             .map_err(|_| poisoned(self.name(), "the Auth store"))?;
-        *store = copy.clone();
+        let report = snapshot.restore_into(&mut store);
+        if report.totp_factors_dropped > 0 {
+            eprintln!(
+                "auth: restored project {} without {} TOTP factor(s) whose secret the store no longer held (default snapshots carry no shared secret; enrol again)",
+                snapshot.project_id(),
+                report.totp_factors_dropped
+            );
+        }
         Ok(())
     }
 }
@@ -465,5 +478,103 @@ mod tests {
         let foreign: super::SnapshotPart = std::sync::Arc::new(7u8);
         assert!(hook.validate(&scope, &foreign).is_err());
         assert!(hook.restore(&scope, &foreign).is_err());
+    }
+
+    /// `INV-AUTH-003` on the production Auth snapshot hook (ADR-034): a default snapshot of
+    /// a store with an enrolled and a pending TOTP factor holds no secret material, a
+    /// restore rebinds the enrolled factor to the secret the live store still holds so it
+    /// stays usable, and a factor withdrawn between capture and restore is dropped rather
+    /// than restored unusable (`AUTH-SNAPSHOT-SECRET-01`, `-02`, `-05`).
+    #[test]
+    fn a_default_auth_snapshot_holds_no_totp_secret_and_a_restore_rebinds_the_enrolled_factor() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthSnapshot, AuthStore, NewUser};
+        use fireemu_core_auth::totp::totp_at;
+        use fireemu_core_types::determinism::SplitMix64;
+        use std::sync::{Arc, Mutex};
+
+        let store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(11),
+            TotpPolicy::default(),
+        )));
+        let registry = Arc::new(AuthRegistry::new("demo-app", store.clone()));
+        let hook = super::Auth(registry);
+        let scope = Scope::Project("demo-app".to_owned());
+        let t1 = AT
+            .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(90))
+            .unwrap();
+
+        // An enrolled factor and a pending enrollment, both carrying a secret.
+        let (uid, secret, other, other_secret) = {
+            let mut s = store.lock().unwrap();
+            let uid = s.create_user(NewUser::email("a@example.com"), AT).unwrap();
+            let material = s.start_totp_enrollment(&uid, AT).unwrap();
+            let secret = material.secret_for_test().to_vec();
+            let code = totp_at(&secret, &s.policy().params(), AT);
+            s.finalize_totp_enrollment(&uid, &material.session_id, code, AT)
+                .unwrap();
+            let other = s.create_user(NewUser::email("b@example.com"), AT).unwrap();
+            let pending = s.start_totp_enrollment(&other, AT).unwrap();
+            let other_secret = pending.secret_for_test().to_vec();
+            (uid, secret, other, other_secret)
+        };
+
+        let part = hook.capture(&scope).expect("the capture succeeds");
+        hook.validate(&scope, &part)
+            .expect("the part is this hook's");
+        let snapshot = part
+            .downcast_ref::<AuthSnapshot>()
+            .expect("an AuthSnapshot");
+        assert!(
+            snapshot.holds_no_totp_secret(),
+            "AUTH-SNAPSHOT-SECRET-01 / -02"
+        );
+        let debug = format!("{snapshot:?}");
+        for material in [&secret, &other_secret] {
+            let base32 = fireemu_core_auth::base32::encode(material);
+            assert!(
+                !debug.contains(&base32),
+                "Debug output never carries a secret"
+            );
+        }
+
+        // After the capture: another user appears, and the first user's factor still works.
+        {
+            let mut s = store.lock().unwrap();
+            s.create_user(NewUser::email("later@example.com"), t1)
+                .unwrap();
+        }
+        hook.restore(&scope, &part).expect("the restore succeeds");
+        {
+            let mut s = store.lock().unwrap();
+            assert!(
+                s.user_by_email("later@example.com").is_none(),
+                "the restore replaces"
+            );
+            assert!(
+                s.user(&other).unwrap().mfa.pending_count() == 0,
+                "a pending enrollment is not part of a default snapshot"
+            );
+            let pending = s.start_mfa_sign_in(&uid, t1).unwrap();
+            let code = totp_at(&secret, &s.policy().params(), t1);
+            s.finalize_mfa_sign_in(&uid, &pending, code, t1)
+                .expect("the restored factor is rebound to the live secret and still verifies");
+        }
+
+        // Withdrawn between capture and restore: the factor is dropped, not restored blind.
+        {
+            let mut s = store.lock().unwrap();
+            let id = s.user(&uid).unwrap().mfa.totp_factors()[0]
+                .mfa_enrollment_id
+                .clone();
+            assert!(s.unenroll_factor(&uid, &id).unwrap());
+        }
+        hook.restore(&scope, &part).expect("the restore succeeds");
+        let s = store.lock().unwrap();
+        assert!(
+            s.user(&uid).unwrap().mfa.is_empty(),
+            "AUTH-SNAPSHOT-SECRET-05: no secret, no factor"
+        );
     }
 }

@@ -502,9 +502,11 @@
           "M-AUTH-004"
         ],
         "integration": [
-          "crates/fireemu-core-auth/tests/mfa.rs"
+          "crates/fireemu-core-auth/tests/mfa.rs",
+          "crates/fireemu/src/snapshots.rs"
         ]
-      }
+      },
+      "note": "The production Auth snapshot hook captures an AuthSnapshot: enrolled TOTP factors with a detached secret, no pending enrollment. a_default_auth_snapshot_holds_no_totp_secret_and_a_restore_rebinds_the_enrolled_factor (crates/fireemu/src/snapshots.rs) proves the part holds no secret, that a restore rebinds the factor to the secret the live store still holds so it keeps verifying, and that a factor withdrawn between capture and restore is dropped rather than restored unusable (ADR-034 amendment)."
     },
     {
       "id": "LIVE-AUTH-001",
@@ -519,6 +521,35 @@
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-AUTH-004",
+      "statement": "An expired transient Auth credential (email action code, phone verification code, TOTP enrollment session, pending second-factor sign-in) is never observable as active, every kind has an outstanding budget whose refusal creates nothing, pending sign-ins resolve by direct ownership lookup, and refresh tokens are never swept.",
+      "criticality": "important",
+      "owner": "core-auth",
+      "status": "implemented",
+      "note": "Sweeping depends on the virtual clock and the order of operations only: the store sweeps before every creation and the Identity Toolkit adapter sweeps before every request. OOB codes and SMS codes leave at their exact TTL; a TOTP enrollment session is reported SESSION_EXPIRED for one grace window and reaped after it; a pending sign-in expires after PENDING_SIGN_IN_TTL_SECONDS. Budgets: MAX_OUTSTANDING_CODES per project and kind, MAX_PENDING_PER_USER per user.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-auth/tests/transient.rs",
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-AUTH-005",
+      "statement": "Every Identity Toolkit route this adapter dispatches is described by exactly one row of the route table with a privilege class and a bounded non-unknown operation label; unknown paths are 404 with the unknown label and known paths with another method are 405 after their privilege class was checked.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "note": "crates/fireemu-adapter-http/src/identity_toolkit/routes.rs is the single source: dispatch, the App Check bypass classification, the operation label and the project scoping all read it. Its unit tests fail when a handler has no row, a row has no label or the unknown label, or two rows share a method and pattern.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/src/identity_toolkit/routes.rs",
+          "crates/fireemu-adapter-http/tests/app_check_auth.rs",
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
         ]
       }
     },

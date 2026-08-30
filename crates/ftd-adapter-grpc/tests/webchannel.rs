@@ -11,11 +11,16 @@ use ftd_adapter_grpc::rules::RulesEnforcer;
 use ftd_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 use ftd_core_auth::mfa::TotpPolicy;
 use ftd_core_auth::store::AuthStore;
-use ftd_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use ftd_core_firestore::field_path::FieldPath;
+use ftd_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
+    PlanningContext,
+};
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::SplitMix64;
 use ftd_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+use ftd_core_types::ids::CollectionId;
 use ftd_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 use tokio_stream::StreamExt;
@@ -401,4 +406,153 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
 fn chunk_parts(text: &str) -> (usize, &str) {
     let (len, rest) = text.split_once('\n').unwrap();
     (len.parse().unwrap(), rest)
+}
+
+/// A hub whose strict gateway declares one composite index: `tasks` under an `ownerId`
+/// equality ordered by `createdAt` descending.
+fn indexed_hub() -> Hub {
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("tasks").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: FieldPath::parse("ownerId").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: FieldPath::parse("createdAt").unwrap(),
+                mode: IndexFieldMode::Descending,
+            },
+        ],
+    });
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes,
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+    Hub::new(Arc::new(RestState {
+        local,
+        gateway: Arc::new(gateway),
+        rules: None,
+        app_check: None,
+    }))
+}
+
+/// `where ownerId == "u1" order by <field> desc` on `tasks`, in the JSON shape the browser
+/// SDK puts on the wire.
+fn owner_ordered_target(id: i32, order_field: &str) -> String {
+    json!({
+        "database": DB,
+        "addTarget": {
+            "targetId": id,
+            "query": {
+                "parent": format!("{DB}/documents"),
+                "structuredQuery": {
+                    "from": [{"collectionId": "tasks"}],
+                    "where": {"fieldFilter": {
+                        "field": {"fieldPath": "ownerId"},
+                        "op": "EQUAL",
+                        "value": {"stringValue": "u1"}
+                    }},
+                    "orderBy": [{"field": {"fieldPath": order_field}, "direction": "DESCENDING"}]
+                }
+            }
+        }
+    })
+    .to_string()
+}
+
+/// FS-WEB-1: the failing `AddTarget` rides along with the handshake, so the session must
+/// stay open long enough for the browser to attach its first back channel and read the
+/// cause there. Closing the session instead answers the back channel with `Unknown SID`,
+/// which the SDK reports as `unavailable` rather than `failed-precondition`.
+#[tokio::test]
+async fn a_missing_index_on_the_opening_target_reaches_the_first_back_channel() {
+    let hub = indexed_hub();
+    let opening = owner_ordered_target(31, "updatedAt");
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &opening)]),
+    }));
+    assert_eq!(status, 200);
+    let sid = headers
+        .iter()
+        .find(|(k, _)| *k == "x-http-session-id")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    // The stream task answers the opening message before the back channel exists.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let response = hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "rpc"),
+            ("AID", "0"),
+            ("CI", "1"),
+            ("TYPE", "xmlhttp"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    });
+    let ChannelResponse::Stream { mut body, .. } = response else {
+        panic!("the session is still open: the back channel must not be an Unknown SID reply");
+    };
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let arrays = chunks(std::str::from_utf8(&chunk).unwrap());
+    let payloads: Vec<&Value> = arrays[0]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| &a[1][0])
+        .collect();
+    let removal = payloads
+        .iter()
+        .find(|p| p["targetChange"]["targetChangeType"] == "REMOVE")
+        .expect("the rejected target is removed, not delivered as a stream error");
+    assert_eq!(removal["targetChange"]["targetIds"][0], 31);
+    assert_eq!(removal["targetChange"]["cause"]["code"], 9);
+    let message = removal["targetChange"]["cause"]["message"]
+        .as_str()
+        .unwrap();
+    assert!(
+        message.contains("The query requires an index.") && message.contains("updatedAt"),
+        "the actionable diagnostic reaches the browser: {message}"
+    );
+    assert!(
+        payloads.iter().all(|p| p.get("error").is_none()),
+        "no stream-level error envelope: {payloads:?}"
+    );
+
+    // The session survives: a covered query on the same channel still works.
+    let covered = owner_ordered_target(32, "createdAt");
+    let (status, _, ack) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("SID", &sid), ("RID", "2"), ("AID", "0")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &covered)]),
+    }));
+    assert_eq!(status, 200, "the session is still known: {ack}");
 }

@@ -36,6 +36,14 @@ suite) needs, and what leaves the other smokes working without attaching a token
   guards its `indexedDB` token cache. The SDK never dials the local exchange endpoint itself
   (`@firebase/app-check` hard-codes the production base URL), which is why the provider calls
   the daemon and hands the JWT back.
+- `missing-index.mjs`: the `firebase` client SDK against a conservative gateway that declares
+  exactly one composite index (`missing-index.indexes.json`, reached through
+  `missing-index.firebase.json`). An undeclared `getDocsFromServer()` must reject with
+  `failed-precondition` and the actionable diagnostic, the covered query must still succeed on
+  the same client, and a raw WebChannel handshake carrying the failing `AddTarget` must answer
+  the first back channel with `TargetChange REMOVE` instead of `Unknown SID` (the Node build of
+  the SDK speaks gRPC, so that transport is probed directly). Run it with
+  `firebase-testd exec --config tools/sdk-smoke/firebase-testd.missing-index.json --firebase-json tools/sdk-smoke/missing-index.firebase.json`.
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) and open
   `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FTD_CONTROL_TOKEN>`; the page prints

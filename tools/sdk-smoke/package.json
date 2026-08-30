@@ -9,7 +9,8 @@
     "smoke:lite": "node lite.mjs",
     "smoke:storage": "node storage.mjs",
     "smoke:functions": "node functions.mjs",
-    "smoke:appcheck": "node appcheck.mjs"
+    "smoke:appcheck": "node appcheck.mjs",
+    "smoke:missing-index": "node missing-index.mjs"
   },
   "dependencies": {
     "firebase": "^12",

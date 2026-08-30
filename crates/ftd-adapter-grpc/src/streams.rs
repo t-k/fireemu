@@ -434,7 +434,21 @@ fn handle_listen_request(
                     "this Listen stream already holds {MAX_LISTEN_TARGETS} targets"
                 )));
             }
-            let kind = decode_target(ctx, parent, target)?;
+            // Decoding and validating the query is per-target work: the strict gateway can
+            // refuse this one target (a missing composite index, a name outside the stream
+            // database, a malformed query) while every other target on the stream is
+            // unaffected. Production answers such a refusal with `REMOVE[id]` carrying the
+            // cause and keeps the stream open, so a stream-level error is reserved for
+            // session-wide or database-wide failures. Ending the stream here instead makes
+            // the browser SDK read a transport failure and report `unavailable` rather than
+            // the actionable cause.
+            let kind = match decode_target(ctx, parent, target) {
+                Ok(kind) => kind,
+                Err(e) => {
+                    out.push(removed_with_cause(id, &e));
+                    return Ok(());
+                }
+            };
             out.push(target_change(
                 pb::target_change::TargetChangeType::Add,
                 vec![id],

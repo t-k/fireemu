@@ -9,11 +9,16 @@ use ftd_adapter_grpc::rules::RulesEnforcer;
 use ftd_adapter_grpc::service::GatewayService;
 use ftd_core_auth::mfa::TotpPolicy;
 use ftd_core_auth::store::AuthStore;
-use ftd_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use ftd_core_firestore::field_path::FieldPath;
+use ftd_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
+    PlanningContext,
+};
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::SplitMix64;
 use ftd_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+use ftd_core_types::ids::CollectionId;
 use ftd_core_types::time::LogicalInstant;
 use ftd_proto_firestore::google::firestore::v1 as pb;
 use ftd_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
@@ -1087,4 +1092,170 @@ fn the_declared_read_time_window_is_the_stores_retention_window() {
         ftd_adapter_grpc::local::READ_TIME_RETENTION_SECONDS,
         ftd_core_firestore::store::READ_TIME_RETENTION_SECONDS
     );
+}
+
+/// The one declared composite index of the missing-index reproduction: `tasks` ordered by
+/// `createdAt` descending under an `ownerId` equality.
+fn declared_task_index() -> IndexSet {
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("tasks").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: FieldPath::parse("ownerId").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: FieldPath::parse("createdAt").unwrap(),
+                mode: IndexFieldMode::Descending,
+            },
+        ],
+    });
+    indexes
+}
+
+async fn start_with_indexes(
+    indexes: IndexSet,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes,
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), handle)
+}
+
+/// `where ownerId == "u1" order by <field> desc` on `tasks`: covered by the declared index
+/// for `createdAt`, and a missing composite index for any other field.
+fn add_owner_ordered_target(id: i32, order_field: &str) -> pb::ListenRequest {
+    pb::ListenRequest {
+        database: DB.to_owned(),
+        target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+            target_id: id,
+            target_type: Some(pb::target::TargetType::Query(pb::target::QueryTarget {
+                parent: DOCS.to_owned(),
+                query_type: Some(pb::target::query_target::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![sq::CollectionSelector {
+                            collection_id: "tasks".to_owned(),
+                            all_descendants: false,
+                        }],
+                        r#where: Some(sq::Filter {
+                            filter_type: Some(sq::filter::FilterType::FieldFilter(
+                                sq::FieldFilter {
+                                    field: Some(sq::FieldReference {
+                                        field_path: "ownerId".to_owned(),
+                                    }),
+                                    op: sq::field_filter::Operator::Equal as i32,
+                                    value: Some(s("u1")),
+                                },
+                            )),
+                        }),
+                        order_by: vec![sq::Order {
+                            field: Some(sq::FieldReference {
+                                field_path: order_field.to_owned(),
+                            }),
+                            direction: sq::Direction::Descending as i32,
+                        }],
+                        ..Default::default()
+                    },
+                )),
+            })),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+/// FS-LSN-1: a query the strict gateway refuses concerns the target that carried it, never
+/// the stream. The rejected target is removed with its own cause (code 9 and the actionable
+/// index diagnostic) while every other target on the same stream keeps listening.
+#[tokio::test]
+async fn a_missing_index_removes_only_its_own_target_and_the_stream_keeps_listening() {
+    let (mut client, handle) = start_with_indexes(declared_task_index()).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+
+    // The covered query is an ordinary active target.
+    tx.send(add_owner_ordered_target(21, "createdAt"))
+        .await
+        .unwrap();
+    let covered = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(
+        covered,
+        vec!["ADD[21]", "CURRENT[21]", "NO_CHANGE[21]", "NO_CHANGE[]"]
+    );
+
+    // The undeclared one is refused, and the refusal names the target.
+    tx.send(add_owner_ordered_target(22, "updatedAt"))
+        .await
+        .unwrap();
+    let rejected = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+        .await
+        .expect("a response within 5 s")
+        .expect("the stream is still open")
+        .expect("a target removal, not a stream error");
+    assert_eq!(describe(&rejected), "REMOVE[22] cause=9");
+    let cause = match &rejected.response_type {
+        Some(pb::listen_response::ResponseType::TargetChange(t)) => t.cause.clone().unwrap(),
+        other => panic!("expected a target change: {other:?}"),
+    };
+    assert_eq!(cause.code, tonic::Code::FailedPrecondition as i32);
+    assert!(
+        cause.message.contains("The query requires an index.")
+            && cause.message.contains("firestore.indexes.json")
+            && cause.message.contains("updatedAt"),
+        "the actionable diagnostic survives the target removal: {}",
+        cause.message
+    );
+
+    // The surviving target still receives live diffs on the same stream.
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write(
+                "tasks/t1",
+                &[("ownerId", s("u1")), ("createdAt", s("2026-08-30"))],
+            )],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let diff = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(
+        diff,
+        vec!["CHANGE t1", "NO_CHANGE[21]", "NO_CHANGE[]"],
+        "target 21 stayed active after target 22 was refused"
+    );
+    handle.abort();
 }

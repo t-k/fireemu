@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "indexValidationPolicy": "conservative"
+  },
+  "daemon": { "clockStart": "2026-08-29T12:01:00Z" }
+}

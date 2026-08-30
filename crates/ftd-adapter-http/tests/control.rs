@@ -35,6 +35,12 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         text_indexes: Arc::new(Mutex::new(
             ftd_core_firestore::text_index::TextIndexSet::default(),
         )),
+        default_project: "demo-app".to_owned(),
+        sessions: Mutex::new(std::collections::BTreeMap::from([(
+            "default".to_owned(),
+            "demo-app".to_owned(),
+        )])),
+        project_hooks: None,
     }
 }
 
@@ -466,5 +472,94 @@ fn text_index_definitions_are_loaded_listed_and_lifecycle_actions_are_unimplemen
             .unwrap()
             .len(),
         2
+    );
+}
+
+struct ProjectLog(Mutex<Vec<String>>);
+
+impl ftd_adapter_http::control::ProjectHooks for ProjectLog {
+    fn create(&self, project: &str) -> Result<(), String> {
+        self.0.lock().unwrap().push(format!("create {project}"));
+        Ok(())
+    }
+    fn reset(&self, project: &str) {
+        self.0.lock().unwrap().push(format!("reset {project}"));
+    }
+    fn remove(&self, project: &str) {
+        self.0.lock().unwrap().push(format!("remove {project}"));
+    }
+}
+
+#[test]
+fn sessions_are_created_listed_reset_and_deleted_per_project() {
+    let log = Arc::new(ProjectLog(Mutex::new(Vec::new())));
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut s = state(counter.clone());
+    s.project_hooks = Some(log.clone());
+    // Validation: project shape, demo- prefix, duplicates.
+    for bad in [
+        json!({}),
+        json!({"project": "Bad_Project"}),
+        json!({"project": "other-app"}),
+    ] {
+        assert_eq!(
+            handle(&s, "POST", "/v1/sessions", &bad).status,
+            400,
+            "{bad}"
+        );
+    }
+    let r = handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["name"], "demo-b");
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        409
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions",
+            &json!({"name": "second", "project": "demo-b"})
+        )
+        .status,
+        409
+    );
+    let list = handle(&s, "GET", "/v1/sessions", &json!({}));
+    assert_eq!(
+        list.body["sessions"],
+        json!([{"name": "default", "project": "demo-app"}, {"name": "demo-b", "project": "demo-b"}])
+    );
+    let info = handle(&s, "GET", "/v1/sessions/demo-b", &json!({}));
+    assert_eq!(info.status, 200, "{}", info.body);
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/nothing", &json!({})).status,
+        404
+    );
+    // Reset of the extra session wipes only its project; the default reset runs the hooks.
+    let r = handle(&s, "POST", "/v1/sessions/demo-b/reset", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["scope"], "project");
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
+        200
+    );
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        handle(&s, "DELETE", "/v1/sessions/default", &json!({})).status,
+        400
+    );
+    assert_eq!(
+        handle(&s, "DELETE", "/v1/sessions/demo-b", &json!({})).status,
+        200
+    );
+    assert_eq!(
+        handle(&s, "GET", "/v1/sessions/demo-b", &json!({})).status,
+        404
+    );
+    assert_eq!(
+        *log.0.lock().unwrap(),
+        vec!["create demo-b", "reset demo-b", "remove demo-b"]
     );
 }

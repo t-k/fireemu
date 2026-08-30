@@ -29,6 +29,7 @@ fn state() -> AuthState {
         barrier: None,
         events: None,
         control_token: None,
+        registry: None,
     }
 }
 
@@ -831,4 +832,68 @@ fn inspection_routes_need_the_control_token_from_browser_pages_and_codes_expire(
     );
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["message"], "INVALID_SESSION_INFO");
+}
+
+#[test]
+fn a_registered_project_has_its_own_users_behind_the_project_scoped_routes() {
+    use ftd_core_auth::store::AuthRegistry;
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "demo-b",
+        AuthStore::new("demo-b", SplitMix64::new(9), TotpPolicy::default())
+    ));
+    assert!(!registry.register(
+        "demo-app",
+        AuthStore::new("demo-app", SplitMix64::new(9), TotpPolicy::default())
+    ));
+    s.registry = Some(registry.clone());
+    sign_up(&s, "default@example.com");
+    // The other project's admin routes see an empty store and create there.
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-b/accounts"),
+        &json!({"email": "b@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (_, in_b) = admin(
+        &s,
+        &format!("{V1}/projects/demo-b/accounts:lookup"),
+        &json!({"email": ["default@example.com", "b@example.com"]}),
+    );
+    assert_eq!(in_b["users"].as_array().unwrap().len(), 1);
+    assert_eq!(in_b["users"][0]["email"], "b@example.com");
+    let (_, in_default) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["default@example.com", "b@example.com"]}),
+    );
+    assert_eq!(in_default["users"].as_array().unwrap().len(), 1);
+    assert_eq!(in_default["users"][0]["email"], "default@example.com");
+    // Tokens issued for demo-b name it as their audience.
+    let store_b = registry.store_for("demo-b").unwrap();
+    let store_b = store_b.lock().unwrap();
+    let uid = store_b
+        .user_by_id(created["localId"].as_str().unwrap())
+        .unwrap()
+        .local_id
+        .clone();
+    let token = store_b
+        .id_token_claims(&uid, None, LogicalInstant::from_unix_seconds(1_788_004_860))
+        .unwrap();
+    assert_eq!(token.aud, "demo-b");
+    drop(store_b);
+    // An unregistered project is refused as before.
+    let (status, _) = admin(
+        &s,
+        &format!("{V1}/projects/demo-c/accounts:lookup"),
+        &json!({"email": ["x@example.com"]}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        registry.projects(),
+        vec!["demo-app".to_owned(), "demo-b".to_owned()]
+    );
+    assert!(registry.remove("demo-b"));
+    assert!(!registry.remove("demo-b"));
 }

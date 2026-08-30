@@ -28,6 +28,7 @@ fn state() -> AuthState {
         barrier: None,
         events: None,
         control_token: None,
+        registry: None,
     }
 }
 

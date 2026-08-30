@@ -50,12 +50,15 @@ pub struct AuthState {
     /// emulator inspection routes (they expose action codes, SMS codes and account wipes).
     /// `None` refuses every browser-origin request there.
     pub control_token: Option<String>,
+    /// Stores of the other session projects: project-scoped routes (`projects/{p}/...`,
+    /// `/emulator/v1/projects/{p}/...`) of a registered project use its own store.
+    pub registry: Option<Arc<ftd_core_auth::store::AuthRegistry>>,
 }
 
 /// Hands the user events a request produced to the sink once the handler released the
 /// store (drops after it; before the admission is released).
 struct EventDrain<'a> {
-    store: &'a Arc<Mutex<AuthStore>>,
+    store: Arc<Mutex<AuthStore>>,
     sink: Option<&'a AuthEventSink>,
 }
 
@@ -309,11 +312,21 @@ pub fn handle_with(
     };
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    // Project-scoped routes of a registered session project use that project's store;
+    // everything else (client SDK routes) is the default project's.
+    let scoped_project = path
+        .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
+        .or_else(|| path.strip_prefix("/emulator/v1/projects/"))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|p| !p.is_empty());
+    let store_arc = scoped_project
+        .and_then(|p| state.registry.as_ref().and_then(|r| r.store_for(p)))
+        .unwrap_or_else(|| state.store.clone());
     let _drain = EventDrain {
-        store: &state.store,
+        store: store_arc.clone(),
         sink: state.events.as_ref(),
     };
-    let Ok(mut store) = state.store.lock() else {
+    let Ok(mut store) = store_arc.lock() else {
         return error(500, "INTERNAL");
     };
     if method == "GET" && JWKS_PATHS.contains(&path) {

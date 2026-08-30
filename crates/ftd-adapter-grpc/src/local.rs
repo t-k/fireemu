@@ -45,6 +45,9 @@ pub struct LocalBackend {
     pending_actor: Mutex<Option<Actor>>,
     /// The session's fault plan, when one is shared.
     faults: Mutex<Option<ftd_core_session::fault::SharedFaults>>,
+    /// Per-database generation, bumped by every wipe of that database (resume tokens are
+    /// bound to it, so a project reset invalidates that project's tokens only).
+    generations: Mutex<BTreeMap<(String, String), u64>>,
     ids: Mutex<SplitMix64>,
     commits: tokio::sync::broadcast::Sender<CommitEvent>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
@@ -211,6 +214,7 @@ impl LocalBackend {
             databases: Mutex::new(BTreeMap::new()),
             pending_actor: Mutex::new(None),
             faults: Mutex::new(None),
+            generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             commits: tokio::sync::broadcast::channel(1024).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
@@ -238,6 +242,57 @@ impl LocalBackend {
     /// Current reset epoch.
     pub fn epoch(&self) -> u64 {
         self.epoch.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The wipe generation of a database (see `generations`).
+    #[must_use]
+    pub fn database_generation(&self, parent: &Parent) -> u64 {
+        self.generations
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(&(
+                    parent.project.as_str().to_owned(),
+                    parent.database.as_str().to_owned(),
+                ))
+                .copied()
+            })
+            .unwrap_or(0)
+    }
+
+    fn bump_generations(&self, keys: &[(String, String)]) {
+        if let Ok(mut g) = self.generations.lock() {
+            for k in keys {
+                *g.entry(k.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    /// Drops every database of one project (a session reset of that project): other
+    /// projects' streams and epoch are untouched; the project's streams observe the wipe.
+    pub fn reset_project(&self, project: &str) {
+        let cleared: Vec<(String, String)> = match self.databases.lock() {
+            Ok(mut dbs) => {
+                let keys: Vec<(String, String)> =
+                    dbs.keys().filter(|(p, _)| p == project).cloned().collect();
+                for k in &keys {
+                    dbs.remove(k);
+                }
+                keys
+            }
+            Err(_) => Vec::new(),
+        };
+        self.bump_generations(&cleared);
+        for (project, database) in cleared {
+            let _ = self.commits.send(CommitEvent {
+                actor: Actor::system(),
+                project,
+                database,
+                version: 0,
+                commit_time: None,
+                changes: Arc::new(Vec::new()),
+            });
+        }
     }
 
     /// A copy of every database (session snapshots).
@@ -285,6 +340,7 @@ impl LocalBackend {
             }
             Err(_) => Vec::new(),
         };
+        self.bump_generations(&cleared);
         for (project, database) in cleared {
             let _ = self.commits.send(CommitEvent {
                 actor: Actor::system(),

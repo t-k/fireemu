@@ -2,7 +2,7 @@
 
 use core::fmt;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ftd_core_limits::catalogs::FIREBASE_AUTH_2026_08_30;
 use ftd_core_limits::evaluate::{evaluate, LimitDisposition, LimitViolation, DEFAULT_THRESHOLDS};
@@ -441,6 +441,12 @@ impl AuthStore {
     #[must_use]
     pub fn signer(&self) -> Option<&dyn crate::jwt::IdTokenSigner> {
         self.signer.as_deref()
+    }
+
+    /// The installed signer as a shared handle (to install it on another project's store).
+    #[must_use]
+    pub fn signer_arc(&self) -> Option<Arc<dyn crate::jwt::IdTokenSigner>> {
+        self.signer.clone()
     }
 
     /// Creates a store for `project_id`.
@@ -1507,5 +1513,81 @@ impl AuthStore {
     #[must_use]
     pub const fn id_token_ttl() -> LogicalDuration {
         LogicalDuration::from_seconds(ID_TOKEN_TTL_SECONDS)
+    }
+}
+
+/// The Auth stores of every project a daemon serves: the configured (default) project plus
+/// the projects created as sessions through the control API. Tokens name their project in
+/// `aud`, so a verifier picks the store by audience.
+#[derive(Debug)]
+pub struct AuthRegistry {
+    default_project: String,
+    default: Arc<Mutex<AuthStore>>,
+    others: Mutex<BTreeMap<String, Arc<Mutex<AuthStore>>>>,
+}
+
+impl AuthRegistry {
+    /// A registry around the default project's store.
+    #[must_use]
+    pub fn new(default_project: &str, default: Arc<Mutex<AuthStore>>) -> Self {
+        Self {
+            default_project: default_project.to_owned(),
+            default,
+            others: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// The default project.
+    #[must_use]
+    pub fn default_project(&self) -> &str {
+        &self.default_project
+    }
+
+    /// The default project's store.
+    #[must_use]
+    pub fn default_store(&self) -> Arc<Mutex<AuthStore>> {
+        self.default.clone()
+    }
+
+    /// The store of `project`, if it is the default or a registered session.
+    #[must_use]
+    pub fn store_for(&self, project: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        if project == self.default_project {
+            return Some(self.default.clone());
+        }
+        self.others.lock().ok()?.get(project).cloned()
+    }
+
+    /// Registers a project's store; `false` when the project already has one.
+    pub fn register(&self, project: &str, store: AuthStore) -> bool {
+        if project == self.default_project {
+            return false;
+        }
+        let Ok(mut others) = self.others.lock() else {
+            return false;
+        };
+        if others.contains_key(project) {
+            return false;
+        }
+        others.insert(project.to_owned(), Arc::new(Mutex::new(store)));
+        true
+    }
+
+    /// Removes a registered project; `false` when it was not registered.
+    pub fn remove(&self, project: &str) -> bool {
+        self.others
+            .lock()
+            .ok()
+            .is_some_and(|mut o| o.remove(project).is_some())
+    }
+
+    /// Every project with a store, the default first.
+    #[must_use]
+    pub fn projects(&self) -> Vec<String> {
+        let mut out = vec![self.default_project.clone()];
+        if let Ok(others) = self.others.lock() {
+            out.extend(others.keys().cloned());
+        }
+        out
     }
 }

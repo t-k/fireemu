@@ -382,6 +382,24 @@ impl StorageState {
         self.events.clear();
     }
 
+    /// Drops every object, blob and upload of one bucket (a project's session reset);
+    /// returns how many objects went.
+    pub fn remove_bucket(&mut self, bucket: &BucketName) -> usize {
+        let gone: Vec<(BucketName, ObjectName)> = self
+            .objects
+            .keys()
+            .filter(|(b, _)| b == bucket)
+            .cloned()
+            .collect();
+        for key in &gone {
+            if let Some(m) = self.objects.remove(key) {
+                self.blobs.remove(&m.blob);
+            }
+        }
+        self.uploads.retain(|_, u| u.bucket != *bucket);
+        gone.len()
+    }
+
     /// Takes the events recorded since the last call.
     pub fn drain_events(&mut self) -> Vec<StorageEvent> {
         std::mem::take(&mut self.events)

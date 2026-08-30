@@ -47,6 +47,16 @@ pub trait FunctionsHook: Send + Sync {
     fn project(&self) -> String;
 }
 
+/// Per-project state management for sessions other than the default one.
+pub trait ProjectHooks: Send + Sync {
+    /// A session for `project` was created: allocate its state (an Auth store, ...).
+    fn create(&self, project: &str) -> Result<(), String>;
+    /// Wipe the project's state (Firestore databases, default buckets, Auth users).
+    fn reset(&self, project: &str);
+    /// Drop the project's state and forget it.
+    fn remove(&self, project: &str);
+}
+
 /// One adapter's part of a session snapshot: an opaque copy of its state.
 pub type SnapshotPart = Arc<dyn std::any::Any + Send + Sync>;
 
@@ -94,6 +104,14 @@ pub struct ControlState {
     pub faults: Option<ftd_core_session::fault::SharedFaults>,
     /// Text Index definitions (`FS-TEXT-VAL-1`, strict validation only).
     pub text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexSet>>,
+    /// The default session's project.
+    pub default_project: String,
+    /// Sessions by name → project (`default` is always present). Sessions are isolated
+    /// by project: each has its own Firestore databases, Storage buckets and Auth store;
+    /// the virtual clock, rules, functions and fault plan are shared.
+    pub sessions: Mutex<std::collections::BTreeMap<String, String>>,
+    /// Per-project state hooks for the sessions other than the default one.
+    pub project_hooks: Option<Arc<dyn ProjectHooks>>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<dyn FunctionsHook>>,
     /// Session admission barrier: a reset holds it exclusively across every hook, so no
@@ -170,6 +188,15 @@ pub fn handle_with(
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>()
         })),
+        ("GET", "/v1/sessions") => {
+            let Ok(sessions) = state.sessions.lock() else {
+                return error(500, "INTERNAL");
+            };
+            ok(
+                json!({"sessions": sessions.iter().map(|(name, project)| json!({"name": name, "project": project})).collect::<Vec<_>>()}),
+            )
+        }
+        ("POST", "/v1/sessions") => create_session(state, body),
         (m, p) if p.starts_with("/v1/sessions/") => session_route(state, m, p, body),
         // The Pub/Sub REST shape (`projects/{p}/topics/{t}:publish`), for clients that speak it.
         ("POST", p) if p.starts_with("/v1/projects/") && p.ends_with(":publish") => {
@@ -261,19 +288,108 @@ fn rules_route(slot: &RwLock<LoadedRules>, method: &str, body: &Value) -> JsonRe
     }
 }
 
+/// `POST /v1/sessions {"name"?, "project"}`: a session isolated by project. The name
+/// defaults to the project; `demo-` projects only when `requireDemoPrefix` is set.
+fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
+    let Some(project) = body.get("project").and_then(Value::as_str) else {
+        return error(400, "INVALID_ARGUMENT : project is required");
+    };
+    let valid_id = |s: &str| {
+        (1..=63).contains(&s.len())
+            && s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && !s.starts_with('-')
+    };
+    if !valid_id(project) {
+        return error(
+            400,
+            "INVALID_ARGUMENT : project must be lowercase letters, digits and dashes (1..=63)",
+        );
+    }
+    if state.require_demo_prefix && !project.starts_with("demo-") {
+        return error(
+            400,
+            "INVALID_ARGUMENT : projects must start with demo- (projects.requireDemoPrefix)",
+        );
+    }
+    let name = body.get("name").and_then(Value::as_str).unwrap_or(project);
+    if !valid_id(name) {
+        return error(
+            400,
+            "INVALID_ARGUMENT : name must be lowercase letters, digits and dashes (1..=63)",
+        );
+    }
+    let Ok(mut sessions) = state.sessions.lock() else {
+        return error(500, "INTERNAL");
+    };
+    if sessions.contains_key(name) {
+        return error(409, &format!("ALREADY_EXISTS : session {name:?}"));
+    }
+    if sessions.values().any(|p| p == project) {
+        return error(
+            409,
+            &format!("ALREADY_EXISTS : project {project:?} already has a session"),
+        );
+    }
+    if let Some(hooks) = &state.project_hooks {
+        if let Err(e) = hooks.create(project) {
+            return error(500, &format!("INTERNAL : {e}"));
+        }
+    }
+    sessions.insert(name.to_owned(), project.to_owned());
+    ok(json!({"name": name, "project": project, "created": true}))
+}
+
 fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {
     let rest = &path["/v1/sessions/".len()..];
     let (session, action) = rest.split_once('/').map_or((rest, ""), |(s, a)| (s, a));
     if session.is_empty() {
         return error(404, "NOT_FOUND");
     }
+    let project = match state.sessions.lock() {
+        Ok(sessions) => sessions.get(session).cloned(),
+        Err(_) => return error(500, "INTERNAL"),
+    };
+    let Some(project) = project else {
+        return error(
+            404,
+            &format!("NOT_FOUND : no session {session:?} (POST /v1/sessions creates one)"),
+        );
+    };
+    let is_default = project == state.default_project;
+    if (method, action) == ("DELETE", "") {
+        if is_default {
+            return error(
+                400,
+                "INVALID_ARGUMENT : the default session cannot be deleted; reset it",
+            );
+        }
+        let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
+        if let Some(hooks) = &state.project_hooks {
+            hooks.remove(&project);
+        }
+        if let Ok(mut sessions) = state.sessions.lock() {
+            sessions.remove(session);
+        }
+        return ok(json!({"session": session, "project": project, "deleted": true}));
+    }
     if (method, action) == ("POST", "reset") {
         // Exclusive across every hook: requests in flight finish first, new ones wait.
         let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
-        for hook in &state.reset_hooks {
-            hook();
+        if is_default {
+            for hook in &state.reset_hooks {
+                hook();
+            }
+            return ok(
+                json!({"session": session, "project": project, "reset": true, "hooks": state.reset_hooks.len()}),
+            );
         }
-        return ok(json!({"session": session, "reset": true, "hooks": state.reset_hooks.len()}));
+        if let Some(hooks) = &state.project_hooks {
+            hooks.reset(&project);
+        }
+        return ok(
+            json!({"session": session, "project": project, "reset": true, "scope": "project"}),
+        );
     }
     if let Some(rest) = action.strip_prefix("snapshots") {
         return snapshot_route(state, session, method, rest, body);

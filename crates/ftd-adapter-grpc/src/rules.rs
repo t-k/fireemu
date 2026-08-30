@@ -306,6 +306,9 @@ pub struct RulesEnforcer {
     rules: Arc<RwLock<LoadedRules>>,
     auth: Arc<Mutex<AuthStore>>,
     clock: Arc<Mutex<VirtualClock>>,
+    /// Stores of the other session projects (tokens are verified against the store of
+    /// their `aud`).
+    registry: Option<Arc<ftd_core_auth::store::AuthRegistry>>,
 }
 
 impl RulesEnforcer {
@@ -316,7 +319,19 @@ impl RulesEnforcer {
         auth: Arc<Mutex<AuthStore>>,
         clock: Arc<Mutex<VirtualClock>>,
     ) -> Self {
-        Self { rules, auth, clock }
+        Self {
+            rules,
+            auth,
+            clock,
+            registry: None,
+        }
+    }
+
+    /// Verifies tokens of every registered session project, not only the default one.
+    #[must_use]
+    pub fn with_registry(mut self, registry: Arc<ftd_core_auth::store::AuthRegistry>) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     fn now(&self) -> Result<LogicalInstant, Status> {
@@ -357,8 +372,28 @@ impl RulesEnforcer {
             return Ok(Principal::Owner);
         }
         let now = self.now()?;
-        let store = self
-            .auth
+        // The token's audience names its project: verify against that project's store.
+        let store_arc = match &self.registry {
+            Some(registry) => {
+                let default = self
+                    .auth
+                    .lock()
+                    .map_err(|_| Status::internal("auth store lock poisoned"))?;
+                let aud = ftd_core_auth::jwt::decode_token(token, default.signer())
+                    .ok()
+                    .and_then(|d| {
+                        d.payload
+                            .get("aud")
+                            .and_then(ftd_core_types::json::JsonValue::as_str)
+                            .map(str::to_owned)
+                    });
+                drop(default);
+                aud.and_then(|a| registry.store_for(&a))
+                    .unwrap_or_else(|| self.auth.clone())
+            }
+            None => self.auth.clone(),
+        };
+        let store = store_arc
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
         let (_, decoded) = verify_id_token_decoded(token, &store, now)

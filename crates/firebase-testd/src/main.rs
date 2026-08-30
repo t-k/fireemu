@@ -20,6 +20,7 @@
 mod config;
 mod control;
 mod functions;
+mod sessions;
 mod snapshots;
 
 use std::path::PathBuf;
@@ -570,6 +571,7 @@ fn control_state(
     control_token: String,
     faults: ftd_core_session::fault::SharedFaults,
     text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexSet>>,
+    registry: &Arc<ftd_core_auth::store::AuthRegistry>,
 ) -> ftd_adapter_http::control::ControlState {
     let storage_reset = {
         let storage = storage.clone();
@@ -621,6 +623,17 @@ fn control_state(
         snapshots: Mutex::new(std::collections::BTreeMap::new()),
         faults: Some(faults),
         text_indexes,
+        default_project: cfg.auth_project.clone(),
+        sessions: Mutex::new(std::collections::BTreeMap::from([(
+            "default".to_owned(),
+            cfg.auth_project.clone(),
+        )])),
+        project_hooks: Some(Arc::new(sessions::Projects {
+            backend: backend.clone(),
+            storage: storage.clone(),
+            registry: registry.clone(),
+            seed: cfg.seed,
+        })),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))
                 as Arc<dyn ftd_adapter_http::control::FunctionsHook>
@@ -691,6 +704,11 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             }
         }
         let barrier = backend.barrier();
+        // Session projects other than the default get their own Auth store (same signer).
+        let registry = Arc::new(ftd_core_auth::store::AuthRegistry::new(
+            &cfg.auth_project,
+            auth_store.clone(),
+        ));
         let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
         let storage_rules = Arc::new(RwLock::new(load_storage_rules(&cfg)?));
         let (grpc_listener, http_listener, storage_listener, functions_listener) =
@@ -729,6 +747,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             barrier: Some(barrier.clone()),
             events: functions_runtime.as_ref().map(functions::auth_sink),
             control_token: Some(control_token.clone()),
+            registry: Some(registry.clone()),
         });
         let storage = storage_state(
             &cfg,
@@ -754,6 +773,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             control_token.clone(),
             faults.clone(),
             text_indexes.clone(),
+            &registry,
         ));
         print_banner(
             &cfg,
@@ -776,11 +796,10 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
         }
 
         let enforcer = cfg.rules_enforced.then(|| {
-            Arc::new(RulesEnforcer::new(
-                rules.clone(),
-                auth_store.clone(),
-                clock.clone(),
-            ))
+            Arc::new(
+                RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
+                    .with_registry(registry.clone()),
+            )
         });
         let mut service = GatewayService::local(gateway.clone(), backend.clone());
         if let Some(e) = &enforcer {

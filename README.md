@@ -51,6 +51,8 @@ curl -X POST http://127.0.0.1:9099/v1/sessions/default/snapshots/seeded:restore 
 curl -X PUT  http://127.0.0.1:9099/v1/sessions/default/faultPlan -d '{"rules": [{"match": {"operation": "firestore.commit", "nth": 2}, "action": {"type": "returnError", "code": "ABORTED"}}]}'
 ```
 
+Sessions are isolated by project: `POST /v1/sessions -d '{"project": "demo-b"}'` gives `demo-b` its own Firestore databases, default Storage buckets and Auth store (Admin SDK routes under `projects/demo-b/...` and tokens with that audience use it), `POST /v1/sessions/demo-b/reset` wipes only that project and `DELETE /v1/sessions/demo-b` removes it; the clock, rules, functions and fault plan are shared by every session.
+
 Snapshots copy the Firestore databases, Storage objects, Auth users, the clock and both rulesets in one exclusive section (a restore is a new epoch: streams end, the functions runtime resets); they live in memory. Fault plans (spec 18) name an operation (`firestore.commit` / `read` / `beginTransaction`, `storage.upload` / `read` / `delete` / `list`, `functions.invoke` / `deliver`), optionally the nth occurrence and a function, and an action (`returnError` with a gRPC name or HTTP code, `delay` seconds, `duplicate` count, `crashRunner`, `timeout`, `deadLetter`, `transactionConflict`, `dropConnection`); `GET .../faultPlan` shows what fired.
 
 Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.

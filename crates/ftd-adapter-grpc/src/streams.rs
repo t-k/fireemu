@@ -373,7 +373,7 @@ fn handle_listen_request(
             // start over and would silently line up with unrelated history.
             let binding = TokenBinding {
                 epoch: ctx.local.epoch(),
-                database: database_hash(parent),
+                database: database_hash(parent, ctx.local.database_generation(parent)),
                 target: target_hash(&kind),
             };
             let resume = match &target.resume_type {
@@ -485,7 +485,7 @@ fn refresh_all(
         let read_time = encode_instant(read_at);
         let binding = TokenBinding {
             epoch: local.epoch(),
-            database: database_hash(parent),
+            database: database_hash(parent, local.database_generation(parent)),
             target: 0,
         };
         let token = resume_token(version, &binding);
@@ -706,9 +706,9 @@ fn fnv(text: &str) -> u64 {
     })
 }
 
-fn database_hash(parent: &Parent) -> u64 {
+fn database_hash(parent: &Parent, generation: u64) -> u64 {
     fnv(&format!(
-        "{}/{}",
+        "{}/{}#{generation}",
         parent.project.as_str(),
         parent.database.as_str()
     ))

@@ -2,6 +2,11 @@
 
 Exercise a running `firebase-testd` with the real Firebase SDKs.
 
+`firebase-testd.smoke.json` pins the virtual clock and enables App Check with one registered
+app and every service `unenforced`: the daemon then classifies and records every request
+without denying any, which is what the Emulator UI's App Check page (and its Playwright
+suite) needs, and what leaves the other smokes working without attaching a token.
+
 - `smoke.mjs`: `firebase-admin` (Firestore over gRPC with `Bearer owner`, Auth over the
   Identity Toolkit REST subset).
 - `client.mjs`: the `firebase` client SDK (Auth sign-up, Firestore `Listen` / `Write`
@@ -24,8 +29,8 @@ Exercise a running `firebase-testd` with the real Firebase SDKs.
   exchanges a registered local debug secret, then Firestore, Storage, Auth and an
   `enforceAppCheck` callable with the token attached; start the daemon with
   `--config tools/sdk-smoke/firebase-testd.appcheck.json --functions tools/sdk-smoke/functions-project --functions-port 5001`
-  (that config is the smoke config plus an `appCheck` section that registers the app and the
-  digest of the clearly fake debug secret the script uses) and set `FTD_FUNCTIONS_HOST`.
+  (that config registers the same app as the smoke config but puts Firestore and Storage in
+  `enforced`, which is what the refusal checks need) and set `FTD_FUNCTIONS_HOST`.
   `FTD_APP_CHECK_EMULATOR_HOST` is exported by `firebase-testd exec`; it defaults to the Auth
   port. No browser shims are needed: `CustomProvider` touches no browser global, and the SDK
   guards its `indexedDB` token cache. The SDK never dials the local exchange endpoint itself

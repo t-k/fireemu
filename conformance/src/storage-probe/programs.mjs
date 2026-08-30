@@ -1451,15 +1451,13 @@ const gcsInsertAndGet = {
         body: part.body,
       });
     });
-    await ctx.step("media-insert-without-name", () =>
-      ctx.http({
-        method: "POST",
-        path: gcsUpload(ctx),
-        query: { uploadType: "media" },
-        headers: { ...OWNER, "content-type": "text/plain" },
-        body: text("x"),
-      }),
-    );
+    // Deliberately NOT probed: a JSON API media insert without a `name` crashes the pinned
+    // official CLI outright (apis/gcloud.js answers 400 and then still dereferences the
+    // missing name; the unhandled TypeError prints "An unexpected error has occurred." and
+    // exits the whole `firebase emulators:exec` process with code 2, orphaning its child
+    // emulators). Measured against firebase-tools 15.28.2 on 2026-08-31. fireemu answers a
+    // plain 400 "object name is required"; the row lives in the contract as an
+    // officialLimitations entry because no fixture can record a crash.
     await ctx.step("insert-without-credentials", () =>
       ctx.http({
         method: "POST",

@@ -19,7 +19,8 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import net from "node:net";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
@@ -49,7 +50,7 @@ async function terminateGroup(child) {
   clearTimeout(timer);
 }
 
-async function runSupervisor({ name, command, args, env, timeoutMs = 900_000 }) {
+async function runSupervisor({ name, command, args, env, outPath, timeoutMs = 900_000 }) {
   const child = spawn(command, args, {
     cwd: CONFORMANCE_DIR,
     detached: true,
@@ -77,13 +78,47 @@ async function runSupervisor({ name, command, args, env, timeoutMs = 900_000 }) 
   process.off("SIGTERM", onSignal);
   await terminateGroup(child);
   if (timedOut) throw new Error(`${name}: timed out\n${log.join("")}`);
-  if (code !== 0) throw new Error(`${name}: exited ${code}\n${log.join("")}`);
+  // What matters is the session's run file: the official CLI can exit non-zero on shutdown
+  // hiccups of emulators the probe already finished with (`sides.mjs` accepts runs the same
+  // way).
+  if (!existsSync(outPath)) {
+    throw new Error(`${name}: exited ${code} without writing a run\n${log.join("")}`);
+  }
+  if (code !== 0) {
+    console.error(`${name}: supervisor exited ${code} after the session wrote its run`);
+  }
   return log.join("");
 }
 
+/**
+ * Fails fast when one of a side's fixed ports is already held: a crashed earlier run can
+ * leave an emulator behind, and the CLI's own message ("port taken") does not say which
+ * process to kill.
+ */
+async function assertPortsFree(ports) {
+  for (const port of ports) {
+    const held = await new Promise((resolve) => {
+      const socket = net.connect({ host: "127.0.0.1", port }, () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.on("error", () => resolve(false));
+    });
+    if (held) {
+      throw new Error(
+        `port ${port} is already in use; a previous run left an emulator behind ` +
+          `(lsof -nP -iTCP:${port} -sTCP:LISTEN names it)`,
+      );
+    }
+  }
+}
+
 async function probeOracle(outPath) {
+  await assertPortsFree([32380, 32399, 32301]);
+  await rm(outPath, { force: true });
   await runSupervisor({
     name: "oracle",
+    outPath,
     command: join(CONFORMANCE_DIR, "node_modules/.bin/firebase"),
     args: [
       "emulators:exec",
@@ -112,8 +147,11 @@ async function probeFireemu(outPath) {
       .map((p) => join(REPO_ROOT, p))
       .find((p) => existsSync(p));
   if (!binary) throw new Error("fireemu is not built: run `cargo build -p fireemu`");
+  await assertPortsFree(Object.values(TESTD));
+  await rm(outPath, { force: true });
   await runSupervisor({
     name: "fireemu",
+    outPath,
     command: binary,
     args: [
       "exec",

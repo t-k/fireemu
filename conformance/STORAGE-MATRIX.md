@@ -12,7 +12,7 @@ nothing until they are ruled on (they fail no claim while excluded by name).
 
 ## firebase-protocol
 
-debt: 13
+parity: 3 &middot; debt: 99
 
 | program | step | status |
 | --- | --- | --- |
@@ -29,4 +29,230 @@ debt: 13
 | `fb-media-upload` | `upload-without-name` | debt |
 | `fb-media-upload` | `unicode-name-round-trip` | debt |
 | `fb-media-upload` | `root-route` | debt |
+| `fb-multipart-upload` | `upload` | debt |
+| `fb-multipart-upload` | `download-headers` | debt |
+| `fb-multipart-upload` | `upload-name-from-metadata-part` | debt |
+| `fb-multipart-upload` | `upload-bad-boundary` | debt |
+| `fb-multipart-upload` | `upload-one-part-only` | debt |
+| `fb-multipart-upload` | `multipart-data-ending-in-line-breaks` | parity |
+| `fb-resumable-upload` | `start` | debt |
+| `fb-resumable-upload` | `query-empty` | debt |
+| `fb-resumable-upload` | `upload-first-chunk` | debt |
+| `fb-resumable-upload` | `query-after-chunk` | debt |
+| `fb-resumable-upload` | `upload-and-finalize` | debt |
+| `fb-resumable-upload` | `query-finalized` | debt |
+| `fb-resumable-upload` | `finalize-again` | debt |
+| `fb-resumable-upload` | `upload-after-finalize` | debt |
+| `fb-resumable-upload` | `cancel-finalized` | debt |
+| `fb-resumable-upload` | `committed-object` | debt |
+| `fb-resumable-upload` | `committed-bytes` | parity |
+| `fb-resumable-upload` | `query-unknown-session` | debt |
+| `fb-resumable-upload` | `start-without-name` | debt |
+| `fb-resumable-upload` | `start-second` | debt |
+| `fb-resumable-upload` | `cancel-active` | debt |
+| `fb-resumable-upload` | `upload-after-cancel` | debt |
+| `fb-resumable-upload` | `finalize-after-cancel` | debt |
+| `fb-resumable-upload` | `cancelled-object-absent` | debt |
+| `fb-resumable-upload` | `start-third` | debt |
+| `fb-resumable-upload` | `upload-with-wrong-offset` | debt |
+| `fb-resumable-upload` | `wrong-offset-object` | debt |
+| `fb-download-tokens` | `upload` | debt |
+| `fb-download-tokens` | `download-with-token-no-credentials` | debt |
+| `fb-download-tokens` | `metadata-with-token-no-credentials` | debt |
+| `fb-download-tokens` | `download-with-wrong-token` | debt |
+| `fb-download-tokens` | `owner-uploads-closed-object` | debt |
+| `fb-download-tokens` | `closed-object-with-token` | debt |
+| `fb-download-tokens` | `closed-object-without-token` | debt |
+| `fb-download-tokens` | `create-token` | debt |
+| `fb-download-tokens` | `create-token-without-owner` | debt |
+| `fb-download-tokens` | `create-token-missing-object` | debt |
+| `fb-download-tokens` | `delete-token` | debt |
+| `fb-download-tokens` | `deleted-token-no-longer-grants` | debt |
+| `fb-download-tokens` | `delete-last-token-mints-a-new-one` | debt |
+| `fb-download-tokens` | `json-api-upload-has-no-token` | parity |
+| `fb-download-tokens` | `firebase-get-mints-a-token` | debt |
+| `fb-download-tokens` | `firebase-get-again-keeps-it` | debt |
+| `fb-download-tokens` | `json-api-sees-the-minted-token` | debt |
+| `fb-download-tokens` | `upload-with-client-supplied-token` | debt |
+| `fb-metadata-update` | `upload` | debt |
+| `fb-metadata-update` | `patch` | debt |
+| `fb-metadata-update` | `put-with-method-override` | debt |
+| `fb-metadata-update` | `clear-all-custom-metadata` | debt |
+| `fb-metadata-update` | `non-string-custom-value` | debt |
+| `fb-metadata-update` | `empty-patch-bumps-metageneration` | debt |
+| `fb-metadata-update` | `patch-missing` | debt |
+| `fb-metadata-update` | `patch-closed` | debt |
+| `fb-metadata-update` | `patch-closed-and-missing` | debt |
+| `fb-metadata-update` | `response-headers-of-patch` | debt |
+| `fb-delete` | `delete` | debt |
+| `fb-delete` | `delete-again` | debt |
+| `fb-delete` | `get-after-delete` | debt |
+| `fb-delete` | `download-after-delete` | debt |
+| `fb-delete` | `delete-closed` | debt |
+| `fb-delete` | `delete-closed-and-missing` | debt |
+| `fb-delete` | `delete-open-and-missing` | debt |
+| `fb-errors` | `get-missing-metadata` | debt |
+| `fb-errors` | `get-missing-media` | debt |
+| `fb-errors` | `get-missing-anonymous` | debt |
+| `fb-errors` | `get-closed-missing-anonymous` | debt |
+| `fb-errors` | `get-closed-existing-anonymous` | debt |
+| `fb-errors` | `upload-closed-anonymous` | debt |
+| `fb-errors` | `upload-closed-with-user-token` | debt |
+| `fb-errors` | `malformed-bearer` | debt |
+| `fb-errors` | `list-prefix-without-trailing-slash` | debt |
+| `fb-errors` | `unknown-method` | debt |
+| `fb-errors` | `extra-path-segment` | debt |
+| `fb-errors` | `cors-preflight` | debt |
+| `fb-errors` | `cors-actual-request` | debt |
+| `fb-list` | `delimited` | debt |
+| `fb-list` | `flat` | debt |
+| `fb-list` | `subdirectory` | debt |
+| `fb-list` | `empty-prefix` | debt |
+| `fb-list` | `paged` | debt |
+| `fb-list` | `page-token-shape` | debt |
+| `fb-list` | `list-closed-prefix` | debt |
+| `fb-list` | `list-listable-prefix-anonymous` | debt |
+| `fb-list` | `get-in-listable-prefix-anonymous` | debt |
+| `fb-list` | `max-results-zero` | debt |
+| `fb-overwrite` | `first` | debt |
+| `fb-overwrite` | `second` | debt |
+| `fb-overwrite` | `generation-changed` | debt |
+| `fb-overwrite` | `old-generation-not-served` | debt |
+
+## rules
+
+debt: 33
+
+| program | step | status |
+| --- | --- | --- |
+| `rules-request-model` | `size-under-limit` | debt |
+| `rules-request-model` | `size-over-limit` | debt |
+| `rules-request-model` | `size-over-limit-not-published` | debt |
+| `rules-request-model` | `size-delete-without-request-resource` | debt |
+| `rules-request-model` | `type-image` | debt |
+| `rules-request-model` | `type-text` | debt |
+| `rules-request-model` | `type-defaulted-when-absent` | debt |
+| `rules-request-model` | `type-from-metadata-part-wins` | debt |
+| `rules-request-model` | `custom-metadata-owner` | debt |
+| `rules-request-model` | `custom-metadata-absent` | debt |
+| `rules-request-model` | `hashes-present-in-request-resource` | debt |
+| `rules-request-model` | `update-unlocked` | debt |
+| `rules-request-model` | `update-locked` | debt |
+| `rules-request-model` | `overwrite-locked-is-an-update` | debt |
+| `rules-request-model` | `delete-locked` | debt |
+| `rules-request-model` | `delete-unlocked` | debt |
+| `rules-request-model` | `delete-missing-under-resource-rule` | debt |
+| `rules-request-model` | `fields-create` | debt |
+| `rules-request-model` | `fields-read` | debt |
+| `rules-request-model` | `cache-control-visible-to-rules` | debt |
+| `rules-request-model` | `content-language-visible-to-rules` | debt |
+| `rules-request-model` | `own-prefix` | debt |
+| `rules-request-model` | `other-prefix` | debt |
+| `rules-request-model` | `anonymous-prefix` | debt |
+| `rules-request-model` | `bearer-scheme-user-token` | debt |
+| `rules-request-model` | `token-claims` | debt |
+| `rules-request-model` | `token-claims-other-email` | debt |
+| `rules-request-model` | `firestore-get-allows` | debt |
+| `rules-request-model` | `firestore-get-denies` | debt |
+| `rules-request-model` | `firestore-get-missing-document` | debt |
+| `rules-request-model` | `firestore-exists-allows` | debt |
+| `rules-request-model` | `firestore-exists-denies` | debt |
+| `rules-request-model` | `resumable-denied-at-finalize` | debt |
+
+## json-api
+
+parity: 2 &middot; debt: 72
+
+| program | step | status |
+| --- | --- | --- |
+| `gcs-insert-and-get` | `media-insert` | debt |
+| `gcs-insert-and-get` | `get-metadata` | debt |
+| `gcs-insert-and-get` | `get-media` | debt |
+| `gcs-insert-and-get` | `get-media-range` | debt |
+| `gcs-insert-and-get` | `download-route` | debt |
+| `gcs-insert-and-get` | `short-route-metadata` | debt |
+| `gcs-insert-and-get` | `xml-style-route` | debt |
+| `gcs-insert-and-get` | `multipart-insert` | debt |
+| `gcs-insert-and-get` | `multipart-name-with-leading-slash` | debt |
+| `gcs-insert-and-get` | `multipart-content-type-from-header` | debt |
+| `gcs-insert-and-get` | `insert-without-credentials` | debt |
+| `gcs-insert-and-get` | `insert-with-user-token-bypasses-rules` | debt |
+| `gcs-insert-and-get` | `get-closed-with-user-token` | debt |
+| `gcs-insert-and-get` | `get-with-garbage-bearer` | debt |
+| `gcs-resumable-upload` | `start` | debt |
+| `gcs-resumable-upload` | `put-whole-body` | debt |
+| `gcs-resumable-upload` | `put-after-finish` | debt |
+| `gcs-resumable-upload` | `put-unknown-session` | debt |
+| `gcs-resumable-upload` | `put-without-upload-id` | debt |
+| `gcs-resumable-upload` | `start-without-name` | debt |
+| `gcs-resumable-upload` | `start-name-in-query` | debt |
+| `gcs-resumable-upload` | `start-chunked` | debt |
+| `gcs-resumable-upload` | `chunk-one` | debt |
+| `gcs-resumable-upload` | `chunk-two` | debt |
+| `gcs-resumable-upload` | `chunked-object` | debt |
+| `gcs-update-list-delete` | `patch` | debt |
+| `gcs-update-list-delete` | `patch-remove-custom-key` | debt |
+| `gcs-update-list-delete` | `patch-missing` | debt |
+| `gcs-update-list-delete` | `put-update` | debt |
+| `gcs-update-list-delete` | `list-delimited` | debt |
+| `gcs-update-list-delete` | `list-flat-names` | debt |
+| `gcs-update-list-delete` | `list-empty` | debt |
+| `gcs-update-list-delete` | `list-paged` | debt |
+| `gcs-update-list-delete` | `list-short-route` | parity |
+| `gcs-update-list-delete` | `list-without-credentials` | debt |
+| `gcs-update-list-delete` | `delete` | debt |
+| `gcs-update-list-delete` | `delete-again` | debt |
+| `gcs-update-list-delete` | `get-missing-metadata` | debt |
+| `gcs-update-list-delete` | `get-missing-media` | debt |
+| `gcs-update-list-delete` | `delete-short-route-missing` | debt |
+| `gcs-copy-rewrite` | `source` | debt |
+| `gcs-copy-rewrite` | `copy-to` | debt |
+| `gcs-copy-rewrite` | `rewrite-to` | debt |
+| `gcs-copy-rewrite` | `rewrite-with-metadata-override` | debt |
+| `gcs-copy-rewrite` | `copy-into-closed-path` | debt |
+| `gcs-copy-rewrite` | `copy-without-credentials` | debt |
+| `gcs-copy-rewrite` | `copy-missing-source` | debt |
+| `gcs-copy-rewrite` | `copy-short-route` | debt |
+| `gcs-copy-rewrite` | `copy-onto-itself` | debt |
+| `gcs-copy-rewrite` | `copied-bytes` | debt |
+| `gcs-preconditions` | `insert-if-generation-match-zero-on-existing` | debt |
+| `gcs-preconditions` | `insert-if-generation-match-current` | debt |
+| `gcs-preconditions` | `patch-if-metageneration-mismatch` | debt |
+| `gcs-preconditions` | `get-if-generation-not-match-current` | debt |
+| `gcs-preconditions` | `delete-if-generation-mismatch` | debt |
+| `gcs-preconditions` | `malformed-precondition` | debt |
+| `gcs-preconditions` | `get-selected-generation-missing` | debt |
+| `gcs-preconditions` | `object-still-present` | debt |
+| `gcs-checksums` | `matching-md5` | debt |
+| `gcs-checksums` | `mismatching-md5` | debt |
+| `gcs-checksums` | `mismatching-md5-not-published` | debt |
+| `gcs-checksums` | `mismatching-crc32c-in-metadata` | debt |
+| `gcs-checksums` | `reported-hashes` | parity |
+| `gcs-unsupported-surface` | `compose` | debt |
+| `gcs-unsupported-surface` | `acl-list` | debt |
+| `gcs-unsupported-surface` | `acl-insert` | debt |
+| `gcs-unsupported-surface` | `bucket-get` | debt |
+| `gcs-unsupported-surface` | `bucket-list` | debt |
+| `gcs-unsupported-surface` | `bucket-list-short-route` | debt |
+| `gcs-unsupported-surface` | `bucket-insert` | debt |
+| `gcs-unsupported-surface` | `bucket-iam` | debt |
+| `gcs-unsupported-surface` | `notifications` | debt |
+| `gcs-unsupported-surface` | `unknown-object-verb` | debt |
+| `gcs-unsupported-surface` | `signed-url-style-query` | debt |
+
+## triggers
+
+parity: 1 &middot; debt: 8
+
+| program | step | status |
+| --- | --- | --- |
+| `triggers` | `finalize-on-firebase-media-upload` | debt |
+| `triggers` | `metadata-update-on-patch` | debt |
+| `triggers` | `finalize-on-overwrite` | debt |
+| `triggers` | `finalize-on-json-api-copy` | debt |
+| `triggers` | `delete` | debt |
+| `triggers` | `no-event-on-denied-upload` | debt |
+| `triggers` | `no-event-on-missing-delete` | parity |
+| `triggers` | `metadata-update-on-token-creation` | debt |
+| `triggers` | `json-api-resumable-finalize` | debt |
 

@@ -577,8 +577,37 @@ impl StorageState {
         std::mem::take(&mut self.events)
     }
 
+    /// A download token in the UUID v4 shape the official emulator and production mint
+    /// (`crypto.randomUUID()` upstream); here it is drawn from the store's seeded RNG, so a
+    /// seeded run reproduces its tokens.
     fn token(&mut self) -> String {
-        format!("{:016x}{:016x}", self.rng.next_u64(), self.rng.next_u64())
+        let mut bytes = [0u8; 16];
+        bytes[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[6] = (bytes[6] & 0x0F) | 0x40;
+        bytes[8] = (bytes[8] & 0x3F) | 0x80;
+        let h = |r: std::ops::Range<usize>| {
+            bytes[r].iter().fold(String::new(), |mut s, b| {
+                use std::fmt::Write as _;
+                let _ = write!(s, "{b:02x}");
+                s
+            })
+        };
+        format!(
+            "{}-{}-{}-{}-{}",
+            h(0..4),
+            h(4..6),
+            h(6..8),
+            h(8..10),
+            h(10..16)
+        )
+    }
+
+    /// Mints one download token (the caller decides where it goes: the Firebase upload
+    /// dialect injects it into the incoming `firebaseStorageDownloadTokens` metadata, as the
+    /// official emulator does).
+    pub fn mint_download_token(&mut self) -> String {
+        self.token()
     }
 
     /// Object metadata.
@@ -611,6 +640,12 @@ impl StorageState {
         if bytes.len() as u64 > MAX_OBJECT_BYTES {
             return Err(StorageError::TooLarge);
         }
+        // Download tokens ride in as the `firebaseStorageDownloadTokens` custom metadata
+        // key and are lifted out of it, exactly as the official emulator's
+        // `setDownloadTokensFromCustomMetadata` does. A new generation carries only the
+        // tokens its own upload declared: the previous generation's tokens die with it.
+        let mut metadata = metadata;
+        let download_tokens = extract_download_tokens(&mut metadata.custom, Vec::new());
         if custom_metadata_size(&metadata.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
@@ -619,16 +654,6 @@ impl StorageState {
         self.next_blob += 1;
         let blob = BlobId(self.next_blob);
         self.next_generation += 1;
-        let previous_tokens = self
-            .objects
-            .get(&key)
-            .map(|m| m.download_tokens.clone())
-            .unwrap_or_default();
-        let download_tokens = if previous_tokens.is_empty() {
-            vec![self.token()]
-        } else {
-            previous_tokens
-        };
         let meta = ObjectMetadata {
             bucket: bucket.clone(),
             name: name.clone(),
@@ -671,6 +696,11 @@ impl StorageState {
         Self::check(self.objects.get(&key), pre)?;
         let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
         let mut next = patch.apply(meta);
+        // A patch may write `firebaseStorageDownloadTokens`; the key is lifted into the
+        // token list (merged with the tokens the object already has), never stored as
+        // ordinary custom metadata.
+        next.download_tokens =
+            extract_download_tokens(&mut next.custom, std::mem::take(&mut next.download_tokens));
         if custom_metadata_size(&next.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
@@ -682,34 +712,58 @@ impl StorageState {
         Ok(next)
     }
 
-    /// Adds a Firebase download token.
+    /// Adds a Firebase download token. A token is a metadata change: the metageneration is
+    /// bumped, `updated` moves, and a `MetadataUpdated` event is recorded, exactly as the
+    /// official emulator's `addDownloadToken` behaves.
     pub fn add_download_token(
         &mut self,
         bucket: &BucketName,
         name: &ObjectName,
-    ) -> Result<String, StorageError> {
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
         let token = self.token();
         let meta = self
             .objects
             .get_mut(&(bucket.clone(), name.clone()))
             .ok_or(StorageError::NotFound)?;
-        meta.download_tokens.push(token.clone());
-        Ok(token)
+        meta.download_tokens.push(token);
+        meta.metageneration += 1;
+        meta.updated = now;
+        let updated = meta.clone();
+        self.events
+            .push(StorageEvent::MetadataUpdated(updated.clone()));
+        Ok(updated)
     }
 
-    /// Removes a Firebase download token.
+    /// Removes a Firebase download token. Removing the last one mints a replacement, any
+    /// removal on an object that has tokens bumps the metageneration and records a
+    /// `MetadataUpdated` event, and a removal from an object with no tokens changes
+    /// nothing, exactly as the official emulator's `deleteDownloadToken` behaves.
     pub fn remove_download_token(
         &mut self,
         bucket: &BucketName,
         name: &ObjectName,
         token: &str,
-    ) -> Result<(), StorageError> {
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let replacement = self.token();
         let meta = self
             .objects
             .get_mut(&(bucket.clone(), name.clone()))
             .ok_or(StorageError::NotFound)?;
+        if meta.download_tokens.is_empty() {
+            return Ok(meta.clone());
+        }
         meta.download_tokens.retain(|t| t != token);
-        Ok(())
+        if meta.download_tokens.is_empty() {
+            meta.download_tokens.push(replacement);
+        }
+        meta.metageneration += 1;
+        meta.updated = now;
+        let updated = meta.clone();
+        self.events
+            .push(StorageEvent::MetadataUpdated(updated.clone()));
+        Ok(updated)
     }
 
     /// Deletes the current generation.
@@ -754,9 +808,12 @@ impl StorageState {
         self.put(dst_bucket, dst_name, bytes, metadata, pre, now)
     }
 
-    /// Lists objects of `bucket` under `prefix`, bytewise by name. With a `delimiter`, names
-    /// containing it after the prefix are folded into `prefixes`. Page tokens are the last
-    /// name of the previous page.
+    /// Lists objects of `bucket` under `prefix`, bytewise by name, the way the official
+    /// emulator lists them: every folded prefix is returned on every page, only items are
+    /// paged, the page token is the name of the first item of the next page (the token
+    /// item is included), and a token that names no item restarts from the beginning.
+    /// `max_results` caps the items only (`None` is the official default of 1000;
+    /// `Some(0)` is an empty page whose token names the first item).
     #[must_use]
     pub fn list(
         &self,
@@ -764,49 +821,41 @@ impl StorageState {
         prefix: &str,
         delimiter: Option<&str>,
         page_token: Option<&str>,
-        max_results: usize,
+        max_results: Option<usize>,
     ) -> ListPage {
-        let max_results = if max_results == 0 {
-            DEFAULT_LIST_PAGE_SIZE
-        } else {
-            max_results
-        };
-        let mut items = Vec::new();
+        let mut items: Vec<ObjectMetadata> = Vec::new();
         let mut prefixes: Vec<String> = Vec::new();
-        let mut next_page_token = None;
-        let mut entries = 0usize;
-        // The token is the last raw object name consumed by the page (an object folded into
-        // an already emitted prefix counts as consumed), so the next page resumes after it.
-        let mut last_consumed: Option<&str> = None;
         for ((b, name), meta) in &self.objects {
             if b != bucket || !name.as_str().starts_with(prefix) {
-                continue;
-            }
-            if page_token.is_some_and(|t| name.as_str() <= t) {
                 continue;
             }
             let rest = &name.as_str()[prefix.len()..];
             let folded = delimiter
                 .filter(|d| !d.is_empty())
                 .and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])));
-            if let Some(p) = &folded {
-                if prefixes.last() == Some(p) {
-                    last_consumed = Some(name.as_str());
-                    continue;
-                }
-            }
-            if entries >= max_results {
-                next_page_token = last_consumed.map(str::to_owned);
-                break;
-            }
             if let Some(p) = folded {
-                prefixes.push(p);
+                // Names sharing a folded prefix are contiguous in name order, so a
+                // duplicate is always adjacent.
+                if prefixes.last() != Some(&p) {
+                    prefixes.push(p);
+                }
             } else {
                 items.push(meta.clone());
             }
-            entries += 1;
-            last_consumed = Some(name.as_str());
         }
+        if let Some(token) = page_token {
+            if let Some(idx) = items.iter().position(|m| m.name.as_str() == token) {
+                items.drain(..idx);
+            }
+        }
+        let max = max_results.unwrap_or(DEFAULT_LIST_PAGE_SIZE);
+        let next_page_token = if items.len() > max {
+            let token = items[max].name.as_str().to_owned();
+            items.truncate(max);
+            Some(token)
+        } else {
+            None
+        };
         ListPage {
             items,
             prefixes,
@@ -1297,6 +1346,24 @@ impl StorageState {
         u.received = Vec::new();
         Ok(())
     }
+}
+
+/// Lifts the `firebaseStorageDownloadTokens` key out of custom metadata into the token
+/// list, merging with `existing` (order kept, duplicates dropped), as the official
+/// emulator's `setDownloadTokensFromCustomMetadata` does.
+fn extract_download_tokens(
+    custom: &mut BTreeMap<String, String>,
+    existing: Vec<String>,
+) -> Vec<String> {
+    let mut tokens = existing;
+    if let Some(joined) = custom.remove("firebaseStorageDownloadTokens") {
+        for t in joined.split(',') {
+            if !t.is_empty() && !tokens.iter().any(|x| x == t) {
+                tokens.push(t.to_owned());
+            }
+        }
+    }
+    tokens
 }
 
 impl MetadataPatch {

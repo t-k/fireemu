@@ -192,16 +192,25 @@ async function http({ method, path, query, headers = {}, body }) {
         .join("&")}`
     : "";
   const url = path.startsWith("http") ? path : `http://${STORAGE_HOST}${path}${qs}`;
-  const init = { method, headers, redirect: "manual" };
+  // A hung request must become a recorded fault, never a hung run.
+  const init = { method, headers, redirect: "manual", signal: AbortSignal.timeout(30_000) };
   if (body !== undefined && method !== "GET" && method !== "HEAD") init.body = body;
   const response = await fetch(url, init);
   const bytes = Buffer.from(await response.arrayBuffer());
+  const contentType = response.headers.get("content-type") ?? "";
+  const sentOrigin = Object.keys(headers).some((h) => h.toLowerCase() === "origin");
   const recorded = {};
   for (const name of RECORDED_HEADERS) {
+    // Transport artifacts of the serving framework are not protocol rows: CORS headers are
+    // compared only on the steps that send an Origin, express stamps its own weak ETag on
+    // every JSON body (the object etag is compared inside the body), and content-length
+    // restates a body the record already carries.
+    if ((name.startsWith("access-control-") || name === "vary") && !sentOrigin) continue;
+    if (name === "etag" && contentType.includes("application/json")) continue;
+    if (name === "content-length") continue;
     const value = response.headers.get(name);
     if (value !== null) recorded[name] = value;
   }
-  const contentType = response.headers.get("content-type") ?? "";
   let parsed;
   if (contentType.includes("application/json")) {
     try {
@@ -305,6 +314,7 @@ function createContext() {
     /** Records the normalized value `fn` returns, or the error it threw. */
     async step(id, fn) {
       if (id in steps) throw new Error(`duplicate step id ${id}`);
+      if (process.env.STORAGE_PROBE_TRACE) console.error(`[storage-probe]   step ${id}`);
       let value;
       try {
         value = await fn();

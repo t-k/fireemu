@@ -83,7 +83,9 @@ fn generations_metagenerations_and_preconditions() {
     );
     assert_eq!(first.content_type, "application/octet-stream");
     assert_eq!(s.bytes(&first), b"one");
-    assert_eq!(first.download_tokens.len(), 1);
+    // Tokens are not minted by the store: they ride in as `firebaseStorageDownloadTokens`
+    // custom metadata (the Firebase upload dialect injects one), as upstream stores them.
+    assert_eq!(first.download_tokens.len(), 0);
 
     // Metadata update bumps the metageneration only.
     let patched = s
@@ -103,7 +105,8 @@ fn generations_metagenerations_and_preconditions() {
     assert_eq!(patched.content_type, "text/plain");
     assert_eq!(patched.updated, t(1));
 
-    // Data replacement bumps the generation, resets the metageneration, keeps tokens.
+    // Data replacement bumps the generation and resets the metageneration; the previous
+    // generation's download tokens die with it (a new upload carries its own).
     let second = s
         .put(
             &b,
@@ -191,19 +194,21 @@ fn listing_uses_the_namespace_with_prefix_and_delimiter() {
         )
         .unwrap();
     }
-    let root = s.list(&b, "", Some("/"), None, 0);
+    let root = s.list(&b, "", Some("/"), None, None);
     let items: Vec<&str> = root.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(items, vec!["a.txt", "dirty.txt"]);
     assert_eq!(root.prefixes, vec!["dir/", "日本/"]);
-    let dir = s.list(&b, "dir/", Some("/"), None, 0);
+    let dir = s.list(&b, "dir/", Some("/"), None, None);
     let items: Vec<&str> = dir.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(items, vec!["dir/x.txt", "dir/z.txt"]);
     assert_eq!(dir.prefixes, vec!["dir/sub/"]);
     // No delimiter: flat listing, paged.
-    let page1 = s.list(&b, "dir", None, None, 2);
+    let page1 = s.list(&b, "dir", None, None, Some(2));
     assert_eq!(page1.items.len(), 2);
+    // The token names the first item of the next page, which that page includes.
     let token = page1.next_page_token.clone().unwrap();
-    let page2 = s.list(&b, "dir", None, Some(&token), 2);
+    assert_eq!(token, "dir/z.txt");
+    let page2 = s.list(&b, "dir", None, Some(&token), Some(2));
     let names: Vec<&str> = page2.items.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, vec!["dir/z.txt", "dirty.txt"]);
     assert!(page2.next_page_token.is_none());
@@ -282,10 +287,10 @@ fn resumable_uploads_are_an_explicit_state_machine() {
 }
 
 #[test]
-fn delimiter_pagination_resumes_after_the_last_consumed_object() {
+fn pagination_pages_items_only_and_repeats_every_prefix() {
     let mut s = StorageState::new(1);
     let b = bucket();
-    for n in ["dir/a", "dir/b", "other/x", "root"] {
+    for n in ["dir/a", "dir/b", "other/x", "root", "root2"] {
         s.put(
             &b,
             &name(n),
@@ -296,18 +301,26 @@ fn delimiter_pagination_resumes_after_the_last_consumed_object() {
         )
         .unwrap();
     }
-    let mut token: Option<String> = None;
-    let mut seen: Vec<String> = Vec::new();
-    for _ in 0..10 {
-        let page = s.list(&b, "", Some("/"), token.as_deref(), 1);
-        seen.extend(page.prefixes.iter().cloned());
-        seen.extend(page.items.iter().map(|m| m.name.as_str().to_owned()));
-        token = page.next_page_token;
-        if token.is_none() {
-            break;
-        }
-    }
-    assert_eq!(seen, vec!["dir/", "other/", "root"]);
+    // Folded prefixes are not paged: every page carries all of them; only items count
+    // against max_results, and the token names the first item of the next page.
+    let page1 = s.list(&b, "", Some("/"), None, Some(1));
+    assert_eq!(page1.prefixes, vec!["dir/", "other/"]);
+    assert_eq!(page1.items.len(), 1);
+    assert_eq!(page1.items[0].name.as_str(), "root");
+    assert_eq!(page1.next_page_token.as_deref(), Some("root2"));
+    let page2 = s.list(&b, "", Some("/"), page1.next_page_token.as_deref(), Some(1));
+    assert_eq!(page2.prefixes, vec!["dir/", "other/"]);
+    assert_eq!(page2.items[0].name.as_str(), "root2");
+    assert!(page2.next_page_token.is_none());
+    // A token that names no item restarts from the beginning, as the official emulator's
+    // `findIndex` fallback does.
+    let restarted = s.list(&b, "", Some("/"), Some("no-such-item"), None);
+    assert_eq!(restarted.items.len(), 2);
+    // An explicit max_results of 0 is an empty page whose token names the first item.
+    let empty = s.list(&b, "", Some("/"), None, Some(0));
+    assert!(empty.items.is_empty());
+    assert_eq!(empty.prefixes, vec!["dir/", "other/"]);
+    assert_eq!(empty.next_page_token.as_deref(), Some("root"));
 }
 
 #[test]
@@ -518,23 +531,60 @@ fn hashes_etag_tokens_and_bucket_scans() {
     assert_eq!(m.md5_base64(), "kAFQmDzST7DWlj99KOF/cg==");
     assert_eq!(m.crc32c_base64(), "Nks/tw==");
     assert_eq!(m.etag(), format!("\"{}-1\"", m.generation));
-    assert_eq!(m.download_tokens.len(), 1);
-    assert_eq!(m.download_tokens[0].len(), 32, "128-bit hex token");
-    let token = s.add_download_token(&b, &name("h")).unwrap();
-    assert_eq!(token.len(), 32);
-    assert_ne!(token, m.download_tokens[0], "tokens are distinct");
-    assert_eq!(s.get(&b, &name("h")).unwrap().download_tokens.len(), 2);
-    s.remove_download_token(&b, &name("h"), &token).unwrap();
+    assert_eq!(m.download_tokens.len(), 0, "the store mints nothing on put");
+    let _ = s.drain_events();
+    // A token is a metadata change: the metageneration bumps and a MetadataUpdated event
+    // is recorded, as the official emulator's addDownloadToken behaves.
+    let with_token = s.add_download_token(&b, &name("h"), t(2)).unwrap();
+    let token = with_token.download_tokens[0].clone();
+    assert_eq!(token.len(), 36, "UUID-shaped token");
+    assert_eq!(token.as_bytes()[14], b'4', "UUID version 4");
+    assert_eq!(with_token.metageneration, 2);
+    assert_eq!(with_token.updated, t(2));
+    let second = s.add_download_token(&b, &name("h"), t(3)).unwrap();
+    assert_eq!(second.download_tokens.len(), 2);
+    assert_ne!(second.download_tokens[1], token, "tokens are distinct");
+    // Removing the last token mints a replacement; every change bumps the metageneration.
+    let removed = s
+        .remove_download_token(&b, &name("h"), &token, t(4))
+        .unwrap();
+    assert_eq!(removed.download_tokens, vec![second.download_tokens[1].clone()]);
+    let replaced = s
+        .remove_download_token(&b, &name("h"), &removed.download_tokens[0], t(5))
+        .unwrap();
+    assert_eq!(replaced.download_tokens.len(), 1, "the last removal mints a new one");
+    assert_ne!(replaced.download_tokens[0], removed.download_tokens[0]);
+    assert_eq!(replaced.metageneration, 5);
+    let events = s.drain_events();
+    assert_eq!(events.len(), 4, "each token change is one MetadataUpdated event");
+    assert!(events
+        .iter()
+        .all(|e| matches!(e, StorageEvent::MetadataUpdated(_))));
+    // Tokens ride in and out through the firebaseStorageDownloadTokens custom key.
+    let seeded = s
+        .put(
+            &b,
+            &name("seeded"),
+            b"s".to_vec(),
+            NewMetadata {
+                custom: BTreeMap::from([(
+                    "firebaseStorageDownloadTokens".to_owned(),
+                    "tok-a,tok-b,tok-a".to_owned(),
+                )]),
+                ..NewMetadata::default()
+            },
+            Precondition::default(),
+            t(6),
+        )
+        .unwrap();
+    assert_eq!(seeded.download_tokens, vec!["tok-a", "tok-b"]);
+    assert!(seeded.custom.is_empty(), "the key never stays custom metadata");
     assert_eq!(
-        s.get(&b, &name("h")).unwrap().download_tokens,
-        m.download_tokens
-    );
-    assert_eq!(
-        s.add_download_token(&b, &name("missing")),
+        s.add_download_token(&b, &name("missing"), t(7)),
         Err(StorageError::NotFound)
     );
     assert_eq!(
-        s.remove_download_token(&b, &name("missing"), "x"),
+        s.remove_download_token(&b, &name("missing"), "x", t(7)),
         Err(StorageError::NotFound)
     );
     s.put(

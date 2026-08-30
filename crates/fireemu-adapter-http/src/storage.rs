@@ -1531,10 +1531,11 @@ fn list(
     let prefix = params.get("prefix").cloned().unwrap_or_default();
     let delimiter = params.get("delimiter").cloned();
     let page_token = params.get("pageToken").cloned();
+    // Absent means the official default page size; an explicit 0 is an empty page whose
+    // token names the first item, as the official emulator answers it.
     let max_results = params
         .get("maxResults")
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
+        .and_then(|v| v.parse::<usize>().ok());
     state
         .authorize(
             principal,

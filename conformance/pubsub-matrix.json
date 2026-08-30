@@ -1,0 +1,266 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "firebaseTools": "15.28.2",
+    "pubsubEmulator": "0.8.35",
+    "note": "the Cloud Pub/Sub emulator firebase-tools pins; see ORACLE.md"
+  },
+  "project": "demo-pubsub-probe",
+  "summary": {
+    "parity": 22,
+    "documented-divergence": 1,
+    "debt": 0
+  },
+  "programs": [
+    {
+      "id": "topics-lifecycle",
+      "area": "topics",
+      "faults": [],
+      "steps": [
+        {
+          "id": "created",
+          "status": "parity",
+          "value": {
+            "ok": true
+          }
+        },
+        {
+          "id": "getName",
+          "status": "parity",
+          "value": {
+            "name": "topics/probe-lifecycle"
+          }
+        },
+        {
+          "id": "listed",
+          "status": "parity",
+          "value": {
+            "present": true
+          }
+        },
+        {
+          "id": "duplicate",
+          "status": "parity",
+          "value": {
+            "code": "ALREADY_EXISTS"
+          }
+        },
+        {
+          "id": "deleted",
+          "status": "parity",
+          "value": {
+            "ok": true
+          }
+        },
+        {
+          "id": "getAfterDelete",
+          "status": "parity",
+          "value": {
+            "code": "NOT_FOUND"
+          }
+        }
+      ]
+    },
+    {
+      "id": "topics-validation",
+      "area": "topics",
+      "faults": [],
+      "steps": [
+        {
+          "id": "tooShort",
+          "status": "parity",
+          "value": {
+            "code": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    },
+    {
+      "id": "subscriptions-lifecycle",
+      "area": "subscriptions",
+      "faults": [],
+      "steps": [
+        {
+          "id": "created",
+          "status": "parity",
+          "value": {
+            "ok": true
+          }
+        },
+        {
+          "id": "getTopic",
+          "status": "parity",
+          "value": {
+            "topic": "topics/probe-sub-topic"
+          }
+        },
+        {
+          "id": "listed",
+          "status": "parity",
+          "value": {
+            "present": true
+          }
+        },
+        {
+          "id": "missingTopic",
+          "status": "parity",
+          "value": {
+            "code": "NOT_FOUND"
+          }
+        },
+        {
+          "id": "deleted",
+          "status": "parity",
+          "value": {
+            "ok": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "publish-pull-ack",
+      "area": "delivery",
+      "faults": [],
+      "steps": [
+        {
+          "id": "publish",
+          "status": "parity",
+          "value": {
+            "count": 2,
+            "nonEmptyIds": true
+          }
+        },
+        {
+          "id": "pull",
+          "status": "parity",
+          "value": {
+            "messages": [
+              [
+                "first",
+                {
+                  "seq": "1"
+                }
+              ],
+              [
+                "second",
+                {
+                  "seq": "2"
+                }
+              ]
+            ]
+          }
+        },
+        {
+          "id": "afterAck",
+          "status": "parity",
+          "value": {
+            "empty": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "subscription-filter",
+      "area": "delivery",
+      "faults": [],
+      "steps": [
+        {
+          "id": "filtered",
+          "status": "parity",
+          "value": {
+            "messages": [
+              [
+                "o",
+                {
+                  "type": "order"
+                }
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ordering-keys",
+      "area": "delivery",
+      "faults": [],
+      "steps": [
+        {
+          "id": "order",
+          "status": "parity",
+          "value": {
+            "sequence": "abc"
+          }
+        }
+      ]
+    },
+    {
+      "id": "nack-redelivery",
+      "area": "delivery",
+      "faults": [],
+      "steps": [
+        {
+          "id": "firstDelivery",
+          "status": "parity",
+          "value": {
+            "received": false
+          }
+        },
+        {
+          "id": "redelivered",
+          "status": "parity",
+          "value": {
+            "received": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "seek-to-time",
+      "area": "delivery",
+      "faults": [],
+      "steps": [
+        {
+          "id": "drained",
+          "status": "parity",
+          "value": {
+            "received": true
+          }
+        },
+        {
+          "id": "replayed",
+          "status": "documented-divergence",
+          "oracle": {
+            "received": false
+          },
+          "fireemu": {
+            "received": true
+          },
+          "documents": "README.md, \"Pub/Sub\"; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "After a subscription is seeked to a timestamp before a message was published, fireemu redelivers that message even though it was already acknowledged and the subscription did not set retainAckedMessages. fireemu retains acked messages for seek unconditionally; the official emulator retains them only when retainAckedMessages is true, so it does not replay here. This is a fireemu superset: a seek never sees fewer messages than the official emulator returns."
+        }
+      ]
+    },
+    {
+      "id": "publish-errors",
+      "area": "errors",
+      "faults": [],
+      "steps": [
+        {
+          "id": "emptyMessage",
+          "status": "parity",
+          "value": {
+            "code": "NO_ERROR"
+          }
+        },
+        {
+          "id": "missingTopic",
+          "status": "parity",
+          "value": {
+            "code": "NOT_FOUND"
+          }
+        }
+      ]
+    }
+  ]
+}

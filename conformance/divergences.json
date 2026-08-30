@@ -154,6 +154,10 @@
       "documents": "README.md, \"Functions\"",
       "reason": "The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected."
     },
+    "pubsub-probe/seek-to-time#replayed": {
+      "documents": "README.md, \"Pub/Sub\"; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "After a subscription is seeked to a timestamp before a message was published, fireemu redelivers that message even though it was already acknowledged and the subscription did not set retainAckedMessages. fireemu retains acked messages for seek unconditionally; the official emulator retains them only when retainAckedMessages is true, so it does not replay here. This is a fireemu superset: a seek never sees fewer messages than the official emulator returns."
+    },
     "storage-probe/fb-resumable-upload#upload-with-wrong-offset": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
       "reason": "fireemu checks X-Goog-Upload-Offset against the bytes already received and refuses a mismatch with 400, as production does. The official emulator never reads the offset: it appends whatever arrives, so a chunk sent with a wrong offset was measured to commit a corrupt object."

@@ -1,0 +1,9 @@
+{
+  "emulators": {
+    "singleProjectMode": true,
+    "pubsub": { "host": "127.0.0.1", "port": 32460 },
+    "hub": { "host": "127.0.0.1", "port": 32461 },
+    "logging": { "host": "127.0.0.1", "port": 32462 },
+    "ui": { "enabled": false }
+  }
+}

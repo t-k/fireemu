@@ -227,6 +227,11 @@ pub fn trigger_json(trigger: &Trigger) -> Value {
             "withAuthContext": with_auth_context,
         }),
         Trigger::PubSub { topic } => json!({"kind": "pubsub", "topic": topic}),
+        Trigger::TaskQueue { retry, rate_limits } => json!({
+            "kind": "tasks",
+            "maxAttempts": retry.max_attempts,
+            "maxConcurrentDispatches": rate_limits.max_concurrent_dispatches,
+        }),
         Trigger::Eventarc {
             event_type,
             channel,

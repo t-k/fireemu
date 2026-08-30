@@ -809,7 +809,7 @@
         "useEmulator"
       ],
       "state": "claimed",
-      "decision": "Active supported surface. Parity is claimed for HTTPS and callable functions, event triggers including Eventarc custom events and Firebase alerts, scheduled functions, discovery over one or several codebases and the environment a runtime is started with, all running a real firebase-functions codebase in the bundled Node runner.",
+      "decision": "Active supported surface. Parity is claimed for HTTPS and callable functions, event triggers including Eventarc custom events and Firebase alerts, Cloud Tasks queue functions, scheduled functions, discovery over one or several codebases and the environment a runtime is started with, all running a real firebase-functions codebase in the bundled Node runner.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_functions",
         "https://firebase.google.com/docs/emulator-suite"
@@ -820,7 +820,6 @@
       "notes": [],
       "gaps": [
         "blocking identity functions",
-        "Cloud Tasks queue functions",
         "Remote Config triggers",
         "Python and Dart codebases",
         "hot reload of a codebase's source",
@@ -867,7 +866,7 @@
         },
         {
           "id": "FN-CLAIM-EVENTS",
-          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, with retries, dead letters and bounded diagnostic retention.",
+          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued and dispatched, all with retries, dead letters and bounded diagnostic retention.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -884,7 +883,8 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the official emulator consumes JSON CloudEvents in the Node runtime; the protobuf payload form is not what firebase-functions reads"
+            "the official emulator consumes JSON CloudEvents in the Node runtime; the protobuf payload form is not what firebase-functions reads",
+            "the official Tasks emulator ignores a task's scheduleTime -- nothing in its dispatch loop consults it, so a scheduled task fires immediately and the value only decorates the X-CloudTasks-TaskETA header"
           ],
           "fireemuOnly": [
             {
@@ -894,6 +894,10 @@
             {
               "behaviour": "the Eventarc publishEvents routes are served on the functions port rather than on the official suite's own Eventarc port, and CLOUD_EVENTARC_EMULATOR_HOST names that listener; an SDK reaches them unchanged",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a task may not name a URL of its own: only this emulator's function URL is dispatched to, where the official emulator POSTs a task to any address it is given",
+              "precision": "conservative"
             }
           ],
           "productionOnly": [],

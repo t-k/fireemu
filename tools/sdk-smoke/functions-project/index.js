@@ -196,3 +196,35 @@ exports.onFatalIssue = onNewFatalIssuePublished(async (event) => {
     createTime: event.data.createTime,
   });
 });
+
+
+// Cloud Tasks. `getFunctions().taskQueue("countJob").enqueue(payload)` reaches the queue
+// through CLOUD_TASKS_EMULATOR_HOST, and the queue dispatches to this handler with the
+// X-CloudTasks-* headers a task carries.
+const { onTaskDispatched } = require("firebase-functions/v2/tasks");
+exports.countJob = onTaskDispatched(
+  { retryConfig: { maxAttempts: 3, minBackoffSeconds: 0.1 } },
+  async (request) => {
+    await db.doc(`tasks/${request.data.id}`).set({
+      n: request.data.n,
+      queueName: request.queueName,
+      retryCount: request.retryCount,
+      executionCount: request.executionCount,
+      hasScheduledTime: typeof request.scheduledTime === "string",
+    });
+  },
+);
+
+// A task-queue function that fails until its third attempt: the retry schedule is the thing
+// under test, not the handler.
+let taskAttempts = 0;
+exports.flakyJob = onTaskDispatched(
+  { retryConfig: { maxAttempts: 5, minBackoffSeconds: 0.05 } },
+  async (request) => {
+    taskAttempts += 1;
+    if (taskAttempts < 3) {
+      throw new Error(`attempt ${taskAttempts} fails on purpose`);
+    }
+    await db.doc("tasks/flaky").set({ attempts: taskAttempts, retryCount: request.retryCount });
+  },
+);

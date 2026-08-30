@@ -353,7 +353,19 @@ function describe(name, fn, instrumentation) {
       );
     }
     if (ep.taskQueueTrigger) {
-      return ignored(base, "tasks", "planned", "planned: Cloud Tasks queue functions are not served yet");
+      // An `onTaskDispatched` function is an HTTP function that only its queue calls: the
+      // official emulator sets both `httpsTrigger` and `taskQueueTrigger` on the definition
+      // and gives it the ordinary /{project}/{region}/{name} URL, which becomes the queue's
+      // defaultUri. The nulls the manifest carries mean "the default", as the emulator's `??`
+      // reads them.
+      return {
+        ...base,
+        trigger: {
+          type: "tasks",
+          retryConfig: ep.taskQueueTrigger.retryConfig || {},
+          rateLimits: ep.taskQueueTrigger.rateLimits || {},
+        },
+      };
     }
     return ignored(base, "unknown", "unsupported", "the endpoint declares no trigger this runner recognises");
   }
@@ -505,7 +517,9 @@ function makeHttpServer(functions, manifest) {
     }
     // The secret is not part of the request the function sees.
     delete req.headers["x-fireemu-runner-secret"];
-    const spec = manifest.functions.find((f) => f.name === req.params.name && f.trigger?.type === "http");
+    const spec = manifest.functions.find(
+      (f) => f.name === req.params.name && (f.trigger?.type === "http" || f.trigger?.type === "tasks"),
+    );
     const fn = spec && functions.get(spec.entryPoint);
     const region = spec?.region || "us-central1";
     if (!fn || (project && req.params.project !== project) || req.params.region !== region) {
@@ -640,7 +654,7 @@ async function main() {
       })),
   };
   let httpPort;
-  if (manifest.functions.some((f) => f.trigger.type === "http")) {
+  if (manifest.functions.some((f) => f.trigger.type === "http" || f.trigger.type === "tasks")) {
     try {
       const server = await makeHttpServer(functions, manifest);
       if (server) httpPort = server.address().port;

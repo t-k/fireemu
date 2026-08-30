@@ -333,6 +333,78 @@ fn sanitize_credentials(
     }
 }
 
+/// Answers the three Cloud Tasks routes.
+///
+/// There is no queue to create: the official emulator creates one per `onTaskDispatched`
+/// function at load time and fireemu's queue *is* the function, so the create route reports
+/// what the queue already is rather than storing a second copy of it. Deleting a task is
+/// refused rather than silently accepted, because a task is dispatched as soon as it is
+/// accepted here and there is no window in which a delete could still take effect.
+fn task_route(
+    runtime: &Arc<FunctionsRuntime>,
+    route: &crate::tasks::Route,
+    method: &hyper::Method,
+    body: &[u8],
+) -> Response<Full<Bytes>> {
+    use crate::tasks::Route;
+    match route {
+        Route::CreateQueue {
+            project,
+            location,
+            queue,
+        } => {
+            if method != hyper::Method::POST {
+                return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
+            }
+            let served = runtime.manifest().get(queue).is_some_and(|f| {
+                matches!(
+                    f.trigger,
+                    fireemu_core_functions::manifest::Trigger::TaskQueue { .. }
+                ) && &f.region == location
+            });
+            if !served || project != runtime.project() {
+                return typed(
+                    StatusCode::NOT_FOUND,
+                    "application/json",
+                    &serde_json::json!({"error": format!(
+                        "no onTaskDispatched function named {queue} in {project}/{location}"
+                    )})
+                    .to_string(),
+                );
+            }
+            typed(
+                StatusCode::OK,
+                "application/json",
+                &serde_json::json!({"taskQueueConfig": {"queue": queue}}).to_string(),
+            )
+        }
+        Route::Enqueue {
+            project,
+            location,
+            queue,
+        } => {
+            if method != hyper::Method::POST {
+                return simple(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
+            }
+            let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
+                return simple(StatusCode::BAD_REQUEST, "the request body is not JSON");
+            };
+            match runtime.enqueue_task(project, location, queue, &parsed) {
+                Ok(answer) => typed(StatusCode::OK, "application/json", &answer.to_string()),
+                Err(refusal) => typed(
+                    StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::BAD_REQUEST),
+                    "text/plain; charset=utf-8",
+                    &refusal.body,
+                ),
+            }
+        }
+        Route::DeleteTask { .. } => simple(
+            StatusCode::NOT_FOUND,
+            "Tried to remove a task that doesn't exist",
+        ),
+    }
+}
+
 /// Reads a request body up to the forwarding limit, or the 413 that replaces it.
 async fn collect_body(body: Incoming) -> Result<Bytes, Refusal> {
     match Limited::new(body, MAX_FUNCTION_BODY_BYTES).collect().await {
@@ -378,6 +450,14 @@ async fn respond(
                 Err(answer) => *answer,
             });
         }
+    }
+    // Cloud Tasks shares this port for the same reason Eventarc does.
+    if let Some(route) = crate::tasks::route(&path) {
+        let method = req.method().clone();
+        return Ok(match collect_body(req.into_body()).await {
+            Ok(body) => task_route(&runtime, &route, &method, &body),
+            Err(answer) => *answer,
+        });
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,

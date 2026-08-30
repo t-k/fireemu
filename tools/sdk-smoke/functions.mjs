@@ -8,6 +8,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getStorage } from "firebase-admin/storage";
 import { getEventarc } from "firebase-admin/eventarc";
+import { getFunctions } from "firebase-admin/functions";
 
 const project = process.env.GOOGLE_CLOUD_PROJECT || "demo-app";
 const control = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`;
@@ -254,6 +255,30 @@ try {
       fired?.appId === "1:1234567890:web:abcdef" &&
       fired?.title === "TestApp.main",
     fired,
+  );
+
+  // Cloud Tasks, through the Admin SDK: it reads CLOUD_TASKS_EMULATOR_HOST, so nothing here
+  // names a port either.
+  await getFunctions(app).taskQueue("countJob").enqueue({ id: "t1", n: 5 });
+  await awaitIdle();
+  const task = (await db.doc("tasks/t1").get()).data();
+  check(
+    "onTaskDispatched receives the payload and the queue context",
+    task?.n === 5 &&
+      task?.queueName === `queue:${project}-us-central1-countJob` &&
+      task?.retryCount === 0 &&
+      task?.executionCount === 0 &&
+      task?.hasScheduledTime === true,
+    task,
+  );
+
+  await getFunctions(app).taskQueue("flakyJob").enqueue({ go: true });
+  await awaitIdle();
+  const flakyTask = (await db.doc("tasks/flaky").get()).data();
+  check(
+    "a task queue retries on the official backoff until the handler succeeds",
+    flakyTask?.attempts === 3 && flakyTask?.retryCount === 2,
+    flakyTask,
   );
 
   const status = await (await fetch(`${control}/v1/sessions/default/functions`)).json();

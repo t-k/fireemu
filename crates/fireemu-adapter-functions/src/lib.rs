@@ -15,4 +15,5 @@ pub mod manifest_json;
 pub mod protocol;
 pub mod runner;
 pub mod runtime;
+pub mod tasks;
 pub mod zone;

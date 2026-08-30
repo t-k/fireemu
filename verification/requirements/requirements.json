@@ -1039,6 +1039,18 @@
           "crates/fireemu-adapter-functions/src/eventarc.rs"
         ]
       }
+    },
+    {
+      "id": "FN-TASKS-001",
+      "statement": "A task enqueued against a queue takes that queue's default URI, carries the official X-CloudTasks-* headers with a first delivery of retry count 0, and retries on the official backoff until it succeeds or its attempts run out.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-functions/src/tasks.rs"
+        ]
+      }
     }
   ]
 }

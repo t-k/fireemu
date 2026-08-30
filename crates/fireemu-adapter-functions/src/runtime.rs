@@ -83,6 +83,10 @@ pub struct FunctionsConfig {
     pub overlap: OverlapPolicy,
     /// What happens to schedule runs that became due while the clock moved.
     pub catch_up: CatchUpPolicy,
+    /// The functions listener's own `host:port`, when it is bound. A Cloud Tasks queue's
+    /// `defaultUri` is the function's public URL, so the runtime has to know its own address
+    /// to build one and to recognise a task that named it explicitly.
+    pub functions_host: Option<String>,
 }
 
 /// Which of the schedule runs that became due during a clock move are enqueued.
@@ -255,6 +259,16 @@ impl RecordLog {
 }
 
 struct Inner {
+    /// Cloud Tasks deliveries that have been accepted and not yet finished, including the
+    /// time they spend in backoff between attempts. They are outstanding causal work, so
+    /// `await-idle` waits for them; they are not in `running`, because a task holds its place
+    /// across attempts while `running` counts one invocation at a time.
+    tasks_in_flight: usize,
+    /// Task resource names this runtime has accepted. The official emulator never removes an
+    /// id from its set either, so a name is single-use for the life of the queue.
+    task_names: std::collections::BTreeSet<String>,
+    /// Supplies the id of a task that did not name itself.
+    next_task: u64,
     outbox: Outbox,
     payloads: BTreeMap<EventId, (String, Value)>,
     /// Invocations occupying a slot, keyed by invocation key (`<event>-<attempt>` or
@@ -347,6 +361,13 @@ struct Codebase {
     name: String,
     runner: std::sync::RwLock<Arc<Runner>>,
     spawn: Option<SpawnSpec>,
+}
+
+/// Wall-clock milliseconds, for the one header that carries them.
+fn epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// The runtime.
@@ -501,6 +522,9 @@ impl FunctionsRuntime {
                 .collect(),
             owner,
             inner: Mutex::new(Inner {
+                tasks_in_flight: 0,
+                task_names: std::collections::BTreeSet::new(),
+                next_task: 0,
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
                 running: BTreeMap::new(),
@@ -879,6 +903,179 @@ impl FunctionsRuntime {
         ids
     }
 
+    /// Accepts one Cloud Tasks enqueue and starts delivering it.
+    ///
+    /// The queue is the function: the official emulator creates one queue per
+    /// `onTaskDispatched` function at load time, keyed by the function's name, whose
+    /// `defaultUri` is that function's own `/{project}/{region}/{name}` URL. There is nothing
+    /// to create here, so the queue exists exactly while the function does, and an enqueue
+    /// against a name that is not one answers the official `404`.
+    pub fn enqueue_task(
+        self: &Arc<Self>,
+        project: &str,
+        location: &str,
+        queue: &str,
+        body: &Value,
+    ) -> Result<Value, crate::tasks::EnqueueRefusal> {
+        use crate::tasks::EnqueueRefusal;
+        let refuse = |status: u16, body: &str| EnqueueRefusal {
+            status,
+            body: body.to_owned(),
+        };
+        if project != self.config.project {
+            return Err(refuse(
+                404,
+                "Tried to queue a task from a non-existent queue",
+            ));
+        }
+        let spec = self
+            .manifest
+            .get(queue)
+            .filter(|f| matches!(f.trigger, Trigger::TaskQueue { .. }))
+            .ok_or_else(|| refuse(404, "Tried to queue a task from a non-existent queue"))?;
+        let Trigger::TaskQueue { retry, .. } = spec.trigger else {
+            return Err(refuse(
+                404,
+                "Tried to queue a task from a non-existent queue",
+            ));
+        };
+        if spec.region != location {
+            return Err(refuse(
+                404,
+                "Tried to queue a task from a non-existent queue",
+            ));
+        }
+        let host = self.config.functions_host.as_deref().ok_or_else(|| {
+            refuse(
+                503,
+                "the functions listener is not bound, so a task queue has no default URI",
+            )
+        })?;
+        let default_uri = format!("http://{host}/{project}/{location}/{queue}");
+        let next_id = {
+            let Ok(mut inner) = self.inner.lock() else {
+                return Err(refuse(500, "runtime poisoned"));
+            };
+            inner.next_task += 1;
+            inner.next_task
+        };
+        let task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
+        // A task may name its own URL (`opts.uri`). Only this emulator's own function URLs
+        // are accepted: the official emulator will POST a task to any address, and a local
+        // emulator that makes an arbitrary outbound request on a caller's say-so is a
+        // request-forgery surface the rest of fireemu does not offer.
+        if task.url != default_uri {
+            return Err(refuse(
+                400,
+                "a task may only be dispatched to this emulator's own function URL",
+            ));
+        }
+        {
+            let Ok(mut inner) = self.inner.lock() else {
+                return Err(refuse(500, "runtime poisoned"));
+            };
+            if !inner.task_names.insert(task.name.clone()) {
+                return Err(refuse(409, "A task with the same name already exists"));
+            }
+            inner.tasks_in_flight += 1;
+        }
+        let answer = crate::tasks::accepted_response(&task);
+        let runtime = self.clone();
+        let key = crate::tasks::queue_key(project, location, queue);
+        let function = queue.to_owned();
+        let region = location.to_owned();
+        let project = project.to_owned();
+        tokio::spawn(async move {
+            runtime
+                .dispatch_task(&task, &key, &project, &region, &function, retry)
+                .await;
+            if let Ok(mut inner) = runtime.inner.lock() {
+                inner.tasks_in_flight = inner.tasks_in_flight.saturating_sub(1);
+            }
+            runtime.idle.notify_waiters();
+        });
+        Ok(answer)
+    }
+
+    /// Delivers one task, retrying on the official schedule until it succeeds or runs out.
+    ///
+    /// Backoff is real time, as it is upstream: the default unit is 100 ms, so three attempts
+    /// cost 300 ms rather than a clock advance. That is the one place in this runtime where a
+    /// wait is not on the virtual clock, and it is deliberate -- a task queue's retry policy
+    /// is a wall-clock policy in production too.
+    async fn dispatch_task(
+        self: &Arc<Self>,
+        task: &crate::tasks::Task,
+        queue_key: &str,
+        project: &str,
+        region: &str,
+        function: &str,
+        retry: fireemu_core_functions::manifest::TaskRetryConfig,
+    ) {
+        let started = std::time::Instant::now();
+        let epoch = self.inner.lock().ok().map(|i| i.epoch);
+        let mut attempt = 1u32;
+        let mut execution_count = 0u32;
+        let mut previous: Option<u16> = None;
+        let body = serde_json::to_vec(&task.body).unwrap_or_default();
+        loop {
+            // A reset supersedes every task accepted before it.
+            if self.inner.lock().ok().map(|i| i.epoch) != epoch {
+                return;
+            }
+            let Some(target) = self.http_target(project, region, function) else {
+                eprintln!(
+                    "[functions] task {}: {function} is no longer served",
+                    task.name
+                );
+                return;
+            };
+            let headers = crate::tasks::dispatch_headers(
+                task,
+                queue_key,
+                attempt,
+                execution_count,
+                previous,
+                epoch_millis(),
+            );
+            // The runner's HTTP server routes on the public path, and strips it before the
+            // handler sees the request, so the dispatch carries the function's own URL path
+            // rather than the `/` the queue would send to an arbitrary address.
+            let path = format!("/{project}/{region}/{function}");
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(task.dispatch_deadline_seconds),
+                self.invoke_http(&target, "POST", &path, &headers, &body),
+            )
+            .await;
+            let status = match outcome {
+                Ok(Ok(response)) if (200..300).contains(&response.status) => return,
+                Ok(Ok(response)) => Some(response.status),
+                // A transport failure or an overrun deadline is a retry with no previous
+                // response, exactly as the official `catch` treats an aborted fetch.
+                Ok(Err(_)) | Err(_) => None,
+            };
+            if let Some(status) = status {
+                // Only a non-5xx failure bumps the execution count upstream.
+                if !(500..600).contains(&status) {
+                    execution_count += 1;
+                }
+                previous = Some(status);
+            }
+            attempt += 1;
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            if retry.exhausted(attempt, elapsed) {
+                eprintln!(
+                    "[functions] task {} gave up after {} attempt(s)",
+                    task.name,
+                    attempt - 1
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(retry.backoff_millis(attempt))).await;
+        }
+    }
+
     /// Delivers one custom `CloudEvent` published on `channel` to every matching
     /// `onCustomEventPublished` function, and reports how many were reached.
     ///
@@ -1244,6 +1441,10 @@ impl FunctionsRuntime {
             inner.running.clear();
             inner.delayed.clear();
             inner.catch_up_pending = false;
+            // A task accepted before the reset must not reach the new session's handlers.
+            // The dispatchers see the epoch change and stop.
+            inner.tasks_in_flight = 0;
+            inner.task_names.clear();
             for job in &mut inner.jobs {
                 job.cursor = now;
             }
@@ -1308,7 +1509,12 @@ impl FunctionsRuntime {
     pub fn is_idle(&self) -> bool {
         self.inner
             .lock()
-            .map(|i| !i.outbox.has_active() && i.running.is_empty() && !i.catch_up_pending)
+            .map(|i| {
+                !i.outbox.has_active()
+                    && i.running.is_empty()
+                    && !i.catch_up_pending
+                    && i.tasks_in_flight == 0
+            })
             .unwrap_or(true)
     }
 
@@ -1345,6 +1551,7 @@ impl FunctionsRuntime {
             "succeeded": inner.succeeded_total,
             "deadLettered": inner.dead_lettered_total,
             "catchUpPending": inner.catch_up_pending,
+            "tasksInFlight": inner.tasks_in_flight,
             "overlapRejected": inner.overlap_rejected,
             "timeZoneDatabase": crate::zone::database_version(),
             "runnerAlive": self.runner_alive(),
@@ -1501,7 +1708,7 @@ impl FunctionsRuntime {
                 .iter()
                 .filter(|f| f.region == region)
             {
-                if matches!(f.trigger, Trigger::Http { .. }) {
+                if matches!(f.trigger, Trigger::Http { .. } | Trigger::TaskQueue { .. }) {
                     keys.push(format!("{}-{}", f.region, f.name));
                 } else {
                     keys.push(format!(
@@ -1530,7 +1737,12 @@ impl FunctionsRuntime {
             return None;
         }
         let f = self.manifest.get(function)?;
-        if !matches!(f.trigger, Trigger::Http { .. }) || f.region != region {
+        // A task-queue function is an HTTP function that only its queue calls, and the
+        // official emulator serves it at the same URL -- that URL *is* the queue's
+        // `defaultUri` (`functionsEmulator.js:454-459`).
+        if !matches!(f.trigger, Trigger::Http { .. } | Trigger::TaskQueue { .. })
+            || f.region != region
+        {
             return None;
         }
         // Each codebase hosts its own HTTP server, so the route resolves to the runner of the
@@ -1866,6 +2078,7 @@ impl FunctionsRuntime {
             Trigger::PubSub { .. } => "pubsub",
             Trigger::Auth { .. } => "auth",
             Trigger::Eventarc { .. } => "eventarc",
+            Trigger::TaskQueue { .. } => "tasks",
         };
         json!({
             "invocationId": format!("{}-{attempt}", id.value()),

@@ -610,6 +610,8 @@ fn child_environment(
             "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
             format!("http://{addr}"),
         ));
+        // Cloud Tasks' variable carries no scheme, unlike Eventarc's.
+        env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), addr.to_string()));
     }
     if let Some(addr) = addrs.hub {
         env.push(("FIREBASE_EMULATOR_HUB".to_owned(), addr.to_string()));
@@ -640,7 +642,7 @@ fn child_environment(
 /// command's environment, so a shell configured for other emulators cannot leak into it.
 /// `FIREBASE_DATABASE_EMULATOR_HOST` is on the list although fireemu never sets it: an
 /// inherited one would point a Realtime Database client at something fireemu does not serve.
-const OWNED_VARIABLES: [&str; 11] = [
+const OWNED_VARIABLES: [&str; 12] = [
     "FIRESTORE_EMULATOR_HOST",
     "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
     "FIREBASE_AUTH_EMULATOR_HOST",
@@ -650,6 +652,7 @@ const OWNED_VARIABLES: [&str; 11] = [
     "FIREBASE_EMULATOR_HUB",
     "FIREEMU_FUNCTIONS_HOST",
     "CLOUD_EVENTARC_EMULATOR_HOST",
+    "CLOUD_TASKS_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_JWKS_URL",
 ];

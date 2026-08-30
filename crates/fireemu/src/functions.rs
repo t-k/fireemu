@@ -413,6 +413,7 @@ pub async fn start(
             .unwrap_or_default(),
         catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
             .unwrap_or_default(),
+        functions_host: hosts.functions.clone(),
     };
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -523,6 +524,8 @@ async fn start_codebase(
             "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
             format!("http://{host}"),
         ));
+        // Cloud Tasks' variable carries no scheme, unlike Eventarc's (`env.js:34-39`).
+        env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), host.clone()));
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), host.clone()));
     }
     // Debug mode is granted only when the daemon is the sole source of both callable

@@ -18,8 +18,8 @@
 
 use ftd_core_functions::cron::Schedule;
 use ftd_core_functions::manifest::{
-    AuthEvent, DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger,
-    DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent,
+    Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use ftd_core_functions::pattern::PathPattern;
 use serde_json::{json, Value};
@@ -55,13 +55,34 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
         .ok_or_else(|| format!("manifest: function {name:?}: trigger.type is required"))?;
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
     let trigger = match kind {
-        "http" | "https" | "callable" => Trigger::Http {
-            callable: kind == "callable"
+        "http" | "https" | "callable" => {
+            let callable = kind == "callable"
                 || trigger
                     .get("callable")
                     .and_then(Value::as_bool)
+                    .unwrap_or(false);
+            // Absent means undetermined, never `false`: a manifest that does not say has not
+            // observed the option, and guessing it away is what section 13.4 forbids.
+            let consume = match trigger.get("consumeAppCheckToken") {
+                None => ConsumeAppCheckToken::Undetermined,
+                Some(v) => v
+                    .as_str()
+                    .and_then(ConsumeAppCheckToken::parse)
+                    .ok_or_else(|| {
+                        format!(
+                            "manifest: function {name:?}: consumeAppCheckToken must be \"disabled\", \"enabled\" or \"undetermined\""
+                        )
+                    })?,
+            };
+            Trigger::Http {
+                callable,
+                enforce_app_check: trigger
+                    .get("enforceAppCheck")
+                    .and_then(Value::as_bool)
                     .unwrap_or(false),
-        },
+                consume_app_check_token: consume,
+            }
+        }
         "firestore" => {
             let event_type = s(trigger, "eventType")
                 .ok_or_else(|| format!("manifest: function {name:?}: eventType is required"))?;
@@ -164,7 +185,16 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
         .iter()
         .map(|f| {
             let trigger = match &f.trigger {
-                Trigger::Http { callable } => json!({"type": "http", "callable": callable}),
+                Trigger::Http {
+                    callable,
+                    enforce_app_check,
+                    consume_app_check_token,
+                } => json!({
+                    "type": "http",
+                    "callable": callable,
+                    "enforceAppCheck": enforce_app_check,
+                    "consumeAppCheckToken": consume_app_check_token.as_str(),
+                }),
                 Trigger::Firestore {
                     event,
                     database,

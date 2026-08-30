@@ -834,23 +834,6 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
         // the runner's HTTP server to this daemon's proxy.
         let control_token = random_secret()?;
         let runner_secret = random_secret()?;
-        let functions_runtime = match functions_listener.as_ref() {
-            Some(_) => Some(
-                functions::start(
-                    &cfg,
-                    &clock,
-                    &backend,
-                    &functions::EmulatorHosts {
-                        firestore: grpc_addr.to_string(),
-                        auth: http_addr.to_string(),
-                        storage: storage_addr.to_string(),
-                    },
-                    &runner_secret,
-                )
-                .await?,
-            ),
-            None => None,
-        };
         let app_check = match app_check_signer {
             Some(signer) => Some(app_check_state(
                 &cfg,
@@ -864,6 +847,30 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
         // One gate for the whole daemon; one policy per product from appCheck.services.* and
         // the --only selection (the activation table of specification section 8).
         let app_check_gate = app_check.as_ref().map(|s| s.gate());
+        // Row 4 of the activation table: selecting Functions selects its App Check dependency,
+        // and the callable trusted protocol is then active for every callable -- including the
+        // ones that do not enforce, so valid app context is available to them. The runner is
+        // started only after this is known, because it decides whether the runner may run with
+        // the `skipTokenVerification` debug feature at all.
+        let callable_trusted_protocol = app_check_gate.is_some() && functions_listener.is_some();
+        let functions_runtime = match functions_listener.as_ref() {
+            Some(_) => Some(
+                functions::start(
+                    &cfg,
+                    &clock,
+                    &backend,
+                    &functions::EmulatorHosts {
+                        firestore: grpc_addr.to_string(),
+                        auth: http_addr.to_string(),
+                        storage: storage_addr.to_string(),
+                    },
+                    &runner_secret,
+                    callable_trusted_protocol,
+                )
+                .await?,
+            ),
+            None => None,
+        };
         let auth_policy = service_admission(
             app_check_gate.as_ref(),
             "auth",
@@ -917,6 +924,35 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
         )?;
         if let Some(runtime) = &functions_runtime {
             runtime.set_faults(faults.for_project(runtime.project()));
+            if let Some(gate) = &app_check_gate {
+                // The callable baseline is `unenforced`: the daemon classifies and records
+                // every callable token, and the callable's own `enforceAppCheck` decides
+                // (specification section 13.4). The Auth verifier is a dedicated enforcer that
+                // never evaluates a rule: it exists to verify the ID token against the target
+                // project's users on the virtual clock, which is required whether or not
+                // Security Rules are enforced at all.
+                let policy = service_admission(
+                    Some(gate),
+                    "functions",
+                    ftd_core_app_check::verify::BaselineMode::Unenforced,
+                )
+                .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;
+                let verifier = Arc::new(
+                    RulesEnforcer::new(
+                        Arc::new(RwLock::new(LoadedRules::default())),
+                        auth_store.clone(),
+                        clock.clone(),
+                    )
+                    .with_registry(registry.clone()),
+                );
+                runtime.set_callable_trust(Arc::new(
+                    ftd_adapter_functions::callable::CallableTrust::new(
+                        policy,
+                        verifier,
+                        runtime.project(),
+                    ),
+                ));
+            }
         }
         let control = Arc::new(control_state(
             &cfg,
@@ -950,10 +986,15 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
                 state.signer.kid()
             );
             println!(
-                "  app check modes:  auth={} firestore={} storage={}   (enforced for Auth, Firestore unary/REST and non-resumable Storage; streams, WebChannel, resumable uploads and callables are milestone AC2)",
+                "  app check modes:  auth={} firestore={} storage={}   (Firestore covers unary gRPC, REST, Write/Listen streams and WebChannel; Storage covers resumable uploads too){}",
                 only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
                 only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
                 only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
+                if callable_trusted_protocol {
+                    "\n  app check callables: the trusted callable protocol is active; enforceAppCheck is honoured per function"
+                } else {
+                    ""
+                },
             );
         }
         if let Some(addr) = ui_addr {

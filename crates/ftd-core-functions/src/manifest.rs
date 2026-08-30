@@ -138,6 +138,64 @@ impl AuthEvent {
     }
 }
 
+/// What a callable declared for `consumeAppCheckToken`, three-valued and fail-closed
+/// (specification section 13.4).
+///
+/// The option lives inside the callable wrapper's closure, so it cannot be read off the
+/// deployed endpoint: the runner has to observe it as the callable is declared. When it cannot
+/// — an unsupported `firebase-functions` version, a callable built without passing through the
+/// instrumented export — the answer is [`Self::Undetermined`], never a guessed `Disabled`. A
+/// hidden `consumeAppCheckToken: true` would otherwise run with `alreadyConsumed: false`, which
+/// is exactly the silent wrong answer replay protection exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConsumeAppCheckToken {
+    /// The callable declared `false`, or declared nothing at all.
+    Disabled,
+    /// The callable declared `true`. Unsupported while `APPCHECK-REPLAY-1` is unimplemented.
+    Enabled,
+    /// The value could not be observed.
+    #[default]
+    Undetermined,
+}
+
+impl ConsumeAppCheckToken {
+    /// The manifest spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Enabled => "enabled",
+            Self::Undetermined => "undetermined",
+        }
+    }
+
+    /// Parses the manifest spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "disabled" => Some(Self::Disabled),
+            "enabled" => Some(Self::Enabled),
+            "undetermined" => Some(Self::Undetermined),
+            _ => None,
+        }
+    }
+}
+
+impl Trigger {
+    /// An HTTP trigger with no callable App Check options observed.
+    ///
+    /// `onRequest` functions never get an automatic App Check decision, so the options are
+    /// meaningless for them; a callable built this way is undetermined and fails closed.
+    #[must_use]
+    pub const fn http(callable: bool) -> Self {
+        Self::Http {
+            callable,
+            enforce_app_check: false,
+            consume_app_check_token: ConsumeAppCheckToken::Undetermined,
+        }
+    }
+}
+
 /// What invokes a function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
@@ -145,6 +203,12 @@ pub enum Trigger {
     Http {
         /// Callable protocol.
         callable: bool,
+        /// The callable's effective `enforceAppCheck`, global options included. Meaningless
+        /// for an `onRequest` function, which never gets an automatic App Check decision
+        /// (specification section 7.3).
+        enforce_app_check: bool,
+        /// The callable's `consumeAppCheckToken`, as the runner could observe it.
+        consume_app_check_token: ConsumeAppCheckToken,
     },
     /// Firestore document change.
     Firestore {

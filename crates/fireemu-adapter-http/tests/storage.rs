@@ -216,8 +216,9 @@ fn firebase_protocol_upload_download_list_update_delete() {
         &s,
         req("GET", &format!("/v0/b/{BUCKET}/o/{enc}"), &owner, b""),
     );
+    // The official Firebase dialect answers a missing object with a bare status text.
     assert_eq!(r.status, 404);
-    assert_eq!(json_body(&r)["error"]["status"], "NOT_FOUND");
+    assert_eq!(r.body, b"Not Found");
 }
 
 #[test]
@@ -263,7 +264,8 @@ fn firebase_resumable_upload_protocol() {
         (r.status, header(&r, "x-goog-upload-status")),
         (200, Some("active"))
     );
-    assert_eq!(header(&r, "x-goog-upload-size-received"), Some("3"));
+    // Only a query reports the received size, as the official emulator answers it.
+    assert_eq!(header(&r, "x-goog-upload-size-received"), None);
     let r = handle(
         &s,
         req(
@@ -316,14 +318,15 @@ fn firebase_resumable_upload_protocol() {
 fn json_api_dialect_for_the_admin_sdk() {
     let s = state(None);
     let owner = [("authorization", "Bearer owner")];
-    // Bucket metadata, multipart upload, media upload.
+    // The official emulator serves no bucket metadata: the path falls into its XML-style
+    // fallback and answers the missing-object envelope.
     assert_eq!(
         handle(
             &s,
             req("GET", &format!("/storage/v1/b/{BUCKET}"), &owner, b"")
         )
         .status,
-        200
+        404
     );
     let (ct, body) = multipart(
         &json!({"name": "a/b.txt", "contentType": "text/plain", "metadata": {"owner": "x"}}),
@@ -446,11 +449,26 @@ fn json_api_dialect_for_the_admin_sdk() {
     let listed = json_body(&r);
     assert_eq!(listed["kind"], "storage#objects");
     assert_eq!(listed["items"][0]["name"], "a/b.txt");
+    // Copy routes exist only on the short /b/... spelling, as the official emulator
+    // registers them; the /storage/v1 spelling is its 501 catch-all.
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "POST",
+                &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/copy.txt"),
+                &owner,
+                b"",
+            ),
+        )
+        .status,
+        501
+    );
     let r = handle(
         &s,
         req(
             "POST",
-            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/copy.txt"),
+            &format!("/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/copy.txt"),
             &owner,
             b"",
         ),
@@ -530,7 +548,11 @@ service firebase.storage {
         req(
             "POST",
             &own,
-            &[("authorization", &firebase_auth), ("content-type", &ct)],
+            &[
+                ("authorization", &firebase_auth),
+                ("content-type", &ct),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
             &body,
         ),
     );
@@ -541,13 +563,29 @@ service firebase.storage {
         req(
             "POST",
             &other,
-            &[("authorization", &firebase_auth), ("content-type", &ct)],
+            &[
+                ("authorization", &firebase_auth),
+                ("content-type", &ct),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
             &body,
         ),
     );
     assert_eq!(r.status, 403);
-    assert_eq!(json_body(&r)["error"]["status"], "PERMISSION_DENIED");
-    let r = handle(&s, req("POST", &own, &[("content-type", &ct)], &body));
+    // The denial body is the official emulator's fixed envelope.
+    assert_eq!(
+        json_body(&r)["error"]["message"],
+        "Permission denied. No WRITE permission."
+    );
+    let r = handle(
+        &s,
+        req(
+            "POST",
+            &own,
+            &[("content-type", &ct), ("x-goog-upload-protocol", "multipart")],
+            &body,
+        ),
+    );
     assert_eq!(r.status, 403);
     // Reads: own object ok, without credentials denied, public readable, token bypass.
     let enc = format!("users%2F{uid}%2Fnote.txt");
@@ -712,8 +750,15 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
         req("GET", &format!("/b/{BUCKET}/o?prefix=stream"), &owner, b""),
     );
     assert_eq!(json_body(&r)["items"][0]["name"], "stream.bin");
+    // The official emulator has no bucket-metadata route at all: a bucket GET falls into
+    // its XML-style object fallback and answers the missing-object envelope, so
+    // `bucket.exists()` is false on both emulators.
     let r = handle(&s, req("GET", &format!("/b/{BUCKET}"), &[], b""));
-    assert_eq!(json_body(&r)["kind"], "storage#bucket");
+    assert_eq!(r.status, 404);
+    assert_eq!(
+        json_body(&r)["error"]["message"],
+        format!("No such object: b/{BUCKET}")
+    );
 }
 
 fn user_token(s: &StorageState) -> (String, String) {
@@ -742,12 +787,18 @@ fn multipart_payloads_keep_their_trailing_line_breaks() {
         b"--fireemu-boundary-ish\r\n",
     ] {
         let (ct, body) = multipart(&json!({"name": "t.txt"}), "text/plain", data);
+        // The Firebase dialect takes the name from the query and the multipart decision
+        // from the X-Goog-Upload-Protocol header, as the official emulator reads them.
         let r = handle(
             &s,
             req(
                 "POST",
-                &format!("/v0/b/{BUCKET}/o?uploadType=multipart"),
-                &[("authorization", "Bearer owner"), ("content-type", &ct)],
+                &format!("/v0/b/{BUCKET}/o?name=t.txt&uploadType=multipart"),
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", &ct),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
                 &body,
             ),
         );
@@ -948,7 +999,7 @@ service firebase.storage {
       allow read, create: if true;
       allow update: if request.resource.contentType == 'text/plain'
                     && request.resource.contentLanguage == 'en'
-                    && !('generation' in request.resource.keys());
+                    && request.resource.generation > 0;
     }
   }
 }",
@@ -964,7 +1015,11 @@ service firebase.storage {
         req(
             "POST",
             &format!("/v0/b/{BUCKET}/o?name=docs%2Fa.txt&uploadType=multipart"),
-            &[("authorization", &auth), ("content-type", &ct)],
+            &[
+                ("authorization", &auth),
+                ("content-type", &ct),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
             &body,
         ),
     );
@@ -1088,10 +1143,10 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!((r.status, r.body.as_slice()), (206, &b"89"[..]));
     let r = get("bytes=2-4");
     assert_eq!((r.status, r.body.as_slice()), (206, &b"234"[..]));
-    assert_eq!(header(&r, "content-length"), Some("3"));
+    // An unsatisfiable range is ignored and the whole object served, as the official
+    // emulator (express `req.range` answering -1) serves it.
     let r = get("bytes=10-");
-    assert_eq!(r.status, 416);
-    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    assert_eq!((r.status, r.body.as_slice()), (200, &b"0123456789"[..]));
     // Resumable JSON API: the declared span must match the body and the total.
     let r = handle(
         &s,
@@ -1172,7 +1227,7 @@ fn v1_rulesets_never_grant_lists() {
 }
 
 #[test]
-fn rewrite_authorizes_the_source_before_revealing_it_and_gets_honour_preconditions() {
+fn rewrite_honours_source_preconditions_and_conditional_reads() {
     let s = state(Some(
         "rules_version = '2';
 service firebase.storage {
@@ -1181,7 +1236,6 @@ service firebase.storage {
   }
 }",
     ));
-    let (_uid, auth) = user_token(&s);
     let (ct, body) = multipart(&json!({"name": "open/src"}), "text/plain", b"src");
     let r = handle(
         &s,
@@ -1194,21 +1248,32 @@ service firebase.storage {
     );
     assert_eq!(r.status, 200);
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
-    // A denied caller sees 403 whether or not the source exists.
-    for src in ["closed%2Fmissing", "closed%2Fother"] {
-        let r = handle(&s, req(
-                "POST",
-                &format!("/storage/v1/b/{BUCKET}/o/{src}/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=1"),
-                &[("authorization", &auth)],
-                b"",
-            ),
-        );
-        assert_eq!(r.status, 403, "{src}");
-    }
+    // The JSON API is the privileged dialect: rules never run on it, and the copy routes
+    // exist only on the short /b/... spelling (the long one is the official 501 catch-all).
     let r = handle(&s, req(
             "POST",
-            &format!("/storage/v1/b/{BUCKET}/o/open%2Fsrc/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=999"),
-            &[("authorization", &auth)],
+            &format!("/storage/v1/b/{BUCKET}/o/open%2Fsrc/rewriteTo/b/{BUCKET}/o/open%2Fdst"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 501);
+    let r = handle(&s, req(
+            "POST",
+            &format!("/b/{BUCKET}/o/closed%2Fmissing/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=1"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        json_body(&r)["error"]["message"],
+        format!("No such object: {BUCKET}/closed/missing")
+    );
+    let r = handle(&s, req(
+            "POST",
+            &format!("/b/{BUCKET}/o/open%2Fsrc/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=999"),
+            &[],
             b"",
         ),
     );

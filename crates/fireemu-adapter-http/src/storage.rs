@@ -1798,16 +1798,14 @@ fn fb_list(
     let max_results = params
         .get("maxResults")
         .and_then(|v| v.parse::<usize>().ok());
-    state
-        .authorize(
-            principal,
-            Method::List,
-            &b,
-            prefix.trim_end_matches('/'),
-            None,
-            RulesValue::Null,
-        )
-        .map_err(|denial| denial)?;
+    state.authorize(
+        principal,
+        Method::List,
+        &b,
+        prefix.trim_end_matches('/'),
+        None,
+        RulesValue::Null,
+    )?;
     let store = state.store()?;
     let page = store.list(
         &b,
@@ -2510,7 +2508,7 @@ fn gcs_object(
             };
             // Conditional reads: a not-match predicate naming the current value is 304
             // (production semantics; the official emulator reads no preconditions at all).
-            match precondition(params).map_err(|e| e)?.check(Some(&meta)) {
+            match precondition(params)?.check(Some(&meta)) {
                 Ok(()) => {}
                 Err(StorageError::NotModified(_)) => {
                     return Ok(StorageResponse::empty(304).with_header("etag", meta.etag()))
@@ -2544,7 +2542,9 @@ fn gcs_object(
         "DELETE" => {
             let pre = precondition(params)?;
             let mut store = state.store()?;
-            if store.get(&b, &n).is_none() {
+            // The generation selector is honoured as production honours it (the official
+            // emulator reads neither it nor the preconditions — a published divergence).
+            if select_generation(store.get(&b, &n).cloned(), params, "generation")?.is_none() {
                 return Ok(gcs_no_such_object(bucket, name, false));
             }
             store.delete(&b, &n, pre).map_err(gcs_core_err)?;

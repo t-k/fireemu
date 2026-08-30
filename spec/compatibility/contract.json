@@ -975,10 +975,10 @@
       "issues": [
         "docs.local/issues/open/close-storage-emulator-compatibility-gaps.md"
       ],
-      "notes": [],
-      "gaps": [
-        "import and export of the official Storage emulator artifacts"
+      "notes": [
+        "import and export of the official Storage emulator artifacts are claimed by CLI-CLAIM-IMPORT-EXPORT under the cli surface (DATA-1 / DATA-2)"
       ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -994,28 +994,28 @@
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-http/tests/storage.rs",
-              "crates/fireemu-core-storage/tests/store.rs"
+              "crates/fireemu-core-storage/tests/store.rs",
+              "conformance/storage-matrix.json"
             ],
             "conformance": [
-              {
-                "fixture": "storage/admin-upload-download-metadata",
-                "excludedSteps": [
-                  {
-                    "step": "download-a-missing-object",
-                    "issue": "docs.local/issues/open/close-storage-emulator-compatibility-gaps.md",
-                    "reason": "the 404 body differs: the official emulator answers a plain 'No such object' sentence, fireemu a JSON error envelope"
-                  }
-                ]
-              },
+              "storage/admin-upload-download-metadata",
               "storage/client-protocol-and-rules"
             ]
           },
           "officialLimitations": [
-            "the official Storage emulator implements no object versioning, no ACLs, no signed URLs, no compose and no notifications"
+            "the official Storage emulator implements no object versioning, no ACLs (its POST acl stub answers success without effect), no signed URLs, no compose and no notifications",
+            "the official Storage emulator parses no generation or metageneration precondition and verifies no declared checksum: it was measured to overwrite an object guarded by ifGenerationMatch=0, delete through a stale guard, and store a payload whose declared md5 did not match the bytes",
+            "the official Storage emulator ignores resumable offsets and the JSON API Content-Range chunk protocol: it appends whatever arrives and finalizes every PUT, so a two-chunk upload was measured to commit its first chunk as the whole object",
+            "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope; fireemu reproduces that route table exactly",
+            "a JSON API media insert without a name crashes the pinned official CLI outright (an unhandled TypeError after its own 400 exits firebase emulators:exec with code 2); fireemu answers a plain 400, and the row is recorded here because no fixture can record a crash"
           ],
           "fireemuOnly": [
             {
               "behaviour": "a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "generation / metageneration preconditions, declared checksums, resumable offsets and the Content-Range chunk protocol are honoured as production honours them, refusing requests the official emulator admits (and corrupts state on); every such step is pinned as a documented divergence in conformance/storage-matrix.json",
               "precision": "conservative"
             }
           ],
@@ -1038,17 +1038,31 @@
               "the_profile_decides_whether_storage_rules_admit_a_mock_token"
             ],
             "integration": [
-              "crates/fireemu-adapter-http/tests/storage.rs"
+              "crates/fireemu-adapter-http/tests/storage.rs",
+              "conformance/storage-matrix.json"
             ],
             "conformance": [
               "storage/client-protocol-and-rules"
             ]
           },
           "officialLimitations": [
-            "the official emulator treats the JSON API as a privileged surface: it goes around Security Rules unless an end-user token is presented",
-            "list requires rules_version 2 in the official rules runtime"
+            "the official emulator treats the whole JSON API as a privileged surface: Security Rules never run on it, whatever credential is presented (its adminStorageLayer validator answers true unconditionally), and fireemu reproduces that",
+            "the official emulator evaluates every upload as the rules create method, even over an existing object: a rule guarding update was measured to admit an anonymous overwrite",
+            "the official emulator's rules resource omits the production cacheControl and contentLanguage fields, so a rule reading them raises and denies there",
+            "the official rules runtime receives crc32c as a decimal string, not the base64 of the JSON API, and fireemu passes the same spelling",
+            "list requires rules_version 2 in the official rules runtime",
+            "a rules denial is answered with the fixed Permission denied. No READ|WRITE|LIST permission. envelope; the evaluation detail is a log line, and fireemu publishes its own through the control API instead"
           ],
-          "fireemuOnly": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "an upload over an existing object evaluates the rules update method, as production evaluates it, so update-guarding rules keep working; the divergence from the official emulator's create-always is pinned in conformance/storage-matrix.json",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "resource.cacheControl and resource.contentLanguage are passed to Storage rules as production passes them",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
           "productionOnly": [],
           "preview": []
         }

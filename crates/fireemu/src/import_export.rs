@@ -373,6 +373,14 @@ const IMPORT_FIRESTORE_BYTES_BUDGET: u64 = 1024 * 1024 * 1024;
 /// directory: a symlink inside a crafted export must never make an import read an arbitrary
 /// file on the host (and then serve it as an object).
 fn read_inside(root: &Path, path: &Path) -> Result<Vec<u8>, String> {
+    // A link inside the export is refused as well: the official CLI never writes one, and a
+    // link would let one file be named under many names past the per-name bounds. The
+    // canonicalized containment below stays, because this leaf check does not see a link
+    // in an intermediate directory component. Hard links and a concurrent swap between the
+    // check and the read are outside the threat model (a static, distributed artifact).
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("it is a symlink, which an import never follows".to_owned());
+    }
     let root = std::fs::canonicalize(root).map_err(|e| format!("cannot resolve it: {e}"))?;
     let real = std::fs::canonicalize(path).map_err(|e| format!("cannot read it: {e}"))?;
     if !real.starts_with(&root) {

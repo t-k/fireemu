@@ -555,7 +555,7 @@ pub fn read_entity(bytes: &[u8]) -> Result<ExportDocument, FirestoreExportError>
                 path = elements;
             }
             (ENTITY_PROPERTY | ENTITY_RAW_PROPERTY, WireType::Delimited) => {
-                properties.push(read_property(reader.delimited()?)?);
+                properties.push(read_property(reader.delimited()?, 0)?);
             }
             _ => reader.skip(field, wire)?,
         }
@@ -658,9 +658,17 @@ fn read_element(
     }
 }
 
+/// Nesting a decoded value may reach: Firestore allows maps and arrays 20 deep, and a
+/// deeper artifact is not one the emulator wrote. The bound keeps a crafted output file from
+/// recursing the decoder off the stack.
+pub const MAX_VALUE_DEPTH: usize = 20;
+
 /// Reads a `Property`, returning its name, whether it is an array element, and its value
-/// (`None` for the empty-list marker).
-fn read_property(bytes: &[u8]) -> Result<(String, bool, Option<Value>), FirestoreExportError> {
+/// (`None` for the empty-list marker). `depth` counts the nested entities above it.
+fn read_property(
+    bytes: &[u8],
+    depth: usize,
+) -> Result<(String, bool, Option<Value>), FirestoreExportError> {
     let mut reader = Reader::new(bytes);
     let mut meaning = 0u64;
     let mut name = String::new();
@@ -681,11 +689,11 @@ fn read_property(bytes: &[u8]) -> Result<(String, bool, Option<Value>), Firestor
     if meaning == MEANING_EMPTY_LIST {
         return Ok((name, false, None));
     }
-    let value = read_value(raw.unwrap_or(&[]), meaning)?;
+    let value = read_value(raw.unwrap_or(&[]), meaning, depth)?;
     Ok((name, multiple, Some(value)))
 }
 
-fn read_value(bytes: &[u8], meaning: u64) -> Result<Value, FirestoreExportError> {
+fn read_value(bytes: &[u8], meaning: u64, depth: usize) -> Result<Value, FirestoreExportError> {
     let mut reader = Reader::new(bytes);
     let mut value: Option<Value> = None;
     while let Some((field, wire)) = reader.field()? {
@@ -711,7 +719,7 @@ fn read_value(bytes: &[u8], meaning: u64) -> Result<Value, FirestoreExportError>
                 let raw = reader.delimited()?;
                 value = Some(match meaning {
                     MEANING_BLOB => Value::Bytes(raw.to_vec()),
-                    MEANING_ENTITY_PROTO => nested_value(raw)?,
+                    MEANING_ENTITY_PROTO => nested_value(raw, depth + 1)?,
                     _ => Value::String(String::from_utf8(raw.to_vec()).map_err(|_| {
                         FirestoreExportError::Shape(
                             "an exported string property is not UTF-8".to_owned(),
@@ -795,13 +803,18 @@ fn read_reference_value(bytes: &[u8]) -> Result<String, FirestoreExportError> {
 }
 
 /// A nested `EntityProto` carrying a map value (or a vector embedding).
-fn nested_value(bytes: &[u8]) -> Result<Value, FirestoreExportError> {
+fn nested_value(bytes: &[u8], depth: usize) -> Result<Value, FirestoreExportError> {
+    if depth > MAX_VALUE_DEPTH {
+        return shape(format!(
+            "an exported value is nested more than {MAX_VALUE_DEPTH} levels deep, which no Firestore document can be"
+        ));
+    }
     let mut reader = Reader::new(bytes);
     let mut properties = Vec::new();
     while let Some((field, wire)) = reader.field()? {
         match (field, wire) {
             (ENTITY_PROPERTY | ENTITY_RAW_PROPERTY, WireType::Delimited) => {
-                properties.push(read_property(reader.delimited()?)?);
+                properties.push(read_property(reader.delimited()?, depth)?);
             }
             _ => reader.skip(field, wire)?,
         }

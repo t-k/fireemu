@@ -110,8 +110,8 @@ fn malformed_tokens_and_unsupported_algorithms_are_rejected() {
 }
 
 #[test]
-fn rsa_signing_is_declared_unsupported_not_faked() {
-    assert!(!SigningMode::SessionRsa.supported());
+fn both_signing_modes_are_supported_and_parse_from_config() {
+    assert!(SigningMode::SessionRsa.supported());
     assert!(SigningMode::UnsignedEmulator.supported());
     assert_eq!(
         SigningMode::parse_config("session-rsa"),

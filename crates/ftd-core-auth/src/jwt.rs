@@ -68,10 +68,11 @@ pub enum SigningMode {
 }
 
 impl SigningMode {
-    /// Whether this binary can issue tokens in the mode.
+    /// Whether this binary can issue tokens in the mode (RS256 needs a signer installed in
+    /// the store by the runtime shell; the core never carries key material).
     #[must_use]
     pub const fn supported(self) -> bool {
-        matches!(self, Self::UnsignedEmulator)
+        true
     }
 
     /// Parses the canonical config value.
@@ -114,6 +115,8 @@ pub enum JwtError {
     Revoked,
     /// The signing mode cannot be used by this binary.
     SigningUnsupported(SigningMode),
+    /// The signature does not verify against the session key.
+    BadSignature,
 }
 
 impl fmt::Display for JwtError {
@@ -129,11 +132,53 @@ impl fmt::Display for JwtError {
             Self::UnknownUser => f.write_str("token subject is not a known user"),
             Self::Revoked => f.write_str("token revoked"),
             Self::SigningUnsupported(m) => write!(f, "signing mode {m:?} is not implemented"),
+            Self::BadSignature => f.write_str("token signature does not verify"),
         }
     }
 }
 
 impl std::error::Error for JwtError {}
+
+/// Signs and verifies ID tokens (`RS256`); implemented by the runtime shell, which owns the
+/// session key. The core only sees the signing input and the signature bytes.
+pub trait IdTokenSigner: Send + Sync {
+    /// JOSE algorithm name (`RS256`).
+    fn alg(&self) -> &'static str;
+    /// Key id carried in the token header.
+    fn kid(&self) -> &str;
+    /// Signature over `header.payload`.
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8>;
+    /// Whether `signature` is valid for `signing_input`.
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool;
+    /// The public key as a JWK (JSON text), for the JWKS endpoint.
+    fn public_jwk_json(&self) -> String;
+}
+
+impl fmt::Debug for dyn IdTokenSigner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IdTokenSigner({} kid {})", self.alg(), self.kid())
+    }
+}
+
+/// Encodes claims with `signer`, or unsigned (`alg: none`) without one.
+#[must_use]
+pub fn encode_with(claims: &IdTokenClaims, signer: Option<&dyn IdTokenSigner>) -> String {
+    let Some(signer) = signer else {
+        return encode_unsigned(claims);
+    };
+    let header = format!(
+        r#"{{"alg":"{}","kid":"{}","typ":"JWT"}}"#,
+        signer.alg(),
+        signer.kid()
+    );
+    let signing_input = format!(
+        "{}.{}",
+        base64url_encode(header.as_bytes()),
+        base64url_encode(claims.canonical_json().as_bytes())
+    );
+    let signature = signer.sign(signing_input.as_bytes());
+    format!("{signing_input}.{}", base64url_encode(&signature))
+}
 
 /// Encodes claims as an unsigned emulator-style token.
 #[must_use]
@@ -184,21 +229,44 @@ impl DecodedToken {
 
 /// Decodes an unsigned token without verifying claims.
 pub fn decode_unsigned(token: &str) -> Result<DecodedToken, JwtError> {
+    decode_token(token, None)
+}
+
+/// Decodes a token and checks its signature: with a `signer` the token must carry the
+/// signer's algorithm and a valid signature (an unsigned token is refused, so a session
+/// issuing RS256 tokens never accepts forged `alg: none` ones); without one only `alg: none`
+/// with an empty signature is accepted.
+pub fn decode_token(
+    token: &str,
+    signer: Option<&dyn IdTokenSigner>,
+) -> Result<DecodedToken, JwtError> {
     let parts: Vec<&str> = token.split('.').collect();
-    let [header, payload, signature] = parts.as_slice() else {
+    let [header_b64, payload, signature] = parts.as_slice() else {
         return Err(JwtError::Malformed);
     };
-    let header = String::from_utf8(base64url_decode(header)?).map_err(|_| JwtError::Malformed)?;
+    let header =
+        String::from_utf8(base64url_decode(header_b64)?).map_err(|_| JwtError::Malformed)?;
     let header = parse(&header).map_err(|_| JwtError::Malformed)?;
     let alg = header
         .get("alg")
         .and_then(JsonValue::as_str)
         .ok_or(JwtError::Malformed)?;
-    if alg != "none" {
-        return Err(JwtError::UnsupportedAlgorithm(alg.to_owned()));
-    }
-    if !signature.is_empty() {
-        return Err(JwtError::Malformed);
+    if let Some(signer) = signer {
+        if alg != signer.alg() {
+            return Err(JwtError::UnsupportedAlgorithm(alg.to_owned()));
+        }
+        let signing_input = format!("{header_b64}.{payload}");
+        let signature = base64url_decode(signature)?;
+        if signature.is_empty() || !signer.verify(signing_input.as_bytes(), &signature) {
+            return Err(JwtError::BadSignature);
+        }
+    } else {
+        if alg != "none" {
+            return Err(JwtError::UnsupportedAlgorithm(alg.to_owned()));
+        }
+        if !signature.is_empty() {
+            return Err(JwtError::Malformed);
+        }
     }
     let typ = header
         .get("typ")
@@ -235,7 +303,16 @@ pub fn verify_id_token(
     store: &AuthStore,
     now: LogicalInstant,
 ) -> Result<TokenVerification, JwtError> {
-    let decoded = decode_unsigned(token)?;
+    verify_id_token_decoded(token, store, now).map(|(v, _)| v)
+}
+
+/// [`verify_id_token`] returning the decoded token as well (claims for `request.auth`).
+pub fn verify_id_token_decoded(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+) -> Result<(TokenVerification, DecodedToken), JwtError> {
+    let decoded = decode_token(token, store.signer())?;
     let expected_iss = format!("https://securetoken.google.com/{}", store.project_id());
     let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
     if iss != expected_iss {
@@ -272,8 +349,11 @@ pub fn verify_id_token(
         .and_then(|f| f.get("sign_in_second_factor"))
         .and_then(JsonValue::as_str)
         .map(str::to_owned);
-    Ok(TokenVerification {
-        uid: sub.to_owned(),
-        second_factor,
-    })
+    Ok((
+        TokenVerification {
+            uid: sub.to_owned(),
+            second_factor,
+        },
+        decoded,
+    ))
 }

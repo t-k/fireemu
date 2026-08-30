@@ -2,6 +2,7 @@
 
 use core::fmt;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use ftd_core_limits::catalogs::FIREBASE_AUTH_2026_08_30;
 use ftd_core_limits::evaluate::{evaluate, LimitDisposition, LimitViolation, DEFAULT_THRESHOLDS};
@@ -263,9 +264,22 @@ pub struct AuthStore {
     refresh_tokens: BTreeMap<String, RefreshSession>,
     next_id_override: Option<String>,
     next_sequence: u64,
+    signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
 }
 
 impl AuthStore {
+    /// Installs the ID token signer (RS256 session key). Tokens issued afterwards are
+    /// signed and only signed tokens verify.
+    pub fn set_signer(&mut self, signer: Arc<dyn crate::jwt::IdTokenSigner>) {
+        self.signer = Some(signer);
+    }
+
+    /// The ID token signer, if one is installed.
+    #[must_use]
+    pub fn signer(&self) -> Option<&dyn crate::jwt::IdTokenSigner> {
+        self.signer.as_deref()
+    }
+
     /// Creates a store for `project_id`.
     #[must_use]
     pub fn new(project_id: &str, rng: SplitMix64, policy: TotpPolicy) -> Self {
@@ -278,6 +292,7 @@ impl AuthStore {
             refresh_tokens: BTreeMap::new(),
             next_id_override: None,
             next_sequence: 0,
+            signer: None,
         }
     }
 

@@ -60,6 +60,8 @@ pub struct RuntimeConfig {
     pub scheduler_default_time_zone: Option<String>,
     /// Overlap policy of schedules (`scheduler.overlap`).
     pub scheduler_overlap: String,
+    /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
+    pub id_token_signing: ftd_core_auth::jwt::SigningMode,
 }
 
 impl Default for RuntimeConfig {
@@ -88,6 +90,7 @@ impl Default for RuntimeConfig {
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
             scheduler_overlap: "allow".to_owned(),
+            id_token_signing: ftd_core_auth::jwt::SigningMode::UnsignedEmulator,
         }
     }
 }
@@ -386,8 +389,11 @@ impl RuntimeConfig {
                 let m = ftd_core_auth::jwt::SigningMode::parse_config(mode)
                     .ok_or_else(|| ConfigError(format!("unknown auth.idTokenSigning {mode:?}")))?;
                 if !m.supported() {
-                    return Err(ConfigError(format!("auth.idTokenSigning {mode:?} is declared but not implemented; use \"unsigned-emulator\"")));
+                    return Err(ConfigError(format!(
+                        "auth.idTokenSigning {mode:?} is not implemented"
+                    )));
                 }
+                cfg.id_token_signing = m;
             }
         }
         Ok(cfg)

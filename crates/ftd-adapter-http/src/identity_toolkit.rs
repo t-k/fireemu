@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use ftd_core_auth::base32;
 use ftd_core_auth::claims::{ClaimValue, CustomClaims};
-use ftd_core_auth::jwt::{encode_unsigned, verify_id_token, JwtError};
+use ftd_core_auth::jwt::{encode_with, verify_id_token, JwtError};
 use ftd_core_auth::mfa::MfaError;
 use ftd_core_auth::store::{
     AuthError, AuthStore, LocalId, NewUser, PendingSignInId, SecondFactorAssertion,
@@ -155,7 +155,7 @@ fn issue_tokens_with(
         )
         .map_err(|e| auth_error(&e))?;
     Ok(json!({
-        "idToken": encode_unsigned(&claims),
+        "idToken": encode_with(&claims, store.signer()),
         "refreshToken": refresh,
         "expiresIn": "3600",
         "localId": uid.as_str(),
@@ -245,6 +245,12 @@ pub fn handle(state: &AuthState, method: &str, path: &str, body: &Value) -> Json
     handle_with(state, method, path, &RequestHeaders::default(), body)
 }
 
+/// Where the session's JWKS is served (the Google path the SDKs know, and the well-known one).
+pub const JWKS_PATHS: &[&str] = &[
+    "/.well-known/jwks.json",
+    "/www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com",
+];
+
 /// Routes one request with its headers (privileged routes check them).
 #[must_use]
 pub fn handle_with(
@@ -263,6 +269,18 @@ pub fn handle_with(
     let Ok(mut store) = state.store.lock() else {
         return error(500, "INTERNAL");
     };
+    if method == "GET" && JWKS_PATHS.contains(&path) {
+        // The public keys signed ID tokens verify against (empty for unsigned sessions).
+        let keys: Vec<Value> = store
+            .signer()
+            .and_then(|s| serde_json::from_str::<Value>(&s.public_jwk_json()).ok())
+            .into_iter()
+            .collect();
+        return JsonResponse {
+            status: 200,
+            body: json!({"keys": keys}),
+        };
+    }
     // Admin SDK paths are project-scoped: /identitytoolkit.googleapis.com/v1/projects/{p}/accounts...
     let admin = path
         .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
@@ -1185,7 +1203,7 @@ fn refresh(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
         Ok(claims) => JsonResponse {
             status: 200,
             body: json!({
-                "id_token": encode_unsigned(&claims),
+                "id_token": encode_with(&claims, store.signer()),
                 "refresh_token": token,
                 "expires_in": "3600",
                 "token_type": "Bearer",

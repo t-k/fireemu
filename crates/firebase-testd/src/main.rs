@@ -24,6 +24,7 @@ use ftd_adapter_grpc::rules::RulesEnforcer;
 use ftd_adapter_grpc::serve::serve_multiplexed;
 use ftd_adapter_grpc::service::GatewayService;
 use ftd_adapter_http::identity_toolkit::AuthState;
+use ftd_core_auth::jwt::IdTokenSigner;
 use ftd_core_auth::mfa::TotpPolicy;
 use ftd_core_auth::store::AuthStore;
 use ftd_core_firestore::index::{IndexSet, PlanningContext};
@@ -390,6 +391,19 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             SplitMix64::new(cfg.seed ^ 0xA0),
             TotpPolicy::default(),
         )));
+        if cfg.id_token_signing == ftd_core_auth::jwt::SigningMode::SessionRsa {
+            // Key generation is slow in a debug build; say so before it starts.
+            println!("  generating the session RSA key for RS256 ID tokens ...");
+            let signer = ftd_adapter_http::signing::RsaSigner::from_seed(cfg.seed ^ 0x2256)?;
+            println!(
+                "  id tokens:        RS256 (kid {})   JWKS: http://{}/.well-known/jwks.json",
+                signer.kid(),
+                cfg.http_addr
+            );
+            if let Ok(mut store) = auth_store.lock() {
+                store.set_signer(signer);
+            }
+        }
         let barrier = backend.barrier();
         let auth = Arc::new(AuthState {
             store: auth_store.clone(),

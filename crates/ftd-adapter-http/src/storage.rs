@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
-use ftd_core_auth::jwt::{decode_unsigned, verify_id_token};
+use ftd_core_auth::jwt::verify_id_token_decoded;
 use ftd_core_auth::store::AuthStore;
 use ftd_core_rules::eval::{
     evaluate_request, Decision, DenyReason, Method, RequestContext, RulesService,
@@ -655,9 +655,9 @@ impl StorageState {
             .auth
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        verify_id_token(token, &store, self.now()).map_err(|e| format!("invalid ID token: {e}"))?;
+        let (_, decoded) = verify_id_token_decoded(token, &store, self.now())
+            .map_err(|e| format!("invalid ID token: {e}"))?;
         drop(store);
-        let decoded = decode_unsigned(token).map_err(|e| format!("invalid ID token: {e}"))?;
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
             .map_err(|e| format!("invalid ID token claims: {e}"))?;
         Ok(Principal::User(ctx))

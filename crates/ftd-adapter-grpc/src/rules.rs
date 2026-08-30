@@ -27,7 +27,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
-use ftd_core_auth::jwt::{decode_unsigned, verify_id_token};
+use ftd_core_auth::jwt::verify_id_token_decoded;
 use ftd_core_auth::store::AuthStore;
 use ftd_core_firestore::field_path::FieldPath;
 use ftd_core_firestore::path::DocumentPath;
@@ -300,11 +300,9 @@ impl RulesEnforcer {
             .auth
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
-        verify_id_token(token, &store, now)
+        let (_, decoded) = verify_id_token_decoded(token, &store, now)
             .map_err(|e| Status::unauthenticated(format!("invalid ID token: {e}")))?;
         drop(store);
-        let decoded = decode_unsigned(token)
-            .map_err(|e| Status::unauthenticated(format!("invalid ID token: {e}")))?;
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
             .map_err(|e| Status::unauthenticated(format!("invalid ID token claims: {e}")))?;
         Ok(Principal::User(ctx))

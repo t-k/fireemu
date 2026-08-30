@@ -1,0 +1,6553 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "firebaseTools": "15.28.2",
+    "note": "the Firestore emulator jar and its Rules runtime that firebase-tools pins; see ORACLE.md"
+  },
+  "seed": 20260831,
+  "generated": 260,
+  "claims": [
+    {
+      "id": "type_is-001",
+      "area": "type_is",
+      "claim": "1 is int",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-002",
+      "area": "type_is",
+      "claim": "1 is float",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-003",
+      "area": "type_is",
+      "claim": "1 is number",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-004",
+      "area": "type_is",
+      "claim": "1.0 is float",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-005",
+      "area": "type_is",
+      "claim": "1.0 is int",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-006",
+      "area": "type_is",
+      "claim": "1.0 is number",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-007",
+      "area": "type_is",
+      "claim": "'a' is string",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-008",
+      "area": "type_is",
+      "claim": "true is bool",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-009",
+      "area": "type_is",
+      "claim": "[] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-010",
+      "area": "type_is",
+      "claim": "{} is map",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-011",
+      "area": "type_is",
+      "claim": "null is null",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "type_is-012",
+      "area": "type_is",
+      "claim": "request.time is timestamp",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-013",
+      "area": "type_is",
+      "claim": "duration.value(1, 's') is duration",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-014",
+      "area": "type_is",
+      "claim": "latlng.value(1.0, 2.0) is latlng",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-015",
+      "area": "type_is",
+      "claim": "path('/a/b') is path",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-016",
+      "area": "type_is",
+      "claim": "'a'.toUtf8() is bytes",
+      "oracle": "true"
+    },
+    {
+      "id": "type_is-017",
+      "area": "type_is",
+      "claim": "[1, 2].toSet() is set",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-018",
+      "area": "type_is",
+      "claim": "[1, 2].toSet() is list",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-019",
+      "area": "type_is",
+      "claim": "{'a': 1}.diff({'b': 2}).addedKeys() is set",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-020",
+      "area": "type_is",
+      "claim": "{'a': 1}.diff({'b': 2}).addedKeys() is list",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-021",
+      "area": "type_is",
+      "claim": "null is int",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-022",
+      "area": "type_is",
+      "claim": "null is map",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-023",
+      "area": "type_is",
+      "claim": "1 is string",
+      "oracle": "false"
+    },
+    {
+      "id": "type_is-024",
+      "area": "type_is",
+      "claim": "1 is bogus",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "type_is-025",
+      "area": "type_is",
+      "claim": "request.auth is map",
+      "oracle": "false"
+    },
+    {
+      "id": "comparison-001",
+      "area": "comparison",
+      "claim": "1 == 1.0",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-002",
+      "area": "comparison",
+      "claim": "1 != 1.0",
+      "oracle": "false"
+    },
+    {
+      "id": "comparison-003",
+      "area": "comparison",
+      "claim": "1 < 1.5",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-004",
+      "area": "comparison",
+      "claim": "2 > 1.5",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-005",
+      "area": "comparison",
+      "claim": "1 <= 1",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-006",
+      "area": "comparison",
+      "claim": "'a' < 'b'",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-007",
+      "area": "comparison",
+      "claim": "'A' < 'a'",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-008",
+      "area": "comparison",
+      "claim": "'' < 'a'",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-009",
+      "area": "comparison",
+      "claim": "[1] == [1]",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-010",
+      "area": "comparison",
+      "claim": "[1, 2] == [2, 1]",
+      "oracle": "false"
+    },
+    {
+      "id": "comparison-011",
+      "area": "comparison",
+      "claim": "{'a': 1} == {'a': 1}",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-012",
+      "area": "comparison",
+      "claim": "{'a': 1} == {'a': 1.0}",
+      "oracle": "false"
+    },
+    {
+      "id": "comparison-013",
+      "area": "comparison",
+      "claim": "null == null",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-014",
+      "area": "comparison",
+      "claim": "null != 1",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-015",
+      "area": "comparison",
+      "claim": "1 == '1'",
+      "oracle": "false"
+    },
+    {
+      "id": "comparison-016",
+      "area": "comparison",
+      "claim": "true == 1",
+      "oracle": "false"
+    },
+    {
+      "id": "comparison-017",
+      "area": "comparison",
+      "claim": "true == true",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-018",
+      "area": "comparison",
+      "claim": "[1, 2] < [1, 3]",
+      "oracle": "error"
+    },
+    {
+      "id": "comparison-019",
+      "area": "comparison",
+      "claim": "{'a': 1} < {'a': 2}",
+      "oracle": "error"
+    },
+    {
+      "id": "comparison-020",
+      "area": "comparison",
+      "claim": "1 < 'a'",
+      "oracle": "error"
+    },
+    {
+      "id": "comparison-021",
+      "area": "comparison",
+      "claim": "null < 1",
+      "oracle": "error"
+    },
+    {
+      "id": "comparison-022",
+      "area": "comparison",
+      "claim": "'a'.toUtf8() == 'a'.toUtf8()",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-023",
+      "area": "comparison",
+      "claim": "'a'.toUtf8() < 'b'.toUtf8()",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-024",
+      "area": "comparison",
+      "claim": "path('/a') == path('/a')",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-025",
+      "area": "comparison",
+      "claim": "path('/a') < path('/b')",
+      "oracle": "error"
+    },
+    {
+      "id": "comparison-026",
+      "area": "comparison",
+      "claim": "latlng.value(1.0, 2.0) == latlng.value(1.0, 2.0)",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-027",
+      "area": "comparison",
+      "claim": "duration.value(1, 's') == duration.value(1000, 'ms')",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-028",
+      "area": "comparison",
+      "claim": "duration.value(1, 's') < duration.value(2, 's')",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-029",
+      "area": "comparison",
+      "claim": "[1, 2].toSet() == [2, 1].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "comparison-030",
+      "area": "comparison",
+      "claim": "[1, 2].toSet() == [1, 2]",
+      "oracle": "false"
+    },
+    {
+      "id": "comparison-031",
+      "area": "comparison",
+      "claim": "[1, 1, 2].toSet() == [1, 2].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-001",
+      "area": "arithmetic",
+      "claim": "1 + 2 == 3",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-002",
+      "area": "arithmetic",
+      "claim": "1 - 2 == -1",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-003",
+      "area": "arithmetic",
+      "claim": "2 * 3 == 6",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-004",
+      "area": "arithmetic",
+      "claim": "5 / 2 == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-005",
+      "area": "arithmetic",
+      "claim": "-5 / 2 == -2",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-006",
+      "area": "arithmetic",
+      "claim": "5 / 2 is int",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-007",
+      "area": "arithmetic",
+      "claim": "5.0 / 2 == 2.5",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-008",
+      "area": "arithmetic",
+      "claim": "5 % 3 == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-009",
+      "area": "arithmetic",
+      "claim": "-5 % 3 == -2",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-010",
+      "area": "arithmetic",
+      "claim": "5 % -3 == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-011",
+      "area": "arithmetic",
+      "claim": "1 / 0 == 1",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-012",
+      "area": "arithmetic",
+      "claim": "1 % 0 == 1",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-013",
+      "area": "arithmetic",
+      "claim": "1.0 / 0.0 == 1.0",
+      "oracle": "false"
+    },
+    {
+      "id": "arithmetic-014",
+      "area": "arithmetic",
+      "claim": "math.isInfinite(1.0 / 0.0)",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-015",
+      "area": "arithmetic",
+      "claim": "9223372036854775807 + 1 == 0",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-016",
+      "area": "arithmetic",
+      "claim": "-9223372036854775807 - 2 == 0",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-017",
+      "area": "arithmetic",
+      "claim": "9223372036854775807 * 2 == 0",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-018",
+      "area": "arithmetic",
+      "claim": "-9223372036854775807 - 1 == -9223372036854775808",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-019",
+      "area": "arithmetic",
+      "claim": "-(-9223372036854775807) == 9223372036854775807",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-020",
+      "area": "arithmetic",
+      "claim": "1 + 1.5 == 2.5",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-021",
+      "area": "arithmetic",
+      "claim": "1.5 + 1 == 2.5",
+      "oracle": "true"
+    },
+    {
+      "id": "arithmetic-022",
+      "area": "arithmetic",
+      "claim": "1 + true == 2",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-023",
+      "area": "arithmetic",
+      "claim": "1 + null == 1",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-024",
+      "area": "arithmetic",
+      "claim": "'a' + 1 == 'a1'",
+      "oracle": "error"
+    },
+    {
+      "id": "arithmetic-025",
+      "area": "arithmetic",
+      "claim": "1 + 'a' == '1a'",
+      "oracle": "error"
+    },
+    {
+      "id": "string-001",
+      "area": "string",
+      "claim": "'abc'.size() == 3",
+      "oracle": "true"
+    },
+    {
+      "id": "string-002",
+      "area": "string",
+      "claim": "'\\u00e9'.size() == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "string-003",
+      "area": "string",
+      "claim": "'ABC'.lower() == 'abc'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-004",
+      "area": "string",
+      "claim": "'abc'.upper() == 'ABC'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-005",
+      "area": "string",
+      "claim": "'  a  '.trim() == 'a'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-006",
+      "area": "string",
+      "claim": "'a,b'.split(',') == ['a', 'b']",
+      "oracle": "true"
+    },
+    {
+      "id": "string-007",
+      "area": "string",
+      "claim": "'abc'.split('') == ['a', 'b', 'c']",
+      "oracle": "false"
+    },
+    {
+      "id": "string-008",
+      "area": "string",
+      "claim": "'a'.split(',') == ['a']",
+      "oracle": "true"
+    },
+    {
+      "id": "string-009",
+      "area": "string",
+      "claim": "'abc' + 'def' == 'abcdef'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-010",
+      "area": "string",
+      "claim": "'abc'[0] == 'a'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-011",
+      "area": "string",
+      "claim": "'abc'[3] == 'a'",
+      "oracle": "error"
+    },
+    {
+      "id": "string-012",
+      "area": "string",
+      "claim": "'abc'[-1] == 'c'",
+      "oracle": "error"
+    },
+    {
+      "id": "string-013",
+      "area": "string",
+      "claim": "'abcdef'[1:3] == 'bc'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-014",
+      "area": "string",
+      "claim": "'abcdef'[0:0] == ''",
+      "oracle": "error"
+    },
+    {
+      "id": "string-015",
+      "area": "string",
+      "claim": "'abcdef'[4:2] == ''",
+      "oracle": "error"
+    },
+    {
+      "id": "string-016",
+      "area": "string",
+      "claim": "'abcdef'[0:99] == 'abcdef'",
+      "oracle": "error"
+    },
+    {
+      "id": "string-017",
+      "area": "string",
+      "claim": "'abc'.toUtf8().size() == 3",
+      "oracle": "true"
+    },
+    {
+      "id": "string-018",
+      "area": "string",
+      "claim": "'abc'.toUtf8().toBase64() == 'YWJj'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-019",
+      "area": "string",
+      "claim": "'abc'.toUtf8().toHexString() == '616263'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-020",
+      "area": "string",
+      "claim": "'a'.replace('a', 'b') == 'b'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-021",
+      "area": "string",
+      "claim": "'aaa'.replace('a', 'b') == 'bbb'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-022",
+      "area": "string",
+      "claim": "'abc'.replace('(a)(b)', '$2$1') == 'bac'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-023",
+      "area": "string",
+      "claim": "'abc'.replace('(a)(b)', '\\\\2\\\\1') == 'bac'",
+      "oracle": "false"
+    },
+    {
+      "id": "string-024",
+      "area": "string",
+      "claim": "string(1) == '1'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-025",
+      "area": "string",
+      "claim": "string(1.5) == '1.5'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-026",
+      "area": "string",
+      "claim": "string(true) == 'true'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-027",
+      "area": "string",
+      "claim": "string(null) == 'null'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-028",
+      "area": "string",
+      "claim": "string(path('/a/b')) == '/a/b'",
+      "oracle": "true"
+    },
+    {
+      "id": "string-029",
+      "area": "string",
+      "claim": "int('12') == 12",
+      "oracle": "true"
+    },
+    {
+      "id": "string-030",
+      "area": "string",
+      "claim": "int('12abc') == 12",
+      "oracle": "error"
+    },
+    {
+      "id": "string-031",
+      "area": "string",
+      "claim": "int(' 12 ') == 12",
+      "oracle": "error"
+    },
+    {
+      "id": "string-032",
+      "area": "string",
+      "claim": "int(1.9) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "string-033",
+      "area": "string",
+      "claim": "int(-1.9) == -1",
+      "oracle": "true"
+    },
+    {
+      "id": "string-034",
+      "area": "string",
+      "claim": "int(true) == 1",
+      "oracle": "error"
+    },
+    {
+      "id": "string-035",
+      "area": "string",
+      "claim": "float('1.5') == 1.5",
+      "oracle": "true"
+    },
+    {
+      "id": "string-036",
+      "area": "string",
+      "claim": "float(1) == 1.0",
+      "oracle": "true"
+    },
+    {
+      "id": "string-037",
+      "area": "string",
+      "claim": "bool('true') == true",
+      "oracle": "error"
+    },
+    {
+      "id": "string-038",
+      "area": "string",
+      "claim": "bytes('abc').size() == 3",
+      "oracle": "error"
+    },
+    {
+      "id": "regex-001",
+      "area": "regex",
+      "claim": "'abc'.matches('a.c')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-002",
+      "area": "regex",
+      "claim": "'abc'.matches('b')",
+      "oracle": "false"
+    },
+    {
+      "id": "regex-003",
+      "area": "regex",
+      "claim": "'abc'.matches('.*b.*')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-004",
+      "area": "regex",
+      "claim": "'abc'.matches('^abc$')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-005",
+      "area": "regex",
+      "claim": "'abc'.matches('abc|def')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-006",
+      "area": "regex",
+      "claim": "'a1'.matches('[a-z][0-9]')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-007",
+      "area": "regex",
+      "claim": "'a1'.matches('\\\\w+')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-008",
+      "area": "regex",
+      "claim": "'a1'.matches('[[:alpha:]][[:digit:]]')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-009",
+      "area": "regex",
+      "claim": "'ABC'.matches('(?i)abc')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-010",
+      "area": "regex",
+      "claim": "'abc'.matches('a(?=b)c')",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "regex-011",
+      "area": "regex",
+      "claim": "'aa'.matches('(a)\\\\1')",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "regex-012",
+      "area": "regex",
+      "claim": "'abc'.matches('a{1,2}bc')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-013",
+      "area": "regex",
+      "claim": "'abc'.matches('[')",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "regex-014",
+      "area": "regex",
+      "claim": "''.matches('')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-015",
+      "area": "regex",
+      "claim": "'a\\nb'.matches('a.b')",
+      "oracle": "false"
+    },
+    {
+      "id": "regex-016",
+      "area": "regex",
+      "claim": "'a\\nb'.matches('(?s)a.b')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-017",
+      "area": "regex",
+      "claim": "'abc'.matches('(?:abc)')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-018",
+      "area": "regex",
+      "claim": "'abc'.matches('a\\\\x62c')",
+      "oracle": "true"
+    },
+    {
+      "id": "regex-019",
+      "area": "regex",
+      "claim": "'\\u00e9'.matches('.')",
+      "oracle": "true"
+    },
+    {
+      "id": "list-001",
+      "area": "list",
+      "claim": "[1, 2, 3].size() == 3",
+      "oracle": "true"
+    },
+    {
+      "id": "list-002",
+      "area": "list",
+      "claim": "[1, 2, 3].hasAll([1, 2])",
+      "oracle": "true"
+    },
+    {
+      "id": "list-003",
+      "area": "list",
+      "claim": "[1, 2, 3].hasAll([1, 4])",
+      "oracle": "false"
+    },
+    {
+      "id": "list-004",
+      "area": "list",
+      "claim": "[1, 2, 3].hasAny([4, 2])",
+      "oracle": "true"
+    },
+    {
+      "id": "list-005",
+      "area": "list",
+      "claim": "[1, 2, 3].hasOnly([1, 2, 3, 4])",
+      "oracle": "true"
+    },
+    {
+      "id": "list-006",
+      "area": "list",
+      "claim": "[1, 2, 3].hasOnly([1, 2])",
+      "oracle": "false"
+    },
+    {
+      "id": "list-007",
+      "area": "list",
+      "claim": "[1, 2].concat([3]) == [1, 2, 3]",
+      "oracle": "true"
+    },
+    {
+      "id": "list-008",
+      "area": "list",
+      "claim": "['a', 'b'].join(',') == 'a,b'",
+      "oracle": "true"
+    },
+    {
+      "id": "list-009",
+      "area": "list",
+      "claim": "[1, 2].join(',') == '12'",
+      "oracle": "false"
+    },
+    {
+      "id": "list-010",
+      "area": "list",
+      "claim": "[1, 2, 3].removeAll([2]) == [1, 3]",
+      "oracle": "true"
+    },
+    {
+      "id": "list-011",
+      "area": "list",
+      "claim": "[1, 2, 2].removeAll([2]) == [1]",
+      "oracle": "true"
+    },
+    {
+      "id": "list-012",
+      "area": "list",
+      "claim": "[1, 2].toSet().size() == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "list-013",
+      "area": "list",
+      "claim": "[1, 2, 3][0] == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "list-014",
+      "area": "list",
+      "claim": "[1, 2, 3][3] == 1",
+      "oracle": "error"
+    },
+    {
+      "id": "list-015",
+      "area": "list",
+      "claim": "[1, 2, 3][-1] == 3",
+      "oracle": "error"
+    },
+    {
+      "id": "list-016",
+      "area": "list",
+      "claim": "[1, 2, 3][0:2] == [1, 2]",
+      "oracle": "true"
+    },
+    {
+      "id": "list-017",
+      "area": "list",
+      "claim": "[1, 2, 3][1:1] == []",
+      "oracle": "true"
+    },
+    {
+      "id": "list-018",
+      "area": "list",
+      "claim": "[1, 2, 3][2:1] == []",
+      "oracle": "error"
+    },
+    {
+      "id": "list-019",
+      "area": "list",
+      "claim": "[1, 2, 3][0:99] == [1, 2, 3]",
+      "oracle": "error"
+    },
+    {
+      "id": "list-020",
+      "area": "list",
+      "claim": "1 in [1, 2]",
+      "oracle": "true"
+    },
+    {
+      "id": "list-021",
+      "area": "list",
+      "claim": "4 in [1, 2]",
+      "oracle": "false"
+    },
+    {
+      "id": "list-022",
+      "area": "list",
+      "claim": "'a' in ['a']",
+      "oracle": "true"
+    },
+    {
+      "id": "list-023",
+      "area": "list",
+      "claim": "[] == []",
+      "oracle": "true"
+    },
+    {
+      "id": "list-024",
+      "area": "list",
+      "claim": "[1, [2]] == [1, [2]]",
+      "oracle": "true"
+    },
+    {
+      "id": "list-025",
+      "area": "list",
+      "claim": "[1, 2].hasAll([])",
+      "oracle": "true"
+    },
+    {
+      "id": "list-026",
+      "area": "list",
+      "claim": "[].hasAny([1])",
+      "oracle": "false"
+    },
+    {
+      "id": "map-001",
+      "area": "map",
+      "claim": "{'a': 1}.size() == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "map-002",
+      "area": "map",
+      "claim": "{'a': 1, 'b': 2}.keys() == ['a', 'b']",
+      "oracle": "true"
+    },
+    {
+      "id": "map-003",
+      "area": "map",
+      "claim": "{'b': 2, 'a': 1}.keys() == ['a', 'b']",
+      "oracle": "true"
+    },
+    {
+      "id": "map-004",
+      "area": "map",
+      "claim": "{'a': 1, 'b': 2}.values() == [1, 2]",
+      "oracle": "true"
+    },
+    {
+      "id": "map-005",
+      "area": "map",
+      "claim": "{'a': 1}.get('a', 0) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "map-006",
+      "area": "map",
+      "claim": "{'a': 1}.get('b', 0) == 0",
+      "oracle": "true"
+    },
+    {
+      "id": "map-007",
+      "area": "map",
+      "claim": "{'a': {'b': 1}}.get(['a', 'b'], 0) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "map-008",
+      "area": "map",
+      "claim": "{'a': 1}.get(['b', 'c'], 0) == 0",
+      "oracle": "true"
+    },
+    {
+      "id": "map-009",
+      "area": "map",
+      "claim": "'a' in {'a': 1}",
+      "oracle": "true"
+    },
+    {
+      "id": "map-010",
+      "area": "map",
+      "claim": "'b' in {'a': 1}",
+      "oracle": "false"
+    },
+    {
+      "id": "map-011",
+      "area": "map",
+      "claim": "{'a': 1}.a == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "map-012",
+      "area": "map",
+      "claim": "{'a': 1}.b == 1",
+      "oracle": "error"
+    },
+    {
+      "id": "map-013",
+      "area": "map",
+      "claim": "{'a': 1}['a'] == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "map-014",
+      "area": "map",
+      "claim": "{'a': 1}['b'] == 1",
+      "oracle": "error"
+    },
+    {
+      "id": "map-015",
+      "area": "map",
+      "claim": "{'a': 1}.keys().hasOnly(['a'])",
+      "oracle": "true"
+    },
+    {
+      "id": "map-016",
+      "area": "map",
+      "claim": "{'a': 1}.diff({'a': 1}).affectedKeys().size() == 0",
+      "oracle": "true"
+    },
+    {
+      "id": "map-017",
+      "area": "map",
+      "claim": "{'a': 1}.diff({'b': 2}).addedKeys() == ['a'].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "map-018",
+      "area": "map",
+      "claim": "{'a': 1}.diff({'b': 2}).removedKeys() == ['b'].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "map-019",
+      "area": "map",
+      "claim": "{'a': 1}.diff({'a': 2}).changedKeys() == ['a'].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "map-020",
+      "area": "map",
+      "claim": "{'a': 1}.diff({'a': 1}).unchangedKeys() == ['a'].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "map-021",
+      "area": "map",
+      "claim": "{'a': 1, 'b': 2}.diff({'a': 2}).affectedKeys() == ['a', 'b'].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "map-022",
+      "area": "map",
+      "claim": "{}.size() == 0",
+      "oracle": "true"
+    },
+    {
+      "id": "set-001",
+      "area": "set",
+      "claim": "[1, 2].toSet().size() == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "set-002",
+      "area": "set",
+      "claim": "[1, 2].toSet().union([3].toSet()) == [1, 2, 3].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "set-003",
+      "area": "set",
+      "claim": "[1, 2].toSet().intersection([2, 3].toSet()) == [2].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "set-004",
+      "area": "set",
+      "claim": "[1, 2].toSet().difference([2].toSet()) == [1].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "set-005",
+      "area": "set",
+      "claim": "[1, 2].toSet().hasAll([1])",
+      "oracle": "true"
+    },
+    {
+      "id": "set-006",
+      "area": "set",
+      "claim": "[1, 2].toSet().hasAll([1, 3])",
+      "oracle": "false"
+    },
+    {
+      "id": "set-007",
+      "area": "set",
+      "claim": "[1, 2].toSet().hasAny([3, 1])",
+      "oracle": "true"
+    },
+    {
+      "id": "set-008",
+      "area": "set",
+      "claim": "[1, 2].toSet().hasOnly([1, 2, 3])",
+      "oracle": "true"
+    },
+    {
+      "id": "set-009",
+      "area": "set",
+      "claim": "[1, 2].toSet().hasAll([1].toSet())",
+      "oracle": "true"
+    },
+    {
+      "id": "set-010",
+      "area": "set",
+      "claim": "1 in [1, 2].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "set-011",
+      "area": "set",
+      "claim": "3 in [1, 2].toSet()",
+      "oracle": "false"
+    },
+    {
+      "id": "set-012",
+      "area": "set",
+      "claim": "[1, 2].toSet().union([3]) == [1, 2, 3].toSet()",
+      "oracle": "error"
+    },
+    {
+      "id": "set-013",
+      "area": "set",
+      "claim": "[1, 2].toSet().toSet() == [1, 2].toSet()",
+      "oracle": "error"
+    },
+    {
+      "id": "set-014",
+      "area": "set",
+      "claim": "[].toSet().size() == 0",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-001",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2) is timestamp",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-002",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).year() == 2020",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-003",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).month() == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-004",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).day() == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-005",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).dayOfWeek() == 4",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-006",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).dayOfYear() == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-007",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).hours() == 0",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-008",
+      "area": "timestamp",
+      "claim": "timestamp.value(1000) is timestamp",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-009",
+      "area": "timestamp",
+      "claim": "timestamp.value(1000).toMillis() == 1000",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-010",
+      "area": "timestamp",
+      "claim": "timestamp.value(1500).seconds() == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-011",
+      "area": "timestamp",
+      "claim": "timestamp.value(1500).nanos() == 500000000",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-012",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).date() == timestamp.date(2020, 1, 2)",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-013",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 1, 2).time() == duration.value(0, 's')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-014",
+      "area": "timestamp",
+      "claim": "timestamp.value(1000) + duration.value(1, 's') == timestamp.value(2000)",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-015",
+      "area": "timestamp",
+      "claim": "timestamp.value(2000) - timestamp.value(1000) == duration.value(1, 's')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-016",
+      "area": "timestamp",
+      "claim": "timestamp.value(2000) - duration.value(1, 's') == timestamp.value(1000)",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-017",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 13, 1) is timestamp",
+      "oracle": "error"
+    },
+    {
+      "id": "timestamp-018",
+      "area": "timestamp",
+      "claim": "timestamp.date(2020, 2, 30) is timestamp",
+      "oracle": "error"
+    },
+    {
+      "id": "timestamp-019",
+      "area": "timestamp",
+      "claim": "duration.value(1, 'w') == duration.value(7, 'd')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-020",
+      "area": "timestamp",
+      "claim": "duration.value(1, 'd') == duration.value(24, 'h')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-021",
+      "area": "timestamp",
+      "claim": "duration.value(1, 'h') == duration.value(60, 'm')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-022",
+      "area": "timestamp",
+      "claim": "duration.value(1, 'm') == duration.value(60, 's')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-023",
+      "area": "timestamp",
+      "claim": "duration.value(1, 's') == duration.value(1000000000, 'ns')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-024",
+      "area": "timestamp",
+      "claim": "duration.value(1, 'x') == duration.value(1, 's')",
+      "oracle": "error"
+    },
+    {
+      "id": "timestamp-025",
+      "area": "timestamp",
+      "claim": "duration.time(1, 2, 3, 4).seconds() == 3723",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-026",
+      "area": "timestamp",
+      "claim": "duration.time(1, 2, 3, 4).nanos() == 4",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-027",
+      "area": "timestamp",
+      "claim": "duration.abs(duration.value(-1, 's')) == duration.value(1, 's')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-028",
+      "area": "timestamp",
+      "claim": "duration.value(1, 's') + duration.value(1, 's') == duration.value(2, 's')",
+      "oracle": "true"
+    },
+    {
+      "id": "timestamp-029",
+      "area": "timestamp",
+      "claim": "request.time > timestamp.value(0)",
+      "oracle": "true"
+    },
+    {
+      "id": "latlng-001",
+      "area": "latlng",
+      "claim": "latlng.value(1.0, 2.0).latitude() == 1.0",
+      "oracle": "true"
+    },
+    {
+      "id": "latlng-002",
+      "area": "latlng",
+      "claim": "latlng.value(1.0, 2.0).longitude() == 2.0",
+      "oracle": "true"
+    },
+    {
+      "id": "latlng-003",
+      "area": "latlng",
+      "claim": "latlng.value(0.0, 0.0).distance(latlng.value(0.0, 0.0)) == 0.0",
+      "oracle": "true"
+    },
+    {
+      "id": "latlng-004",
+      "area": "latlng",
+      "claim": "latlng.value(0.0, 0.0).distance(latlng.value(1.0, 0.0)) > 111000.0",
+      "oracle": "true"
+    },
+    {
+      "id": "latlng-005",
+      "area": "latlng",
+      "claim": "latlng.value(91.0, 0.0) is latlng",
+      "oracle": "error"
+    },
+    {
+      "id": "latlng-006",
+      "area": "latlng",
+      "claim": "latlng.value(1, 2) is latlng",
+      "oracle": "true"
+    },
+    {
+      "id": "math-001",
+      "area": "math",
+      "claim": "math.abs(-1) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "math-002",
+      "area": "math",
+      "claim": "math.abs(-1.5) == 1.5",
+      "oracle": "true"
+    },
+    {
+      "id": "math-003",
+      "area": "math",
+      "claim": "math.ceil(1.2) == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "math-004",
+      "area": "math",
+      "claim": "math.ceil(1.2) is int",
+      "oracle": "false"
+    },
+    {
+      "id": "math-005",
+      "area": "math",
+      "claim": "math.floor(1.8) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "math-006",
+      "area": "math",
+      "claim": "math.round(1.5) == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "math-007",
+      "area": "math",
+      "claim": "math.round(-1.5) == -2",
+      "oracle": "false"
+    },
+    {
+      "id": "math-008",
+      "area": "math",
+      "claim": "math.sqrt(4.0) == 2.0",
+      "oracle": "true"
+    },
+    {
+      "id": "math-009",
+      "area": "math",
+      "claim": "math.sqrt(4) == 2.0",
+      "oracle": "true"
+    },
+    {
+      "id": "math-010",
+      "area": "math",
+      "claim": "math.sqrt(-1.0) == 0.0",
+      "oracle": "false"
+    },
+    {
+      "id": "math-011",
+      "area": "math",
+      "claim": "math.isNaN(math.sqrt(-1.0))",
+      "oracle": "true"
+    },
+    {
+      "id": "math-012",
+      "area": "math",
+      "claim": "math.isInfinite(1.0)",
+      "oracle": "error"
+    },
+    {
+      "id": "math-013",
+      "area": "math",
+      "claim": "math.pow(2.0, 3.0) == 8.0",
+      "oracle": "true"
+    },
+    {
+      "id": "math-014",
+      "area": "math",
+      "claim": "math.abs(-9223372036854775807) == 9223372036854775807",
+      "oracle": "true"
+    },
+    {
+      "id": "hashing-001",
+      "area": "hashing",
+      "claim": "hashing.md5('abc').toHexString().lower() == '900150983cd24fb0d6963f7d28e17f72'",
+      "oracle": "true"
+    },
+    {
+      "id": "hashing-002",
+      "area": "hashing",
+      "claim": "hashing.sha256('abc').toHexString().lower() == 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'",
+      "oracle": "true"
+    },
+    {
+      "id": "hashing-003",
+      "area": "hashing",
+      "claim": "hashing.crc32('abc').toHexString().lower() == '352441c2'",
+      "oracle": "false"
+    },
+    {
+      "id": "hashing-004",
+      "area": "hashing",
+      "claim": "hashing.crc32c('abc').toHexString().lower() == '364b3fb7'",
+      "oracle": "false"
+    },
+    {
+      "id": "hashing-005",
+      "area": "hashing",
+      "claim": "hashing.md5('abc') is bytes",
+      "oracle": "true"
+    },
+    {
+      "id": "hashing-006",
+      "area": "hashing",
+      "claim": "hashing.md5('abc'.toUtf8()) == hashing.md5('abc')",
+      "oracle": "true"
+    },
+    {
+      "id": "hashing-007",
+      "area": "hashing",
+      "claim": "hashing.sha256('abc').size() == 32",
+      "oracle": "true"
+    },
+    {
+      "id": "path-001",
+      "area": "path",
+      "claim": "path('/a/b').size() == 2",
+      "oracle": "error"
+    },
+    {
+      "id": "path-002",
+      "area": "path",
+      "claim": "path('/a/b')[0] == 'a'",
+      "oracle": "true"
+    },
+    {
+      "id": "path-003",
+      "area": "path",
+      "claim": "path('a/b').size() == 2",
+      "oracle": "error"
+    },
+    {
+      "id": "path-004",
+      "area": "path",
+      "claim": "path('/a/b') == /a/b",
+      "oracle": "true"
+    },
+    {
+      "id": "path-005",
+      "area": "path",
+      "claim": "path('/a/b').bind({}) == path('/a/b')",
+      "oracle": "true"
+    },
+    {
+      "id": "path-006",
+      "area": "path",
+      "claim": "path('/a/$(x)').bind({'x': 'b'}) == path('/a/b')",
+      "oracle": "error"
+    },
+    {
+      "id": "path-007",
+      "area": "path",
+      "claim": "path('/a/$(x)').bind({'y': 'b'}) == path('/a/b')",
+      "oracle": "error"
+    },
+    {
+      "id": "path-008",
+      "area": "path",
+      "claim": "/databases/(default)/documents/a/b is path",
+      "oracle": "true"
+    },
+    {
+      "id": "path-009",
+      "area": "path",
+      "claim": "path('/a') + path('/b') == path('/a/b')",
+      "oracle": "error"
+    },
+    {
+      "id": "path-010",
+      "area": "path",
+      "claim": "string(path('/a/b')) == '/a/b'",
+      "oracle": "true"
+    },
+    {
+      "id": "path-011",
+      "area": "path",
+      "claim": "path(1) is path",
+      "oracle": "error"
+    },
+    {
+      "id": "request-001",
+      "area": "request",
+      "claim": "request.auth == null",
+      "oracle": "true"
+    },
+    {
+      "id": "request-002",
+      "area": "request",
+      "claim": "request.method == 'get'",
+      "oracle": "true"
+    },
+    {
+      "id": "request-003",
+      "area": "request",
+      "claim": "request.path is path",
+      "oracle": "true"
+    },
+    {
+      "id": "request-004",
+      "area": "request",
+      "claim": "request.time is timestamp",
+      "oracle": "true"
+    },
+    {
+      "id": "request-005",
+      "area": "request",
+      "claim": "request.resource == null",
+      "oracle": "error"
+    },
+    {
+      "id": "request-006",
+      "area": "request",
+      "claim": "request.query == null",
+      "oracle": "error"
+    },
+    {
+      "id": "request-007",
+      "area": "request",
+      "claim": "resource == null",
+      "oracle": "true"
+    },
+    {
+      "id": "request-008",
+      "area": "request",
+      "claim": "resource.data == null",
+      "oracle": "error"
+    },
+    {
+      "id": "request-009",
+      "area": "request",
+      "claim": "request.auth.uid == 'x'",
+      "oracle": "error"
+    },
+    {
+      "id": "request-010",
+      "area": "request",
+      "claim": "request.bogus == null",
+      "oracle": "error"
+    },
+    {
+      "id": "request-011",
+      "area": "request",
+      "claim": "request.keys() is list",
+      "oracle": "true"
+    },
+    {
+      "id": "nullness-001",
+      "area": "nullness",
+      "claim": "{'a': 1}.b == null",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-002",
+      "area": "nullness",
+      "claim": "{'a': 1}['b'] == null",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-003",
+      "area": "nullness",
+      "claim": "null.a == null",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-004",
+      "area": "nullness",
+      "claim": "(null == null) && true",
+      "oracle": "true"
+    },
+    {
+      "id": "nullness-005",
+      "area": "nullness",
+      "claim": "true && null",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-006",
+      "area": "nullness",
+      "claim": "false && null",
+      "oracle": "false"
+    },
+    {
+      "id": "nullness-007",
+      "area": "nullness",
+      "claim": "true || null",
+      "oracle": "true"
+    },
+    {
+      "id": "nullness-008",
+      "area": "nullness",
+      "claim": "false || null",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-009",
+      "area": "nullness",
+      "claim": "!null",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-010",
+      "area": "nullness",
+      "claim": "null && null",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-011",
+      "area": "nullness",
+      "claim": "1 && true",
+      "oracle": "error"
+    },
+    {
+      "id": "nullness-012",
+      "area": "nullness",
+      "claim": "{'a': null}.a == null",
+      "oracle": "true"
+    },
+    {
+      "id": "nullness-013",
+      "area": "nullness",
+      "claim": "'a' in {'a': null}",
+      "oracle": "true"
+    },
+    {
+      "id": "nullness-014",
+      "area": "nullness",
+      "claim": "{'a': null}.keys() == ['a']",
+      "oracle": "true"
+    },
+    {
+      "id": "nullness-015",
+      "area": "nullness",
+      "claim": "{'a': null}.get('a', 1) == null",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-001",
+      "area": "operators",
+      "claim": "true && true",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-002",
+      "area": "operators",
+      "claim": "true && false",
+      "oracle": "false"
+    },
+    {
+      "id": "operators-003",
+      "area": "operators",
+      "claim": "(1 / 0 == 1) || true",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-004",
+      "area": "operators",
+      "claim": "true || (1 / 0 == 1)",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-005",
+      "area": "operators",
+      "claim": "false && (1 / 0 == 1)",
+      "oracle": "false"
+    },
+    {
+      "id": "operators-006",
+      "area": "operators",
+      "claim": "(1 / 0 == 1) && false",
+      "oracle": "false"
+    },
+    {
+      "id": "operators-007",
+      "area": "operators",
+      "claim": "true ? true : (1 / 0 == 1)",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-008",
+      "area": "operators",
+      "claim": "false ? (1 / 0 == 1) : true",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-009",
+      "area": "operators",
+      "claim": "1 == 1 ? true : false",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-010",
+      "area": "operators",
+      "claim": "1 ? true : false",
+      "oracle": "error"
+    },
+    {
+      "id": "operators-011",
+      "area": "operators",
+      "claim": "!true == false",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-012",
+      "area": "operators",
+      "claim": "-(-1) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "operators-013",
+      "area": "operators",
+      "claim": "-'a' == 'a'",
+      "oracle": "error"
+    },
+    {
+      "id": "operators-014",
+      "area": "operators",
+      "claim": "!1",
+      "oracle": "error"
+    },
+    {
+      "id": "debug-001",
+      "area": "debug",
+      "claim": "debug(true)",
+      "oracle": "true"
+    },
+    {
+      "id": "debug-002",
+      "area": "debug",
+      "claim": "debug(false)",
+      "oracle": "false"
+    },
+    {
+      "id": "debug-003",
+      "area": "debug",
+      "claim": "debug(1) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "debug-004",
+      "area": "debug",
+      "claim": "debug([1, 2]).size() == 2",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-001",
+      "area": "detail",
+      "claim": "math.round(-1.5) == -1",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-002",
+      "area": "detail",
+      "claim": "math.round(-1.4) == -1",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-003",
+      "area": "detail",
+      "claim": "math.round(-1.6) == -2",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-004",
+      "area": "detail",
+      "claim": "math.round(0.5) == 1",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-005",
+      "area": "detail",
+      "claim": "math.round(1.5) is int",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-006",
+      "area": "detail",
+      "claim": "math.floor(1.8) is float",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-007",
+      "area": "detail",
+      "claim": "math.abs(-1) is int",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-008",
+      "area": "detail",
+      "claim": "math.abs(-1.5) is float",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-009",
+      "area": "detail",
+      "claim": "math.pow(2, 3) == 8.0",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-010",
+      "area": "detail",
+      "claim": "math.pow(2.0, 3.0) is float",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-011",
+      "area": "detail",
+      "claim": "math.sqrt(4) is float",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-012",
+      "area": "detail",
+      "claim": "hashing.crc32('abc').size() == 4",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-013",
+      "area": "detail",
+      "claim": "hashing.crc32('abc').size() == 8",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-014",
+      "area": "detail",
+      "claim": "hashing.crc32('abc').toHexString() == '352441C2'",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-015",
+      "area": "detail",
+      "claim": "hashing.crc32('abc').toHexString() == '00000000352441C2'",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-016",
+      "area": "detail",
+      "claim": "hashing.crc32c('abc').toHexString() == '364B3FB7'",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-017",
+      "area": "detail",
+      "claim": "hashing.md5('abc').toHexString() == '900150983CD24FB0D6963F7D28E17F72'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-018",
+      "area": "detail",
+      "claim": "hashing.sha256('abc').toBase64() == 'ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0='",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-019",
+      "area": "detail",
+      "claim": "[1, 2].join(',') == '1,2'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-020",
+      "area": "detail",
+      "claim": "[1, 2].toSet() is bool",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-021",
+      "area": "detail",
+      "claim": "[1, 2].toSet() is map",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-022",
+      "area": "detail",
+      "claim": "[1, 2].toSet() is string",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-023",
+      "area": "detail",
+      "claim": "[1, 2].toSet() is int",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-024",
+      "area": "detail",
+      "claim": "[1, 2].toSet().size() is int",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-025",
+      "area": "detail",
+      "claim": "[1, 2, 3][1:3] == [2, 3]",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-026",
+      "area": "detail",
+      "claim": "[1, 2, 3][0:3] == [1, 2, 3]",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-027",
+      "area": "detail",
+      "claim": "[1, 2, 3][0:0] == []",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-028",
+      "area": "detail",
+      "claim": "[1, 2, 3][3:3] == []",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-029",
+      "area": "detail",
+      "claim": "[1, 2, 3][-1:1] == [1]",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-030",
+      "area": "detail",
+      "claim": "'abcdef'[0:6] == 'abcdef'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-031",
+      "area": "detail",
+      "claim": "'abcdef'[6:6] == ''",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-032",
+      "area": "detail",
+      "claim": "'abcdef'[2:2] == ''",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-033",
+      "area": "detail",
+      "claim": "'abcdef'[0:1] == 'a'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-034",
+      "area": "detail",
+      "claim": "'abc'.size() is int",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-035",
+      "area": "detail",
+      "claim": "latlng.value(0.0, 0.0).distance(latlng.value(1.0, 0.0)) < 112000.0",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-036",
+      "area": "detail",
+      "claim": "latlng.value(0.0, 0.0).distance(latlng.value(1.0, 0.0)) is float",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-037",
+      "area": "detail",
+      "claim": "request.keys().hasAny(['auth'])",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-038",
+      "area": "detail",
+      "claim": "request.keys().hasAny(['resource'])",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-039",
+      "area": "detail",
+      "claim": "request.keys().hasAny(['query'])",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-040",
+      "area": "detail",
+      "claim": "request.keys().hasAny(['method', 'path', 'time'])",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-041",
+      "area": "detail",
+      "claim": "'resource' in request",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-042",
+      "area": "detail",
+      "claim": "'query' in request",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-043",
+      "area": "detail",
+      "claim": "'auth' in request",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-044",
+      "area": "detail",
+      "claim": "string(path('/a/b')) == '/a/b'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-045",
+      "area": "detail",
+      "claim": "string([1, 2]) == '[1, 2]'",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-046",
+      "area": "detail",
+      "claim": "string({'a': 1}) == '{a: 1}'",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-047",
+      "area": "detail",
+      "claim": "string('a') == 'a'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-048",
+      "area": "detail",
+      "claim": "string(request.time) is string",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-049",
+      "area": "detail",
+      "claim": "int('0x10') == 16",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-050",
+      "area": "detail",
+      "claim": "int('-3') == -3",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-051",
+      "area": "detail",
+      "claim": "int('') == 0",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-052",
+      "area": "detail",
+      "claim": "int(9223372036854775807) == 9223372036854775807",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-053",
+      "area": "detail",
+      "claim": "float('abc') == 0.0",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-054",
+      "area": "detail",
+      "claim": "'a'.matches('A')",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-055",
+      "area": "detail",
+      "claim": "'a'.matches('(?i)A')",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-056",
+      "area": "detail",
+      "claim": "'aXb'.matches('a\\\\x58b')",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-057",
+      "area": "detail",
+      "claim": "'a-b'.matches('[a\\\\-b]+')",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-058",
+      "area": "detail",
+      "claim": "'a'.replace('a', '$0$0') == 'aa'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-059",
+      "area": "detail",
+      "claim": "'ab'.replace('(a)', '[$1]') == '[a]b'",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-060",
+      "area": "detail",
+      "claim": "'abc'.matches('\\\\p{L}+')",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-061",
+      "area": "detail",
+      "claim": "'a b'.matches('a\\\\sb')",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-062",
+      "area": "detail",
+      "claim": "[1, 2].toSet().difference([2, 3].toSet()) == [1].toSet()",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-063",
+      "area": "detail",
+      "claim": "[1, 2].toSet().hasOnly([1].toSet())",
+      "oracle": "false"
+    },
+    {
+      "id": "detail-064",
+      "area": "detail",
+      "claim": "([1, 2].toSet() == [1, 2].toSet()) && true",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-065",
+      "area": "detail",
+      "claim": "{'a': 1}.diff({'a': 1}).affectedKeys().hasOnly([])",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-066",
+      "area": "detail",
+      "claim": "path('/a/b').bind({'x': 'y'}) == path('/a/b')",
+      "oracle": "error"
+    },
+    {
+      "id": "detail-067",
+      "area": "detail",
+      "claim": "path('/a/{x}').bind({'x': 'b'}) == path('/a/b')",
+      "oracle": "true"
+    },
+    {
+      "id": "detail-068",
+      "area": "detail",
+      "claim": "'x' in path('/a/b')",
+      "oracle": "error"
+    },
+    {
+      "id": "encoding-001",
+      "area": "encoding",
+      "claim": "hashing.crc32('abc').toHexString() == 'C2412435'",
+      "oracle": "true"
+    },
+    {
+      "id": "encoding-002",
+      "area": "encoding",
+      "claim": "hashing.crc32('abc').toBase64() == 'NSRBwg=='",
+      "oracle": "false"
+    },
+    {
+      "id": "encoding-003",
+      "area": "encoding",
+      "claim": "hashing.crc32c('abc').toHexString() == 'B73F4B36'",
+      "oracle": "true"
+    },
+    {
+      "id": "encoding-004",
+      "area": "encoding",
+      "claim": "hashing.sha256('abc').toBase64() == 'ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0='",
+      "oracle": "false"
+    },
+    {
+      "id": "encoding-005",
+      "area": "encoding",
+      "claim": "hashing.sha256('abc').toBase64() == 'ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0='",
+      "oracle": "true"
+    },
+    {
+      "id": "encoding-006",
+      "area": "encoding",
+      "claim": "hashing.sha256('abc').toBase64() == 'ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0'",
+      "oracle": "false"
+    },
+    {
+      "id": "encoding-007",
+      "area": "encoding",
+      "claim": "'abc'.toUtf8().toBase64() == 'YWJj'",
+      "oracle": "true"
+    },
+    {
+      "id": "encoding-008",
+      "area": "encoding",
+      "claim": "'ab'.toUtf8().toBase64() == 'YWI='",
+      "oracle": "true"
+    },
+    {
+      "id": "encoding-009",
+      "area": "encoding",
+      "claim": "'ab'.toUtf8().toBase64() == 'YWI'",
+      "oracle": "false"
+    },
+    {
+      "id": "encoding-010",
+      "area": "encoding",
+      "claim": "'a'.toUtf8().toBase64() == 'YQ=='",
+      "oracle": "true"
+    },
+    {
+      "id": "encoding-011",
+      "area": "encoding",
+      "claim": "'a'.toUtf8().toBase64() == 'YQ'",
+      "oracle": "false"
+    },
+    {
+      "id": "encoding-012",
+      "area": "encoding",
+      "claim": "'\\u00ff\\u00fe'.toUtf8().toHexString() == 'C3BFC3BE'",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-001",
+      "area": "slice",
+      "claim": "[1, 2, 3][0:0] is list",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-002",
+      "area": "slice",
+      "claim": "[1, 2, 3][0:1] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-003",
+      "area": "slice",
+      "claim": "[1, 2, 3][0:2] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-004",
+      "area": "slice",
+      "claim": "[1, 2, 3][0:3] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-005",
+      "area": "slice",
+      "claim": "[1, 2, 3][0:4] is list",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-006",
+      "area": "slice",
+      "claim": "[1, 2, 3][1:1] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-007",
+      "area": "slice",
+      "claim": "[1, 2, 3][1:2] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-008",
+      "area": "slice",
+      "claim": "[1, 2, 3][1:3] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-009",
+      "area": "slice",
+      "claim": "[1, 2, 3][2:2] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-010",
+      "area": "slice",
+      "claim": "[1, 2, 3][2:3] is list",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-011",
+      "area": "slice",
+      "claim": "[1, 2, 3][3:3] is list",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-012",
+      "area": "slice",
+      "claim": "[1, 2, 3][2:1] is list",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-013",
+      "area": "slice",
+      "claim": "[1, 2, 3][-1:2] is list",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-014",
+      "area": "slice",
+      "claim": "[1, 2, 3][1:-1] is list",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-015",
+      "area": "slice",
+      "claim": "[][0:0] is list",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-016",
+      "area": "slice",
+      "claim": "'abc'[0:0] is string",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-017",
+      "area": "slice",
+      "claim": "'abc'[0:1] is string",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-018",
+      "area": "slice",
+      "claim": "'abc'[0:3] is string",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-019",
+      "area": "slice",
+      "claim": "'abc'[0:4] is string",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-020",
+      "area": "slice",
+      "claim": "'abc'[1:1] is string",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-021",
+      "area": "slice",
+      "claim": "'abc'[1:2] is string",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-022",
+      "area": "slice",
+      "claim": "'abc'[2:2] is string",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-023",
+      "area": "slice",
+      "claim": "'abc'[3:3] is string",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-024",
+      "area": "slice",
+      "claim": "'abc'[2:1] is string",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-025",
+      "area": "slice",
+      "claim": "''[0:0] is string",
+      "oracle": "error"
+    },
+    {
+      "id": "slice-026",
+      "area": "slice",
+      "claim": "[1, 2, 3][1:1] == []",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-027",
+      "area": "slice",
+      "claim": "[1, 2, 3][2:2] == []",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-028",
+      "area": "slice",
+      "claim": "'abc'[1:1] == ''",
+      "oracle": "true"
+    },
+    {
+      "id": "slice-029",
+      "area": "slice",
+      "claim": "'abc'[2:2] == ''",
+      "oracle": "true"
+    },
+    {
+      "id": "gen-0001",
+      "area": "generated",
+      "claim": "((({'a': 1}.toUtf8() is set) % int(bool(true))) != 'a')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0002",
+      "area": "generated",
+      "claim": "([] is bytes)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0003",
+      "area": "generated",
+      "claim": "(bool({'a': 1}) in ('' - false))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0004",
+      "area": "generated",
+      "claim": "(string(0.0) >= null)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0005",
+      "area": "generated",
+      "claim": "(((null && [1, 'a']) || ([1, 'a'] is set)).seconds() is number)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0006",
+      "area": "generated",
+      "claim": "(int(([1, 2] && {})).toHexString() > true)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0007",
+      "area": "generated",
+      "claim": "((string(1.5) is latlng) || (0.hasAny({'a': 'b', 'c': 2}) in (3 % [])))",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0008",
+      "area": "generated",
+      "claim": "(0.join(request.time) is string)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0009",
+      "area": "generated",
+      "claim": "('' || 1.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0010",
+      "area": "generated",
+      "claim": "(('a' is path) || (0 || 3))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0011",
+      "area": "generated",
+      "claim": "((1.5 == request.time).concat((null && 1)) >= false)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0012",
+      "area": "generated",
+      "claim": "((request.time < 'A b') != (2 + request.time))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0013",
+      "area": "generated",
+      "claim": "(({'a': 1}.join(true) / (false && 0.0)) == request.auth)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0014",
+      "area": "generated",
+      "claim": "(1.5 in [1, 'a'])",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0015",
+      "area": "generated",
+      "claim": "((request.auth % 2) > resource)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0016",
+      "area": "generated",
+      "claim": "(({'a': 1}.diff(2) % (-1 in 0)).lower() is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0017",
+      "area": "generated",
+      "claim": "(float(([1, 2] - null)) == {'a': 1})",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0018",
+      "area": "generated",
+      "claim": "(request.path || 1.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0019",
+      "area": "generated",
+      "claim": "((9223372036854775807 || 1.5).join(0.difference(['a', 'b'])).toMillis() is bytes)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0020",
+      "area": "generated",
+      "claim": "(bytes((([] && 9223372036854775807) / ''.year())) is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0021",
+      "area": "generated",
+      "claim": "(request.auth.time() && (request.auth || [1, 'a']))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0022",
+      "area": "generated",
+      "claim": "(bool(null['a']) || (false.size() && ('A b' == ['a', 'b'])))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0023",
+      "area": "generated",
+      "claim": "((request.path['abc'] < (request.path in ['a', 'b'])).difference((int(resource) * ([1, 2] && request.auth))) is timestamp)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0024",
+      "area": "generated",
+      "claim": "(bool(request.auth.hasAny({'a': 1})) >= 'A b')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0025",
+      "area": "generated",
+      "claim": "(bytes((1.5 is duration).difference(float(3))) is set)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0026",
+      "area": "generated",
+      "claim": "(null.split(2) || (request.auth != 'abc'))",
+      "oracle": "true"
+    },
+    {
+      "id": "gen-0027",
+      "area": "generated",
+      "claim": "(('abc'.toHexString() % (request.auth + 9223372036854775807))[[1, 2][[1, 'a']][[1, 2].hasAny({'a': 1})]] <= true)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0028",
+      "area": "generated",
+      "claim": "(request.auth.date() == request.path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0029",
+      "area": "generated",
+      "claim": "([1, 2] || [1, 'a'])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0030",
+      "area": "generated",
+      "claim": "((3 || 'abc')[(-1 is list)] <= -2.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0031",
+      "area": "generated",
+      "claim": "(((['a', 'b'].seconds() < ['a', 'b'].distance('A b')) - ((9223372036854775807 || 'A b') is string)) < resource)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0032",
+      "area": "generated",
+      "claim": "((float('a').date() - ({'a': 'b', 'c': 2}[-2.5] && (null && 0))) is float)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0033",
+      "area": "generated",
+      "claim": "(string(resource).intersection(2.removeAll(request.auth)) is float)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0034",
+      "area": "generated",
+      "claim": "((['a', 'b'].toMillis() || ('' is set))[((null && [1, 2]) - float(''))] > 'A b')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0035",
+      "area": "generated",
+      "claim": "(resource.hasAll(9223372036854775807).time() || (9223372036854775807 is latlng)[string(request.auth)])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0036",
+      "area": "generated",
+      "claim": "(bool(bytes((false is map))) != ['a', 'b'])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0037",
+      "area": "generated",
+      "claim": "(int(request.auth.union('abc')) in ([1, 2][0.0] in (9223372036854775807 is latlng)))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0038",
+      "area": "generated",
+      "claim": "(({}.values() is duration) is float)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0039",
+      "area": "generated",
+      "claim": "(bool(request.auth)[{'a': 1}.upper()] == 9223372036854775807)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0040",
+      "area": "generated",
+      "claim": "(((null in ['a', 'b']) && ({} is set)).toSet() < [1, 2])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0041",
+      "area": "generated",
+      "claim": "(true && 'A b')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0042",
+      "area": "generated",
+      "claim": "((request.time + {}) <= request.time.toMillis())",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0043",
+      "area": "generated",
+      "claim": "(-1.hasAll(9223372036854775807) == (null in -1))",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0044",
+      "area": "generated",
+      "claim": "(-1 in -1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0045",
+      "area": "generated",
+      "claim": "(((null || []) && ['a', 'b'].difference(9223372036854775807)).intersection((-2.5 is latlng).intersection({}.date())) == false)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0046",
+      "area": "generated",
+      "claim": "(bytes((([] * 3) in (['a', 'b'] is path))) is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0047",
+      "area": "generated",
+      "claim": "(-1 in 3)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0048",
+      "area": "generated",
+      "claim": "(0.removeAll([1, 'a']).hasAny((-1 is bool)) < 1.5)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0049",
+      "area": "generated",
+      "claim": "(int((null && 1.5)) != true)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0050",
+      "area": "generated",
+      "claim": "(string(bytes(['a', 'b'].removeAll(3))) > 'abc')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0051",
+      "area": "generated",
+      "claim": "(bytes(9223372036854775807).toUtf8() is bool)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0052",
+      "area": "generated",
+      "claim": "(2 && {})",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0053",
+      "area": "generated",
+      "claim": "({'a': 'b', 'c': 2} in request.time)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0054",
+      "area": "generated",
+      "claim": "(path(resource.join('abc')) != 2)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0055",
+      "area": "generated",
+      "claim": "(null || 'a')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0056",
+      "area": "generated",
+      "claim": "((('' >= 0.0) is int).hasAll(((-2.5 - 'a') || {}.toMillis())) > null)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0057",
+      "area": "generated",
+      "claim": "(float({}) > -2.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0058",
+      "area": "generated",
+      "claim": "({'a': 'b', 'c': 2} && 'abc')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0059",
+      "area": "generated",
+      "claim": "(bool([]) is bytes)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0060",
+      "area": "generated",
+      "claim": "(true.values() is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0061",
+      "area": "generated",
+      "claim": "(int(['a', 'b']).keys() is latlng)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0062",
+      "area": "generated",
+      "claim": "((resource >= 0.0) is number)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0063",
+      "area": "generated",
+      "claim": "(({'a': 'b', 'c': 2} + -1) < resource)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0064",
+      "area": "generated",
+      "claim": "(request.auth || resource)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0065",
+      "area": "generated",
+      "claim": "(([1, 'a'].year() >= ({'a': 'b', 'c': 2} in 'abc')) && (string('abc') + (9223372036854775807 / -1)))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0066",
+      "area": "generated",
+      "claim": "((null is path) in float(-1))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0067",
+      "area": "generated",
+      "claim": "(int((path('a') != ('A b' - 'A b'))) >= ['a', 'b'])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0068",
+      "area": "generated",
+      "claim": "(request.auth.latitude()[([] && false)] is bool)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0069",
+      "area": "generated",
+      "claim": "(-1.join('A b') is latlng)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0070",
+      "area": "generated",
+      "claim": "((('abc' <= request.time) || (-2.5 in 'a')).year() is bytes)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0071",
+      "area": "generated",
+      "claim": "(true || {'a': 1})",
+      "oracle": "true"
+    },
+    {
+      "id": "gen-0072",
+      "area": "generated",
+      "claim": "((-2.5 || false).difference((3 < -1)) is number)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0073",
+      "area": "generated",
+      "claim": "({} in {'a': 1})",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0074",
+      "area": "generated",
+      "claim": "(request.time.toUtf8() < null)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0075",
+      "area": "generated",
+      "claim": "(((0 is int) + (0.0 * request.path)) < 9223372036854775807)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0076",
+      "area": "generated",
+      "claim": "('A b' in {})",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0077",
+      "area": "generated",
+      "claim": "(('a' is duration)[request.path[0]] is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0078",
+      "area": "generated",
+      "claim": "(2.join('abc').size().toBase64() is set)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0079",
+      "area": "generated",
+      "claim": "([1, 'a'].hasAll(resource) <= 0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0080",
+      "area": "generated",
+      "claim": "(bool('A b') is list)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0081",
+      "area": "generated",
+      "claim": "(((9223372036854775807 / 'abc') / ([] && {'a': 1})) && (0.matches([1, 'a']) is number))",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0082",
+      "area": "generated",
+      "claim": "([].upper() is number)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0083",
+      "area": "generated",
+      "claim": "('A b' && 0.0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0084",
+      "area": "generated",
+      "claim": "(({} || {'a': 1}).distance(['a', 'b'].concat(request.path)) is float)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0085",
+      "area": "generated",
+      "claim": "(path(1.5) > -1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0086",
+      "area": "generated",
+      "claim": "((1 + false).day() <= {})",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0087",
+      "area": "generated",
+      "claim": "(((-1 in request.auth) in (resource is string)) in ((null * -1) < ['a', 'b'][null]))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0088",
+      "area": "generated",
+      "claim": "((1.5 in 0.0) < ('abc' || -2.5))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0089",
+      "area": "generated",
+      "claim": "(path((-1 * null)) is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0090",
+      "area": "generated",
+      "claim": "(0 && '')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0091",
+      "area": "generated",
+      "claim": "((true || ['a', 'b']) in 'a'.intersection(9223372036854775807))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0092",
+      "area": "generated",
+      "claim": "(int({}) == (3 is list))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0093",
+      "area": "generated",
+      "claim": "((request.auth || [1, 2]).keys() is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0094",
+      "area": "generated",
+      "claim": "((('a' < -2.5) is map) > (null.split(1.5) is float))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0095",
+      "area": "generated",
+      "claim": "(([1, 'a'] || resource) <= -2.5.toBase64())",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0096",
+      "area": "generated",
+      "claim": "(float(true) != [1, 'a'])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0097",
+      "area": "generated",
+      "claim": "((null && -2.5) is int)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0098",
+      "area": "generated",
+      "claim": "((null == {'a': 'b', 'c': 2}).join([1, 'a'].removeAll([1, 2])).matches(((true || null) is duration)) is number)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0099",
+      "area": "generated",
+      "claim": "('' && false)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0100",
+      "area": "generated",
+      "claim": "(([].year() > bytes('a')) < (({'a': 1} || 'a') is string))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0101",
+      "area": "generated",
+      "claim": "(3.union(['a', 'b']) is int)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0102",
+      "area": "generated",
+      "claim": "(resource || 3)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0103",
+      "area": "generated",
+      "claim": "(bool([1, 'a']) < 1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0104",
+      "area": "generated",
+      "claim": "((resource > 2).upper().day() < null)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0105",
+      "area": "generated",
+      "claim": "(((-2.5 in request.time) - resource.lower()) is float)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0106",
+      "area": "generated",
+      "claim": "((request.path % '').concat(false.toHexString()) is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0107",
+      "area": "generated",
+      "claim": "('abc' == 0.0)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0108",
+      "area": "generated",
+      "claim": "(([] in null) in ([] <= {'a': 'b', 'c': 2}))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0109",
+      "area": "generated",
+      "claim": "({'a': 1}[{}] is set)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0110",
+      "area": "generated",
+      "claim": "(float(2.concat(false)) >= ((1 >= ['a', 'b']) is int))",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0111",
+      "area": "generated",
+      "claim": "((3 && 'a').toBase64() == 9223372036854775807)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0112",
+      "area": "generated",
+      "claim": "(3.concat([1, 2]) <= null)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0113",
+      "area": "generated",
+      "claim": "(3 in -2.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0114",
+      "area": "generated",
+      "claim": "(path((request.time && '')) != request.time)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0115",
+      "area": "generated",
+      "claim": "({}[-2.5].toBase64() < 2)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0116",
+      "area": "generated",
+      "claim": "((true in ['a', 'b'])[({'a': 1} >= 3)].matches((false in request.auth).union(float(request.time))) != 1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0117",
+      "area": "generated",
+      "claim": "((1.5[request.time] >= ({'a': 'b', 'c': 2} && 0)).time() < 1.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0118",
+      "area": "generated",
+      "claim": "((null >= 3)[('abc' is set)] < request.auth)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0119",
+      "area": "generated",
+      "claim": "((0.0.nanos() != -2.5.concat(true)).values() is number)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0120",
+      "area": "generated",
+      "claim": "(3.latitude() is number)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0121",
+      "area": "generated",
+      "claim": "(int(1.5).matches((9223372036854775807 is path)).join((bytes({}) == (request.time in ['a', 'b']))) is list)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0122",
+      "area": "generated",
+      "claim": "((('a' is set) && {'a': 1}.nanos()) != 9223372036854775807.concat(resource).matches(([1, 2] in [])))",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0123",
+      "area": "generated",
+      "claim": "((['a', 'b'] + -2.5).size() is latlng)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0124",
+      "area": "generated",
+      "claim": "('abc' is duration)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0125",
+      "area": "generated",
+      "claim": "(request.auth.union(['a', 'b']) is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0126",
+      "area": "generated",
+      "claim": "(1.5 != ['a', 'b'])",
+      "oracle": "true"
+    },
+    {
+      "id": "gen-0127",
+      "area": "generated",
+      "claim": "(({}[null] - ('A b' / request.path)) || ''.removeAll(1)[9223372036854775807[request.path]])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0128",
+      "area": "generated",
+      "claim": "((true && 'a') || (3 is bytes))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0129",
+      "area": "generated",
+      "claim": "(-2.5.toHexString() && ({'a': 1} >= 'A b'))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0130",
+      "area": "generated",
+      "claim": "(((3 || {}) in ['a', 'b'][null]) in (request.auth < 9223372036854775807).hasAny((-1 is float)))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0131",
+      "area": "generated",
+      "claim": "(({'a': 'b', 'c': 2} <= 0).removeAll((request.path is bool)) is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0132",
+      "area": "generated",
+      "claim": "(true.hasOnly('abc') < 0.0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0133",
+      "area": "generated",
+      "claim": "((9223372036854775807 < {'a': 1}) && (-1 % {}))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0134",
+      "area": "generated",
+      "claim": "(int({}.toBase64()) is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0135",
+      "area": "generated",
+      "claim": "((([1, 'a'] >= []) in ([1, 'a'] || request.time)) is bytes)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0136",
+      "area": "generated",
+      "claim": "([] || {})",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0137",
+      "area": "generated",
+      "claim": "(({'a': 'b', 'c': 2}.removeAll(2) + ({'a': 'b', 'c': 2} is number)) && (true != request.path).values())",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0138",
+      "area": "generated",
+      "claim": "(float(1) is set)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0139",
+      "area": "generated",
+      "claim": "(((2 || 1) || [1, 2].distance([]))[(resource is bool).removeAll((true is map))] is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0140",
+      "area": "generated",
+      "claim": "(0.0 is float)",
+      "oracle": "true"
+    },
+    {
+      "id": "gen-0141",
+      "area": "generated",
+      "claim": "(true.difference('A b') is timestamp)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0142",
+      "area": "generated",
+      "claim": "((0.0 % 2) > 2)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0143",
+      "area": "generated",
+      "claim": "(int((([1, 'a'] || resource) && (3 is timestamp))) > true)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0144",
+      "area": "generated",
+      "claim": "(['a', 'b'].hasAll([]) >= 2.seconds())",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0145",
+      "area": "generated",
+      "claim": "((-2.5 >= 'a').hasAny((request.time && 3)) is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0146",
+      "area": "generated",
+      "claim": "(null.hasOnly({}).toSet() is set)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0147",
+      "area": "generated",
+      "claim": "({}.seconds().diff(([] / 1.5)) is latlng)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0148",
+      "area": "generated",
+      "claim": "(request.time[resource].hasOnly((3 && 3)) < (path(9223372036854775807) && (request.time is set)))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0149",
+      "area": "generated",
+      "claim": "((true && 3) || float(request.path))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0150",
+      "area": "generated",
+      "claim": "(''.hasOnly(0) is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0151",
+      "area": "generated",
+      "claim": "((1.5.join(3) < {'a': 1}['abc']) || bool(0.0).nanos())",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0152",
+      "area": "generated",
+      "claim": "([1, 2][request.path] is timestamp)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0153",
+      "area": "generated",
+      "claim": "((2 * 'abc') in (resource * 'a'))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0154",
+      "area": "generated",
+      "claim": "(float(('' != 'a').latitude()) < 'abc')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0155",
+      "area": "generated",
+      "claim": "((({'a': 1} + {'a': 'b', 'c': 2}) && -1.hasAll('a'))[(resource || null).join((false || false))] == '')",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0156",
+      "area": "generated",
+      "claim": "(([].diff(-2.5) && string(['a', 'b'])) == int((request.time + null)))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0157",
+      "area": "generated",
+      "claim": "((('' / request.auth) / (request.path <= 3)) == request.time)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0158",
+      "area": "generated",
+      "claim": "(path(([1, 'a'] * 0)) is bool)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0159",
+      "area": "generated",
+      "claim": "((({'a': 'b', 'c': 2} in true) is timestamp).difference(null.matches([]).date()) is path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0160",
+      "area": "generated",
+      "claim": "((request.path is path).join(path(2)) in bool(('a' && {})))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0161",
+      "area": "generated",
+      "claim": "({'a': 1} is map)",
+      "oracle": "true"
+    },
+    {
+      "id": "gen-0162",
+      "area": "generated",
+      "claim": "(((1.5 % 0) / (request.time is number)) > {'a': 'b', 'c': 2})",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0163",
+      "area": "generated",
+      "claim": "('abc' < 'a')",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0164",
+      "area": "generated",
+      "claim": "(bool('a') <= 0.0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0165",
+      "area": "generated",
+      "claim": "(int(((1 is number) is list)) is bool)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0166",
+      "area": "generated",
+      "claim": "((1.5.toBase64() is list).join(2.intersection([1, 'a']).hasOnly(request.auth.removeAll(9223372036854775807))) is float)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0167",
+      "area": "generated",
+      "claim": "(bytes(request.path) is path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0168",
+      "area": "generated",
+      "claim": "(0.0 != 'A b')",
+      "oracle": "true"
+    },
+    {
+      "id": "gen-0169",
+      "area": "generated",
+      "claim": "(((-1 || {})[0.hasOnly(null)] / ((false is path) && ({'a': 1} || 9223372036854775807))) < resource)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0170",
+      "area": "generated",
+      "claim": "(bytes((2 <= '')) < 2)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0171",
+      "area": "generated",
+      "claim": "(bytes([1, 2].union('')).size() <= 0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0172",
+      "area": "generated",
+      "claim": "((({'a': 1} is latlng) in (-2.5 == true)) || ((2 <= {}) is int))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0173",
+      "area": "generated",
+      "claim": "(int(('' / {'a': 'b', 'c': 2})) > 1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0174",
+      "area": "generated",
+      "claim": "((0.0 is list).toMillis() >= 9223372036854775807)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0175",
+      "area": "generated",
+      "claim": "([1, 'a'].year() is int)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0176",
+      "area": "generated",
+      "claim": "((float(request.auth) && (1 < [1, 2])) && ((request.auth + null) <= (-1 / 1.5)))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0177",
+      "area": "generated",
+      "claim": "(''.date() >= ([1, 2] && resource))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0178",
+      "area": "generated",
+      "claim": "((-2.5 <= [1, 'a']).hasOnly((0 && request.path)) >= 0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0179",
+      "area": "generated",
+      "claim": "({}.time() in ([1, 'a'] && null))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0180",
+      "area": "generated",
+      "claim": "((1.5 && [1, 'a']).latitude().diff((-1[request.path] % (9223372036854775807 < 0))) is path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0181",
+      "area": "generated",
+      "claim": "(int((request.auth / {'a': 1})) is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0182",
+      "area": "generated",
+      "claim": "(string({'a': 1}) > {})",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0183",
+      "area": "generated",
+      "claim": "((path(0) - ([1, 'a'] is float)).concat((0 in 'A b').seconds()) >= [1, 2])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0184",
+      "area": "generated",
+      "claim": "((({'a': 'b', 'c': 2} == {}) % (3 in request.auth)) is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0185",
+      "area": "generated",
+      "claim": "(string((2 is list)) is timestamp)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0186",
+      "area": "generated",
+      "claim": "((null.hasOnly('a') is float)[(false && [1, 'a']).difference(int(''))] is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0187",
+      "area": "generated",
+      "claim": "('a'.diff(null) is number)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0188",
+      "area": "generated",
+      "claim": "(request.time && 0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0189",
+      "area": "generated",
+      "claim": "((int('') + (true + request.path)) <= (('' is bytes) != string(request.auth)))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0190",
+      "area": "generated",
+      "claim": "(string('A b') is latlng)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0191",
+      "area": "generated",
+      "claim": "((({'a': 'b', 'c': 2} != []) || 'A b'.diff({'a': 1})) is string)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0192",
+      "area": "generated",
+      "claim": "(3 is bytes)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0193",
+      "area": "generated",
+      "claim": "(null.time() == 'abc')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0194",
+      "area": "generated",
+      "claim": "({'a': 1} == true)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0195",
+      "area": "generated",
+      "claim": "((['a', 'b'] is timestamp).hasAll(bytes([1, 'a']))[(-1.size() is string)] is list)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0196",
+      "area": "generated",
+      "claim": "((-1 - null).difference({'a': 'b', 'c': 2}.seconds()).join(({'a': 'b', 'c': 2} > ['a', 'b']).matches((false is int))) < request.auth)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0197",
+      "area": "generated",
+      "claim": "(int((1 || {'a': 'b', 'c': 2})) != (9223372036854775807[0] && true[['a', 'b']]))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0198",
+      "area": "generated",
+      "claim": "(int({'a': 'b', 'c': 2}) >= 0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0199",
+      "area": "generated",
+      "claim": "((-2.5 * [1, 'a']) != -1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0200",
+      "area": "generated",
+      "claim": "(request.auth.lower() is list)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0201",
+      "area": "generated",
+      "claim": "(['a', 'b'] || request.time)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0202",
+      "area": "generated",
+      "claim": "(({'a': 'b', 'c': 2} * 9223372036854775807) is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0203",
+      "area": "generated",
+      "claim": "((2 + 'abc') is string)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0204",
+      "area": "generated",
+      "claim": "('abc' || 'a')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0205",
+      "area": "generated",
+      "claim": "((('' / request.time) >= (true in true)) != 'a'[1.5][[][0.0]])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0206",
+      "area": "generated",
+      "claim": "(0.0.year() is list)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0207",
+      "area": "generated",
+      "claim": "(((3 - '') <= ([1, 'a'] >= request.auth)) == 3['abc'][int([1, 'a'])])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0208",
+      "area": "generated",
+      "claim": "(2.upper() is timestamp)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0209",
+      "area": "generated",
+      "claim": "(3 is float)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0210",
+      "area": "generated",
+      "claim": "(1 || 1.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0211",
+      "area": "generated",
+      "claim": "(false is int)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0212",
+      "area": "generated",
+      "claim": "(bytes(-2.5) is path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0213",
+      "area": "generated",
+      "claim": "('A b'.hasAll(request.time) > 1.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0214",
+      "area": "generated",
+      "claim": "(1.5.toMillis() is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0215",
+      "area": "generated",
+      "claim": "(((9223372036854775807 - -2.5) == ({'a': 'b', 'c': 2} + false)) || (({'a': 1} is timestamp) is number))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0216",
+      "area": "generated",
+      "claim": "(int(((9223372036854775807 && {'a': 'b', 'c': 2}) || float(''))) is latlng)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0217",
+      "area": "generated",
+      "claim": "(('A b' == 'a').hasAll(path({'a': 1})) is map)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0218",
+      "area": "generated",
+      "claim": "((resource / []) <= (resource is latlng))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0219",
+      "area": "generated",
+      "claim": "(bool((9223372036854775807.difference({'a': 'b', 'c': 2}) in (-1 >= request.auth))) < -1)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0220",
+      "area": "generated",
+      "claim": "(({} is path).toBase64().concat(float(('' % ['a', 'b']))) > null)",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0221",
+      "area": "generated",
+      "claim": "(({} / -2.5) && 'abc'.time())",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0222",
+      "area": "generated",
+      "claim": "((true.split('a') is number).split(({}.year() is path)) == false)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0223",
+      "area": "generated",
+      "claim": "(-1 || 9223372036854775807)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0224",
+      "area": "generated",
+      "claim": "(float((9223372036854775807 || 'abc')).values() < [1, 'a'])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0225",
+      "area": "generated",
+      "claim": "({'a': 1}.seconds() > resource)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0226",
+      "area": "generated",
+      "claim": "('A b' in [])",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0227",
+      "area": "generated",
+      "claim": "(float({'a': 1}.values()).latitude() is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0228",
+      "area": "generated",
+      "claim": "(({'a': 'b', 'c': 2} is int).toSet() > 'abc')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0229",
+      "area": "generated",
+      "claim": "(path(3) is list)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0230",
+      "area": "generated",
+      "claim": "(path({'a': 'b', 'c': 2}.year()) is latlng)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0231",
+      "area": "generated",
+      "claim": "((2[1] || (request.path > 0)) is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0232",
+      "area": "generated",
+      "claim": "((('abc' is map) < (1 / 0)).seconds() <= [1, 'a'])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0233",
+      "area": "generated",
+      "claim": "(3 == -1)",
+      "oracle": "false"
+    },
+    {
+      "id": "gen-0234",
+      "area": "generated",
+      "claim": "((bytes({}) is latlng) && (request.auth is list).toUtf8())",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0235",
+      "area": "generated",
+      "claim": "((({}[true] || path('a')) % (bool('A b') < (0.0 * 'a'))) is timestamp)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0236",
+      "area": "generated",
+      "claim": "(1.5.split(2) >= 0)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0237",
+      "area": "generated",
+      "claim": "(true.intersection(false) is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0238",
+      "area": "generated",
+      "claim": "(((-1 <= {}) * (request.path in 0)) >= 1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0239",
+      "area": "generated",
+      "claim": "(0 in null)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0240",
+      "area": "generated",
+      "claim": "([1, 2].concat(['a', 'b']) >= 1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0241",
+      "area": "generated",
+      "claim": "(-2.5.distance(3).latitude() is path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0242",
+      "area": "generated",
+      "claim": "(null.diff('A b') >= [])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0243",
+      "area": "generated",
+      "claim": "(float(1) == (false - {'a': 'b', 'c': 2}))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0244",
+      "area": "generated",
+      "claim": "([1, 'a'] && 'A b')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0245",
+      "area": "generated",
+      "claim": "(0 && request.auth)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0246",
+      "area": "generated",
+      "claim": "(true.diff([1, 'a']) < [])",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0247",
+      "area": "generated",
+      "claim": "(1 && '')",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0248",
+      "area": "generated",
+      "claim": "((((3 && 1.5) in 1.5['']) * ((request.path is bytes) is float)) <= -2.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0249",
+      "area": "generated",
+      "claim": "(-2.5.keys() is path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0250",
+      "area": "generated",
+      "claim": "(0.0.trim() is path)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0251",
+      "area": "generated",
+      "claim": "((((request.path is bytes) && (9223372036854775807 * ['a', 'b'])) * ((request.path / {}) && (0 in 0.0))) >= 1)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0252",
+      "area": "generated",
+      "claim": "(1.upper() || ({'a': 'b', 'c': 2} || {'a': 'b', 'c': 2}))",
+      "oracle": "compile-error"
+    },
+    {
+      "id": "gen-0253",
+      "area": "generated",
+      "claim": "(''[0] < -2.5)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0254",
+      "area": "generated",
+      "claim": "((null >= 'abc') && int(1.5))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0255",
+      "area": "generated",
+      "claim": "((-2.5.distance(false) || (true is map)).toUtf8() < true)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0256",
+      "area": "generated",
+      "claim": "(['a', 'b'].values().trim() is duration)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0257",
+      "area": "generated",
+      "claim": "(bytes(bool(1.5)) in 'a'.difference([]).union({}[request.time]))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0258",
+      "area": "generated",
+      "claim": "((-2.5 in {}) != (1.5 > true))",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0259",
+      "area": "generated",
+      "claim": "(int({}[request.path]) is list)",
+      "oracle": "error"
+    },
+    {
+      "id": "gen-0260",
+      "area": "generated",
+      "claim": "(resource > 'A b')",
+      "oracle": "error"
+    }
+  ],
+  "diagnostics": [
+    {
+      "id": "type_is-011",
+      "severity": "ERROR",
+      "description": "mismatched input 'null' expecting IDENTIFIER"
+    },
+    {
+      "id": "type_is-024",
+      "severity": "ERROR",
+      "description": "An unsupported type identifier was used with the 'is' operator. Received bogus. Expected one of bool,bytes,constraint,duration,float,int,latlng,list,vector,set,number,map,string,timestamp,path,map_diff"
+    },
+    {
+      "id": "comparison-014",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "comparison-014",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "comparison-015",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "comparison-015",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "comparison-016",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "comparison-016",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "comparison-030",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "comparison-030",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "arithmetic-014",
+      "severity": "WARNING",
+      "description": "Invalid function name: math.isInfinite."
+    },
+    {
+      "id": "arithmetic-014",
+      "severity": "WARNING",
+      "description": "Invalid function name: math.isInfinite."
+    },
+    {
+      "id": "arithmetic-022",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "arithmetic-022",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "arithmetic-023",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "arithmetic-023",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "string-034",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "string-034",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "string-037",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "string-037",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "string-038",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "string-038",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "regex-010",
+      "severity": "ERROR",
+      "description": "Invalid regular expression pattern. Pattern: a(?=b)c."
+    },
+    {
+      "id": "regex-011",
+      "severity": "ERROR",
+      "description": "Invalid regular expression pattern. Pattern: (a)\\1."
+    },
+    {
+      "id": "regex-013",
+      "severity": "ERROR",
+      "description": "Invalid regular expression pattern. Pattern: [."
+    },
+    {
+      "id": "set-012",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [set]."
+    },
+    {
+      "id": "set-012",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [set]."
+    },
+    {
+      "id": "set-013",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [set]. Expected one of [list]."
+    },
+    {
+      "id": "set-013",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [set]. Expected one of [list]."
+    },
+    {
+      "id": "math-012",
+      "severity": "WARNING",
+      "description": "Invalid function name: math.isInfinite."
+    },
+    {
+      "id": "math-012",
+      "severity": "WARNING",
+      "description": "Invalid function name: math.isInfinite."
+    },
+    {
+      "id": "path-001",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [string, bytes, list, set, map]."
+    },
+    {
+      "id": "path-001",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [string, bytes, list, set, map]."
+    },
+    {
+      "id": "path-003",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [string, bytes, list, set, map]."
+    },
+    {
+      "id": "path-003",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [string, bytes, list, set, map]."
+    },
+    {
+      "id": "path-009",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "path-009",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "path-011",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "path-011",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "nullness-003",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [map]."
+    },
+    {
+      "id": "nullness-003",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [map]."
+    },
+    {
+      "id": "nullness-005",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-005",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-006",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-006",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-007",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-007",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-008",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-008",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-009",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-009",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-010",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-010",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-011",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "nullness-011",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "operators-010",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "operators-010",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "operators-013",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float, duration]."
+    },
+    {
+      "id": "operators-013",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float, duration]."
+    },
+    {
+      "id": "operators-014",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "operators-014",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "detail-045",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float, null, string, bool, path]."
+    },
+    {
+      "id": "detail-045",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float, null, string, bool, path]."
+    },
+    {
+      "id": "detail-046",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, null, string, bool, path]."
+    },
+    {
+      "id": "detail-046",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, null, string, bool, path]."
+    },
+    {
+      "id": "detail-068",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "detail-068",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [path]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0007",
+      "severity": "ERROR",
+      "description": "Unexpected 'hasAny'."
+    },
+    {
+      "id": "gen-0008",
+      "severity": "ERROR",
+      "description": "Unexpected 'match'."
+    },
+    {
+      "id": "gen-0019",
+      "severity": "ERROR",
+      "description": "Unexpected 'difference'."
+    },
+    {
+      "id": "gen-0033",
+      "severity": "ERROR",
+      "description": "Unexpected 'removeAll'."
+    },
+    {
+      "id": "gen-0043",
+      "severity": "ERROR",
+      "description": "Unexpected 'hasAll'."
+    },
+    {
+      "id": "gen-0048",
+      "severity": "ERROR",
+      "description": "Unexpected 'removeAll'."
+    },
+    {
+      "id": "gen-0001",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0001",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0003",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0003",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0005",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0005",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0006",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0006",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0009",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0009",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0010",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0010",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0011",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0011",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0012",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0012",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0013",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0013",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0016",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0016",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0017",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0017",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0018",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0018",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0020",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0020",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0021",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [duration]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0021",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [duration]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0022",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0022",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0023",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0023",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0024",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0024",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0025",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0025",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0026",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0026",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0027",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0027",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0029",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0029",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0030",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0030",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0031",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0031",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0032",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0032",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0034",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0034",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0035",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0035",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0036",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0036",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0037",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [set]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0037",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [set]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0039",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0039",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0040",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0040",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0041",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0041",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0042",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0042",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0044",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0044",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0045",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0045",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0046",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0046",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0047",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0047",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0049",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0049",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0050",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0050",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0051",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0051",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0052",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0052",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0054",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0054",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0055",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0055",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0056",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0056",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0057",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0057",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0058",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0058",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0059",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0059",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0060",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0060",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0069",
+      "severity": "ERROR",
+      "description": "Unexpected 'join'."
+    },
+    {
+      "id": "gen-0078",
+      "severity": "ERROR",
+      "description": "Unexpected 'join'."
+    },
+    {
+      "id": "gen-0081",
+      "severity": "ERROR",
+      "description": "Forward slash '/' found where identifier or binding expected."
+    },
+    {
+      "id": "gen-0082",
+      "severity": "ERROR",
+      "description": "Unexpected 'match'."
+    },
+    {
+      "id": "gen-0101",
+      "severity": "ERROR",
+      "description": "Unexpected 'union'."
+    },
+    {
+      "id": "gen-0110",
+      "severity": "ERROR",
+      "description": "Unexpected 'concat'."
+    },
+    {
+      "id": "gen-0112",
+      "severity": "ERROR",
+      "description": "Unexpected 'concat'."
+    },
+    {
+      "id": "gen-0120",
+      "severity": "ERROR",
+      "description": "Unexpected 'latitude'."
+    },
+    {
+      "id": "gen-0061",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0061",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0063",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0063",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0065",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0065",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0066",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0066",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0067",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0067",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0068",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0068",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0070",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0070",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0071",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0071",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0072",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0072",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0075",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0075",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0077",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0077",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0080",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0080",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0083",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0083",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0084",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0084",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0085",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0085",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0086",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0086",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0087",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0087",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0088",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0088",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0089",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0089",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0090",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0090",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0091",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0091",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0092",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0092",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0093",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0093",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0094",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0094",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0095",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0095",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0096",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0096",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0097",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0097",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0098",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0098",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0099",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0099",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0100",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0100",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0102",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0102",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0103",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0103",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0104",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0104",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0105",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0105",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0106",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0106",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0107",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "gen-0107",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "gen-0108",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0108",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0109",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, string]."
+    },
+    {
+      "id": "gen-0109",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, string]."
+    },
+    {
+      "id": "gen-0111",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0111",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0113",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0113",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0114",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0114",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0116",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0116",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0117",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0117",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0118",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0118",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string, list, map, path]."
+    },
+    {
+      "id": "gen-0119",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0119",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0122",
+      "severity": "ERROR",
+      "description": "Unexpected '.'."
+    },
+    {
+      "id": "gen-0123",
+      "severity": "ERROR",
+      "description": "Unexpected 'match'."
+    },
+    {
+      "id": "gen-0144",
+      "severity": "ERROR",
+      "description": "Unexpected 'seconds'."
+    },
+    {
+      "id": "gen-0155",
+      "severity": "ERROR",
+      "description": "Unexpected '+'."
+    },
+    {
+      "id": "gen-0166",
+      "severity": "ERROR",
+      "description": "Unexpected 'intersection'."
+    },
+    {
+      "id": "gen-0169",
+      "severity": "ERROR",
+      "description": "Unexpected ')'."
+    },
+    {
+      "id": "gen-0121",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0121",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0125",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0125",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0126",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0126",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0127",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [int, string]."
+    },
+    {
+      "id": "gen-0127",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [int, string]."
+    },
+    {
+      "id": "gen-0128",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0128",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0129",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0129",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0130",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0130",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0131",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0131",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0132",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0132",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0133",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0133",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0134",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0134",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [bytes]."
+    },
+    {
+      "id": "gen-0135",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0135",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0136",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0136",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0137",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0137",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0139",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0139",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0141",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0141",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0143",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0143",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0145",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0145",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0146",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0146",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0147",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0147",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0148",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0148",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0149",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0149",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0150",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0150",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0151",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0151",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0153",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0153",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0154",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0154",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0156",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map_diff]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0156",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map_diff]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0157",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0157",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0158",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0158",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0159",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0159",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0160",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0160",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0162",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0162",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0164",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0164",
+      "severity": "WARNING",
+      "description": "Invalid function name: bool."
+    },
+    {
+      "id": "gen-0165",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0165",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0167",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0167",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0168",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0168",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0170",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0170",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0171",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0171",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0172",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0172",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0173",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0173",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0174",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0174",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0175",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0175",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0176",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0176",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0177",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0177",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0178",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0178",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0179",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0179",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0180",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0180",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0195",
+      "severity": "ERROR",
+      "description": "Unexpected 'size'."
+    },
+    {
+      "id": "gen-0208",
+      "severity": "ERROR",
+      "description": "Unexpected 'upper'."
+    },
+    {
+      "id": "gen-0219",
+      "severity": "ERROR",
+      "description": "Unexpected 'difference'."
+    },
+    {
+      "id": "gen-0220",
+      "severity": "ERROR",
+      "description": "Unexpected 'match'."
+    },
+    {
+      "id": "gen-0181",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0181",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0182",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, null, string, bool, path]."
+    },
+    {
+      "id": "gen-0182",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, null, string, bool, path]."
+    },
+    {
+      "id": "gen-0183",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0183",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0184",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0184",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0186",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0186",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0187",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0187",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0188",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0188",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0189",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0189",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0191",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0191",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return true."
+    },
+    {
+      "id": "gen-0193",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0193",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0194",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "gen-0194",
+      "severity": "WARNING",
+      "description": "The sub-expressions are not comparable, so this comparison will always return false."
+    },
+    {
+      "id": "gen-0196",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0196",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0197",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0197",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0198",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0198",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string]."
+    },
+    {
+      "id": "gen-0199",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0199",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0201",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0201",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0202",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0202",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0204",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0204",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0205",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0205",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0206",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0206",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0207",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0207",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0210",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0210",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0212",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0212",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0213",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0213",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [string]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0214",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0214",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [timestamp]."
+    },
+    {
+      "id": "gen-0215",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0215",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [int, float, string, duration, timestamp]."
+    },
+    {
+      "id": "gen-0216",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0216",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0217",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0217",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list, set]."
+    },
+    {
+      "id": "gen-0218",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0218",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0221",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0221",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0222",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0222",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0223",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0223",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int, float, duration]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0224",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0224",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0225",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0225",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [map]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0227",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0227",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0228",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0228",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [list]."
+    },
+    {
+      "id": "gen-0229",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0229",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0230",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0230",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0231",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [list, map, path]."
+    },
+    {
+      "id": "gen-0231",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [list, map, path]."
+    },
+    {
+      "id": "gen-0232",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0232",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [duration, timestamp]."
+    },
+    {
+      "id": "gen-0234",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0234",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0235",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, string]."
+    },
+    {
+      "id": "gen-0235",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, string]."
+    },
+    {
+      "id": "gen-0236",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0236",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0237",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0237",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [set]."
+    },
+    {
+      "id": "gen-0238",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0238",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0239",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0239",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [list, set, map, constraint]."
+    },
+    {
+      "id": "gen-0252",
+      "severity": "ERROR",
+      "description": "Unexpected 'upper'."
+    },
+    {
+      "id": "gen-0241",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0241",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0242",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0242",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [null]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0243",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0243",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float, duration, timestamp]."
+    },
+    {
+      "id": "gen-0244",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0244",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0245",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0245",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0246",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0246",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [map]."
+    },
+    {
+      "id": "gen-0247",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0247",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0248",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0248",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0249",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float, duration]."
+    },
+    {
+      "id": "gen-0249",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [int, float, duration]."
+    },
+    {
+      "id": "gen-0250",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0250",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0251",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0251",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [bool]. Expected one of [int, float]."
+    },
+    {
+      "id": "gen-0254",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0254",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [int]. Expected one of [bool]."
+    },
+    {
+      "id": "gen-0255",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0255",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [float]. Expected one of [latlng]."
+    },
+    {
+      "id": "gen-0256",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0256",
+      "severity": "WARNING",
+      "description": "Invalid type. Received one of [list]. Expected one of [string]."
+    },
+    {
+      "id": "gen-0257",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    },
+    {
+      "id": "gen-0257",
+      "severity": "WARNING",
+      "description": "Invalid function name: bytes."
+    }
+  ]
+}

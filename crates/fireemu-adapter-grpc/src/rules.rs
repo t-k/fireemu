@@ -339,6 +339,15 @@ pub fn check_audience(principal: &Principal, project: &str) -> Result<(), Status
     }
 }
 
+/// Why replacing a ruleset failed.
+#[derive(Debug)]
+pub enum RulesLoadError {
+    /// The source does not compile; the position is the compiler's.
+    Compile(fireemu_core_rules::parse::ParseError),
+    /// The rules lock is poisoned.
+    Poisoned,
+}
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RwLock<LoadedRules>>,
@@ -390,6 +399,17 @@ impl RulesEnforcer {
             .lock()
             .map(|c| c.now())
             .map_err(|_| Status::internal("clock lock poisoned"))
+    }
+
+    /// Replaces the loaded ruleset, as `PUT /emulator/v1/projects/{p}:securityRules` and the
+    /// control API's `PUT /v1/rules` both do. The swap is atomic: a source that does not
+    /// compile leaves the previous ruleset in force, so a failed load never opens a session
+    /// up.
+    pub fn replace_source(&self, source: &str) -> Result<(), RulesLoadError> {
+        let loaded = LoadedRules::from_source(source).map_err(RulesLoadError::Compile)?;
+        let mut slot = self.rules.write().map_err(|_| RulesLoadError::Poisoned)?;
+        *slot = loaded;
+        Ok(())
     }
 
     /// Whether a ruleset is loaded (poisoned state is an error, never "no rules").

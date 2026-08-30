@@ -659,6 +659,44 @@ impl AppCheckRegistry {
         }
     }
 
+    /// Copies the dynamic debug-token registrations of every project `accept` admits
+    /// (section 14). Static registrations are configuration and are never captured.
+    #[must_use]
+    pub fn capture_dynamic_debug_tokens<A: Fn(&str) -> bool>(
+        &self,
+        accept: A,
+    ) -> DynamicDebugTokens {
+        DynamicDebugTokens {
+            apps: self
+                .apps
+                .iter()
+                .filter(|((project, _), _)| accept(project))
+                .map(|((project, app_id), app)| {
+                    (
+                        (project.clone(), app_id.clone()),
+                        app.dynamic.iter().map(Clone::clone).collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// Puts a captured set of dynamic debug tokens back, replacing rather than merging: a
+    /// registration created after the snapshot disappears and one deleted after it returns
+    /// (section 14). Apps the snapshot did not cover keep what they have.
+    pub fn restore_dynamic_debug_tokens<A: Fn(&str) -> bool>(
+        &mut self,
+        accept: A,
+        captured: &DynamicDebugTokens,
+    ) {
+        for (key, app) in &mut self.apps {
+            if !accept(&key.0) {
+                continue;
+            }
+            app.dynamic = captured.apps.get(key).cloned().unwrap_or_default();
+        }
+    }
+
     /// Records one secret-free observation, dropping the oldest beyond the retained bound.
     pub fn record_observation(&self, observation: Observation) {
         let Ok(mut log) = self.observations.lock() else {
@@ -677,5 +715,45 @@ impl AppCheckRegistry {
             .lock()
             .map(|log| log.iter().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Drops the retained observations of the projects `accept` admits: counters reset with
+    /// project state (section 14).
+    pub fn clear_observations<A: Fn(&str) -> bool>(&self, accept: A) {
+        if let Ok(mut log) = self.observations.lock() {
+            log.retain(|o| !accept(&o.project_id));
+        }
+    }
+}
+
+/// The dynamic debug-token registrations of one scope, as a snapshot part (section 14).
+///
+/// This is sensitive process memory: it carries digests, so `Debug` shows only how much it
+/// holds. It is never serialized to disk.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct DynamicDebugTokens {
+    apps: BTreeMap<(String, String), Vec<DebugTokenRecord>>,
+}
+
+impl DynamicDebugTokens {
+    /// How many apps the capture covers.
+    #[must_use]
+    pub fn app_count(&self) -> usize {
+        self.apps.len()
+    }
+
+    /// How many dynamic registrations the capture holds.
+    #[must_use]
+    pub fn token_count(&self) -> usize {
+        self.apps.values().map(Vec::len).sum()
+    }
+}
+
+impl fmt::Debug for DynamicDebugTokens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DynamicDebugTokens")
+            .field("apps", &self.apps.len())
+            .field("tokens", &self.token_count())
+            .finish()
     }
 }

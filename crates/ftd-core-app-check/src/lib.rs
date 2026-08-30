@@ -18,6 +18,7 @@
 //! Milestone AC0 delivers `APPCHECK-CORE-1`, `APPCHECK-DEBUG-EXCHANGE-1` and
 //! `APPCHECK-JWKS-1`. No Firebase product enforces App Check yet.
 
+pub mod admission;
 pub mod claims;
 pub mod crypto;
 pub mod exchange;
@@ -28,14 +29,15 @@ pub mod observe;
 pub mod registry;
 pub mod verify;
 
+pub use admission::{AdmissionRequest, AppCheckGate, PrivilegedBypass, ServiceAdmission};
 pub use claims::AppCheckClaims;
 pub use crypto::{AppCheckSigner, ConstantTimeEq, DebugTokenHasher};
 pub use exchange::{canonical_debug_token, ExchangeOutcome, ExchangeRequest};
 pub use header::{classify_app_check_header, HeaderClassification, APP_CHECK_HEADER};
 pub use observe::{CredentialCategory, Observation};
 pub use registry::{
-    AppCheckRegistry, AppRegistration, DebugTokenDigest, DebugTokenRecord, ProjectEpoch,
-    RegisteredApp, RegistryError,
+    AppCheckRegistry, AppRegistration, DebugTokenDigest, DebugTokenRecord, DynamicDebugTokens,
+    ProjectEpoch, RegisteredApp, RegistryError,
 };
 pub use verify::{
     AdmissionDecision, AppCheckCredentialState, AppCheckFailure, AppIdentity, BaselineMode,

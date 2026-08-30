@@ -12,7 +12,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - **documented divergence** -- a difference that is intended and written down. These are listed
   for completeness; `check` does gate them, against the recorded fireemu value.
 
-## Debt (13)
+## Debt (9)
 
 ### `firestore/rules-decisions#anonymous-read-of-a-closed-document`
 
@@ -48,26 +48,6 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: \nfalse for 'create' @ L20, false for 'update' @ L20"}`
 - fireemu: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: create on conf_rules_closed/lite denied by Security Rules: no allow statement evaluated to true"}`
-
-### `auth/mfa-enrollment-eligibility#finalize-with-the-emulator-code`
-
-- oracle: `{"keys":["idToken","refreshToken"],"status":200}`
-- fireemu: `{"keys":["email","expiresIn","idToken","localId","mfaEnrollmentId","refreshToken"],"status":200}`
-
-### `auth/mfa-enrollment-eligibility#the-account-record-carries-the-factor`
-
-- oracle: `[{"displayName":"work phone","factorId":"phone","hasEnrollmentTime":true,"phoneNumber":"+15555550123","uidLength":28}]`
-- fireemu: `[{"displayName":"work phone","factorId":"phone","hasEnrollmentTime":true,"phoneNumber":"+15555550123","uidLength":24}]`
-
-### `auth/mfa-enrollment-eligibility#second-factor-sign-in-completes`
-
-- oracle: `{"keys":["idToken","refreshToken"],"secondFactor":"phone","status":200}`
-- fireemu: `{"keys":["email","expiresIn","idToken","localId","refreshToken"],"secondFactor":"phone","status":200}`
-
-### `auth/mfa-enrollment-eligibility#withdraw-the-factor`
-
-- oracle: `{"factorsLeft":0,"keys":["expiresIn","idToken","refreshToken"],"status":200}`
-- fireemu: `{"factorsLeft":0,"keys":["email","expiresIn","idToken","localId","refreshToken"],"status":200}`
 
 ### `storage/admin-upload-download-metadata#download-a-missing-object`
 

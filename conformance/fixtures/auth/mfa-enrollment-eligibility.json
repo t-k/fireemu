@@ -10,9 +10,9 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 7,
+    "parity": 11,
     "documented-divergence": 0,
-    "debt": 4,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
@@ -88,21 +88,10 @@
     },
     {
       "id": "finalize-with-the-emulator-code",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "keys": [
           "idToken",
-          "refreshToken"
-        ],
-        "status": 200
-      },
-      "testd": {
-        "keys": [
-          "email",
-          "expiresIn",
-          "idToken",
-          "localId",
-          "mfaEnrollmentId",
           "refreshToken"
         ],
         "status": 200
@@ -130,23 +119,14 @@
     },
     {
       "id": "the-account-record-carries-the-factor",
-      "status": "debt",
-      "oracle": [
+      "status": "parity",
+      "value": [
         {
           "displayName": "work phone",
           "factorId": "phone",
           "hasEnrollmentTime": true,
           "phoneNumber": "+15555550123",
           "uidLength": 28
-        }
-      ],
-      "testd": [
-        {
-          "displayName": "work phone",
-          "factorId": "phone",
-          "hasEnrollmentTime": true,
-          "phoneNumber": "+15555550123",
-          "uidLength": 24
         }
       ]
     },
@@ -199,21 +179,10 @@
     },
     {
       "id": "second-factor-sign-in-completes",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "keys": [
           "idToken",
-          "refreshToken"
-        ],
-        "secondFactor": "phone",
-        "status": 200
-      },
-      "testd": {
-        "keys": [
-          "email",
-          "expiresIn",
-          "idToken",
-          "localId",
           "refreshToken"
         ],
         "secondFactor": "phone",
@@ -222,23 +191,12 @@
     },
     {
       "id": "withdraw-the-factor",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "factorsLeft": 0,
         "keys": [
           "expiresIn",
           "idToken",
-          "refreshToken"
-        ],
-        "status": 200
-      },
-      "testd": {
-        "factorsLeft": 0,
-        "keys": [
-          "email",
-          "expiresIn",
-          "idToken",
-          "localId",
           "refreshToken"
         ],
         "status": 200

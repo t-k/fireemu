@@ -274,6 +274,45 @@ enum UploadState {
     Aborted,
 }
 
+/// The app a resumable upload session was admitted for.
+///
+/// The store never verifies anything: the protocol layer decides admission and hands over the
+/// app identity plus the opaque session-binding value it was admitted under, and asks this type
+/// whether a later request belongs to the same session. The binding value is opaque here on
+/// purpose — it is an unpredictable credential-shaped value elsewhere, so `Debug` redacts it and
+/// the store neither parses nor logs it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct UploadAdmission {
+    app_id: String,
+    binding: String,
+}
+
+impl UploadAdmission {
+    /// The app the initiation was admitted for, and the binding value of that admission.
+    #[must_use]
+    pub fn new(app_id: impl Into<String>, binding: impl Into<String>) -> Self {
+        Self {
+            app_id: app_id.into(),
+            binding: binding.into(),
+        }
+    }
+
+    /// The admitted app identifier.
+    #[must_use]
+    pub fn app_id(&self) -> &str {
+        &self.app_id
+    }
+}
+
+impl fmt::Debug for UploadAdmission {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UploadAdmission")
+            .field("app_id", &self.app_id)
+            .field("binding", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct UploadSession {
     bucket: BucketName,
@@ -284,6 +323,9 @@ struct UploadSession {
     /// Credentials the session was started with (the protocol layer re-derives the caller
     /// from them at finalization).
     authorization: Option<String>,
+    /// The app the session was admitted for, when the initiation captured an enforced App
+    /// Check policy. Continuations and the finalization must match it.
+    admission: Option<UploadAdmission>,
     expected_md5: Option<[u8; 16]>,
     expected_crc32c: Option<u32>,
     received: Vec<u8>,
@@ -298,6 +340,8 @@ pub struct UploadOptions {
     pub total: Option<u64>,
     /// Credentials the session is started with (opaque to the store).
     pub authorization: Option<String>,
+    /// The app the initiation was admitted for, when its captured policy enforces App Check.
+    pub admission: Option<UploadAdmission>,
     /// MD5 the client declared for the whole object.
     pub expected_md5: Option<[u8; 16]>,
     /// CRC32C the client declared for the whole object.
@@ -319,6 +363,8 @@ pub struct PendingUpload<'a> {
     pub total: Option<u64>,
     /// Credentials the session was started with.
     pub authorization: Option<&'a str>,
+    /// The app the session was admitted for, when the initiation captured an enforced policy.
+    pub admission: Option<&'a UploadAdmission>,
 }
 
 /// Progress of a resumable upload after a chunk.
@@ -801,6 +847,7 @@ impl StorageState {
                 precondition,
                 total: options.total,
                 authorization: options.authorization,
+                admission: options.admission,
                 expected_md5: options.expected_md5,
                 expected_crc32c: options.expected_crc32c,
                 received: Vec::new(),
@@ -994,8 +1041,22 @@ impl StorageState {
                 bytes: &u.received,
                 total: u.total,
                 authorization: u.authorization.as_deref(),
+                admission: u.admission.as_ref(),
             }),
         }
+    }
+
+    /// The app a session was admitted for, whatever state the session is in.
+    ///
+    /// Unlike [`Self::pending_upload`] this answers for a committed or aborted session too, so
+    /// the protocol layer can refuse a foreign app before it learns anything else about the
+    /// session. `Ok(None)` means the session carries no App Check binding.
+    pub fn upload_admission(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<Option<&UploadAdmission>, StorageError> {
+        Ok(self.upload_mut(id, now)?.admission.as_ref())
     }
 
     /// Commits the received bytes as a new generation.

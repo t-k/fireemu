@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use ftd_core_app_check::header::classify_app_check_header;
+use ftd_core_app_check::verify::BaselineMode;
 use ftd_core_auth::jwt::verify_id_token_decoded;
 use ftd_core_rules::eval::{
     evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
@@ -26,7 +27,7 @@ use ftd_core_storage::hash::{crc32c, md5};
 use ftd_core_storage::name::{BucketName, ObjectName};
 use ftd_core_storage::store::{
     MetadataPatch, NewMetadata, ObjectMetadata, Precondition, StorageError, StorageEvent,
-    StorageState as ObjectStore, UploadId, UploadOptions,
+    StorageState as ObjectStore, UploadAdmission, UploadId, UploadOptions,
 };
 use ftd_core_types::determinism::Clock;
 use ftd_core_types::time::{LogicalDuration, LogicalInstant};
@@ -1200,23 +1201,63 @@ fn storage_bypass(
     }
 }
 
-/// The App Check denial of a Storage request, or `None` when it is admitted.
+/// What App Check admitted for one Storage request, as far as a resumable upload session cares
+/// (specification section 13.2).
+///
+/// A resumable upload outlives its initiating request, so the initiation records the app it was
+/// admitted for and every later request on that session has to present the same one. `None`
+/// everywhere means the session carries no binding: the service is `off` or `unenforced`, or the
+/// route authenticated a privileged credential instead of an App Check token.
+#[derive(Debug, Clone, Default)]
+pub struct AdmittedApp {
+    /// The verified app this request was admitted on, under an `enforced` policy.
+    binding: Option<UploadAdmission>,
+    /// The route authenticated a privileged credential of its own (section 12.2).
+    privileged: bool,
+}
+
+impl AdmittedApp {
+    /// The binding an upload initiated by this request must record.
+    fn binding(&self) -> Option<UploadAdmission> {
+        self.binding.clone()
+    }
+
+    /// Whether this request may act on a session bound to `expected`.
+    ///
+    /// A privileged route passes: the bypass matrix already grants it the whole Storage
+    /// surface. Anything else must be the same app under the same session epoch, so a token
+    /// from another app — and a token minted after a reset — is refused before the session is
+    /// read, advanced, finalized or cancelled.
+    fn may_continue(&self, expected: Option<&UploadAdmission>) -> bool {
+        match expected {
+            None => true,
+            Some(bound) => self.privileged || self.binding.as_ref() == Some(bound),
+        }
+    }
+}
+
+/// The App Check outcome of a Storage request: the denial to answer with, or what was admitted.
 ///
 /// This runs after the route, the target project and the privileged classification and before
 /// the fault plan, the Auth credential, Security Rules and every mutation, so a denied request
 /// creates no object generation, no metadata change, no upload session, no upload offset and
 /// no Storage event (`INV-APPCHECK-003`).
-fn app_check_denial(
+fn app_check_admission(
     state: &StorageState,
     app_check: &[String],
     dialect: Dialect,
     project_id: &str,
     operation: &'static str,
     bypass: PrivilegedBypass,
-) -> Option<StorageResponse> {
-    let policy = state.app_check_policy.as_ref()?;
+) -> Result<AdmittedApp, StorageResponse> {
+    let Some(policy) = state.app_check_policy.as_ref() else {
+        return Ok(AdmittedApp::default());
+    };
     let header = classify_app_check_header(app_check);
-    let decision = policy.admit(&AdmissionRequest {
+    // The epoch comes back from the same registry read as the decision, so the binding a
+    // session records and the binding a continuation presents belong to one policy snapshot
+    // (`INV-APPCHECK-005`).
+    let (decision, epoch) = policy.admit_bound(&AdmissionRequest {
         project_id,
         transport: "http",
         operation,
@@ -1224,13 +1265,40 @@ fn app_check_denial(
         header: &header,
         now: state.now(),
     });
-    let reason = decision.reason?;
-    let message = if reason == ftd_core_app_check::verify::PUBLIC_REQUIRED_REASON {
-        "App Check token is required by this project's Cloud Storage enforcement."
-    } else {
-        "App Check token is invalid."
+    if let Some(reason) = decision.reason {
+        let message = if reason == ftd_core_app_check::verify::PUBLIC_REQUIRED_REASON {
+            "App Check token is required by this project's Cloud Storage enforcement."
+        } else {
+            "App Check token is invalid."
+        };
+        return Err(error_with_reason(dialect, 403, message, reason));
+    }
+    // Only an `enforced` policy binds a session: under `unenforced` a client may legitimately
+    // stop presenting a token mid-upload, and binding it would enforce by the back door.
+    let binding = match (decision.mode, decision.identity(), epoch) {
+        (BaselineMode::Enforced, Some(identity), Some(epoch)) => Some(UploadAdmission::new(
+            identity.app_id.clone(),
+            epoch.claim_text(),
+        )),
+        _ => None,
     };
-    Some(error_with_reason(dialect, 403, message, reason))
+    Ok(AdmittedApp {
+        binding,
+        privileged: bypass.is_privileged(),
+    })
+}
+
+/// The denial of a resumable request that does not belong to the app that started the session.
+///
+/// It is refused before the session is read, advanced, finalized or cancelled, so a foreign
+/// continuation neither deletes nor advances the upload (specification section 13.2).
+fn foreign_session(dialect: Dialect) -> StorageResponse {
+    error_with_reason(
+        dialect,
+        403,
+        "this resumable upload belongs to another app",
+        ftd_core_app_check::verify::PUBLIC_DENIAL_REASON,
+    )
 }
 
 /// The Storage error envelope with the stable App Check reason code (section 17). The public
@@ -1300,7 +1368,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let json_api_authenticated = matches!(dialect, Dialect::Gcs)
         && authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL);
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
-    if state.app_check_policy.is_some() {
+    let admitted = if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it
         // runs only when a policy exists: an `off` service does no work at all (spec 12.1).
         let bypass = storage_bypass(
@@ -1311,7 +1379,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
             &params,
             json_api_authenticated,
         );
-        if let Some(denial) = app_check_denial(
+        match app_check_admission(
             state,
             &req.app_check,
             dialect,
@@ -1319,9 +1387,12 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
             operation,
             bypass,
         ) {
-            return denial;
+            Ok(admitted) => admitted,
+            Err(denial) => return denial,
         }
-    }
+    } else {
+        AdmittedApp::default()
+    };
     if let Some(refused) = fault_response(state, dialect, &bucket_project, operation) {
         return refused;
     }
@@ -1356,7 +1427,9 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         Route::BucketMeta { bucket } => bucket_meta(&bucket, &host),
         Route::Bucket { dialect, bucket } => match method.as_str() {
             "GET" => list(state, &principal, dialect, &bucket, &params, &host),
-            "POST" => upload(state, &principal, dialect, &bucket, req, &params, &host),
+            "POST" => upload(
+                state, &principal, dialect, &bucket, req, &params, &host, &admitted,
+            ),
             _ => Err((405, "method not allowed".to_owned())),
         },
         Route::GcsUpload { bucket } => match method.as_str() {
@@ -1368,6 +1441,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
                 req,
                 &params,
                 &host,
+                &admitted,
             ),
             _ => Err((405, "method not allowed".to_owned())),
         },
@@ -1376,7 +1450,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
             bucket,
             name,
         } => object(
-            state, &principal, dialect, &bucket, &name, req, &params, &host,
+            state, &principal, dialect, &bucket, &name, req, &params, &host, &admitted,
         ),
         Route::Rewrite {
             bucket,
@@ -1487,6 +1561,7 @@ fn list(
 
 /// Uploads: multipart, media, resumable start / continue (both dialects).
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn upload(
     state: &StorageState,
     principal: &Principal,
@@ -1495,12 +1570,13 @@ fn upload(
     mut req: StorageRequest,
     params: &BTreeMap<String, String>,
     host: &str,
+    admitted: &AdmittedApp,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
     let now = state.now();
     // Continuation of a resumable upload.
     if let Some(upload_id) = params.get("upload_id") {
-        return resumable_continue(state, dialect, &b, upload_id, req, host);
+        return resumable_continue(state, dialect, &b, upload_id, req, host, admitted);
     }
     let upload_type = params.get("uploadType").map(String::as_str);
     let protocol = req.header("x-goog-upload-protocol");
@@ -1588,6 +1664,9 @@ fn upload(
                 UploadOptions {
                     total: declared_len,
                     authorization,
+                    // The app the initiation was admitted for: every later request on this
+                    // session must present the same one (specification section 13.2).
+                    admission: admitted.binding(),
                     expected_md5,
                     expected_crc32c,
                 },
@@ -1742,6 +1821,7 @@ fn resumable_continue(
     upload_id: &str,
     mut req: StorageRequest,
     host: &str,
+    admitted: &AdmittedApp,
 ) -> Outcome {
     let id = UploadId::from_str_unchecked(upload_id);
     let now = state.now();
@@ -1749,6 +1829,14 @@ fn resumable_continue(
     // adopts this buffer as its own instead of copying it.
     let chunk = std::mem::take(&mut req.body);
     let mut store = state.store()?;
+    // The upload belongs to the app that started it. This is checked before the command is
+    // read and before anything is queried, appended, finalized or cancelled, so a foreign
+    // request neither advances nor deletes the session (specification section 13.2).
+    if let Ok(expected) = store.upload_admission(&id, now) {
+        if !admitted.may_continue(expected) {
+            return Ok(foreign_session(dialect));
+        }
+    }
     // The upload belongs to the bucket its URL names: another bucket's URL (and so
     // another session's fault plan and ownership) cannot drive it.
     if store
@@ -1964,6 +2052,7 @@ fn object(
     req: StorageRequest,
     params: &BTreeMap<String, String>,
     host: &str,
+    admitted: &AdmittedApp,
 ) -> Outcome {
     let b = bucket_name(bucket)?;
     let n = object_name(name)?;
@@ -2122,7 +2211,7 @@ fn object(
         "POST" if dialect == Dialect::Firebase => {
             // Resumable continuation posts to the object URL with upload_id.
             if let Some(upload_id) = params.get("upload_id") {
-                return resumable_continue(state, dialect, &b, upload_id, req, host);
+                return resumable_continue(state, dialect, &b, upload_id, req, host, admitted);
             }
             Err((405, "method not allowed".to_owned()))
         }

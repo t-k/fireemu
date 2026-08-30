@@ -34,12 +34,17 @@ pub const START: i64 = 1_788_004_860;
 pub const CONTROL_TOKEN: &str = "test-control-token";
 /// The registered app of the `demo-app` project.
 pub const APP_ID: &str = "1:1234567890:web:local-test-app";
+/// A second registered app of the same `demo-app` project: two apps of one project are what
+/// tells "another app" apart from "another project".
+pub const SECOND_APP_ID: &str = "1:1234567890:web:second-test-app";
 /// The registered app of the `demo-other` project.
 pub const OTHER_APP_ID: &str = "1:9876543210:web:other-test-app";
 /// A well-formed but never registered app ID, for the unknown-app credential state.
 pub const UNREGISTERED_APP_ID: &str = "1:1234567890:web:not-registered";
 /// The debug secret registered for [`APP_ID`].
 pub const SECRET: &str = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+/// The debug secret registered for [`SECOND_APP_ID`].
+pub const SECOND_SECRET: &str = "22222222-2222-4222-9222-222222222222";
 /// The debug secret registered for [`OTHER_APP_ID`].
 pub const OTHER_SECRET: &str = "11111111-1111-4111-9111-111111111111";
 
@@ -64,7 +69,8 @@ pub fn digest_of(secret: &str) -> DebugTokenDigest {
     DebugTokenDigest::from_bytes(Sha256DebugTokenHasher.sha256(canonical.as_bytes()))
 }
 
-/// Two registered projects, one app each, with fresh epochs.
+/// Two registered projects — `demo-app` with two apps, `demo-other` with one — and an epoch
+/// each.
 #[must_use]
 pub fn registry() -> AppCheckRegistry {
     let mut registry = AppCheckRegistry::new(3600).expect("3600s is inside the TTL range");
@@ -77,6 +83,15 @@ pub fn registry() -> AppCheckRegistry {
             debug_token_digests: vec![digest_of(SECRET)],
         })
         .expect("the demo app registers");
+    registry
+        .register_app(AppRegistration {
+            project_id: "demo-app".to_owned(),
+            project_number: "1234567890".to_owned(),
+            app_id: SECOND_APP_ID.to_owned(),
+            enabled: true,
+            debug_token_digests: vec![digest_of(SECOND_SECRET)],
+        })
+        .expect("the second app of the demo project registers");
     registry
         .register_app(AppRegistration {
             project_id: "demo-other".to_owned(),
@@ -157,6 +172,13 @@ pub fn bad_signature(state: &AppCheckState) -> String {
 #[must_use]
 pub fn expired(state: &AppCheckState) -> String {
     token_at(state, "demo-app", APP_ID, START - 7200)
+}
+
+/// A valid token for the *other app of the same project*: the credential a resumable upload
+/// session started by [`APP_ID`] must refuse.
+#[must_use]
+pub fn other_app(state: &AppCheckState) -> String {
+    token(state, "demo-app", SECOND_APP_ID)
 }
 
 /// A correctly signed token for the other registered project.

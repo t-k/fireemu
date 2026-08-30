@@ -42,6 +42,41 @@ pub enum RulesValue {
     PartialMap(BTreeMap<String, RulesValue>),
     /// A list known to contain the listed members plus an unknown remainder.
     PartialList(Vec<RulesValue>),
+    /// A value known only to lie within a range of one comparable type (query proofs: a
+    /// field constrained by inequality filters). Ordered comparisons and equality with a
+    /// concrete value are decided when every value of the range agrees.
+    Range(ValueRange),
+}
+
+/// One end of a [`ValueRange`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeBound {
+    /// Concrete bound (`Int`, `Float`, `String`, `Timestamp` or `Bytes`).
+    pub value: Box<RulesValue>,
+    /// Whether the bound itself belongs to the range.
+    pub inclusive: bool,
+}
+
+/// A range of values of one comparable class (numbers, strings, timestamps or bytes);
+/// an absent end is unbounded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueRange {
+    /// Lower end.
+    pub lower: Option<RangeBound>,
+    /// Upper end.
+    pub upper: Option<RangeBound>,
+}
+
+impl ValueRange {
+    /// The class every member belongs to (`"number"`, `"string"`, `"timestamp"`, `"bytes"`),
+    /// taken from either bound.
+    #[must_use]
+    pub fn class(&self) -> Option<&'static str> {
+        self.lower
+            .as_ref()
+            .or(self.upper.as_ref())
+            .map(|b| RulesValue::compare_class(&b.value))
+    }
 }
 
 impl RulesValue {
@@ -60,7 +95,16 @@ impl RulesValue {
             Self::Timestamp(_) => "timestamp",
             Self::Bytes(_) => "bytes",
             Self::LatLng { .. } => "latlng",
-            Self::Unknown => "unknown",
+            Self::Unknown | Self::Range(_) => "unknown",
+        }
+    }
+
+    /// Class of values that compare with each other (`Int` and `Float` are one class).
+    #[must_use]
+    pub fn compare_class(&self) -> &'static str {
+        match self {
+            Self::Int(_) | Self::Float(_) => "number",
+            other => other.type_name(),
         }
     }
 
@@ -121,6 +165,19 @@ impl fmt::Display for RulesValue {
             Self::Unknown => f.write_str("unknown"),
             Self::PartialMap(m) => write!(f, "map({} known keys, ...)", m.len()),
             Self::PartialList(l) => write!(f, "list({} known members, ...)", l.len()),
+            Self::Range(r) => {
+                f.write_str("range(")?;
+                match &r.lower {
+                    Some(b) => write!(f, "{} {}", if b.inclusive { ">=" } else { ">" }, b.value)?,
+                    None => f.write_str("..")?,
+                }
+                f.write_str(", ")?;
+                match &r.upper {
+                    Some(b) => write!(f, "{} {}", if b.inclusive { "<=" } else { "<" }, b.value)?,
+                    None => f.write_str("..")?,
+                }
+                f.write_str(")")
+            }
         }
     }
 }

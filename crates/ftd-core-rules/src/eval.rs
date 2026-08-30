@@ -22,7 +22,7 @@ use crate::ast::{
     Allow, BinaryOp, Expr, FunctionDecl, Item, Literal, MatchBlock, Method as AstMethod,
     PathSegment, Ruleset, UnaryOp,
 };
-use crate::value::{AuthContext, RulesValue};
+use crate::value::{AuthContext, RulesValue, ValueRange};
 
 /// Request method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +117,8 @@ pub struct RequestContext {
     /// Query proof mode: path captures and `request.path` are undetermined (the request
     /// stands for every potential result).
     pub abstract_path: bool,
+    /// `request.query` (`limit`, `offset`, `orderBy`) of a list request; `None` elsewhere.
+    pub request_query: Option<RulesValue>,
 }
 
 /// Why a request was denied.
@@ -407,6 +409,12 @@ fn build_request(ctx: &RequestContext) -> RulesValue {
         "resource".to_owned(),
         ctx.request_resource.clone().unwrap_or(RulesValue::Null),
     );
+    // Outside a list request `request.query` is an error in production; undetermined here
+    // has the same effect (the rule cannot be proven).
+    m.insert(
+        "query".to_owned(),
+        ctx.request_query.clone().unwrap_or(RulesValue::Unknown),
+    );
     RulesValue::Map(m)
 }
 
@@ -610,7 +618,10 @@ fn truthy(v: &RulesValue) -> Result<bool, EvalError> {
 /// searched or iterated with a definite result.
 fn undetermined(v: &RulesValue) -> bool {
     match v {
-        RulesValue::Unknown | RulesValue::PartialMap(_) | RulesValue::PartialList(_) => true,
+        RulesValue::Unknown
+        | RulesValue::PartialMap(_)
+        | RulesValue::PartialList(_)
+        | RulesValue::Range(_) => true,
         RulesValue::List(items) => items.iter().any(undetermined),
         RulesValue::Map(m) => m.values().any(undetermined),
         _ => false,
@@ -795,6 +806,17 @@ impl<'a> Evaluator<'a> {
                 if matches!(v, RulesValue::Unknown) {
                     return Err(EvalError::Unknown);
                 }
+                if let RulesValue::Range(r) = &v {
+                    // Every member shares the range's class; `int` vs `float` stays open.
+                    let class = r.class().ok_or(EvalError::Unknown)?;
+                    return match type_name.as_str() {
+                        "int" | "float" if class == "number" => Err(EvalError::Unknown),
+                        "latlng" | "bytes" | "duration" => Err(EvalError::Unsupported(format!(
+                            "`is {type_name}` is not implemented"
+                        ))),
+                        t => Ok(RulesValue::Bool(t == class)),
+                    };
+                }
                 let matches = match type_name.as_str() {
                     "number" => matches!(v, RulesValue::Int(_) | RulesValue::Float(_)),
                     "latlng" | "bytes" | "duration" => {
@@ -864,6 +886,36 @@ impl<'a> Evaluator<'a> {
                 } else {
                     return Err(EvalError::Unknown);
                 }
+            }
+            // A range against a concrete value: decided when every member agrees.
+            (
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+                V::Range(r),
+                c,
+            ) if !undetermined(c) => V::Bool(range_relation(r, op, c)?),
+            (
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+                c,
+                V::Range(r),
+            ) if !undetermined(c) => {
+                let mirrored = match op {
+                    BinaryOp::Lt => BinaryOp::Gt,
+                    BinaryOp::Le => BinaryOp::Ge,
+                    BinaryOp::Gt => BinaryOp::Lt,
+                    BinaryOp::Ge => BinaryOp::Le,
+                    other => other,
+                };
+                V::Bool(range_relation(r, mirrored, c)?)
             }
             (_, a, b) if undetermined(a) || undetermined(b) => return Err(EvalError::Unknown),
             (BinaryOp::Eq, a, b) => V::Bool(values_equal(a, b)),
@@ -1035,6 +1087,67 @@ fn as_float(v: &RulesValue) -> Result<f64, EvalError> {
         RulesValue::Float(f) => Ok(*f),
         other => Err(soft(format!("arithmetic on {}", other.type_name()))),
     }
+}
+
+/// `range <op> c` for every member of the range: `Ok(true)` / `Ok(false)` when all members
+/// agree, `Unknown` otherwise. A concrete value of another class never equals a member and
+/// cannot be ordered against one (an error for every member, hence for the proof).
+fn range_relation(r: &ValueRange, op: BinaryOp, c: &RulesValue) -> Result<bool, EvalError> {
+    use core::cmp::Ordering::{Equal, Greater, Less};
+    let class = r.class().ok_or(EvalError::Unknown)?;
+    if c.compare_class() != class {
+        return match op {
+            BinaryOp::Eq => Ok(false),
+            BinaryOp::Ne => Ok(true),
+            _ => Err(soft(format!(
+                "cannot compare {class} with {}",
+                c.type_name()
+            ))),
+        };
+    }
+    // Position of `c` relative to each end: `Less` = below the whole range, `Greater` =
+    // above it, `Equal` = on the bound (its inclusivity decides).
+    let lower = r
+        .lower
+        .as_ref()
+        .map(|b| compare(c, &b.value).map(|o| (o, b.inclusive)))
+        .transpose()?;
+    let upper = r
+        .upper
+        .as_ref()
+        .map(|b| compare(c, &b.value).map(|o| (o, b.inclusive)))
+        .transpose()?;
+    // `c` is below every member / above every member.
+    let below_all = matches!(lower, Some((Less, _) | (Equal, false)));
+    let above_all = matches!(upper, Some((Greater, _) | (Equal, false)));
+    // `c` is at or below every member (`<=`) / at or above every member (`>=`).
+    let at_or_below_all = below_all || matches!(lower, Some((Equal, true)));
+    let at_or_above_all = above_all || matches!(upper, Some((Equal, true)));
+    let outside = below_all || above_all;
+    let pinned = matches!((lower, upper), (Some((Equal, true)), Some((Equal, true))));
+    match op {
+        BinaryOp::Eq if outside => Ok(false),
+        BinaryOp::Eq if pinned => Ok(true),
+        BinaryOp::Ne if outside => Ok(true),
+        BinaryOp::Ne if pinned => Ok(false),
+        // member < c: true when c is above every member, false when c is at or below all.
+        BinaryOp::Lt if above_all => Ok(true),
+        BinaryOp::Lt if at_or_below_all => Ok(false),
+        BinaryOp::Le if at_or_above_all => Ok(true),
+        BinaryOp::Le if below_all => Ok(false),
+        BinaryOp::Gt if below_all => Ok(true),
+        BinaryOp::Gt if at_or_above_all => Ok(false),
+        BinaryOp::Ge if at_or_below_all => Ok(true),
+        BinaryOp::Ge if above_all => Ok(false),
+        _ => Err(EvalError::Unknown),
+    }
+}
+
+/// Orders two concrete values of one comparable class; `None` when they do not compare
+/// (different classes, NaN).
+#[must_use]
+pub fn try_compare(a: &RulesValue, b: &RulesValue) -> Option<core::cmp::Ordering> {
+    compare(a, b).ok()
 }
 
 fn compare(a: &RulesValue, b: &RulesValue) -> Result<core::cmp::Ordering, EvalError> {

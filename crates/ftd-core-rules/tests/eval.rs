@@ -76,6 +76,7 @@ fn ctx(method: Method, path: &str, auth: Option<AuthContext>) -> RequestContext 
         request_resource: None,
         time_unix_nanos: 1_788_004_860_i128 * 1_000_000_000,
         abstract_path: false,
+        request_query: None,
     }
 }
 
@@ -378,6 +379,7 @@ fn abstract_ctx(path: &str, data: Vec<(&str, RulesValue)>) -> RequestContext {
         request_resource: None,
         time_unix_nanos: 1_788_004_860_i128 * 1_000_000_000,
         abstract_path: true,
+        request_query: None,
     }
 }
 
@@ -587,6 +589,7 @@ service cloud.firestore {
         request_resource: None,
         time_unix_nanos: 0,
         abstract_path: false,
+        request_query: None,
     };
     let admin = ctx("/databases/(default)/documents/admin/x", "u1");
     assert!(matches!(
@@ -651,6 +654,7 @@ service firebase.storage {
             request_resource: Some(RulesValue::Map(incoming)),
             time_unix_nanos: 0,
             abstract_path: false,
+            request_query: None,
         }
     };
     assert!(matches!(
@@ -669,4 +673,88 @@ service firebase.storage {
         evaluate_request(&ruleset, &ctx("forbidden.png", "image/png")).decision,
         Decision::Deny(_)
     ));
+}
+
+#[test]
+fn range_values_decide_comparisons_only_when_every_member_agrees() {
+    use ftd_core_rules::value::{RangeBound, ValueRange};
+    let rules = |cond: &str| {
+        format!("rules_version = '2';\nservice cloud.firestore {{ match /databases/{{d}}/documents {{ match /people/{{id}} {{ allow list: if {cond}; }} }} }}")
+    };
+    let bound = |v: i64, inclusive: bool| {
+        Some(RangeBound {
+            value: Box::new(RulesValue::Int(v)),
+            inclusive,
+        })
+    };
+    let ctx = |lower: Option<RangeBound>, upper: Option<RangeBound>| {
+        abstract_ctx(
+            "/databases/(default)/documents/people/ftd-placeholder",
+            vec![("age", RulesValue::Range(ValueRange { lower, upper }))],
+        )
+    };
+    // age >= 18 (from the query) proves the same and weaker bounds, not stronger ones.
+    let adults = ctx(bound(18, true), None);
+    for provable in [
+        "resource.data.age >= 18",
+        "resource.data.age > 17",
+        "resource.data.age >= 10",
+        "18 <= resource.data.age",
+        "resource.data.age != 5",
+        "resource.data.age is number",
+        "!(resource.data.age < 18)",
+        "resource.data.age != 'x'",
+    ] {
+        assert!(allows(&rules(provable), &adults), "{provable}");
+    }
+    for unprovable in [
+        "resource.data.age > 18",
+        "resource.data.age >= 21",
+        "resource.data.age < 65",
+        "resource.data.age == 18",
+        "resource.data.age is int",
+        "resource.data.age + 1 > 18",
+        "resource.data.age == 'x' || resource.data.age > 18",
+    ] {
+        assert!(!allows(&rules(unprovable), &adults), "{unprovable}");
+    }
+    // A definite false stays false (an `||` with it does not become undetermined).
+    assert!(!allows(&rules("resource.data.age < 10"), &adults));
+    assert!(allows(&rules("resource.data.age < 10 || true"), &adults));
+    // Exclusive bounds: age > 18 does not prove age >= 18 is false, but proves > 18.
+    let over = ctx(bound(18, false), None);
+    assert!(allows(&rules("resource.data.age > 18"), &over));
+    assert!(allows(&rules("resource.data.age >= 18"), &over));
+    assert!(
+        !allows(&rules("resource.data.age >= 19"), &over),
+        "18.5 is a member"
+    );
+    // Both ends: 18 <= age < 65.
+    let working = ctx(bound(18, true), bound(65, false));
+    assert!(allows(
+        &rules("resource.data.age >= 18 && resource.data.age < 65"),
+        &working
+    ));
+    assert!(allows(&rules("resource.data.age <= 65"), &working));
+    assert!(
+        !allows(&rules("resource.data.age <= 64"), &working),
+        "64.5 is a member"
+    );
+    assert!(allows(&rules("resource.data.age != 65"), &working));
+    // A pinned range (18 <= age <= 18) is the value itself.
+    let pinned = ctx(bound(18, true), bound(18, true));
+    assert!(allows(&rules("resource.data.age == 18"), &pinned));
+    // Comparing a number range with a string is an error for every member: the allow fails.
+    assert!(!allows(&rules("resource.data.age > 'a'"), &adults));
+    // request.query outside a list request is undetermined; on a list it is concrete.
+    let mut limited = ctx(bound(18, true), None);
+    let mut q = BTreeMap::new();
+    q.insert("limit".to_owned(), RulesValue::Int(10));
+    q.insert("offset".to_owned(), RulesValue::Int(0));
+    q.insert("orderBy".to_owned(), RulesValue::Unknown);
+    limited.request_query = Some(RulesValue::Map(q));
+    assert!(allows(&rules("request.query.limit <= 10"), &limited));
+    assert!(!allows(&rules("request.query.limit <= 5"), &limited));
+    assert!(!allows(&rules("request.query.orderBy == 'age'"), &limited));
+    assert!(!allows(&rules("request.query.limit <= 10"), &adults));
 }

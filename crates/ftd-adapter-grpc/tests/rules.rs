@@ -815,3 +815,93 @@ service cloud.firestore {
     assert!(err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"));
     h.handle.abort();
 }
+
+fn list_range(
+    collection: &str,
+    field: &str,
+    op: sq::field_filter::Operator,
+    value: pb::Value,
+    limit: Option<i32>,
+) -> pb::RunQueryRequest {
+    let mut req = list(collection);
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut req.query_type {
+        sq.r#where = Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                field: Some(sq::FieldReference {
+                    field_path: field.to_owned(),
+                }),
+                op: op as i32,
+                value: Some(value),
+            })),
+        });
+        sq.limit = limit;
+    }
+    req
+}
+
+#[tokio::test]
+async fn queries_are_proven_from_inequality_constraints_and_request_query() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /people/{id} { allow list: if resource.data.age >= 18; }
+    match /paged/{id} { allow list: if request.query.limit <= 20; }
+  }
+}",
+    )
+    .unwrap();
+    let int = |v: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
+    };
+    let people = |op, v| list_range("people", "age", op, int(v), None);
+    // age >= 18 and age > 20 prove the rule; age >= 10 and an unfiltered list do not.
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            people(Op::GreaterThanOrEqual, 18),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(people(Op::GreaterThan, 20), &alice_token))
+        .await
+        .is_ok());
+    for (op, v) in [(Op::GreaterThanOrEqual, 10), (Op::LessThan, 30)] {
+        let err = h
+            .client
+            .run_query(with_bearer(people(op, v), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied, "{op:?} {v}");
+    }
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(list("people"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    // request.query.limit
+    let paged = |limit| list_range("paged", "x", Op::Equal, int(1), limit);
+    assert!(h
+        .client
+        .run_query(with_bearer(paged(Some(20)), &alice_token))
+        .await
+        .is_ok());
+    for limit in [Some(21), None] {
+        let err = h
+            .client
+            .run_query(with_bearer(paged(limit), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied, "{limit:?}");
+    }
+    h.handle.abort();
+}

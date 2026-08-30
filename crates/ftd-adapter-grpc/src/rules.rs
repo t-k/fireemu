@@ -36,11 +36,11 @@ use ftd_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, 
 use ftd_core_firestore::value::Value;
 use ftd_core_rules::ast::Ruleset;
 use ftd_core_rules::eval::{
-    evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
-    RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
+    evaluate_request_with, try_compare, Decision, DenyReason, DocumentAccess, Method,
+    RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use ftd_core_rules::runtime::LoadedRules;
-use ftd_core_rules::value::{AuthContext, RulesValue};
+use ftd_core_rules::value::{AuthContext, RangeBound, RulesValue, ValueRange};
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::Clock;
 use ftd_core_types::time::LogicalInstant;
@@ -454,6 +454,7 @@ impl RulesEnforcer {
                     request_resource: None,
                     time_unix_nanos: now.as_nanos(),
                     abstract_path: true,
+                    request_query: Some(query_value(query)),
                 };
                 decide(ruleset, &ctx, Method::List, &placeholder, &reader)?;
                 let accessed = reader.seen.borrow().len() as u64;
@@ -570,6 +571,7 @@ fn evaluate_with(
         request_resource: request_resource.map(resource_value),
         time_unix_nanos: now.as_nanos(),
         abstract_path: false,
+        request_query: None,
     };
     decide(ruleset, &ctx, method, path, access)
 }
@@ -619,6 +621,31 @@ pub fn write_guard<'a>(
 /// it cannot be proven.
 fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
     let mut data: BTreeMap<String, RulesValue> = BTreeMap::new();
+    // Inequality filters on one field combine into one range (Firestore requires every
+    // range filter of a field to share the value's class); an equality wins over them.
+    let mut ranges: BTreeMap<&FieldPath, Option<ValueRange>> = BTreeMap::new();
+    for atom in disjunction {
+        if let FilterExpr::Field { field, op, value } = atom {
+            if !field.is_document_name() {
+                if let Some(bound) = range_bound(*op, value) {
+                    let entry = ranges.entry(field).or_insert_with(|| {
+                        Some(ValueRange {
+                            lower: None,
+                            upper: None,
+                        })
+                    });
+                    *entry = entry.take().and_then(|r| tighten(r, bound));
+                }
+            }
+        }
+    }
+    for (field, range) in ranges {
+        set_nested(
+            &mut data,
+            field,
+            range.map_or(RulesValue::Unknown, RulesValue::Range),
+        );
+    }
     for atom in disjunction {
         match atom {
             FilterExpr::Field { field, op, value } if !field.is_document_name() => match op {
@@ -652,6 +679,88 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
     m.insert("data".to_owned(), RulesValue::PartialMap(data));
     m.insert("id".to_owned(), RulesValue::Unknown);
     m.insert("__name__".to_owned(), RulesValue::Unknown);
+    RulesValue::Map(m)
+}
+
+/// The bound an inequality filter puts on its field: `(bound, is_lower)`. Only values of a
+/// comparable class qualify.
+fn range_bound(op: FieldOp, value: &Value) -> Option<(RangeBound, bool)> {
+    let v = rules_value(value);
+    if !matches!(
+        v,
+        RulesValue::Int(_)
+            | RulesValue::Float(_)
+            | RulesValue::String(_)
+            | RulesValue::Timestamp(_)
+            | RulesValue::Bytes(_)
+    ) {
+        return None;
+    }
+    if let RulesValue::Float(f) = v {
+        if f.is_nan() {
+            return None;
+        }
+    }
+    let (inclusive, is_lower) = match op {
+        FieldOp::GreaterThan => (false, true),
+        FieldOp::GreaterThanOrEqual => (true, true),
+        FieldOp::LessThan => (false, false),
+        FieldOp::LessThanOrEqual => (true, false),
+        _ => return None,
+    };
+    Some((
+        RangeBound {
+            value: Box::new(v),
+            inclusive,
+        },
+        is_lower,
+    ))
+}
+
+/// Narrows `range` by `bound`; `None` when the bounds do not belong to one class (such a
+/// filter would not run in Firestore, and an undetermined field is the safe result).
+fn tighten(mut range: ValueRange, (bound, is_lower): (RangeBound, bool)) -> Option<ValueRange> {
+    if let Some(class) = range.class() {
+        if bound.value.compare_class() != class {
+            return None;
+        }
+    }
+    let slot = if is_lower {
+        &mut range.lower
+    } else {
+        &mut range.upper
+    };
+    *slot = match slot.take() {
+        None => Some(bound),
+        Some(current) => {
+            let ord = try_compare(&bound.value, &current.value)?;
+            let stricter = match (ord, is_lower) {
+                (core::cmp::Ordering::Greater, true) | (core::cmp::Ordering::Less, false) => true,
+                (core::cmp::Ordering::Equal, _) => !bound.inclusive,
+                _ => false,
+            };
+            Some(if stricter { bound } else { current })
+        }
+    };
+    Some(range)
+}
+
+/// `request.query` of a list request: `limit`, `offset` and `orderBy`. `orderBy` is not
+/// modelled (its production string form is not pinned down here), so rules reading it stay
+/// unproven.
+fn query_value(query: &Query) -> RulesValue {
+    let mut m = BTreeMap::new();
+    m.insert(
+        "limit".to_owned(),
+        query
+            .limit
+            .map_or(RulesValue::Null, |l| RulesValue::Int(i64::from(l))),
+    );
+    m.insert(
+        "offset".to_owned(),
+        RulesValue::Int(i64::from(query.offset)),
+    );
+    m.insert("orderBy".to_owned(), RulesValue::Unknown);
     RulesValue::Map(m)
 }
 

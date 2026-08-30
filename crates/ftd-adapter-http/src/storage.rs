@@ -699,6 +699,7 @@ impl StorageState {
             request_resource,
             time_unix_nanos: self.now().as_nanos(),
             abstract_path: false,
+            request_query: None,
         };
         match evaluate_request(ruleset, &ctx).decision {
             Decision::Allow => Ok(()),

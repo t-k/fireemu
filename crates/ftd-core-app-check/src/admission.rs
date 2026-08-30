@@ -192,8 +192,9 @@ impl AppCheckGate {
             .restore_dynamic_debug_tokens(accept, captured);
     }
 
-    /// Drops the retained observations of every project `accept` returns true for: counters
-    /// reset with the project state they describe (section 14).
+    /// Drops the ring and the counters of every project `accept` returns true for: counters
+    /// reset with the project state they describe, and a deleted project keeps nothing at all
+    /// (section 14). Another project's ring is never touched.
     pub fn clear_observations<A: Fn(&str) -> bool>(&self, accept: A) {
         self.registry
             .read()

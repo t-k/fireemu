@@ -229,6 +229,12 @@ pub struct EmulatorHosts {
     pub auth: Option<String>,
     /// Storage.
     pub storage: Option<String>,
+    /// The functions port itself, which also serves the Eventarc `publishEvents` route. The
+    /// official suite gives Eventarc a port of its own; a custom event has nowhere to go
+    /// without functions, so fireemu serves it here and points the variable the Admin SDK
+    /// reads (`CLOUD_EVENTARC_EMULATOR_HOST`, which carries an `http://` prefix) at this
+    /// listener.
+    pub functions: Option<String>,
 }
 
 /// Where a located runner script came from.
@@ -511,6 +517,13 @@ async fn start_codebase(
     if let Some(host) = &hosts.storage {
         env.push(("FIREBASE_STORAGE_EMULATOR_HOST".to_owned(), host.clone()));
         env.push(("STORAGE_EMULATOR_HOST".to_owned(), format!("http://{host}")));
+    }
+    if let Some(host) = &hosts.functions {
+        env.push((
+            "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
+            format!("http://{host}"),
+        ));
+        env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), host.clone()));
     }
     // Debug mode is granted only when the daemon is the sole source of both callable
     // credentials. The runner inherits an allowlist that does not contain these names, and

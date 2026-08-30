@@ -311,15 +311,34 @@ function describe(name, fn, instrumentation) {
         return { ...base, trigger: { type: "pubsub", topic: topic.replace(/^.*\/topics\//, "") } };
       }
       if (et.channel) {
-        return ignored(
-          base,
-          "eventarc",
-          "planned",
-          `planned: Eventarc custom events (channel ${et.channel}) are not served yet`,
-        );
+        // `onCustomEventPublished`: the channel is `locations/<l>/channels/<c>` and every
+        // eventFilter beyond the type is matched against the published event's attributes.
+        return {
+          ...base,
+          trigger: {
+            type: "eventarc",
+            eventType: type,
+            channel: et.channel,
+            filters: et.eventFilters || {},
+          },
+        };
       }
       if (type.includes("firebasealerts")) {
-        return ignored(base, "firebaseAlerts", "planned", "planned: Firebase alert triggers are not served yet");
+        // Every `onAlertPublished` family member registers an ordinary event trigger with no
+        // channel and `eventFilters: {alerttype, appid?}`. The official emulator hands it to
+        // its Eventarc emulator, which indexes it under `<eventType>-google` and delivers to
+        // it verbatim from `POST /google/publishEvents`. It is an Eventarc trigger on the
+        // sentinel channel, and modelling it as anything else would need a second mechanism
+        // for the same wire path.
+        return {
+          ...base,
+          trigger: {
+            type: "eventarc",
+            eventType: type,
+            channel: "google",
+            filters: et.eventFilters || {},
+          },
+        };
       }
       const product = deferredProduct(type);
       if (product) return ignored(base, product.triggerType, product.scope, product.reason);
@@ -538,6 +557,9 @@ async function invoke(functions, manifest, msg) {
     case "firestore":
     case "storage":
     case "pubsub":
+    // A custom event reaches the handler as the CloudEvent itself, exactly as the official
+    // Eventarc emulator POSTs it to the functions emulator.
+    case "eventarc":
       await fn(msg.event);
       return;
     case "auth":

@@ -203,6 +203,51 @@ fn decode_chunked(mut rest: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Answers `POST .../channels/{channel}:publishEvents`.
+///
+/// The official emulator refuses a `400` for an event with no `type` and otherwise answers a
+/// bare `200` -- `res.sendStatus(200)`, so `OK` as text -- whether or not anything was
+/// subscribed, because delivery is fire-and-forget from the publisher's point of view
+/// (`eventarcEmulator.js` `publishEventsHandler`). A conversion this emulator cannot make is
+/// reported the same way an unpublishable event is, with the official sentence, rather than
+/// accepted and dropped.
+fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Response<Full<Bytes>> {
+    let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return simple(StatusCode::BAD_REQUEST, "Bad Request");
+    };
+    let Some(events) = parsed.get("events").and_then(serde_json::Value::as_array) else {
+        return simple(StatusCode::BAD_REQUEST, "Bad Request");
+    };
+    let google = channel == crate::eventarc::GOOGLE_CHANNEL;
+    for event in events {
+        // The sentinel `google` channel forwards verbatim; a custom channel converts the
+        // proto form the Admin SDK publishes. That branch is the official one, and it is why
+        // Firebase alerts -- which have no channel and are indexed under `<type>-google` --
+        // arrive as the plain CloudEvent their handlers expect.
+        let converted = if google {
+            crate::eventarc::accept_verbatim(event)
+        } else {
+            crate::eventarc::convert(event)
+        };
+        match converted {
+            Ok(published) => {
+                let delivered = runtime.publish_custom_event(
+                    channel,
+                    &published.event_type,
+                    &published.attributes,
+                    &published.event,
+                );
+                eprintln!(
+                    "[functions] eventarc: {} on {channel} reached {delivered} function(s)",
+                    published.event_type
+                );
+            }
+            Err(why) => return simple(StatusCode::BAD_REQUEST, &why),
+        }
+    }
+    simple(StatusCode::OK, "OK")
+}
+
 /// An answer produced instead of proxying: a 404, a denial, a refused origin.
 type Refusal = Box<Response<Full<Bytes>>>;
 
@@ -288,6 +333,17 @@ fn sanitize_credentials(
     }
 }
 
+/// Reads a request body up to the forwarding limit, or the 413 that replaces it.
+async fn collect_body(body: Incoming) -> Result<Bytes, Refusal> {
+    match Limited::new(body, MAX_FUNCTION_BODY_BYTES).collect().await {
+        Ok(collected) => Ok(collected.to_bytes()),
+        Err(_) => Err(Box::new(simple(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request body too large",
+        ))),
+    }
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
@@ -308,6 +364,19 @@ async fn respond(
     if let Some(origin) = &origin {
         if !origin_is_local(origin) {
             return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
+        }
+    }
+    // Eventarc's `publishEvents` shares this port. The official suite gives Eventarc a port
+    // of its own; a custom event has nowhere to go without functions, so fireemu serves the
+    // route here and points `CLOUD_EVENTARC_EMULATOR_HOST` at this listener. The path forms
+    // cannot collide with a function route: both are rooted at a literal segment no project
+    // ID reaches, and both end in a literal the function route does not have.
+    if req.method() == hyper::Method::POST {
+        if let Some(channel) = crate::eventarc::publish_channel(&path) {
+            return Ok(match collect_body(req.into_body()).await {
+                Ok(body) => publish_events(&runtime, &channel, &body),
+                Err(answer) => *answer,
+            });
         }
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
@@ -346,17 +415,9 @@ async fn respond(
         Ok(headers) => headers,
         Err(denial) => return Ok(*denial),
     };
-    let body = match Limited::new(req.into_body(), MAX_FUNCTION_BODY_BYTES)
-        .collect()
-        .await
-    {
-        Ok(c) => c.to_bytes(),
-        Err(_) => {
-            return Ok(simple(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "request body too large",
-            ))
-        }
+    let body = match collect_body(req.into_body()).await {
+        Ok(body) => body,
+        Err(answer) => return Ok(*answer),
     };
     let path_and_query = match query {
         Some(q) => format!("{path}?{q}"),

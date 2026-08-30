@@ -238,6 +238,17 @@ pub enum Trigger {
         /// Bucket (`None` = the project's default bucket).
         bucket: Option<String>,
     },
+    /// A custom event published on an Eventarc channel (`onCustomEventPublished`).
+    Eventarc {
+        /// The `type` attribute the trigger listens for.
+        event_type: String,
+        /// The channel, as `firebase-functions` writes it:
+        /// `locations/<location>/channels/<channel>`. The emulator keys its trigger table on
+        /// `<eventType>-<channel>` and, when a channel is not named, on the literal `google`.
+        channel: String,
+        /// `eventFilters` beyond the type, matched against the published event's attributes.
+        filters: BTreeMap<String, String>,
+    },
     /// Scheduled run.
     Schedule {
         /// Schedule.
@@ -376,6 +387,16 @@ impl fmt::Display for ManifestError {
 
 impl std::error::Error for ManifestError {}
 
+/// The `locations/<l>/channels/<c>` tail of a channel name, whichever of the two spellings
+/// it arrived in.
+#[must_use]
+pub fn channel_suffix(channel: &str) -> &str {
+    match channel.find("locations/") {
+        Some(i) => &channel[i..],
+        None => channel,
+    }
+}
+
 /// A Firestore trigger matched by a document change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirestoreMatch<'a> {
@@ -468,6 +489,42 @@ impl FunctionManifest {
                     event: e,
                     bucket: b,
                 } => *e == event && b.as_deref().unwrap_or(default_bucket) == bucket,
+                _ => false,
+            })
+            .collect()
+    }
+
+    /// Functions whose Eventarc trigger fires for an event of `event_type` on `channel`
+    /// carrying `attributes`.
+    ///
+    /// The channel is compared after normalising the two spellings the official emulator
+    /// keys its table with: a full `projects/<p>/locations/<l>/channels/<c>` resource name
+    /// (what the Admin SDK publishes to) and the `locations/<l>/channels/<c>` form
+    /// `firebase-functions` puts in the endpoint. Filters are matched as
+    /// `EventarcEmulator.matchesAll` matches them: every declared filter must equal the
+    /// event's attribute of that name.
+    #[must_use]
+    pub fn eventarc_matches(
+        &self,
+        channel: &str,
+        event_type: &str,
+        attributes: &BTreeMap<String, String>,
+    ) -> Vec<&FunctionSpec> {
+        let wanted = channel_suffix(channel);
+        self.functions
+            .iter()
+            .filter(|f| match &f.trigger {
+                Trigger::Eventarc {
+                    event_type: t,
+                    channel: c,
+                    filters,
+                } => {
+                    t == event_type
+                        && channel_suffix(c) == wanted
+                        && filters
+                            .iter()
+                            .all(|(k, v)| attributes.get(k).is_some_and(|actual| actual == v))
+                }
                 _ => false,
             })
             .collect()

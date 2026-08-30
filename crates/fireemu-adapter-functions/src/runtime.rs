@@ -879,6 +879,51 @@ impl FunctionsRuntime {
         ids
     }
 
+    /// Delivers one custom `CloudEvent` published on `channel` to every matching
+    /// `onCustomEventPublished` function, and reports how many were reached.
+    ///
+    /// `event` is the JSON `CloudEvent` the function receives; `attributes` are the extra
+    /// attributes the publisher sent, which is what an `eventFilters` entry is matched
+    /// against (`EventarcEmulator.matchesAll`).
+    pub fn publish_custom_event(
+        &self,
+        channel: &str,
+        event_type: &str,
+        attributes: &BTreeMap<String, String>,
+        event: &Value,
+    ) -> usize {
+        if !self.background_triggers_enabled() {
+            // Accepted and dropped, like every other background delivery while the switch is
+            // off. The official emulator does the same to the events it holds.
+            return 0;
+        }
+        let time = self.now();
+        let Ok(mut inner) = self.inner.lock() else {
+            return 0;
+        };
+        let mut delivered = 0;
+        for f in self
+            .manifest
+            .eventarc_matches(channel, event_type, attributes)
+        {
+            self.enqueue_delivery(
+                &mut inner,
+                EventSource::Eventarc,
+                &f.name,
+                event_type,
+                channel,
+                time,
+                event,
+            );
+            delivered += 1;
+        }
+        drop(inner);
+        if delivered > 0 {
+            self.wake.notify_one();
+        }
+        delivered
+    }
+
     /// Turns a user lifecycle event into events for every matching Auth trigger.
     pub fn on_user_event(&self, event: &UserEvent) {
         if !self.background_triggers_enabled() {
@@ -1820,6 +1865,7 @@ impl FunctionsRuntime {
             Trigger::Http { .. } => "http",
             Trigger::PubSub { .. } => "pubsub",
             Trigger::Auth { .. } => "auth",
+            Trigger::Eventarc { .. } => "eventarc",
         };
         json!({
             "invocationId": format!("{}-{attempt}", id.value()),

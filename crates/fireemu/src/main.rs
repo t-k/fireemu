@@ -603,6 +603,13 @@ fn child_environment(
     }
     if let Some(addr) = addrs.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), addr.to_string()));
+        // Eventarc's publishEvents route is served on the functions port. The variable
+        // carries the scheme, as `setEnvVarsForEmulators` gives it one; without it the Admin
+        // SDK publishes to production, which is a network call a local run must never make.
+        env.push((
+            "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
+            format!("http://{addr}"),
+        ));
     }
     if let Some(addr) = addrs.hub {
         env.push(("FIREBASE_EMULATOR_HUB".to_owned(), addr.to_string()));
@@ -633,7 +640,7 @@ fn child_environment(
 /// command's environment, so a shell configured for other emulators cannot leak into it.
 /// `FIREBASE_DATABASE_EMULATOR_HOST` is on the list although fireemu never sets it: an
 /// inherited one would point a Realtime Database client at something fireemu does not serve.
-const OWNED_VARIABLES: [&str; 10] = [
+const OWNED_VARIABLES: [&str; 11] = [
     "FIRESTORE_EMULATOR_HOST",
     "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
     "FIREBASE_AUTH_EMULATOR_HOST",
@@ -642,6 +649,7 @@ const OWNED_VARIABLES: [&str; 10] = [
     "FIREBASE_DATABASE_EMULATOR_HOST",
     "FIREBASE_EMULATOR_HUB",
     "FIREEMU_FUNCTIONS_HOST",
+    "CLOUD_EVENTARC_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_EMULATOR_HOST",
     "FIREEMU_APP_CHECK_JWKS_URL",
 ];
@@ -1296,6 +1304,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         firestore: grpc_addr.map(|a| a.to_string()),
                         auth: addrs.auth.map(|a| a.to_string()),
                         storage: storage_addr.map(|a| a.to_string()),
+                        functions: functions_addr.map(|a| a.to_string()),
                     },
                     &runner_secret,
                     callable_trusted_protocol,

@@ -20,6 +20,8 @@ pub enum EventSource {
     PubSub,
     /// An Auth user lifecycle event.
     Auth,
+    /// A custom event published on an Eventarc channel.
+    Eventarc,
 }
 
 /// CloudEvents-style event type, e.g. `google.cloud.firestore.document.v1.created`.

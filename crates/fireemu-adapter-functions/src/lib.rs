@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod callable;
+pub mod eventarc;
 pub mod events;
 pub mod http;
 pub mod manifest_json;

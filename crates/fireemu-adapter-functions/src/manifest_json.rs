@@ -168,6 +168,29 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 bucket: s(trigger, "bucket").filter(|b| !b.is_empty()),
             }
         }
+        "eventarc" => {
+            let event_type = s(trigger, "eventType")
+                .ok_or_else(|| format!("manifest: function {name:?}: eventType is required"))?;
+            if event_type.is_empty() {
+                return Err(format!("manifest: function {name:?}: eventType is empty"));
+            }
+            let channel = s(trigger, "channel")
+                .unwrap_or_else(|| "locations/us-central1/channels/firebase".to_owned());
+            let mut filters = std::collections::BTreeMap::new();
+            if let Some(map) = trigger.get("filters").and_then(Value::as_object) {
+                for (k, v) in map {
+                    let v = v.as_str().ok_or_else(|| {
+                        format!("manifest: function {name:?}: filters.{k} must be a string")
+                    })?;
+                    filters.insert(k.clone(), v.to_owned());
+                }
+            }
+            Trigger::Eventarc {
+                event_type,
+                channel,
+                filters,
+            }
+        }
         "schedule" => {
             let text = s(trigger, "schedule")
                 .ok_or_else(|| format!("manifest: function {name:?}: schedule is required"))?;
@@ -232,6 +255,16 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                     with_auth_context,
                 } => json!({"type": "firestore", "eventType": format!("{}{}", event.event_type(), if *with_auth_context { ".withAuthContext" } else { "" }), "database": database, "document": document.as_str()}),
                 Trigger::PubSub { topic } => json!({"type": "pubsub", "topic": topic}),
+                Trigger::Eventarc {
+                    event_type,
+                    channel,
+                    filters,
+                } => json!({
+                    "type": "eventarc",
+                    "eventType": event_type,
+                    "channel": channel,
+                    "filters": filters,
+                }),
                 Trigger::Auth { event } => {
                     json!({"type": "auth", "eventType": event.event_type()})
                 }

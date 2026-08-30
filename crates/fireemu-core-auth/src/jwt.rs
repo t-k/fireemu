@@ -58,6 +58,32 @@ pub fn base64url_decode(text: &str) -> Result<Vec<u8>, JwtError> {
     Ok(out)
 }
 
+/// How a Security Rules surface (Firestore, Storage) verifies the ID token a caller
+/// presents, which is what the compatibility profile switches.
+///
+/// The pinned official emulators do not verify the token at all: the Storage emulator calls
+/// `jwt.decode` and builds `request.auth` from whatever comes back
+/// (`firebase-tools/lib/emulator/storage/rules/runtime.js`), and the Firestore emulator was
+/// measured to admit a token whose `sub` names no user, whose `exp` lies in 1970, that
+/// carries no `iss`, that names another project in `aud`, and even one whose `RS256`
+/// signature is garbage. `@firebase/rules-unit-testing` depends on that: its
+/// `authenticatedContext` mints an unsigned token with `iat: 0` and therefore `exp: 3600`
+/// for a user that need not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TokenAcceptance {
+    /// The `strict` profile: every token is an ID token of this session's Auth store, with
+    /// its issuer, audience, expiry on the virtual clock, subject and revocation checked.
+    #[default]
+    Verified,
+    /// The `firebase` profile: a token this store cannot verify is still accepted when it is
+    /// *unsigned* and minted for this project, and `request.auth` is then built from its
+    /// claims as given. Two checks the official emulators skip are kept deliberately: a
+    /// signed token must still verify against the session key, so a forged `RS256` token is
+    /// never a mock token, and the audience must still name the project, so a token of
+    /// another session or another project cannot cross the boundary.
+    EmulatorMock,
+}
+
 /// Token signing mode (`auth.idTokenSigning`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningMode {
@@ -310,6 +336,47 @@ pub fn verify_id_token(
     now: LogicalInstant,
 ) -> Result<TokenVerification, JwtError> {
     verify_id_token_decoded(token, store, now).map(|(v, _)| v)
+}
+
+/// Verifies the token a Security Rules surface received under `acceptance`, returning the
+/// claims `request.auth` is built from.
+///
+/// [`TokenAcceptance::Verified`] is exactly [`verify_id_token_decoded`].
+/// [`TokenAcceptance::EmulatorMock`] additionally admits the mock tokens the official
+/// Firestore and Storage emulators admit: an unsigned token, minted for this project, whose
+/// `sub` names nobody and whose `exp` and `iat` are never read. A token this store *can*
+/// verify always takes the verified path, so a real session token keeps its full meaning.
+pub fn verify_rules_token(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    acceptance: TokenAcceptance,
+) -> Result<DecodedToken, JwtError> {
+    match verify_id_token_decoded(token, store, now) {
+        Ok((_, decoded)) => Ok(decoded),
+        Err(verified_error) => {
+            // A session that installed a signer issues RS256 tokens and refuses unsigned ones
+            // on every surface (`auth.idTokenSigning: session-rsa`); the mock path would undo
+            // exactly that, so it is not offered there whatever the profile says.
+            if acceptance == TokenAcceptance::Verified || store.signer().is_some() {
+                return Err(verified_error);
+            }
+            // Only an unsigned token can be a mock token: `decode_token` without a signer
+            // accepts `alg: none` with an empty signature and nothing else, so a forged
+            // `RS256` token fails here rather than becoming an identity.
+            let decoded = decode_token(token, None)?;
+            let aud = decoded.string("aud").ok_or(JwtError::Malformed)?;
+            if aud != store.project_id() {
+                return Err(JwtError::WrongAudience {
+                    expected: store.project_id().to_owned(),
+                    actual: aud.to_owned(),
+                });
+            }
+            // `request.auth.uid` is the subject; a token without one names no caller.
+            decoded.sub().ok_or(JwtError::Malformed)?;
+            Ok(decoded)
+        }
+    }
 }
 
 /// [`verify_id_token`] returning the decoded token as well (claims for `request.auth`).

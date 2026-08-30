@@ -39,6 +39,7 @@ async fn drop_connection_faults_close_rest_and_reset_grpc_streams() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,

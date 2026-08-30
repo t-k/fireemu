@@ -13,7 +13,7 @@
 //! | `CC-05` | a README that does not carry the version-qualified claim sentence verbatim |
 //! | `CC-06` | a deferred or not-planned product that appears as supported in the manifest or the README |
 //! | `CC-07` | contradictory public statements: an item one entry calls `unimplemented` that another entry, or the contract's shared vocabulary, calls `implemented` |
-//! | `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow |
+//! | `CC-08` | a compatibility profile that sets a configuration key the canonical schema does not define, or a value it does not allow, and a profile name the schema's `profile` key does not accept (or accepts and the contract does not declare) |
 //!
 //! Artifact names resolve the way `tools/traceability-check` resolves them, so the two gates
 //! agree on what "an existing test" means: a `tests` name is a function defined in a Rust file
@@ -568,7 +568,38 @@ fn check_profiles(root: &Path, contract: &Value, problems: &mut Vec<String>) {
     let Some(schema) = read_json(root, CONFIG_SCHEMA_PATH, problems) else {
         return;
     };
+    // A profile the daemon cannot be put into is a document, not a switch: the names the
+    // contract declares and the values the `profile` key accepts have to be the same set.
+    let accepted: Vec<String> = schema
+        .get("properties")
+        .and_then(|p| p.get("profile"))
+        .and_then(|p| p.get("enum"))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if accepted.is_empty() {
+        problems.push(format!(
+            "CC-08: {CONFIG_SCHEMA_PATH} declares no enum for the profile key, so no profile can be selected at runtime"
+        ));
+    }
+    for name in &accepted {
+        if !profiles.contains_key(name) {
+            problems.push(format!(
+                "CC-08: {CONFIG_SCHEMA_PATH} accepts profile {name}, which {CONTRACT_PATH} does not declare"
+            ));
+        }
+    }
     for (name, profile) in profiles {
+        if !accepted.is_empty() && !accepted.contains(name) {
+            problems.push(format!(
+                "CC-08: profile {name} is declared but {CONFIG_SCHEMA_PATH} does not accept it as a value of the profile key, so no run can select it"
+            ));
+        }
         if str_field(profile, "intent").unwrap_or("").is_empty() {
             problems.push(format!("CC-08: profile {name} states no intent"));
         }

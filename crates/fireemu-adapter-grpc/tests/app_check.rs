@@ -227,6 +227,7 @@ async fn start(mode: BaselineMode) -> Harness {
         .expect("bind");
     let addr = listener.local_addr().expect("a local address");
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,

@@ -8,7 +8,11 @@
   "required": ["schemaVersion", "profile", "firestore"],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "profile": { "enum": ["deterministic", "compat", "chaos", "conformance"] },
+    "profile": {
+      "description": "Compatibility profile (spec/compatibility/contract.json). firebase reproduces the pinned official emulators, including their documented limitations; strict adds fireemu's own validation. The profile sets the defaults of firestore.indexValidationPolicy, firestore.enforceLimits and the ID-token semantics of the Security Rules surfaces; any explicit key wins over it.",
+      "enum": ["firebase", "strict"],
+      "default": "firebase"
+    },
     "bind": { "type": "string", "default": "127.0.0.1" },
     "projects": {
       "type": "object",

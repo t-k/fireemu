@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "profile": "deterministic",
+  "profile": "strict",
   "limits": { "catalog": "firestore-standard-2026-08-25", "queryCatalog": "firestore-standard-query-2026-08-25" },
   "firestore": { "edition": "standard", "apiMode": "mongodb-compatible" }
 }

@@ -29,6 +29,7 @@ const DB: &str = "projects/demo-app/databases/(default)";
 
 fn hub(rules: Option<&str>) -> Hub {
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -427,6 +428,7 @@ fn indexed_hub() -> Hub {
         ],
     });
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,

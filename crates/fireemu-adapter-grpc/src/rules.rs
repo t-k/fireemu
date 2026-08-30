@@ -7,6 +7,11 @@
 //! evaluated as unauthenticated. When no ruleset is loaded every request is allowed (the
 //! runtime prints a warning at start).
 //!
+//! How much of that verification a caller's token has to survive is the compatibility
+//! profile's decision, carried here as [`TokenAcceptance`]: the `firebase` profile also
+//! admits the unsigned mock tokens the official emulators admit (an unknown `sub`, an `exp`
+//! nobody reads), while `strict` keeps the full verification.
+//!
 //! Reads are authorized against the exact snapshot that is returned; writes are authorized
 //! inside the database critical section that commits them, against the sequentially staged
 //! state of the commit (a second write to a document created earlier in the same commit is
@@ -31,7 +36,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
-use fireemu_core_auth::jwt::verify_id_token_decoded;
+use fireemu_core_auth::jwt::{verify_rules_token, TokenAcceptance};
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
@@ -342,6 +347,9 @@ pub struct RulesEnforcer {
     /// Stores of the other session projects (tokens are verified against the store of
     /// their `aud`).
     registry: Option<Arc<fireemu_core_auth::store::AuthRegistry>>,
+    /// How a caller's ID token is verified: the compatibility profile decides
+    /// (`firebase` admits the official emulators' mock tokens, `strict` does not).
+    acceptance: TokenAcceptance,
 }
 
 impl RulesEnforcer {
@@ -357,6 +365,7 @@ impl RulesEnforcer {
             auth,
             clock,
             registry: None,
+            acceptance: TokenAcceptance::default(),
         }
     }
 
@@ -364,6 +373,15 @@ impl RulesEnforcer {
     #[must_use]
     pub fn with_registry(mut self, registry: Arc<fireemu_core_auth::store::AuthRegistry>) -> Self {
         self.registry = Some(registry);
+        self
+    }
+
+    /// Sets how a caller's ID token is verified. The default is
+    /// [`TokenAcceptance::Verified`], so a caller that forgets to pass the compatibility
+    /// profile gets the stricter behaviour rather than the looser one.
+    #[must_use]
+    pub const fn with_token_acceptance(mut self, acceptance: TokenAcceptance) -> Self {
+        self.acceptance = acceptance;
         self
     }
 
@@ -429,7 +447,7 @@ impl RulesEnforcer {
         let store = store_arc
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
-        let (_, decoded) = verify_id_token_decoded(token, &store, now)
+        let decoded = verify_rules_token(token, &store, now, self.acceptance)
             .map_err(|e| Status::unauthenticated(format!("invalid ID token: {e}")))?;
         drop(store);
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)

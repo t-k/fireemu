@@ -7,6 +7,7 @@ use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
 use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
@@ -20,7 +21,12 @@ use serde_json::{json, Value};
 const DOCS: &str = "/v1/projects/demo-app/databases/(default)/documents";
 
 fn state(rules: Option<&str>) -> RestState {
+    state_with(rules, TokenAcceptance::Verified)
+}
+
+fn state_with(rules: Option<&str>, acceptance: TokenAcceptance) -> RestState {
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -39,7 +45,7 @@ fn state(rules: Option<&str>) -> RestState {
             TotpPolicy::default(),
         )));
         let loaded = Arc::new(RwLock::new(LoadedRules::from_source(src).unwrap()));
-        Arc::new(RulesEnforcer::new(loaded, auth, clock))
+        Arc::new(RulesEnforcer::new(loaded, auth, clock).with_token_acceptance(acceptance))
     });
     RestState {
         local,
@@ -337,4 +343,55 @@ fn rest_consistency_selectors_are_mutually_exclusive() {
         json!({"structuredQuery": {"from": [{"collectionId": "n"}]}, "newTransaction": {}, "readTime": "2026-08-29T12:00:00Z"}),
     );
     assert_eq!(status, 400, "{err}");
+}
+
+/// The REST surface resolves its caller through the same [`RulesEnforcer`] as gRPC, so the
+/// compatibility profile has to reach it too. `createMockUserToken`'s defaults again:
+/// `iat: 0`, `exp: 3600`, a subject the Auth store has never heard of.
+const OWNER_RULES: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /owned/{uid} { allow read, write: if request.auth != null && request.auth.uid == uid; } } }";
+
+fn mock_user_token(sub: &str, project: &str) -> String {
+    let header = base64url_encode(br#"{"alg":"none","type":"JWT"}"#);
+    let payload = base64url_encode(
+        format!(
+            r#"{{"iss":"https://securetoken.google.com/{project}","aud":"{project}","iat":0,"exp":3600,"auth_time":0,"sub":"{sub}","user_id":"{sub}"}}"#
+        )
+        .as_bytes(),
+    );
+    format!("{header}.{payload}.")
+}
+
+#[test]
+fn the_profile_decides_whether_rest_admits_a_mock_token() {
+    let write = json!({"fields": {"v": {"integerValue": "1"}}});
+    let bearer = format!("Bearer {}", mock_user_token("alice", "demo-app"));
+
+    let firebase = state_with(Some(OWNER_RULES), TokenAcceptance::EmulatorMock);
+    let (status, body) = call_as(
+        &firebase,
+        "PATCH",
+        &format!("{DOCS}/owned/alice"),
+        write.clone(),
+        Some(&bearer),
+    );
+    assert_eq!(status, 200, "{body}");
+    // Still an identity: another subject's document is denied by the rule, not by the token.
+    let (status, _) = call_as(
+        &firebase,
+        "PATCH",
+        &format!("{DOCS}/owned/bob"),
+        write.clone(),
+        Some(&bearer),
+    );
+    assert_eq!(status, 403);
+
+    let strict = state_with(Some(OWNER_RULES), TokenAcceptance::Verified);
+    let (status, body) = call_as(
+        &strict,
+        "PATCH",
+        &format!("{DOCS}/owned/alice"),
+        write,
+        Some(&bearer),
+    );
+    assert_eq!(status, 401, "{body}");
 }

@@ -7,7 +7,7 @@ use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rules::RulesEnforcer;
 use fireemu_adapter_grpc::service::GatewayService;
-use fireemu_core_auth::jwt::encode_unsigned;
+use fireemu_core_auth::jwt::{base64url_encode, encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
@@ -70,9 +70,14 @@ struct Harness {
 }
 
 async fn start() -> Harness {
+    start_with(TokenAcceptance::Verified).await
+}
+
+async fn start_with(acceptance: TokenAcceptance) -> Harness {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -88,7 +93,9 @@ async fn start() -> Harness {
         TotpPolicy::default(),
     )));
     let rules = Arc::new(RwLock::new(LoadedRules::from_source(RULES).unwrap()));
-    let enforcer = Arc::new(RulesEnforcer::new(rules.clone(), auth.clone(), clock));
+    let enforcer = Arc::new(
+        RulesEnforcer::new(rules.clone(), auth.clone(), clock).with_token_acceptance(acceptance),
+    );
     let svc = FirestoreServer::new(GatewayService::local(gateway, backend).with_rules(enforcer));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -1310,6 +1317,111 @@ async fn transactions_are_bound_to_the_token_audience_too() {
             },
             &token,
         ))
+        .await
+        .is_ok());
+    h.handle.abort();
+}
+
+/// The token `@firebase/rules-unit-testing`'s `authenticatedContext(sub)` mints, byte for
+/// byte: `@firebase/util`'s `createMockUserToken` defaults `iat` to 0, so `exp` is 3600 --
+/// an hour after the epoch -- and `sub` names whoever the test asked for, existing or not.
+fn mock_user_token(sub: &str, project: &str) -> String {
+    let header = base64url_encode(br#"{"alg":"none","type":"JWT"}"#);
+    let payload = base64url_encode(
+        format!(
+            r#"{{"iss":"https://securetoken.google.com/{project}","aud":"{project}","iat":0,"exp":3600,"auth_time":0,"sub":"{sub}","user_id":"{sub}","firebase":{{"sign_in_provider":"custom","identities":{{}}}}}}"#
+        )
+        .as_bytes(),
+    );
+    format!("{header}.{payload}.")
+}
+
+fn profile_write(uid: &str) -> pb::CommitRequest {
+    commit(vec![set_write(
+        &format!("profiles/{uid}"),
+        &[("name", s("A name"))],
+    )])
+}
+
+#[tokio::test]
+async fn the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admits() {
+    // Measured against the pinned suite: the official Firestore emulator serves this write,
+    // because it never checks the subject against the Auth emulator and never reads `exp`.
+    // Nobody creates `alice` here, and the clock is far past the token's 1970 expiry.
+    let mut h = start_with(TokenAcceptance::EmulatorMock).await;
+    let token = mock_user_token("alice", "demo-app");
+    assert!(
+        h.client
+            .commit(with_bearer(profile_write("alice"), &token))
+            .await
+            .is_ok(),
+        "a mock token names its subject and the rule comparing it to the path allows"
+    );
+    // It is an identity, not a bypass: the same token is refused on another user's document.
+    let err = h
+        .client
+        .commit(with_bearer(profile_write("bob"), &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify() {
+    let mut h = start_with(TokenAcceptance::Verified).await;
+    let err = h
+        .client
+        .commit(with_bearer(
+            profile_write("alice"),
+            &mock_user_token("alice", "demo-app"),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().contains("invalid ID token"), "{err}");
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn the_firebase_profile_keeps_the_project_binding_and_the_signature_it_can_check() {
+    let mut h = start_with(TokenAcceptance::EmulatorMock).await;
+    // The official emulator admits a token minted for another project; fireemu does not, and
+    // the contract records that as a deliberate divergence of the firebase profile: a token
+    // must never cross a session or a project boundary.
+    let err = h
+        .client
+        .commit(with_bearer(
+            profile_write("alice"),
+            &mock_user_token("alice", "demo-other"),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().contains("audience"), "{err}");
+
+    // A token that claims to be signed is not a mock token: only `alg: none` is one, so a
+    // forged RS256 header can never buy the identity the unsigned path would have granted.
+    let header = base64url_encode(br#"{"alg":"RS256","typ":"JWT","kid":"nope"}"#);
+    let payload = base64url_encode(
+        br#"{"iss":"https://securetoken.google.com/demo-app","aud":"demo-app","iat":0,"exp":3600,"auth_time":0,"sub":"alice","user_id":"alice"}"#,
+    );
+    let err = h
+        .client
+        .commit(with_bearer(
+            profile_write("alice"),
+            &format!("{header}.{payload}.AAAA"),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+
+    // A real session token still takes the verified path, so a live user keeps every claim
+    // the store puts in it rather than being re-read as a mock.
+    let (uid, token) = h.user("real@example.com");
+    assert!(h
+        .client
+        .commit(with_bearer(profile_write(&uid), &token))
         .await
         .is_ok());
     h.handle.abort();

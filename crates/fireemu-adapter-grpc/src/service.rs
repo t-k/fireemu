@@ -749,6 +749,7 @@ mod tests {
     #[test]
     fn guards_refuse_a_caller_from_before_a_reset() {
         let gateway = Gateway {
+            enforce_limits: true,
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,

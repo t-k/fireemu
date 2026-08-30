@@ -144,7 +144,7 @@
     "firebase": {
       "intent": "Reproduce the behaviour the pinned Local Emulator Suite ships and Firebase documents, including its documented limitations. fireemu may not add a rejection in this profile: extra strictness belongs to the strict profile.",
       "sets": {
-        "firestore.indexValidationPolicy": "firebase",
+        "firestore.indexValidationPolicy": "emulator",
         "firestore.enforceLimits": false,
         "limits.enforcement": "observe",
         "limits.quotaAccounting": "off",
@@ -160,9 +160,15 @@
       "officialEmulatorDivergences": [
         {
           "key": "firestore.indexValidationPolicy",
-          "profileValue": "firebase",
+          "profileValue": "emulator",
           "emulatorValue": "emulator",
-          "note": "firebase reproduces the Firebase backend, which refuses a query whose composite index is not configured. The pinned official Firestore emulator does not check indexes at all, so a run that must reproduce the emulator rather than the backend sets emulator instead. Both values are official behaviour of a different oracle; conservative is not."
+          "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs and reports each assumption as FS_EMULATOR_INDEX_ASSUMED. The firebase value reproduces the Firebase backend instead, which refuses the same query; a run whose oracle is production rather than the emulator sets it explicitly. Both values are official behaviour of a different oracle; conservative is neither and belongs to the strict profile."
+        },
+        {
+          "key": "rules.idTokenVerification",
+          "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the project and a signed token still verified",
+          "emulatorValue": "no verification at all: the token is decoded and request.auth is built from whatever it carries",
+          "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The firebase profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. Both are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
         }
       ]
     },
@@ -183,7 +189,7 @@
       }
     }
   },
-  "profileStatus": "The two profiles are declared key sets, applied by writing the keys into a fireemu configuration file. There is no single runtime switch that applies them yet: the canonical schema's top-level profile key (deterministic / compat / chaos / conformance) is accepted and not yet interpreted. tools/compat-check checks every key and value a profile names against spec/config/fireemu.schema.json so the sets cannot drift from the configuration surface.",
+  "profileStatus": "The profile is a runtime switch. The canonical schema's top-level profile key takes exactly the two names declared here, firebase is its default, and the daemon derives three settings from it: firestore.indexValidationPolicy (emulator / conservative), firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query), and how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands). An explicit configuration key always wins over the profile's default for it. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. The remaining keys each profile sets are declared and not yet derived from it -- limits.enforcement, limits.quotaAccounting, limits.warningsAsErrors, rules.staticLimitChecks, rules.runtimeBudgets, auth.idTokenSigning, appCheck.enabled, events.delivery, scheduler.clock and projects.requireDemoPrefix are still written into a configuration file by hand -- so the switch is real but not yet total. tools/compat-check CC-08 checks every key and value a profile names against spec/config/fireemu.schema.json, and checks that the profile names declared here are exactly the values that schema's profile key accepts, so neither the sets nor the names can drift from the configuration surface.",
   "vocabulary": {
     "scopes": {
       "active": "In the supported-surface milestone. Either parity is claimed with evidence, the surface is a fireemu addition, or it is an open gap that blocks the complete-suite claim.",
@@ -386,10 +392,13 @@
           ],
           "evidence": {
             "tests": [
-              "standard_query_without_composite_index_is_failed_precondition_with_fragment"
+              "standard_query_without_composite_index_is_failed_precondition_with_fragment",
+              "the_same_official_limitation_is_served_under_firebase_and_refused_under_strict",
+              "the_limit_switch_turns_a_refusal_into_an_observation"
             ],
             "integration": [
-              "crates/fireemu-adapter-grpc/tests/gateway.rs"
+              "crates/fireemu-adapter-grpc/tests/gateway.rs",
+              "crates/fireemu/tests/profiles.rs"
             ],
             "conformance": [
               "firestore/missing-composite-index"
@@ -460,11 +469,17 @@
             }
           ],
           "evidence": {
-            "tests": [],
+            "tests": [
+              "the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admits",
+              "the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify",
+              "the_firebase_profile_keeps_the_project_binding_and_the_signature_it_can_check",
+              "the_profile_decides_whether_rest_admits_a_mock_token"
+            ],
             "integration": [
               "crates/fireemu-core-rules/tests/eval.rs",
               "crates/fireemu-core-rules/tests/lint.rs",
-              "crates/fireemu-adapter-grpc/tests/rules.rs"
+              "crates/fireemu-adapter-grpc/tests/rules.rs",
+              "crates/fireemu-adapter-grpc/tests/rest.rs"
             ],
             "conformance": [
               "firestore/rules-decisions"
@@ -761,7 +776,9 @@
             }
           ],
           "evidence": {
-            "tests": [],
+            "tests": [
+              "the_profile_decides_whether_storage_rules_admit_a_mock_token"
+            ],
             "integration": [
               "crates/fireemu-adapter-http/tests/storage.rs"
             ],

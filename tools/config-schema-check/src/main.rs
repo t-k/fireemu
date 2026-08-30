@@ -14,8 +14,8 @@
 //! 2. `limits.catalog` must belong to the configured edition;
 //! 3. `limits.queryCatalog` is required (`firestore-standard-query-*`) for Standard and must be
 //!    `null` for Enterprise;
-//! 4. `pipeline.executionMode = proxy` and `textSearch.fidelity = upstream-proxy` require
-//!    `profile = conformance`;
+//! 4. `pipeline.executionMode = proxy` and `textSearch.fidelity = upstream-proxy` forward to a
+//!    real Firestore backend, which no local emulator does; both are declared and refused;
 //! 5. `visibilityPolicy = virtual-lag` requires a non-null `visibilityLag`;
 //! 6. `fidelity = strict-validation-only` forbids `scorePrecision = exact`;
 //! 7. a non-`off` `appCheck.services.*` mode requires `appCheck.enabled`;
@@ -58,7 +58,6 @@ fn is_null_at(v: &Value, path: &[&str]) -> bool {
 /// Cross-field rules. Returns every violated rule.
 fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
     let mut problems = Vec::new();
-    let profile = str_at(cfg, &["profile"]).unwrap_or_default();
     let edition = str_at(cfg, &["firestore", "edition"]).unwrap_or_default();
     let api_mode = str_at(cfg, &["firestore", "apiMode"]).unwrap_or_default();
 
@@ -121,14 +120,15 @@ fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
 
     let pipeline_mode = str_at(cfg, &["firestore", "pipeline", "executionMode"]).unwrap_or("");
     let fidelity = str_at(cfg, &["firestore", "textSearch", "fidelity"]).unwrap_or("");
-    if profile != "conformance" {
-        if pipeline_mode == "proxy" {
-            problems.push("pipeline.executionMode proxy requires profile conformance".to_owned());
-        }
-        if fidelity == "upstream-proxy" {
-            problems
-                .push("textSearch.fidelity upstream-proxy requires profile conformance".to_owned());
-        }
+    if pipeline_mode == "proxy" {
+        problems.push(
+            "pipeline.executionMode proxy forwards to a real Firestore backend, which fireemu does not do".to_owned(),
+        );
+    }
+    if fidelity == "upstream-proxy" {
+        problems.push(
+            "textSearch.fidelity upstream-proxy forwards to a real Firestore backend, which fireemu does not do".to_owned(),
+        );
     }
 
     if str_at(cfg, &["firestore", "textSearch", "visibilityPolicy"]) == Some("virtual-lag")

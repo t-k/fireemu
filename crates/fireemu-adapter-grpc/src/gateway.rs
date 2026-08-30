@@ -83,6 +83,11 @@ pub struct Gateway {
     pub ctx: PlanningContext,
     /// Configured indexes.
     pub indexes: IndexSet,
+    /// Whether a Standard query limit violation refuses the query (`firestore.enforceLimits`,
+    /// which the compatibility profile defaults: `strict` enforces, `firebase` observes).
+    /// When it observes, every violation is reported as an `FS_LIMIT_OBSERVED:<id>` warning
+    /// and the query runs, which is what the official emulator does with the same query.
+    pub enforce_limits: bool,
 }
 
 impl Gateway {
@@ -98,13 +103,20 @@ impl Gateway {
                 fireemu_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS
             )));
         }
+        let mut warnings = Vec::new();
         if self.ctx.edition == FirestoreEdition::Standard {
-            canonical
-                .check_standard_limits()
-                .map_err(Rejection::QueryLimits)?;
+            if let Err(violations) = canonical.check_standard_limits() {
+                if self.enforce_limits {
+                    return Err(Rejection::QueryLimits(violations));
+                }
+                warnings.extend(
+                    violations
+                        .iter()
+                        .map(|v| format!("FS_LIMIT_OBSERVED:{}", v.limit_id)),
+                );
+            }
         }
         let decision = decide(&canonical, &self.indexes, &self.ctx);
-        let mut warnings = Vec::new();
         match &decision {
             IndexDecision::UseIndex { .. } => {}
             IndexDecision::AssumedIndex { requirement } => {

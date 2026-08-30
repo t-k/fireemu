@@ -39,11 +39,22 @@ impl Fixture {
             "conformance/package.json",
             &json!({"dependencies": {"firebase-tools": "15.28.2"}}).to_string(),
         );
+        fixture.write_config_schema(&json!(["firebase"]));
         fixture.write(
+            "README.md",
+            &format!("# fixture\n\nSome prose.\n\n{CLAIM}\n\nRealtime Database is deferred.\n"),
+        );
+        fixture
+    }
+
+    /// The canonical configuration schema, with `accepted` as the profile key's enum.
+    fn write_config_schema(&self, accepted: &Value) {
+        self.write(
             "spec/config/fireemu.schema.json",
             &json!({
                 "type": "object",
                 "properties": {
+                    "profile": {"enum": accepted},
                     "firestore": {
                         "type": "object",
                         "properties": {
@@ -55,11 +66,6 @@ impl Fixture {
             })
             .to_string(),
         );
-        fixture.write(
-            "README.md",
-            &format!("# fixture\n\nSome prose.\n\n{CLAIM}\n\nRealtime Database is deferred.\n"),
-        );
-        fixture
     }
 
     fn write(&self, relative: &str, contents: &str) {
@@ -442,6 +448,26 @@ fn cases() -> Vec<Case> {
                 set(contract, "profiles/firebase/sets", json!({"firestore.enforceLimits": "yes"}));
             },
             expect: Some("but the schema declares a boolean"),
+        },
+        // CC-08: a profile no run can select, because the schema's profile key does not
+        // accept its name. A declared profile that is not a runtime switch is a document.
+        Case {
+            name: "profile-name-the-schema-refuses",
+            mutate: |contract, _, fixture| {
+                let profile = contract["profiles"]["firebase"].clone();
+                set(contract, "profiles", json!({"lenient": profile}));
+                fixture.write_config_schema(&json!(["firebase"]));
+            },
+            expect: Some("profile lenient is declared but"),
+        },
+        // CC-08: the other direction -- a name a run can select that the contract does not
+        // declare, so nothing says what it means.
+        Case {
+            name: "profile-name-the-contract-omits",
+            mutate: |_, _, fixture| {
+                fixture.write_config_schema(&json!(["firebase", "strict"]));
+            },
+            expect: Some("accepts profile strict, which"),
         },
     ]
 }

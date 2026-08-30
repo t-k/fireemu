@@ -24,6 +24,7 @@ async fn start(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition,
             api_mode: FirestoreApiMode::Native,
@@ -307,4 +308,63 @@ async fn pipeline_and_listen_are_explicitly_unimplemented() {
         "passthrough without upstream fails closed"
     );
     handle.abort();
+}
+
+/// `firestore.enforceLimits`, which the compatibility profile defaults: `strict` refuses a
+/// query over a Standard limit, `firebase` reports it and runs the query, because refusing it
+/// is a rejection the official emulator does not make.
+#[test]
+fn the_limit_switch_turns_a_refusal_into_an_observation() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_firestore::value::Value;
+
+    let ctx = PlanningContext {
+        edition: FirestoreEdition::Standard,
+        api_mode: FirestoreApiMode::Native,
+        policy: IndexValidationPolicy::Emulator,
+    };
+    // Two `array-contains` in the same disjunction: one Standard query limit, no index
+    // question, so the two profiles differ in exactly one thing.
+    let contains = |path: &str, v: &str| FilterExpr::Field {
+        field: FieldPath::parse(path).unwrap(),
+        op: FieldOp::ArrayContains,
+        value: Value::String(v.to_owned()),
+    };
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("tasks").unwrap(),
+    ))
+    .with_filter(FilterExpr::And(vec![
+        contains("tags", "a"),
+        contains("labels", "b"),
+    ]));
+
+    let strict = Gateway {
+        enforce_limits: true,
+        ctx,
+        indexes: IndexSet::default(),
+    };
+    let rejection = strict.validate_query(&query).unwrap_err();
+    assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+    assert!(
+        rejection.to_string().contains("ARRAY-CONTAINS"),
+        "{rejection}"
+    );
+
+    let firebase = Gateway {
+        enforce_limits: false,
+        ctx,
+        indexes: IndexSet::default(),
+    };
+    let accepted = firebase
+        .validate_query(&query)
+        .expect("the firebase profile may add no rejection the official emulator does not make");
+    assert!(
+        accepted
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("FS_LIMIT_OBSERVED:")),
+        "the violation is still reported, as a warning: {:?}",
+        accepted.warnings
+    );
 }

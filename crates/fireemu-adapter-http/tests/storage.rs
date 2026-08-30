@@ -8,6 +8,7 @@ use fireemu_adapter_http::storage::{handle, StorageRequest, StorageState};
 use fireemu_adapter_http::storage_server::{
     serve_storage_with_budget, BodyBudget, MAX_STORAGE_BODY_BYTES,
 };
+use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_rules::runtime::LoadedRules;
@@ -22,6 +23,10 @@ const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 const BUCKET: &str = "demo-app.appspot.com";
 
 fn state(rules: Option<&str>) -> StorageState {
+    state_with(rules, TokenAcceptance::Verified)
+}
+
+fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> StorageState {
     StorageState {
         store: Mutex::new(ObjectStore::new(9)),
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
@@ -44,6 +49,7 @@ fn state(rules: Option<&str>) -> StorageState {
         faults: None,
         clock_observer: None,
         app_check_policy: None,
+        token_acceptance,
     }
 }
 
@@ -1843,4 +1849,72 @@ async fn a_failed_upload_releases_its_buffer() {
         "a failed upload publishes no object"
     );
     server.abort();
+}
+
+// ----------------------------------------------------------------------------------------
+// The compatibility profile on the Storage Rules surface
+// ----------------------------------------------------------------------------------------
+
+/// `@firebase/util`'s `createMockUserToken` output: unsigned, `iat: 0` so `exp` is an hour
+/// after the epoch, and a subject that need not exist. The official Storage emulator runs
+/// `jwt.decode` on exactly this and builds `request.auth` from the result, verifying nothing
+/// (`firebase-tools/lib/emulator/storage/rules/runtime.js`).
+fn mock_user_token(sub: &str, project: &str) -> String {
+    let header = base64url_encode(br#"{"alg":"none","type":"JWT"}"#);
+    let payload = base64url_encode(
+        format!(
+            r#"{{"iss":"https://securetoken.google.com/{project}","aud":"{project}","iat":0,"exp":3600,"auth_time":0,"sub":"{sub}","user_id":"{sub}"}}"#
+        )
+        .as_bytes(),
+    );
+    format!("{header}.{payload}.")
+}
+
+const OWNED_STORAGE_RULES: &str = "rules_version = '2';\nservice firebase.storage { match /b/{bucket}/o { match /owned/{uid}/{file=**} { allow read, write: if request.auth != null && request.auth.uid == uid; } } }";
+
+fn upload_as(s: &StorageState, path: &str, authorization: &str) -> u16 {
+    handle(
+        s,
+        req(
+            "POST",
+            &format!(
+                "/v0/b/{BUCKET}/o?name={}&uploadType=media",
+                path.replace('/', "%2F")
+            ),
+            &[
+                ("authorization", authorization),
+                ("content-type", "text/plain"),
+            ],
+            b"hello",
+        ),
+    )
+    .status
+}
+
+#[test]
+fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
+    let bearer = format!("Firebase {}", mock_user_token("alice", "demo-app"));
+
+    let firebase = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::EmulatorMock);
+    assert_eq!(
+        upload_as(&firebase, "owned/alice/x.txt", &bearer),
+        200,
+        "the firebase profile builds request.auth from the mock token, as the official emulator does"
+    );
+    assert_eq!(
+        upload_as(&firebase, "owned/bob/x.txt", &bearer),
+        403,
+        "and the rule, not the token, is what refuses another subject's prefix"
+    );
+    // The audience binding survives the profile: a token minted for another project is not
+    // an identity here even though the official emulator would accept it.
+    let foreign = format!("Firebase {}", mock_user_token("alice", "demo-other"));
+    assert_eq!(upload_as(&firebase, "owned/alice/y.txt", &foreign), 401);
+
+    let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
+    assert_eq!(
+        upload_as(&strict, "owned/alice/x.txt", &bearer),
+        401,
+        "under strict the token names no user of the Auth store, so the caller is refused"
+    );
 }

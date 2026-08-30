@@ -55,6 +55,7 @@ fn harness(mode: BaselineMode) -> Harness {
         faults: None,
         clock_observer: None,
         app_check_policy: fixture::policy(&app_check, "storage", mode),
+        token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
     };
     Harness {
         storage,

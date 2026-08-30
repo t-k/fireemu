@@ -33,6 +33,7 @@ async fn start() -> (
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -70,6 +71,7 @@ async fn start_with_edition(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition,
             api_mode: FirestoreApiMode::Native,
@@ -1174,6 +1176,7 @@ async fn list_page_tokens_are_bound_to_their_listing() {
 #[tokio::test]
 async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -1236,6 +1239,7 @@ async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
 async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
     use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -1505,9 +1509,11 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
     use fireemu_core_session::tenancy::Scope;
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -1694,6 +1700,7 @@ impl Gate {
 
 fn lock_test_backend() -> Arc<LocalBackend> {
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,

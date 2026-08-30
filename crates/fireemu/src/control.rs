@@ -166,10 +166,15 @@ pub fn capability_entries() -> Value {
 }
 
 /// Capability manifest (`GET /v1/capabilities`, spec 4).
+///
+/// `profile` is the compatibility profile the run is executing under: every capability below
+/// is described as it behaves in that profile, so a client reading the manifest knows which
+/// of the two behaviours it is being told about.
 #[must_use]
-pub fn capabilities_manifest() -> Value {
+pub fn capabilities_manifest(profile: crate::config::CompatibilityProfile) -> Value {
     json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "profile": profile.as_str(),
         "capabilities": capability_entries(),
     })
 }

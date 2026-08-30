@@ -132,7 +132,7 @@ fn app_check_config(dir: &Path) -> PathBuf {
         &path,
         r#"{
   "schemaVersion": 1,
-  "profile": "deterministic",
+  "profile": "strict",
   "firestore": { "edition": "standard", "apiMode": "native" },
   "appCheck": {
     "enabled": true,

@@ -164,13 +164,21 @@ fn main() -> ExitCode {
             "emulators:export is not supported yet: fireemu has no on-disk import / export artifact format. Capture state with POST /v1/sessions/{session}/snapshots instead.",
         )),
         Some("doctor") => doctor::run(),
-        Some("capabilities") => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&control::capabilities_manifest()).unwrap_or_default()
-            );
-            ExitCode::SUCCESS
-        }
+        // The manifest describes the behaviour of one profile, so the command takes the same
+        // options the daemon does and reports the profile they resolve to.
+        Some("capabilities") => match parse_options(&args[1..]) {
+            Ok(options) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&control::capabilities_manifest(
+                        options.cfg.profile
+                    ))
+                    .unwrap_or_default()
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e),
+        },
         _ => usage(),
     }
 }
@@ -781,6 +789,7 @@ fn storage_state(
         faults: Some(faults.clone()),
         clock_observer,
         app_check_policy,
+        token_acceptance: cfg.token_acceptance,
     }))
 }
 
@@ -902,6 +911,16 @@ fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: BoundAddrs) {
     println!(
         "  control API:      http://{}/v1/  (health: /health/live)",
         addrs.control
+    );
+    println!(
+        "  profile: {} ({})",
+        cfg.profile.as_str(),
+        match cfg.profile {
+            config::CompatibilityProfile::Firebase =>
+                "reproduces the official emulators, including their documented limitations",
+            config::CompatibilityProfile::Strict =>
+                "adds fireemu's own validation on top of the official behaviour",
+        }
     );
     println!(
         "  edition: {}   clock: {}{}",
@@ -1065,7 +1084,7 @@ fn control_state(
         clock: clock.clone(),
         require_demo_prefix: cfg.require_demo_prefix,
         edition: cfg.edition,
-        capabilities: control::capabilities_manifest(),
+        capabilities: control::capabilities_manifest(cfg.profile),
         rules: rules.clone(),
         storage_rules: storage_rules.clone(),
         reset_hooks,
@@ -1126,6 +1145,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     let result = runtime.block_on(async move {
         let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
         let gateway = Gateway {
+            enforce_limits: cfg.enforce_limits,
             ctx: PlanningContext {
                 edition: cfg.edition,
                 api_mode: cfg.api_mode,
@@ -1440,7 +1460,8 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let enforcer = cfg.rules_enforced.then(|| {
             Arc::new(
                 RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
-                    .with_registry(registry.clone()),
+                    .with_registry(registry.clone())
+                    .with_token_acceptance(cfg.token_acceptance),
             )
         });
         let mut service = GatewayService::local(gateway.clone(), backend.clone());

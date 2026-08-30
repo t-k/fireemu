@@ -4,10 +4,83 @@
 //! that typos never silently change behaviour (the JSON schema in `spec/config` is the
 //! authority; this loader enforces the same rule on the subset it understands).
 
+use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_firestore::index::IndexValidationPolicy;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::Value;
+
+/// The compatibility profile (`profile`), the one switch that decides whether fireemu
+/// reproduces the pinned official emulators or adds its own validation.
+///
+/// The two profiles are declared in `spec/compatibility/contract.json`; this enum is the
+/// half the daemon executes. The keys a profile only *declares* stay declared: what the
+/// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`] and
+/// [`Self::token_acceptance`], and an explicit configuration key always wins over all three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompatibilityProfile {
+    /// Reproduce the behaviour the pinned Local Emulator Suite ships, including its
+    /// documented limitations. This is the profile the README's compatibility claim is made
+    /// under, so it is the default: a project that installs fireemu instead of the official
+    /// suite gets the official suite's behaviour without configuring anything.
+    #[default]
+    Firebase,
+    /// Add fireemu's own validation on top. Every difference it makes may only refuse more
+    /// than the official emulator, never less.
+    Strict,
+}
+
+impl CompatibilityProfile {
+    /// Parses the canonical configuration value.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "firebase" => Some(Self::Firebase),
+            "strict" => Some(Self::Strict),
+            _ => None,
+        }
+    }
+
+    /// The canonical configuration value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Firebase => "firebase",
+            Self::Strict => "strict",
+        }
+    }
+
+    /// The default of `firestore.indexValidationPolicy`.
+    ///
+    /// The pinned official Firestore emulator does not check composite indexes at all, so
+    /// the profile that reproduces it assumes them (`emulator`) and reports each one it
+    /// assumed. `strict` refuses the query instead, with the `firestore.indexes.json`
+    /// fragment production would need. `firebase` remains available as an explicit value for
+    /// a run whose oracle is the Firebase backend rather than the emulator.
+    #[must_use]
+    pub const fn index_policy(self) -> IndexValidationPolicy {
+        match self {
+            Self::Firebase => IndexValidationPolicy::Emulator,
+            Self::Strict => IndexValidationPolicy::Conservative,
+        }
+    }
+
+    /// The default of `firestore.enforceLimits`: whether a Standard query limit violation
+    /// refuses the query or is only reported.
+    #[must_use]
+    pub const fn enforce_limits(self) -> bool {
+        matches!(self, Self::Strict)
+    }
+
+    /// How a caller's ID token is verified on the Security Rules surfaces.
+    #[must_use]
+    pub const fn token_acceptance(self) -> TokenAcceptance {
+        match self {
+            Self::Firebase => TokenAcceptance::EmulatorMock,
+            Self::Strict => TokenAcceptance::Verified,
+        }
+    }
+}
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
 pub const DEFAULT_HUB_PORT: u16 = 4400;
@@ -19,6 +92,9 @@ pub const DEFAULT_UI_PORT: u16 = 4000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
 pub struct RuntimeConfig {
+    /// Compatibility profile (`profile`). It sets the defaults of [`Self::index_policy`],
+    /// [`Self::enforce_limits`] and [`Self::token_acceptance`]; an explicit key wins.
+    pub profile: CompatibilityProfile,
     /// Firestore gRPC bind address.
     pub firestore_addr: String,
     /// HTTP (Auth REST + control API) bind address.
@@ -29,8 +105,15 @@ pub struct RuntimeConfig {
     pub edition: FirestoreEdition,
     /// API mode.
     pub api_mode: FirestoreApiMode,
-    /// Index validation policy.
+    /// Index validation policy (`firestore.indexValidationPolicy`; profile default).
     pub index_policy: IndexValidationPolicy,
+    /// Whether a Standard query limit violation refuses the query
+    /// (`firestore.enforceLimits`; profile default). When it does not, each violation is
+    /// reported as an `FS_LIMIT_OBSERVED:<id>` warning and the query runs.
+    pub enforce_limits: bool,
+    /// How a caller's ID token is verified on the Firestore and Storage Rules surfaces
+    /// (profile-derived; there is no key of its own).
+    pub token_acceptance: TokenAcceptance,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
     /// Initial virtual clock instant.
@@ -224,13 +307,17 @@ impl AppCheckConfig {
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
+        let profile = CompatibilityProfile::default();
         Self {
+            profile,
             firestore_addr: "127.0.0.1:8080".to_owned(),
             http_addr: "127.0.0.1:9099".to_owned(),
             storage_addr: "127.0.0.1:9199".to_owned(),
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            index_policy: IndexValidationPolicy::Conservative,
+            index_policy: profile.index_policy(),
+            enforce_limits: profile.enforce_limits(),
+            token_acceptance: profile.token_acceptance(),
             require_demo_prefix: true,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
@@ -984,6 +1071,16 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
 ];
 
 impl RuntimeConfig {
+    /// Selects the compatibility profile and rewrites the settings it derives. Every key the
+    /// profile decides is written here and nowhere else, so an explicit key parsed afterwards
+    /// simply overwrites it.
+    pub fn set_profile(&mut self, profile: CompatibilityProfile) {
+        self.profile = profile;
+        self.index_policy = profile.index_policy();
+        self.enforce_limits = profile.enforce_limits();
+        self.token_acceptance = profile.token_acceptance();
+    }
+
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
         for key in d.keys() {
             if ![
@@ -1368,6 +1465,17 @@ impl RuntimeConfig {
             return Err(ConfigError("schemaVersion must be 1".into()));
         }
         let mut cfg = Self::default();
+        // The profile is read first: it only moves the defaults every explicit key below
+        // then overrides, so the order of the keys in the file never changes the result.
+        if let Some(p) = obj.get("profile") {
+            let p = p
+                .as_str()
+                .ok_or_else(|| ConfigError("profile must be a string".to_owned()))?;
+            cfg.set_profile(
+                CompatibilityProfile::parse_config(p)
+                    .ok_or_else(|| ConfigError(format!("unknown profile {p:?}")))?,
+            );
+        }
         if let Some(bind) = obj.get("bind").and_then(Value::as_str) {
             if bind != "127.0.0.1" && bind != "localhost" && bind != "::1" {
                 return Err(ConfigError(format!(
@@ -1401,6 +1509,9 @@ impl RuntimeConfig {
             }
             if let Some(f) = fs.get("indexFile").and_then(Value::as_str) {
                 cfg.index_file = Some(f.to_owned());
+            }
+            if let Some(b) = fs.get("enforceLimits").and_then(Value::as_bool) {
+                cfg.enforce_limits = b;
             }
         }
         if cfg.edition == FirestoreEdition::Standard
@@ -1477,10 +1588,99 @@ mod tests {
     fn parse(auth: &Value) -> Result<RuntimeConfig, ConfigError> {
         RuntimeConfig::from_json(&json!({
             "schemaVersion": 1,
-            "profile": "deterministic",
+            "profile": "strict",
             "firestore": {"edition": "standard", "apiMode": "native"},
             "auth": auth,
         }))
+    }
+
+    // ----------------------------------------------------------------------------------
+    // The compatibility profile (spec/compatibility/contract.json)
+    // ----------------------------------------------------------------------------------
+
+    fn with_profile(extra: Value) -> Result<RuntimeConfig, ConfigError> {
+        let mut json = json!({
+            "schemaVersion": 1,
+            "firestore": {"edition": "standard", "apiMode": "native"},
+        });
+        let (Value::Object(base), Value::Object(extra)) = (&mut json, extra) else {
+            unreachable!("both literals are objects")
+        };
+        for (k, v) in extra {
+            base.insert(k, v);
+        }
+        RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn the_profile_sets_the_defaults_it_owns_and_firebase_is_the_default_profile() {
+        // The claim in README.md is made under the firebase profile, so a configuration that
+        // names no profile at all runs under it: installing fireemu instead of the official
+        // suite reproduces the official suite.
+        let default = with_profile(json!({})).unwrap();
+        assert_eq!(default.profile, CompatibilityProfile::Firebase);
+        assert_eq!(RuntimeConfig::default().profile, default.profile);
+
+        // firebase: the pinned official Firestore emulator checks no composite index, does
+        // not refuse a query over a Standard limit, and admits the mock tokens
+        // @firebase/rules-unit-testing mints.
+        let firebase = with_profile(json!({"profile": "firebase"})).unwrap();
+        assert_eq!(firebase.index_policy, IndexValidationPolicy::Emulator);
+        assert!(!firebase.enforce_limits);
+        assert_eq!(firebase.token_acceptance, TokenAcceptance::EmulatorMock);
+
+        // strict: every one of those becomes a refusal.
+        let strict = with_profile(json!({"profile": "strict"})).unwrap();
+        assert_eq!(strict.index_policy, IndexValidationPolicy::Conservative);
+        assert!(strict.enforce_limits);
+        assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
+    }
+
+    #[test]
+    fn an_explicit_key_wins_over_the_profile_whichever_order_it_is_written_in() {
+        // The profile only moves defaults, so a key that names a value keeps it. Both keys
+        // sit in sections parsed after the profile and one (firestore) is parsed before the
+        // profile appears in the file, which is why the loader reads the profile first.
+        let cfg = with_profile(json!({
+            "profile": "firebase",
+            "firestore": {
+                "edition": "standard",
+                "apiMode": "native",
+                "indexValidationPolicy": "conservative",
+                "enforceLimits": true,
+            },
+        }))
+        .unwrap();
+        assert_eq!(cfg.profile, CompatibilityProfile::Firebase);
+        assert_eq!(cfg.index_policy, IndexValidationPolicy::Conservative);
+        assert!(cfg.enforce_limits);
+
+        let cfg = with_profile(json!({
+            "profile": "strict",
+            "firestore": {
+                "edition": "standard",
+                "apiMode": "native",
+                "indexValidationPolicy": "emulator",
+                "enforceLimits": false,
+            },
+        }))
+        .unwrap();
+        assert_eq!(cfg.profile, CompatibilityProfile::Strict);
+        assert_eq!(cfg.index_policy, IndexValidationPolicy::Emulator);
+        assert!(!cfg.enforce_limits);
+        // The token semantics have no key of their own: the profile is the only way to ask
+        // for them, so an explicit index policy never quietly loosens them.
+        assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
+    }
+
+    #[test]
+    fn an_unknown_profile_is_refused_rather_than_ignored() {
+        // The names are the contract's; a typo must not silently select the default, which
+        // is what "accepted and not interpreted" used to do.
+        let e = with_profile(json!({"profile": "compat"})).unwrap_err();
+        assert!(e.0.contains("unknown profile"), "{}", e.0);
+        let e = with_profile(json!({"profile": true})).unwrap_err();
+        assert!(e.0.contains("profile must be a string"), "{}", e.0);
     }
 
     // ----------------------------------------------------------------------------------
@@ -1492,7 +1692,7 @@ mod tests {
     fn app_check(section: &Value) -> Result<AppCheckConfig, ConfigError> {
         RuntimeConfig::from_json(&json!({
             "schemaVersion": 1,
-            "profile": "deterministic",
+            "profile": "strict",
             "firestore": {"edition": "standard", "apiMode": "native"},
             "appCheck": section,
         }))
@@ -1527,7 +1727,7 @@ mod tests {
         // A configuration without the section is exactly the default.
         let parsed = RuntimeConfig::from_json(&json!({
             "schemaVersion": 1,
-            "profile": "deterministic",
+            "profile": "strict",
             "firestore": {"edition": "standard", "apiMode": "native"},
         }))
         .unwrap();
@@ -1655,7 +1855,7 @@ mod tests {
         assert_eq!(
             RuntimeConfig::from_json(&json!({
                 "schemaVersion": 1,
-                "profile": "deterministic",
+                "profile": "strict",
                 "firestore": {"edition": "standard", "apiMode": "native"},
                 "appCheck": true,
             })),

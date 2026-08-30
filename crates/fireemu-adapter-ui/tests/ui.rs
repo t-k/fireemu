@@ -33,6 +33,7 @@ fn state() -> Arc<UiState> {
 #[allow(clippy::too_many_lines)]
 fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
     let gateway = Gateway {
+        enforce_limits: true,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
@@ -67,6 +68,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         faults: None,
         clock_observer: None,
         app_check_policy: None,
+        token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
     });
     let control = Arc::new(ControlState {
         clock: clock.clone(),

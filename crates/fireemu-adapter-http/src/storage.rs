@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_auth::jwt::verify_id_token_decoded;
+use fireemu_core_auth::jwt::{verify_rules_token, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
     RulesService,
@@ -97,6 +97,10 @@ pub struct StorageState {
     /// The App Check baseline policy of Cloud Storage (`appCheck.services.storage`). `None`
     /// is the `off` mode: no header is collected and nothing is classified.
     pub app_check_policy: Option<Arc<ServiceAdmission>>,
+    /// How a caller's ID token is verified before Storage Rules see it: the compatibility
+    /// profile decides (`firebase` admits the official emulator's mock tokens, `strict`
+    /// does not).
+    pub token_acceptance: TokenAcceptance,
 }
 
 impl StorageState {
@@ -835,7 +839,7 @@ impl StorageState {
                 "invalid ID token: audience {aud:?} does not match the bucket's project {project:?}"
             ));
         }
-        let (_, decoded) = verify_id_token_decoded(token, &store, self.now())
+        let decoded = verify_rules_token(token, &store, self.now(), self.token_acceptance)
             .map_err(|e| format!("invalid ID token: {e}"))?;
         drop(store);
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)

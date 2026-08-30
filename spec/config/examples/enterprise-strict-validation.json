@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "profile": "deterministic",
+  "profile": "strict",
   "bind": "127.0.0.1",
   "projects": {
     "requireDemoPrefix": true

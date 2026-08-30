@@ -205,7 +205,9 @@
   },
   "AUTH-RULES-1": {
     "notes": [
-      "request.auth from verified ID tokens on every Firestore surface; Bearer owner bypasses"
+      "request.auth from verified ID tokens on every Firestore surface; Bearer owner bypasses",
+      "the compatibility profile decides how much verification a caller's token must survive: under firebase the unsigned mock tokens the official emulators admit are admitted too (an unknown sub, an exp nobody reads), so @firebase/rules-unit-testing works unchanged; under strict the issuer, audience, virtual-clock expiry, subject and revocation are all checked",
+      "two checks stay on in both profiles, and spec/compatibility/contract.json records them as deliberate divergences of the firebase profile: the audience must name the project, and a token that claims to be signed must verify against the session key"
     ],
     "status": "implemented"
   },
@@ -304,6 +306,8 @@
   "FS-GW-1": {
     "notes": [
       "firestore.indexValidationPolicy = emulator serves queries whose composite index is not configured (FS_EMULATOR_INDEX_ASSUMED warning), like the Firebase Emulator Suite; firebase / conservative keep rejecting them with FAILED_PRECONDITION",
+      "the compatibility profile sets that policy: firebase (the default) selects emulator, so the gateway admits what the pinned official emulator admits, and strict selects conservative; an explicit firestore.indexValidationPolicy wins over both",
+      "firestore.enforceLimits follows the profile the same way: under strict a Standard query limit violation refuses the query with INVALID_ARGUMENT, under firebase it is reported as an FS_LIMIT_OBSERVED:<limit id> warning and the query runs",
       "conformance: firestore/missing-composite-index (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "precision": "conservative",
@@ -444,6 +448,7 @@
     ],
     "notes": [
       "query proofs are sound, not complete: a rule that reads an unconstrained field denies the query",
+      "the principal request.auth is built from follows the compatibility profile on both the Firestore and the Storage Rules surfaces (see AUTH-RULES-1); the rules themselves are evaluated identically under both profiles",
       "request.query.orderBy is rendered as \"field ASC, other DESC\" (the Emulator's form; production's rendering is undocumented)",
       "string.matches()/replace(): RE2-style subset without lookarounds, flags or word boundaries",
       "conformance: firestore/rules-decisions (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"

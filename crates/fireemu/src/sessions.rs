@@ -253,6 +253,7 @@ pub(crate) mod tests {
 
     fn projects(gate: &AppCheckGate) -> Projects {
         let gateway = Gateway {
+            enforce_limits: true,
             ctx: PlanningContext {
                 edition: FirestoreEdition::Standard,
                 api_mode: FirestoreApiMode::Native,
@@ -281,6 +282,7 @@ pub(crate) mod tests {
                 faults: None,
                 clock_observer: None,
                 app_check_policy: None,
+                token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
             }),
             registry: Arc::new(AuthRegistry::new("demo-app", auth_store)),
             seed: 1,

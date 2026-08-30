@@ -163,7 +163,7 @@ fn inspect_functions_passes_the_node_inspector_through_to_the_runner() {
         "fireemu.json",
         r#"{
   "schemaVersion": 1,
-  "profile": "deterministic",
+  "profile": "strict",
   "firestore": { "edition": "standard", "apiMode": "native" },
   "functions": { "runner": ["python3", "runner.py"] }
 }
@@ -257,7 +257,7 @@ fn config_accepts_a_firebase_json_as_well_as_the_canonical_configuration() {
         "fireemu.json",
         r#"{
   "schemaVersion": 1,
-  "profile": "deterministic",
+  "profile": "strict",
   "firestore": { "edition": "standard", "apiMode": "native" },
   "daemon": { "authProject": "demo-canonical" }
 }

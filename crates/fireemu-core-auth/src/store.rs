@@ -1874,6 +1874,68 @@ impl AuthStore {
     }
 }
 
+/// What a restore could not bring back faithfully.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RestoreReport {
+    /// Enrolled TOTP factors whose secret the live store no longer held (withdrawn, the
+    /// account deleted, or the session reset since the capture); they were dropped from
+    /// the restored account rather than restored unusable.
+    pub totp_factors_dropped: usize,
+}
+
+/// A default snapshot of an Auth store: everything the store owns except TOTP secret
+/// material. Enrolled TOTP factors are kept with a detached secret and pending TOTP
+/// enrollments are not kept at all, so the captured part holds no shared secret
+/// (`INV-AUTH-003`, ADR-034). On restore each factor is rebound to the secret the live
+/// store still holds for the same enrollment; a factor whose secret is gone is dropped and
+/// counted in the [`RestoreReport`], never restored as an unusable factor and never claimed
+/// faithful.
+#[derive(Debug, Clone)]
+pub struct AuthSnapshot(AuthStore);
+
+impl AuthSnapshot {
+    /// Copies `store` without its TOTP secret material.
+    #[must_use]
+    pub fn capture(store: &AuthStore) -> Self {
+        let mut copy = store.clone();
+        for user in copy.users.values_mut() {
+            user.mfa.detach_totp_secrets();
+        }
+        Self(copy)
+    }
+
+    /// Whether no user of the snapshot holds any TOTP secret material. Always true for a
+    /// snapshot this type produced; the test proves it rather than trusting the constructor.
+    #[must_use]
+    pub fn holds_no_totp_secret(&self) -> bool {
+        self.0.users.values().all(|u| u.mfa.holds_no_totp_secret())
+    }
+
+    /// The project the snapshot was taken from.
+    #[must_use]
+    pub fn project_id(&self) -> &str {
+        self.0.project_id()
+    }
+
+    /// Replaces `live` with the snapshot, rebinding TOTP secrets from what `live` held.
+    pub fn restore_into(&self, live: &mut AuthStore) -> RestoreReport {
+        let mut restored = self.0.clone();
+        let mut report = RestoreReport::default();
+        for user in restored.users.values_mut() {
+            let dropped = match live.users.get(&user.local_id) {
+                Some(current) => user.mfa.rebind_totp_secrets(&current.mfa),
+                None => user.mfa.rebind_totp_secrets(&MfaState::default()),
+            };
+            report.totp_factors_dropped += dropped;
+        }
+        // The signer is process state shared by every copy; keep whichever the live store
+        // has (a snapshot taken before a signer was installed must not uninstall it).
+        restored.signer = live.signer.clone().or(restored.signer);
+        *live = restored;
+        report
+    }
+}
+
 /// The Auth stores of every project a daemon serves: the configured (default) project plus
 /// the projects created as sessions through the control API. Tokens name their project in
 /// `aud`, so a verifier picks the store by audience.

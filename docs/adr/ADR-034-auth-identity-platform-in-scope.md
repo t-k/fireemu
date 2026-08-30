@@ -21,3 +21,24 @@ rejection, enrollment expiry) testable without sleeping.
   policies and conformance items, never claimed as exact.
 - The official Auth Emulator is classified `OFFICIAL_EMULATOR_DIVERGENCE` for TOTP; real-service
   conformance requires Identity Platform and is opt-in.
+
+## Amendment (2026-08-31): the default snapshot policy for TOTP secrets
+
+`INV-AUTH-003` says shared secrets are never written to default snapshots. The Auth snapshot
+hook now captures an `AuthSnapshot` rather than a copy of the store:
+
+- Enrolled TOTP factors are captured with a *detached* secret (an empty buffer): the
+  enrollment id, display name, enrollment time and replay boundary are kept, the secret is not.
+- Pending TOTP enrollments are not captured at all; a restore lands on a store where the
+  enrollment session is unknown, which is what a client sees after the session expires.
+- On restore each detached factor is rebound to the secret the live store still holds for the
+  same user and enrollment id, and the replay boundary keeps the higher of the two accepted
+  steps (`INV-AUTH-001`). A factor whose secret is gone by then (withdrawn, the account
+  deleted, or the session reset since the capture) is dropped from the restored account and
+  counted in a `RestoreReport`, which the daemon prints to stderr. A factor is never restored
+  with a secret that verifies nothing, and a restore that dropped factors is never claimed
+  faithful.
+- `TotpSecret` zeroes its buffer when dropped (an ordinary write the crate keeps with
+  `black_box`; the crate forbids `unsafe`), and a detached secret never matches a code.
+
+There is no sensitive snapshot mode: a snapshot that would carry secrets is not offered.

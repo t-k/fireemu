@@ -120,6 +120,50 @@ export const Field: Component<{ label: string; children: JSX.Element; mono?: boo
   </div>
 );
 
+/**
+ * A read-only value with a copy button. The value is rendered from the signal it is given
+ * and is never written anywhere else: the caller owns its lifetime.
+ */
+export const CopyField: Component<{
+  label: string;
+  value: string;
+  testId?: string | undefined;
+}> = (props) => {
+  const [copied, setCopied] = createSignal(false);
+  const [field, setField] = createSignal<HTMLInputElement | undefined>();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(props.value);
+    } catch {
+      // No clipboard permission (or no clipboard at all): select the text so the reader can
+      // copy it by hand rather than losing a value that is shown exactly once.
+      field()?.select();
+    }
+    setCopied(true);
+  };
+  return (
+    <div class="mb-2">
+      <label class="label" for={props.testId}>
+        {props.label}
+      </label>
+      <div class="flex items-center gap-2">
+        <input
+          id={props.testId}
+          ref={setField}
+          class="input mono"
+          readOnly
+          value={props.value}
+          data-testid={props.testId}
+          onFocus={(e) => e.currentTarget.select()}
+        />
+        <AsyncButton onClick={copy} testId={props.testId ? `${props.testId}-copy` : undefined}>
+          {copied() ? t("app.copied") : t("app.copy")}
+        </AsyncButton>
+      </div>
+    </div>
+  );
+};
+
 export const Spinner: Component = () => (
   <span class="text-sm text-zinc-500" role="status">
     {t("app.loading")}

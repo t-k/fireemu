@@ -46,13 +46,18 @@ fn state() -> Arc<UiState> {
     let storage = Arc::new(StorageState {
         store: Mutex::new(ftd_core_storage::store::StorageState::new(9)),
         clock: clock.clone(),
-        auth: auth_store.clone(),
+        auth: Arc::new(ftd_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            auth_store.clone(),
+        )),
+        tenancy: None,
         rules: storage_rules.clone(),
         project: "demo-app".to_owned(),
         events: None,
         barrier: None,
         firestore: None,
         faults: None,
+        clock_observer: None,
     });
     let control = Arc::new(ControlState {
         clock: clock.clone(),
@@ -67,13 +72,14 @@ fn state() -> Arc<UiState> {
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(BTreeMap::new()),
-        faults: Some(Arc::new(Mutex::new(
-            ftd_core_session::fault::FaultState::default(),
-        ))),
+        faults: Some(Arc::new(ftd_core_session::fault::FaultRegistry::new())),
         text_indexes: Arc::new(Mutex::new(
-            ftd_core_firestore::text_index::TextIndexSet::default(),
+            ftd_core_firestore::text_index::TextIndexCatalog::default(),
         )),
         default_project: "demo-app".to_owned(),
+        tenancy: Arc::new(RwLock::new(ftd_core_session::tenancy::Tenancy::new(
+            "demo-app",
+        ))),
         sessions: Mutex::new(BTreeMap::from([(
             "default".to_owned(),
             "demo-app".to_owned(),
@@ -108,6 +114,7 @@ fn state() -> Arc<UiState> {
             events: None,
             control_token: Some(TOKEN.to_owned()),
             registry: None,
+            tenancy: None,
         }),
         storage,
         control,

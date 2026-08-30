@@ -3,7 +3,11 @@ import { For, Show, onCleanup, onMount, type Component } from "solid-js";
 import { t, type MessageKey } from "./i18n";
 import { appState } from "./state";
 
-const NAV: { href: string; key: MessageKey }[] = [
+type NavItem = { href: string; key: MessageKey };
+
+// The official Emulator Suite products, then the fireemu-only deterministic runtime controls,
+// kept in a visually and semantically separate group so the two are never conflated.
+const OFFICIAL_NAV: NavItem[] = [
   { href: "/", key: "nav.overview" },
   { href: "/firestore", key: "nav.firestore" },
   { href: "/auth", key: "nav.auth" },
@@ -11,8 +15,8 @@ const NAV: { href: string; key: MessageKey }[] = [
   { href: "/functions", key: "nav.functions" },
   { href: "/rules", key: "nav.rules" },
   { href: "/appcheck", key: "nav.appCheck" },
-  { href: "/runtime", key: "nav.runtime" },
 ];
+const RUNTIME_NAV: NavItem[] = [{ href: "/runtime", key: "nav.runtime" }];
 
 /** The frame: sidebar navigation, a status bar with the clock, the routed page. */
 export const App: Component<RouteSectionProps> = (props) => {
@@ -28,10 +32,22 @@ export const App: Component<RouteSectionProps> = (props) => {
           <div class="text-lg font-bold">{t("app.title")}</div>
           <div class="text-xs text-zinc-500">{t("app.subtitle")}</div>
         </div>
-        <nav class="space-y-0.5" aria-label={t("app.subtitle")}>
-          <For each={NAV}>
+        <nav class="space-y-0.5" aria-label={t("nav.sectionOfficial")}>
+          <For each={OFFICIAL_NAV}>
             {(item) => (
               <A href={item.href} class="nav-link" end={item.href === "/"}>
+                {t(item.key)}
+              </A>
+            )}
+          </For>
+        </nav>
+        <div class="mt-5 mb-1 px-3 text-xs font-semibold tracking-wide text-zinc-400 uppercase">
+          {t("nav.sectionRuntime")}
+        </div>
+        <nav class="space-y-0.5" aria-label={t("nav.sectionRuntime")}>
+          <For each={RUNTIME_NAV}>
+            {(item) => (
+              <A href={item.href} class="nav-link" end={false}>
                 {t(item.key)}
               </A>
             )}

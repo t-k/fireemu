@@ -352,6 +352,69 @@ export const en = {
   "runtime.function": "Function",
   "runtime.action": "Action",
   "runtime.occurrence": "Occurrence",
+  "runtime.fireemuOnly":
+    "These are fireemu-only deterministic controls (virtual clock, snapshots, fault plans, sessions). They are additive to the official Emulator Suite and have no equivalent in it.",
+
+  "nav.sectionOfficial": "Emulator products",
+  "nav.sectionRuntime": "fireemu runtime",
+
+  "scope.title": "Product scope",
+  "scope.intro":
+    "What a user of the official Emulator Suite UI can expect here. Deferred and not-planned products are named explicitly rather than shown as empty tabs.",
+  "scope.product": "Product",
+  "scope.status": "Status",
+  "scope.note": "Notes",
+  "scope.status.supported": "supported",
+  "scope.status.deferred": "deferred",
+  "scope.status.notPlanned": "not planned",
+  "scope.status.pendingBackend": "pending backend",
+  "scope.status.substituted": "substituted",
+  "scope.auth": "Authentication",
+  "scope.authNote":
+    "Users, custom claims, second factors, email action and phone verification codes.",
+  "scope.firestore": "Cloud Firestore",
+  "scope.firestoreNote":
+    "Data browser with a typed field editor, named databases and live updates.",
+  "scope.functions": "Cloud Functions",
+  "scope.functionsNote":
+    "Registered triggers, invocation history, a live log stream, manual schedule runs and Pub/Sub publishes.",
+  "scope.storage": "Cloud Storage",
+  "scope.storageNote":
+    "Objects, uploads, downloads and metadata for the selected session's buckets.",
+  "scope.rules": "Security Rules",
+  "scope.rulesNote": "Firestore and Storage rulesets, editable at runtime.",
+  "scope.appCheck": "App Check",
+  "scope.appCheckNote":
+    "Registered apps, baseline modes, debug tokens and observation counters (when enabled).",
+  "scope.rtdb": "Realtime Database",
+  "scope.rtdbNote": "Deferred: fireemu does not implement the Realtime Database emulator yet.",
+  "scope.extensions": "Extensions",
+  "scope.extensionsNote": "Not planned: outside fireemu's scope.",
+  "scope.requests": "Firestore Requests and Rules coverage",
+  "scope.requestsNote":
+    "Pending backend (UI-PARITY-03): the request-trace and rule-coverage diagnostics need daemon routes that this build does not serve yet. Rules decisions are already gated by the conformance suite.",
+  "scope.alerts": "Firebase alerts",
+  "scope.alertsNote":
+    "Pending backend (UI-PARITY-04): synthesizing alerts needs the Eventarc google-channel / publishEvents mechanism, which this build does not serve yet. No fireemu-only injection path is offered in its place.",
+  "scope.logging": "Logging emulator (WebSocket, port 4500)",
+  "scope.loggingNote":
+    "Substituted: fireemu does not serve the official Logging WebSocket. The live Functions log stream (server-sent events, filterable by level and text) is the local substitute.",
+
+  "functions.filter": "Filter",
+  "functions.filterLevel": "Level",
+  "functions.filterText": "Search",
+  "functions.filterFunction": "Function",
+  "functions.filterTextPlaceholder": "substring",
+  "functions.levelAll": "all levels",
+  "functions.levelOther": "other (stderr)",
+  "functions.levelDebug": "debug",
+  "functions.levelInfo": "info",
+  "functions.levelWarn": "warn",
+  "functions.levelError": "error",
+  "functions.allFunctions": "all functions",
+  "functions.noMatchingLogs": "No log lines match the filter",
+  "functions.noMatchingInvocations": "No invocations match the filter",
+  "functions.logsFilteredCount": "{shown} of {total} lines",
 } as const;
 
 export type MessageKey = keyof typeof en;

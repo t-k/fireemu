@@ -435,6 +435,13 @@ const SessionsPanel: Component = () => {
 const Runtime: Component = () => (
   <div>
     <h1 class="mb-4 text-xl font-bold">{t("runtime.title")}</h1>
+    <div
+      class="mb-4 rounded-md border border-sky-300 bg-sky-50 p-3 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100"
+      role="note"
+      data-testid="runtime-fireemu-only"
+    >
+      {t("runtime.fireemuOnly")}
+    </div>
     <div class="grid gap-4 xl:grid-cols-2">
       <div>
         <ClockPanel />

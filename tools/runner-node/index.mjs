@@ -217,7 +217,9 @@ function v1Context(msg) {
         eventId: event.id,
         timestamp: event.time,
         eventType: legacy,
-        resource: { service: "firestore.googleapis.com", name: event.source },
+        // A string: firebase-functions rewrites a legacy event type's resource into
+        // { service, name } itself (makeCloudFunction); an object here would be nested.
+        resource: event.source,
         params: event.params || {},
       };
     }
@@ -245,7 +247,7 @@ function v1Context(msg) {
         params: {},
       };
     default:
-      return { eventId: event.id, timestamp: event.time, eventType: event.type, resource: { service: "", name: event.source }, params: {} };
+      return { eventId: event.id, timestamp: event.time, eventType: event.type, resource: event.source, params: {} };
   }
 }
 

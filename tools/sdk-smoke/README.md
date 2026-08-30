@@ -20,6 +20,17 @@ Exercise a running `firebase-testd` with the real Firebase SDKs.
   `awaitIdle` and the virtual clock; start the daemon with
   `--config tools/sdk-smoke/firebase-testd.smoke.json --functions tools/sdk-smoke/functions-project --functions-port 5001` (the config pins the virtual clock; schedule counts depend on it) and set
   `FTD_FUNCTIONS_HOST=127.0.0.1:5001`. Run it on a fresh daemon (it fills the database).
+- `appcheck.mjs`: `firebase/app-check` `initializeAppCheck` with a `CustomProvider` that
+  exchanges a registered local debug secret, then Firestore, Storage, Auth and an
+  `enforceAppCheck` callable with the token attached; start the daemon with
+  `--config tools/sdk-smoke/firebase-testd.appcheck.json --functions tools/sdk-smoke/functions-project --functions-port 5001`
+  (that config is the smoke config plus an `appCheck` section that registers the app and the
+  digest of the clearly fake debug secret the script uses) and set `FTD_FUNCTIONS_HOST`.
+  `FTD_APP_CHECK_EMULATOR_HOST` is exported by `firebase-testd exec`; it defaults to the Auth
+  port. No browser shims are needed: `CustomProvider` touches no browser global, and the SDK
+  guards its `indexedDB` token cache. The SDK never dials the local exchange endpoint itself
+  (`@firebase/app-check` hard-codes the production base URL), which is why the provider calls
+  the daemon and hands the JWT back.
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) and open
   `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FTD_CONTROL_TOKEN>`; the page prints
@@ -33,6 +44,12 @@ export FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.
 npm run smoke        # firebase-admin
 npm run smoke:client # firebase client SDK + rules
 npm run smoke:lite   # Firestore Lite (REST) + rules
+
+# App Check (needs the appCheck config and the functions codebase):
+firebase-testd exec --config tools/sdk-smoke/firebase-testd.appcheck.json \
+  --firestore-port 8080 --http-port 9099 --storage-port 9199 \
+  --functions tools/sdk-smoke/functions-project --functions-port 5001 \
+  -- sh -c 'cd tools/sdk-smoke && npm run smoke:appcheck'
 ```
 
 Exit code 0 means every check passed; the JSON output lists each check.

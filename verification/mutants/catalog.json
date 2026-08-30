@@ -402,6 +402,31 @@
       "id": "M-APPCHECK-012",
       "fault": "an owner-shaped path or header alone grants the App Check bypass",
       "critical": true
+    },
+    {
+      "id": "M-APPCHECK-009",
+      "fault": "an invalid callable App Check token is forwarded to the Functions runner",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-013",
+      "fault": "an unverified Authorization value populates callable auth context",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-014",
+      "fault": "an undeterminable consumeAppCheckToken is assumed to be false",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-015",
+      "fault": "a WebChannel replacement token from another app takes over the channel",
+      "critical": true
+    },
+    {
+      "id": "M-APPCHECK-016",
+      "fault": "a resumable upload session accepts a continuation from another app",
+      "critical": true
     }
   ]
 }

@@ -582,14 +582,15 @@
       "statement": "Duplicate, comma-folded, empty, oversized and otherwise ambiguous X-Firebase-AppCheck values are refused consistently, and no adapter selects one of several values.",
       "criticality": "critical",
       "owner": "core-app-check",
-      "status": "partial",
-      "note": "Milestone AC0 implemented and proved the transport-neutral classifier; AC1 adopted it on the Firebase Auth HTTP surface, the Storage HTTP surface, Firestore unary gRPC metadata and Firestore REST, each with duplicate, folded, empty and oversized cases and, for the two HTTP listeners, two field instances over a real socket. WebChannel and the callable Functions proxy adopt it in AC2, so the requirement stays partial.",
+      "status": "implemented",
+      "note": "Milestone AC0 implemented and proved the transport-neutral classifier; AC1 adopted it on the Firebase Auth HTTP surface, the Storage HTTP surface, Firestore unary gRPC metadata and Firestore REST; AC2 adopted it on the WebChannel init header block -- where the parser now keeps every instance in wire order instead of collapsing them into a map -- and on the callable Functions proxy, where an ambiguous field list is never a credential and is stripped before the runner can decode it. Every transport covers duplicate, folded, empty and oversized values.",
       "artifacts": {
         "integration": [
           "crates/ftd-core-app-check/tests/header.rs",
           "crates/ftd-adapter-http/tests/app_check_auth.rs",
           "crates/ftd-adapter-http/tests/app_check_storage.rs",
-          "crates/ftd-adapter-grpc/tests/app_check.rs"
+          "crates/ftd-adapter-grpc/tests/app_check.rs",
+          "crates/ftd-adapter-functions/tests/app_check_callable.rs"
         ],
         "property": "prop_app_check_header_never_selects_one_of_several",
         "mutation": [
@@ -641,8 +642,8 @@
       "statement": "Firestore unary gRPC, Write, Listen, REST and WebChannel obey the same mode and credential matrix and the same stream-lifetime contract.",
       "criticality": "critical",
       "owner": "adapter-grpc",
-      "status": "partial",
-      "note": "Milestone AC1 covers unary gRPC and REST: both ingresses run the full mode x credential matrix against a real listener, refuse duplicate, folded and empty fields, and take the owner bypass only for the exact owner credential. The Write and Listen streams and WebChannel, with their stream-lifetime contract, are AC2.",
+      "status": "implemented",
+      "note": "Milestone AC1 covered unary gRPC and REST; AC2 added the Write and Listen streams and the WebChannel transport with their lifetime contract. A stream classifies its opening metadata once and is decided as soon as its first request names the database, then stays admitted for its whole life: token expiry does not end it, and reconnecting is a new admission. A WebChannel binds to the admitted app and the session epoch of that admission; a later envelope may omit the field, but a replacement for another app or one that does not verify closes the channel. Resolving the Firebase Auth credential no longer fails a stream at open, because the App Check decision is not available yet at that point and section 7.4 puts Auth after it.",
       "artifacts": {
         "integration": [
           "crates/ftd-adapter-grpc/tests/app_check.rs"
@@ -650,7 +651,8 @@
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
           "M-APPCHECK-004",
-          "M-APPCHECK-012"
+          "M-APPCHECK-012",
+          "M-APPCHECK-015"
         ]
       }
     },
@@ -659,8 +661,8 @@
       "statement": "Storage metadata, list, upload, resumable continuation and finalization, download, update, delete, the JSON API bypass and the download-token bypass are explicit.",
       "criticality": "critical",
       "owner": "adapter-http",
-      "status": "partial",
-      "note": "Milestone AC1 covers the non-resumable operations and admits every resumable request, initiation and continuation alike; what is still missing is binding a continuation to the app that started the upload, which is AC2. The download token is compared in constant time and must bind to the resolved bucket, object name and generation. The JSON API bypass requires the owner credential: the dialect bypasses Security Rules without one, as the official Emulator does, but a path shape is not a credential and would otherwise let a caller defeat enforcement by rewriting /v0/b/... to /storage/v1/b/...",
+      "status": "implemented",
+      "note": "Milestone AC1 covered the non-resumable operations and admitted every resumable request; AC2 bound the session to the app that started it. An enforced initiation records the admitted app and the epoch of that admission in the upload session, and every later request on it -- continuation, status query, cancel and finalization -- must present a valid token for the same app; the check runs before the command is read, so a refused request neither advances nor deletes the upload and token expiry mid-upload preserves the resumable state. Only an enforced policy binds: under unenforced a client may legitimately stop presenting a token, and binding it would enforce by the back door. The download token is compared in constant time and must bind to the resolved bucket, object name and generation. The JSON API bypass requires the owner credential: the dialect bypasses Security Rules without one, as the official Emulator does, but a path shape is not a credential and would otherwise let a caller defeat enforcement by rewriting /v0/b/... to /storage/v1/b/...",
       "artifacts": {
         "integration": [
           "crates/ftd-adapter-http/tests/app_check_storage.rs"
@@ -668,8 +670,43 @@
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
           "M-APPCHECK-007",
-          "M-APPCHECK-012"
+          "M-APPCHECK-012",
+          "M-APPCHECK-016"
         ]
+      }
+    },
+    {
+      "id": "AC-FN-001",
+      "statement": "Callable Functions expose valid app context, refuse a missing or invalid token when enforceAppCheck is set, invoke the handler with app undefined when it is not, never let an unverified Auth credential become callable auth context, forward the raw App Check field to onRequest functions, and fail closed on an unsupported consumeAppCheckToken.",
+      "criticality": "critical",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "note": "The daemon proxy is the trust boundary: the SDK wrapper decodes both callable credentials without verifying either under the skipTokenVerification debug feature, so the daemon verifies first and strips every caller-supplied copy of the fields it owns -- the App Check field, Authorization, the runner secret and the x-callable-context-auth / x-original-auth channels firebase-functions honours to override v1 callable auth context. The integration test asserts on the bytes that actually reach the runner, through an echoing runner HTTP server, rather than on the daemon's intent. consumeAppCheckToken is read by a version-bounded loader instrumentation that hooks onCallHandler, withInit and wrapTraceContext, the one path every v1, v2, builder and genkit spelling passes through; the value is three-valued and never guessed as false.",
+      "artifacts": {
+        "integration": [
+          "crates/ftd-adapter-functions/tests/app_check_callable.rs",
+          "crates/firebase-testd/src/functions.rs"
+        ],
+        "property": "prop_app_check_callable_admits_only_one_instance_of_a_verifying_token",
+        "mutation": [
+          "M-APPCHECK-009",
+          "M-APPCHECK-013",
+          "M-APPCHECK-014"
+        ]
+      }
+    },
+    {
+      "id": "AC-SDK-001",
+      "statement": "The real Firebase Web SDK obtains a local App Check token through CustomProvider and sends it to Firestore, Storage, Auth and a callable function.",
+      "criticality": "important",
+      "owner": "sdk-smoke",
+      "status": "implemented",
+      "note": "tools/sdk-smoke/appcheck.mjs runs in plain Node without browser shims: CustomProvider touches no browser global and the SDK guards its indexedDB token cache. The SDK never dials the local exchange itself, because @firebase/app-check hard-codes the production base URL, so the documented provider calls the daemon and returns the JWT with an expiry derived from the ttl. It is a manual smoke rather than a CI gate: it needs node_modules and a running daemon, like every other script in tools/sdk-smoke.",
+      "artifacts": {
+        "integration": [
+          "tools/sdk-smoke/appcheck.mjs"
+        ],
+        "conformance": "tools/sdk-smoke/firebase-testd.appcheck.json"
       }
     },
     {
@@ -698,7 +735,7 @@
       "criticality": "important",
       "owner": "adapter-http",
       "status": "partial",
-      "note": "The control API serves per-project counters by service, verified app ID, category and outcome at GET /v1/sessions/{session}/appCheck/observations; it requires the control token for every method whatever the Origin and sets Cache-Control: no-store. Two things keep this partial: there is no Emulator UI page, and the retained observations are one bounded ring for the runtime rather than one per project, so heavy traffic to one project can evict another project's recent observations.",
+      "note": "The control API serves per-project counters by service, verified app ID, category and outcome at GET /v1/sessions/{session}/appCheck/observations; it requires the control token for every method whatever the Origin and sets Cache-Control: no-store. Callable Functions requests are observed under the functions service with the function name as the operation. Two things keep this partial: there is no Emulator UI page, and the retained observations are one bounded ring for the runtime rather than one per project, so heavy traffic to one project can evict another project's recent observations.",
       "artifacts": {
         "integration": [
           "crates/ftd-adapter-http/tests/app_check_control.rs",

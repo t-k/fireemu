@@ -1,5 +1,5 @@
 //! Property artifacts for `AC-TOKEN-001`, `AC-EXCHANGE-001`, `AC-HEADER-001`,
-//! `AC-BOUNDARY-001`, `AC-AUTH-001`, `AC-FS-001`, `AC-ST-001`, `AC-LIFE-001` and
+//! `AC-BOUNDARY-001`, `AC-AUTH-001`, `AC-FS-001`, `AC-ST-001`, `AC-FN-001`, `AC-LIFE-001` and
 //! `AC-OBS-001` (`docs/specifications/firebase-app-check.md` sections 7.3, 7.4, 10.1, 11,
 //! 12, 14 and 15).
 //!
@@ -463,5 +463,64 @@ proptest! {
             encode(&claims, gate.signer().as_ref())
         };
         prop_assert!(admit(&after), "a token of the new epoch verifies");
+    }
+}
+
+proptest! {
+    /// `AC-FN-001`: the predicate the callable trust boundary reinserts a token on.
+    ///
+    /// The Functions proxy forwards an App Check field to the runner only when the admission
+    /// decision exposes an identity, and it forwards the presented bytes unchanged. This is the
+    /// property that makes that safe: over arbitrary field lists built from a valid token,
+    /// near-misses of it and junk, an identity appears exactly when the list is one instance of
+    /// the one token that verifies -- never for two instances of it, never for a folded pair,
+    /// never for anything else. Everything else the proxy strips, which is what keeps the
+    /// runner's unsafe decoder from ever seeing an unverified credential.
+    ///
+    /// The proxy-level behaviour itself (stripping, byte-for-byte reinsertion, the 401 for an
+    /// enforcing callable) is checked against a real runner in
+    /// `crates/ftd-adapter-functions/tests/app_check_callable.rs`.
+    #[test]
+    fn prop_app_check_callable_admits_only_one_instance_of_a_verifying_token(
+        pattern in proptest::collection::vec(0usize..6, 0..4),
+    ) {
+        let (gate, token) = gate_and_token(31);
+        let mut forged = token.clone();
+        forged.pop();
+        forged.push(if token.ends_with('A') { 'B' } else { 'A' });
+        let folded = format!("{token},{token}");
+        let values: Vec<String> = pattern
+            .iter()
+            .map(|kind| match kind {
+                0 => token.clone(),
+                1 => forged.clone(),
+                2 => "not-a-jwt".to_owned(),
+                3 => String::new(),
+                4 => folded.clone(),
+                _ => "a.b.c".to_owned(),
+            })
+            .collect();
+        let policy = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
+            .expect("unenforced is a policy");
+        let header = classify_app_check_header(&values);
+        let decision = policy.admit(&AdmissionRequest {
+            project_id: "demo-app",
+            transport: "http",
+            operation: "guarded",
+            bypass: PrivilegedBypass::None,
+            header: &header,
+            now: LogicalInstant::from_unix_seconds(START),
+        });
+        let forwards = values.len() == 1 && values[0] == token;
+        prop_assert_eq!(decision.identity().is_some(), forwards, "{:?}", values);
+        if forwards {
+            let identity = decision.identity().expect("an identity");
+            prop_assert_eq!(identity.app_id.as_str(), APP_ID);
+            // The bytes the proxy reinserts are the bytes that were presented.
+            prop_assert_eq!(header, HeaderClassification::Present(token.clone()));
+        }
+        // An unenforced baseline never denies, whatever was presented: the callable's own
+        // `enforceAppCheck` is what refuses, and it refuses on the identity above.
+        prop_assert!(decision.allowed);
     }
 }

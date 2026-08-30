@@ -46,6 +46,29 @@ pub enum RulesValue {
     /// field constrained by inequality filters). Ordered comparisons and equality with a
     /// concrete value are decided when every value of the range agrees.
     Range(ValueRange),
+    /// A duration in nanoseconds (`duration` namespace, timestamp arithmetic).
+    Duration(i128),
+    /// `map.diff(other)`.
+    MapDiff(MapDiff),
+    /// A value known to be one of the listed concrete values (query proofs: an `in`
+    /// filter); non-empty. An operation is decided when every member agrees.
+    OneOf(Vec<RulesValue>),
+    /// A value known to exist, differ from every listed value and not be null (query
+    /// proofs: `!=` / `not-in` filters).
+    NotOneOf(Vec<RulesValue>),
+}
+
+/// The key sets of `map.diff(other)` (sorted).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapDiff {
+    /// Keys in the receiver only.
+    pub added: Vec<String>,
+    /// Keys in the argument only.
+    pub removed: Vec<String>,
+    /// Keys in both with different values.
+    pub changed: Vec<String>,
+    /// Keys in both with equal values.
+    pub unchanged: Vec<String>,
 }
 
 /// One end of a [`ValueRange`].
@@ -95,7 +118,9 @@ impl RulesValue {
             Self::Timestamp(_) => "timestamp",
             Self::Bytes(_) => "bytes",
             Self::LatLng { .. } => "latlng",
-            Self::Unknown | Self::Range(_) => "unknown",
+            Self::Duration(_) => "duration",
+            Self::MapDiff(_) => "map_diff",
+            Self::Unknown | Self::Range(_) | Self::OneOf(_) | Self::NotOneOf(_) => "unknown",
         }
     }
 
@@ -163,6 +188,17 @@ impl fmt::Display for RulesValue {
                 longitude,
             } => write!(f, "latlng({latitude}, {longitude})"),
             Self::Unknown => f.write_str("unknown"),
+            Self::Duration(d) => write!(f, "duration({d}ns)"),
+            Self::MapDiff(d) => write!(
+                f,
+                "map_diff(+{} -{} ~{} ={})",
+                d.added.len(),
+                d.removed.len(),
+                d.changed.len(),
+                d.unchanged.len()
+            ),
+            Self::OneOf(items) => write!(f, "one_of({} values)", items.len()),
+            Self::NotOneOf(items) => write!(f, "not_one_of({} values)", items.len()),
             Self::PartialMap(m) => write!(f, "map({} known keys, ...)", m.len()),
             Self::PartialList(l) => write!(f, "list({} known members, ...)", l.len()),
             Self::Range(r) => {

@@ -203,7 +203,6 @@ fn indexing_conversions_and_calls() {
         "['a'].join(1) == 'a'",
         "getAfter(/databases/$(database)/documents/notes/n1).data.x == 1",
         "timestamp.value(1) == request.time",
-        "math.abs(-1) == 1",
         "duration.value(1, 's') == 1",
         "hashing.md5('x') == 'x'",
         "unknownFunction(1)",

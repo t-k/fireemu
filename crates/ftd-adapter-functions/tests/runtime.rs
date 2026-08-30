@@ -756,3 +756,78 @@ async fn catch_up_latest_and_none_stay_idle_beyond_the_cap() {
         assert_eq!(runtime.status()["catchUpPending"], false);
     }
 }
+
+#[tokio::test]
+async fn scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    let (runtime, clock) = start().await;
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    let rule = |operation: &str, nth: Option<u64>, event_type: Option<&str>, action| FaultRule {
+        matches: FaultMatch {
+            operation: operation.into(),
+            nth,
+            function: Some("tick".into()),
+            event_type: event_type.map(str::to_owned),
+        },
+        action,
+    };
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![
+            // Scheduled deliveries are duplicated once: two invocations per run.
+            rule(
+                "functions.deliver",
+                None,
+                Some("google.cloud.scheduler.job.v1.executed"),
+                FaultAction::Duplicate { count: 1 },
+            ),
+            // The first invocation is held for a minute, then dead-lettered (both actions
+            // of the rule set apply, in that order).
+            rule(
+                "functions.invoke",
+                Some(1),
+                None,
+                FaultAction::Delay { seconds: 60 },
+            ),
+            rule("functions.invoke", Some(1), None, FaultAction::DeadLetter),
+        ],
+    });
+    runtime.set_faults(faults);
+    runtime.run_schedule("tick").unwrap();
+    assert!(
+        runtime
+            .await_idle(Duration::from_millis(500))
+            .await
+            .is_err(),
+        "held by the delay"
+    );
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .all(|d| d.function != "tick"));
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(
+        runtime.await_idle(Duration::from_secs(5)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|d| d.function == "tick" && d.outcome.contains("dead letter")));
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count(),
+        1,
+        "the duplicate ran: {:?}",
+        runtime.history()
+    );
+}

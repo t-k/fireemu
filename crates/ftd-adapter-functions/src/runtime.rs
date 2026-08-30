@@ -171,8 +171,19 @@ struct Inner {
     catch_up_pending: bool,
     /// Schedule runs refused by the `reject` overlap policy.
     overlap_rejected: u64,
-    /// Events held back by a `delay` fault until the virtual clock reaches the instant.
-    delayed: BTreeMap<EventId, LogicalInstant>,
+    /// Events held back by a `delay` fault until the virtual clock reaches the instant,
+    /// with the outcome the same rule set decided for them.
+    delayed: BTreeMap<EventId, Held>,
+}
+
+/// An event a `delay` fault holds back.
+struct Held {
+    /// When it may go.
+    until: LogicalInstant,
+    /// The outcome decided alongside the delay (an error, a dead letter, ...), if any.
+    outcome: Option<(InvokeOutcome, bool)>,
+    /// Whether the runner crashes when it goes.
+    crash: bool,
 }
 
 /// The runtime.
@@ -672,16 +683,19 @@ impl FunctionsRuntime {
             }
             let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
             let payload = schedule_event(&id, &self.config.project, &region, &function, at);
-            Self::enqueue(
+            self.enqueue_delivery(
                 &mut inner,
-                self.config.session,
                 EventSource::Scheduler,
                 &function,
                 "google.cloud.scheduler.job.v1.executed",
-                format!("jobs/{function}"),
+                &format!("jobs/{function}"),
                 at,
-                payload,
+                &payload,
             );
+            enqueued = true;
+        }
+        // Events a `delay` fault held back became due with the clock.
+        if inner.delayed.values().any(|h| h.until <= now) {
             enqueued = true;
         }
         for id in inner.outbox.retries_due(now) {
@@ -720,7 +734,14 @@ impl FunctionsRuntime {
                     let until = now
                         .checked_add(LogicalDuration::from_seconds(seconds.max(0)))
                         .unwrap_or(now);
-                    inner.delayed.insert(id, until);
+                    inner.delayed.insert(
+                        id,
+                        Held {
+                            until,
+                            outcome: None,
+                            crash: false,
+                        },
+                    );
                 }
                 FaultAction::ReturnError { code } => {
                     outcome = Some((
@@ -744,6 +765,11 @@ impl FunctionsRuntime {
                 FaultAction::CrashRunner => crash = true,
                 FaultAction::Duplicate { .. } => {}
             }
+        }
+        // A delay keeps the other actions of the same rule set for when the event goes.
+        if let Some(held) = inner.delayed.get_mut(&id) {
+            held.outcome.clone_from(&outcome);
+            held.crash = crash;
         }
         (outcome, crash)
     }
@@ -802,15 +828,14 @@ impl FunctionsRuntime {
         }
         let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
         let payload = schedule_event(&id, &self.config.project, &f.region, function, now);
-        Self::enqueue(
+        self.enqueue_delivery(
             &mut inner,
-            self.config.session,
             EventSource::Manual,
             function,
             "google.cloud.scheduler.job.v1.executed",
-            format!("jobs/{function}"),
+            &format!("jobs/{function}"),
             now,
-            payload,
+            &payload,
         );
         drop(inner);
         self.wake.notify_one();
@@ -998,7 +1023,7 @@ impl FunctionsRuntime {
 
     /// Proxies one HTTP request to the runner, counting it as running work.
     pub async fn invoke_http(
-        &self,
+        self: &Arc<Self>,
         target: &HttpTarget,
         method: &str,
         path_and_query: &str,
@@ -1008,6 +1033,25 @@ impl FunctionsRuntime {
         let (timeout, concurrency) = self.manifest.get(&target.function).map_or((60, 1), |f| {
             (u64::from(f.timeout_seconds), f.concurrency as usize)
         });
+        // The fault plan applies to HTTP invocations like to event ones (spec 18): an
+        // error answers instead of the handler, a delay moves the clock first, a crash
+        // takes the runner down.
+        if let Some(faulted) = self.http_faults(&target.function) {
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.next_event += 1;
+                let event_id = inner.next_event;
+                inner.history.push(InvocationRecord {
+                    event_id: u128::from(event_id),
+                    function: target.function.clone(),
+                    attempt: 1,
+                    outcome: match &faulted {
+                        Ok(r) => format!("fault plan: http {}", r.status),
+                        Err(e) => format!("failed: {e}"),
+                    },
+                });
+            }
+            return faulted;
+        }
         let (id, key) = {
             let Ok(mut inner) = self.inner.lock() else {
                 return Err("runtime poisoned".into());
@@ -1069,6 +1113,53 @@ impl FunctionsRuntime {
         }
     }
 
+    /// The `functions.invoke` faults for an HTTP invocation of `function`: the answer to
+    /// give instead of calling the handler, if any.
+    fn http_faults(self: &Arc<Self>, function: &str) -> Option<Result<ProxiedResponse, String>> {
+        use ftd_core_session::fault::FaultAction;
+        let mut answer = None;
+        for action in ftd_core_session::fault::decide_shared(
+            self.faults().as_ref(),
+            "functions.invoke",
+            Some(function),
+            None,
+        ) {
+            match action {
+                FaultAction::Delay { seconds } => {
+                    if let Ok(mut clock) = self.clock.lock() {
+                        let _ = clock.advance(LogicalDuration::from_seconds(seconds.max(0)));
+                    }
+                    self.on_clock_changed();
+                }
+                FaultAction::ReturnError { code } => {
+                    answer = Some(Ok(ProxiedResponse {
+                        status: http_status(&code),
+                        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                        body: format!("fault plan: {function} returns {code}").into_bytes(),
+                    }));
+                }
+                FaultAction::Timeout => {
+                    answer = Some(Err(format!("fault plan: function {function} timed out")));
+                }
+                FaultAction::CrashRunner => {
+                    let generation = self.inner.lock().ok().map(|i| i.epoch);
+                    self.runner().kill_now();
+                    self.respawn_runner(generation);
+                    answer = Some(Err(format!(
+                        "fault plan: the runner crashed while serving {function}"
+                    )));
+                }
+                FaultAction::DeadLetter
+                | FaultAction::TransactionConflict
+                | FaultAction::DropConnection => {
+                    answer = Some(Err(format!("fault plan: {action}")));
+                }
+                FaultAction::Duplicate { .. } => {}
+            }
+        }
+        answer
+    }
+
     /// The dispatch loop: run it as a task for the runtime's lifetime.
     pub async fn dispatch_loop(self: Arc<Self>) {
         loop {
@@ -1077,6 +1168,7 @@ impl FunctionsRuntime {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn dispatch_ready(self: &Arc<Self>) {
         // The runner checked here is the one every invocation of this pass goes to: an event
         // leased before a reset must not reach the runner spawned after it.
@@ -1122,16 +1214,17 @@ impl FunctionsRuntime {
             // the plan is consulted once per dispatch attempt, not on every pass over a
             // held event.
             let (fault_outcome, crash) = match inner.delayed.get(&id) {
-                Some(until) if now < *until => continue,
-                Some(_) => {
-                    inner.delayed.remove(&id);
-                    (None, false)
-                }
+                Some(held) if now < held.until => continue,
+                Some(_) => inner
+                    .delayed
+                    .remove(&id)
+                    .map_or((None, false), |h| (h.outcome, h.crash)),
                 None => {
                     let decided = Self::invoke_faults(&mut inner, id, spec, faults.as_ref(), now);
-                    if inner.delayed.get(&id).is_some_and(|until| now < *until) {
+                    if inner.delayed.get(&id).is_some_and(|held| now < held.until) {
                         continue;
                     }
+                    inner.delayed.remove(&id);
                     decided
                 }
             };
@@ -1310,6 +1403,26 @@ impl FunctionsRuntime {
         }
         self.idle.notify_waiters();
         self.wake.notify_one();
+    }
+}
+
+/// An HTTP status from a number or a gRPC code name (fault plan `returnError`).
+fn http_status(code: &str) -> u16 {
+    if let Ok(n) = code.parse::<u16>() {
+        return n;
+    }
+    match code.to_ascii_uppercase().as_str() {
+        "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => 400,
+        "UNAUTHENTICATED" => 401,
+        "PERMISSION_DENIED" => 403,
+        "NOT_FOUND" => 404,
+        "ALREADY_EXISTS" | "ABORTED" => 409,
+        "RESOURCE_EXHAUSTED" => 429,
+        "CANCELLED" => 499,
+        "UNIMPLEMENTED" => 501,
+        "UNAVAILABLE" => 503,
+        "DEADLINE_EXCEEDED" => 504,
+        _ => 500,
     }
 }
 

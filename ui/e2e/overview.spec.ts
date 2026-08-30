@@ -17,4 +17,22 @@ test.describe("Overview", () => {
     await page.getByRole("link", { name: "Rules" }).click();
     await expect(page.getByRole("heading", { name: "Rules", exact: true })).toBeVisible();
   });
+
+  test("states the product scope honestly", async ({ page }) => {
+    await gotoApp(page, "/");
+    const scope = page.getByTestId("product-scope");
+    await expect(scope.getByTestId("scope-rtdb")).toContainText("deferred");
+    await expect(scope.getByTestId("scope-extensions")).toContainText("not planned");
+    await expect(scope.getByTestId("scope-requests")).toContainText("pending backend");
+    await expect(scope.getByTestId("scope-alerts")).toContainText("pending backend");
+    await expect(scope.getByTestId("scope-logging")).toContainText("substituted");
+  });
+
+  test("labels the deterministic controls as fireemu-only and groups them apart", async ({
+    page,
+  }) => {
+    await gotoApp(page, "/runtime");
+    await expect(page.getByTestId("runtime-fireemu-only")).toContainText("fireemu-only");
+    await expect(page.getByText("fireemu runtime").first()).toBeVisible();
+  });
 });

@@ -301,12 +301,14 @@ The daemon serves an Emulator UI on `--ui-port` (default 4000, best effort: a bu
 
 The App Check page shows this instance's JWKS `kid` and token TTL, the effective baseline mode of every service, the apps registered for the selected session's project with their configured digest count against their dynamic registrations, the debug tokens of one app, and the counters and recent observations of the session. Registering a debug token returns the raw secret exactly once: the page shows it in a copyable field behind a warning and drops it when it is dismissed or the page is left. It is never stored in the browser, never put in a URL, and never appears in a list, in `window.__FIREEMU__` or in an observation — the daemon keeps only its SHA-256 digest and cannot show it again. A runtime with `appCheck.enabled` false says so on the page instead of offering the surface.
 
-The app lives in `ui/` (Solid, Vite, Tailwind) and is embedded into the binary at compile time; a binary built without it serves a placeholder page that says so:
+The navigation separates the official Emulator products from the fireemu-only runtime controls: the virtual clock, snapshots, fault plans and sessions live under a labelled **fireemu runtime** group and the Runtime page says so, so the deterministic controls are never mistaken for official parity. The Overview carries a **Product scope** table that states every product's status explicitly rather than showing an empty tab: Auth, Firestore, Functions, Storage, Security Rules and App Check are supported, Realtime Database is **deferred**, Extensions is **not planned**, the official **Logging** emulator WebSocket (port 4500) is **substituted** by the live Functions log stream, and the Firestore request-trace / rule-coverage diagnostics and the Firebase alerts workflow are marked **pending backend** until the daemon serves them (UI-PARITY-03 / UI-PARITY-04). The Functions log stream is filterable in the browser by severity level and free text, and the invocation list by function.
+
+The app lives in `ui/` (Solid, Vite, Tailwind) and is embedded into the binary at compile time; a binary built without it serves a placeholder page that says so. The UI unit tests, lint, format, the adapter-ui browser-policy tests and the Playwright E2E (parity flows plus a security suite covering the CSP, DNS-rebinding via a foreign `Host`/`Origin`, download disposition and bounded reads) run as the `ui` job in CI:
 
 ```sh
-pnpm -C ui install && pnpm -C ui build     # writes ui/dist (not committed)
+pnpm -C ui install && pnpm -C ui lint && pnpm -C ui test && pnpm -C ui build   # writes ui/dist (not committed)
 cargo build --release -p fireemu    # embeds it
-pnpm -C ui test && pnpm -C ui e2e          # unit tests; Playwright against a real daemon
+pnpm -C ui e2e          # Playwright against a real daemon (needs target/release/fireemu)
 ```
 
 ### Composite indexes

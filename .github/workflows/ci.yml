@@ -114,6 +114,47 @@ jobs:
       - run: node npm/scripts/pack-local.mjs
       - run: node npm/scripts/verify-install.mjs --dist npm/dist
 
+  # Emulator UI gate (UI-PARITY-05): unit tests, lint, format, the adapter-ui browser-policy
+  # tests, and the Playwright E2E (parity flows plus the security suite -- CSP, DNS-rebinding
+  # via Host/Origin, download disposition, and bounded reads) against a real daemon.
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: install UI dependencies
+        run: pnpm -C ui install --frozen-lockfile
+      - name: lint
+        run: pnpm -C ui lint
+      - name: format
+        run: pnpm -C ui fmt:check
+      - name: unit tests
+        run: pnpm -C ui test
+      - name: build the UI bundle
+        run: pnpm -C ui build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ui
+      - name: adapter-ui tests (browser policy, streams, downloads)
+        run: cargo nextest run -p fireemu-adapter-ui
+      - name: build the daemon with the UI embedded
+        run: cargo build --release -p fireemu
+      - name: install the Playwright browser
+        run: pnpm -C ui exec playwright install --with-deps chromium
+      - name: browser E2E (parity flows and the security suite)
+        run: pnpm -C ui e2e
+
   tla:
     runs-on: ubuntu-latest
     steps:

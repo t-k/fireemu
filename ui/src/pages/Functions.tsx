@@ -19,6 +19,16 @@ import {
   type InvocationInfo,
   type TriggerInfo,
 } from "../api/functions";
+import { matchesLog, type LevelFilter } from "../lib/logFilter";
+
+const LEVEL_OPTIONS: { value: LevelFilter; key: Parameters<typeof t>[0] }[] = [
+  { value: "all", key: "functions.levelAll" },
+  { value: "debug", key: "functions.levelDebug" },
+  { value: "info", key: "functions.levelInfo" },
+  { value: "warn", key: "functions.levelWarn" },
+  { value: "error", key: "functions.levelError" },
+  { value: "other", key: "functions.levelOther" },
+];
 
 const MAX_LINES = 2000;
 /**
@@ -195,6 +205,24 @@ const Functions: Component = () => {
   const [notice, setNotice] = createSignal<string | null>(null);
   const configured = () => overview()?.unwrapOr(null)?.configured ?? false;
   const [logBox, setLogBox] = createSignal<HTMLPreElement>();
+  const [logLevel, setLogLevel] = createSignal<LevelFilter>("all");
+  const [logText, setLogText] = createSignal("");
+  const [fnFilter, setFnFilter] = createSignal("");
+
+  const filteredLines = (): string[] =>
+    lines().filter((line) => matchesLog(line, { level: logLevel(), text: logText() }));
+  const filteredInvocations = (): InvocationInfo[] => {
+    const name = fnFilter();
+    return name === "" ? invocations() : invocations().filter((r) => r.function === name);
+  };
+  /** Function names to offer in the filter: the registered ones plus any seen in invocations. */
+  const functionNames = (): string[] => {
+    const names = new Set<string>((o()?.functions ?? []).map((f) => f.name));
+    for (const r of invocations()) {
+      names.add(r.function);
+    }
+    return [...names].toSorted();
+  };
 
   const keepRecent = (records: InvocationInfo[]): InvocationInfo[] => {
     setTruncated(records.length > MAX_INVOCATIONS);
@@ -327,7 +355,25 @@ const Functions: Component = () => {
                 )}
               </Show>
             </Section>
-            <Section title={t("functions.invocations")}>
+            <Section
+              title={t("functions.invocations")}
+              actions={
+                <label class="text-sm">
+                  <span class="sr-only">{t("functions.filterFunction")}</span>
+                  <select
+                    class="input"
+                    data-testid="invocation-function-filter"
+                    value={fnFilter()}
+                    onInput={(e) => setFnFilter(e.currentTarget.value)}
+                  >
+                    <option value="">{t("functions.allFunctions")}</option>
+                    <For each={functionNames()}>
+                      {(name) => <option value={name}>{name}</option>}
+                    </For>
+                  </select>
+                </label>
+              }
+            >
               <Show
                 when={invocations().length > 0}
                 fallback={<p class="text-sm text-zinc-500">{t("functions.noInvocations")}</p>}
@@ -337,30 +383,39 @@ const Functions: Component = () => {
                     {t("functions.invocationsTruncated", { count: MAX_INVOCATIONS })}
                   </p>
                 </Show>
-                <div class="max-h-64 overflow-auto">
-                  <table class="table" data-testid="invocation-table">
-                    <thead>
-                      <tr>
-                        <th>{t("functions.eventId")}</th>
-                        <th>{t("functions.name")}</th>
-                        <th>{t("functions.attempt")}</th>
-                        <th>{t("functions.outcome")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <For each={invocations().toReversed()}>
-                        {(r) => (
-                          <tr>
-                            <td class="mono text-xs">{r.eventId}</td>
-                            <td class="mono">{r.function}</td>
-                            <td>{r.attempt}</td>
-                            <td class="mono text-xs">{r.outcome}</td>
-                          </tr>
-                        )}
-                      </For>
-                    </tbody>
-                  </table>
-                </div>
+                <Show
+                  when={filteredInvocations().length > 0}
+                  fallback={
+                    <p class="text-sm text-zinc-500" data-testid="invocations-no-match">
+                      {t("functions.noMatchingInvocations")}
+                    </p>
+                  }
+                >
+                  <div class="max-h-64 overflow-auto">
+                    <table class="table" data-testid="invocation-table">
+                      <thead>
+                        <tr>
+                          <th>{t("functions.eventId")}</th>
+                          <th>{t("functions.name")}</th>
+                          <th>{t("functions.attempt")}</th>
+                          <th>{t("functions.outcome")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <For each={filteredInvocations().toReversed()}>
+                          {(r) => (
+                            <tr>
+                              <td class="mono text-xs">{r.eventId}</td>
+                              <td class="mono">{r.function}</td>
+                              <td>{r.attempt}</td>
+                              <td class="mono text-xs">{r.outcome}</td>
+                            </tr>
+                          )}
+                        </For>
+                      </tbody>
+                    </table>
+                  </div>
+                </Show>
               </Show>
             </Section>
           </div>
@@ -368,6 +423,29 @@ const Functions: Component = () => {
             title={t("functions.logs")}
             actions={
               <>
+                <label class="text-sm">
+                  <span class="sr-only">{t("functions.filterLevel")}</span>
+                  <select
+                    class="input"
+                    data-testid="log-level-filter"
+                    value={logLevel()}
+                    onInput={(e) => setLogLevel(e.currentTarget.value as LevelFilter)}
+                  >
+                    <For each={LEVEL_OPTIONS}>
+                      {(opt) => <option value={opt.value}>{t(opt.key)}</option>}
+                    </For>
+                  </select>
+                </label>
+                <label class="text-sm">
+                  <span class="sr-only">{t("functions.filterText")}</span>
+                  <input
+                    class="input w-40"
+                    data-testid="log-text-filter"
+                    placeholder={t("functions.filterTextPlaceholder")}
+                    value={logText()}
+                    onInput={(e) => setLogText(e.currentTarget.value)}
+                  />
+                </label>
                 <span
                   class={`badge ${connected() ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100" : "bg-zinc-200 dark:bg-zinc-800"}`}
                 >
@@ -379,13 +457,24 @@ const Functions: Component = () => {
               </>
             }
           >
+            <div class="mb-1 text-xs text-zinc-500" data-testid="log-count">
+              {t("functions.logsFilteredCount", {
+                shown: filteredLines().length,
+                total: lines().length,
+              })}
+            </div>
             <pre
               ref={setLogBox}
               class="mono h-72 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-900 p-3 text-zinc-100"
               data-testid="function-logs"
             >
-              <Show when={lines().length > 0} fallback={t("functions.noLogs")}>
-                {lines().join("\n")}
+              <Show
+                when={filteredLines().length > 0}
+                fallback={
+                  lines().length > 0 ? t("functions.noMatchingLogs") : t("functions.noLogs")
+                }
+              >
+                {filteredLines().join("\n")}
               </Show>
             </pre>
           </Section>

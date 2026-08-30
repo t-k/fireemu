@@ -8,9 +8,9 @@ use ftd_adapter_grpc::rest::RestState;
 use ftd_adapter_http::control::ControlState;
 use ftd_adapter_http::identity_toolkit::AuthState;
 use ftd_adapter_http::storage::StorageState;
-use ftd_adapter_ui::{RuntimeInfo, UiState};
+use ftd_adapter_ui::{AppCheckInfo, RuntimeInfo, UiState};
 
-use crate::config::RuntimeConfig;
+use crate::config::{AppCheckService, RuntimeConfig, Selection};
 
 /// Port of the UI listener as given on the command line; `0` disables the UI.
 static UI_PORT: OnceLock<u16> = OnceLock::new();
@@ -54,6 +54,10 @@ pub async fn bind() -> Result<Ui, String> {
 pub struct Parts<'a> {
     /// Runtime configuration.
     pub cfg: &'a RuntimeConfig,
+    /// The selected services (`--only`): a configured baseline mode only applies while both
+    /// App Check and the product itself are selected, so the page shows what the runtime is
+    /// actually doing rather than what the file asked for.
+    pub only: &'a Selection,
     /// The control token browser pages must present.
     pub control_token: String,
     /// Firestore REST layer.
@@ -68,6 +72,8 @@ pub struct Parts<'a> {
     pub control: Arc<ControlState>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<FunctionsRuntime>>,
+    /// App Check, when enabled: the UI fronts its privileged debug-token management.
+    pub app_check: Option<Arc<ftd_adapter_http::app_check::AppCheckState>>,
     /// Bound addresses: Firestore, HTTP (Auth + control), Storage, Functions, UI.
     pub addrs: (
         std::net::SocketAddr,
@@ -81,6 +87,26 @@ pub struct Parts<'a> {
 /// The shared UI state.
 pub fn state(parts: Parts<'_>) -> Arc<UiState> {
     let (firestore, http, storage, functions, ui) = parts.addrs;
+    let app_check_info = parts.app_check.as_ref().map(|s| AppCheckInfo {
+        kid: s.signer.kid().to_owned(),
+        modes: [
+            ("auth", AppCheckService::Auth),
+            ("firestore", AppCheckService::Firestore),
+            ("storage", AppCheckService::Storage),
+        ]
+        .into_iter()
+        .map(|(name, service)| {
+            (
+                name.to_owned(),
+                parts
+                    .only
+                    .app_check_mode(&parts.cfg.app_check, service)
+                    .as_config_str()
+                    .to_owned(),
+            )
+        })
+        .collect(),
+    });
     Arc::new(UiState {
         control_token: parts.control_token,
         info: RuntimeInfo {
@@ -95,6 +121,7 @@ pub fn state(parts: Parts<'_>) -> Arc<UiState> {
             ui_addr: ui.to_string(),
             rules_enforced: parts.cfg.rules_enforced,
             clock_pinned: parts.cfg.clock_start_pinned,
+            app_check: app_check_info,
         },
         rest: parts.rest,
         backend: parts.backend,
@@ -102,5 +129,6 @@ pub fn state(parts: Parts<'_>) -> Arc<UiState> {
         storage: parts.storage,
         control: parts.control,
         functions: parts.functions,
+        app_check: parts.app_check,
     })
 }

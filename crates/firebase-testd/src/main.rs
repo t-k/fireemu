@@ -1060,6 +1060,7 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
             (Some(listener), Some(addr)) => {
                 let state = ui::state(ui::Parts {
                     cfg: &cfg,
+                    only: &only,
                     control_token: control_token.clone(),
                     rest: rest.clone(),
                     backend: backend.clone(),
@@ -1067,6 +1068,7 @@ fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitC
                     storage: storage.clone(),
                     control: control.clone(),
                     functions: functions_runtime.clone(),
+                    app_check: app_check.clone(),
                     addrs: (grpc_addr, http_addr, storage_addr, functions_addr, addr),
                 });
                 tokio::spawn(ftd_adapter_ui::server::serve_ui(listener, state))

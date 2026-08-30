@@ -17,6 +17,8 @@
 //! ANY  /ui/api/storage/...             Storage JSON API, as owner
 //! GET  /ui/api/functions               manifest, status, history, dead letters
 //! GET  /ui/api/functions/logs          SSE: runner log lines and invocation outcomes
+//! GET  /ui/api/appcheck/config         App Check: apps and baseline modes (no digest, no secret)
+//! ANY  /ui/api/appcheck/projects/...   App Check debug-token management, as the control token
 //! ANY  /ui/api/control/v1/...          the control API
 //! ```
 //!
@@ -48,6 +50,17 @@ pub const MAX_JSON_BODY_BYTES: usize = 256 * 1024;
 /// front: the listener closes the connection instead of sending it.
 pub const DROP_CONNECTION_HEADER: &str = "x-ftd-drop-connection";
 
+/// What the UI shows about App Check (fixed at start). The mutable part of the surface --
+/// the registered apps, their dynamic debug tokens and the observations -- is read from the
+/// registry on every request instead, so the page never shows a stale registration.
+#[derive(Debug, Clone, Default)]
+pub struct AppCheckInfo {
+    /// The `kid` of this instance's App Check signing key (public: it names the JWKS entry).
+    pub kid: String,
+    /// The effective baseline mode of each service (`--only` applied), in a stable order.
+    pub modes: Vec<(String, String)>,
+}
+
 /// What the UI shows about this runtime (fixed at start).
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeInfo {
@@ -73,6 +86,8 @@ pub struct RuntimeInfo {
     pub rules_enforced: bool,
     /// Whether the clock start was pinned by `daemon.clockStart`.
     pub clock_pinned: bool,
+    /// App Check, when the runtime enabled it.
+    pub app_check: Option<AppCheckInfo>,
 }
 
 /// Shared state of the UI surface.
@@ -93,6 +108,10 @@ pub struct UiState {
     pub control: Arc<ControlState>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<FunctionsRuntime>>,
+    /// App Check, when the runtime enabled it: the UI fronts its privileged debug-token
+    /// management and reads its registry for the configuration summary. The state carries the
+    /// control token and the secret source, so it never leaves this crate's own routes.
+    pub app_check: Option<Arc<ftd_adapter_http::app_check::AppCheckState>>,
 }
 
 /// One request of the UI surface.
@@ -307,6 +326,7 @@ pub fn config_json(state: &UiState) -> Value {
         "rulesEnforced": info.rules_enforced,
         "clockPinned": info.clock_pinned,
         "functionsConfigured": state.functions.is_some(),
+        "appCheckEnabled": state.app_check.is_some(),
         "uiBundled": assets::bundled(),
         "sessions": sessions,
         "controlToken": state.control_token,

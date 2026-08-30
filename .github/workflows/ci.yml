@@ -15,9 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # rust-toolchain.toml pins the compiler; the action only makes sure rustup is present.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: the pinned toolchain is the one in use
+        run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
@@ -86,6 +89,30 @@ jobs:
           else
             cargo nextest run --workspace --profile pr
           fi
+
+  # The packages a release would publish, built from this commit and installed the way a user
+  # installs them: offline, from the packed tarballs, under a path with a space and non-ASCII
+  # characters, through a symlink and from a read-only directory. `pack-local.mjs` is what a
+  # developer runs before a tag; running it here keeps the packaging from rotting between tags.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package
+      - run: pnpm -C ui install --frozen-lockfile
+      - run: pnpm -C ui build
+      - run: cargo build --release --locked -p fireemu
+      - run: node npm/scripts/pack-local.mjs
+      - run: node npm/scripts/verify-install.mjs --dist npm/dist
 
   tla:
     runs-on: ubuntu-latest

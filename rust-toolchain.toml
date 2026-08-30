@@ -1,0 +1,7 @@
+# The toolchain every build of fireemu uses, developer machines and CI alike. rustup reads this
+# file and installs the pinned release on first use, so a release artifact is built by the same
+# compiler wherever it is built -- one of the inputs a reproducible build has to hold constant.
+# Bump it deliberately, in its own commit, and let CI run the whole gate on the new compiler.
+[toolchain]
+channel = "1.94.0"
+components = ["rustfmt", "clippy"]

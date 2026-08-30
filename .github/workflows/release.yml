@@ -23,6 +23,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Reproducibility inputs. The compiler is pinned by rust-toolchain.toml; the two paths a
+  # build would otherwise embed (the checkout and the cargo home) are remapped to fixed names,
+  # so the same commit built in another directory, or by another machine, yields the same
+  # bytes. The `reproducible` job below builds linux-x64 twice under different paths and
+  # compares them.
+  RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/src --remap-path-prefix=/home/runner/.cargo=/cargo -D warnings
+  SOURCE_DATE_EPOCH: 0
 
 jobs:
   # The single source of truth for what gets built is npm/platforms/platforms.mjs; the matrix
@@ -166,7 +173,10 @@ jobs:
           if [ "${{ matrix.platform.os }}" = "win32" ]; then
             (cd npm/platforms/build && 7z a -tzip "../../../dist/${base}.zip" "${NAME}") >/dev/null
           else
-            tar -czf "dist/${base}.tar.gz" -C npm/platforms/build "${NAME}"
+            # Deterministic: a fixed member order, owner and mtime, and no gzip timestamp,
+            # so the archive of a reproducible binary is itself reproducible.
+            tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH}" \
+              -C npm/platforms/build -cf - "${NAME}" | gzip -n > "dist/${base}.tar.gz"
           fi
           ls -l dist
 
@@ -181,8 +191,96 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  publish:
+  # The same commit, built twice under different directories, has to produce the same bytes.
+  # Only linux-x64 is checked: it is the platform every CI container installs, and the other
+  # targets are built with the same flags on the same pinned compiler. The verdict is printed
+  # and does not yet block a release; once it has passed on a tag, drop continue-on-error.
+  reproducible:
+    needs: [plan, ui]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: rustup target add x86_64-unknown-linux-musl
+      - name: first build, in the checkout
+        run: |
+          cargo build --release --locked -p fireemu --target x86_64-unknown-linux-musl
+          sha256sum target/x86_64-unknown-linux-musl/release/fireemu | tee first.sha256
+      - name: second build, from a copy under another path
+        env:
+          RUSTFLAGS: --remap-path-prefix=/tmp/fireemu-rebuild=/src --remap-path-prefix=/home/runner/.cargo=/cargo -D warnings
+        run: |
+          rsync -a --exclude target --exclude .git ./ /tmp/fireemu-rebuild/
+          cd /tmp/fireemu-rebuild
+          cargo build --release --locked -p fireemu --target x86_64-unknown-linux-musl
+          sha256sum target/x86_64-unknown-linux-musl/release/fireemu | awk '{print $1}' > "$GITHUB_WORKSPACE/second.sha256"
+      - name: the two builds are byte-identical
+        run: |
+          first=$(awk '{print $1}' first.sha256); second=$(cat second.sha256)
+          echo "first  $first"; echo "second $second"
+          test "$first" = "$second"
+
+  # The artifact a user installs, not the workspace build, is what the conformance corpus is
+  # replayed against: the packed launcher and the linux-x64 package are installed offline into
+  # a project the way `npm install fireemu` would, run through doctor / exec / symlink /
+  # read-only checks, and then drive `pnpm -C conformance run check`. The npm SBOM of that
+  # installation is attached to the release next to the cargo one.
+  verify-artifact:
     needs: [plan, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-linux-x64
+          path: npm/platforms/build/linux-x64
+      - name: pack the two packages at the release version
+        run: |
+          node npm/scripts/stamp-version.mjs ${{ needs.plan.outputs.version }}
+          node npm/scripts/prepare-launcher.mjs
+          mkdir -p npm/dist
+          (cd npm/platforms/build/linux-x64 && npm pack --pack-destination ../../../dist)
+          (cd npm/fireemu && npm pack --pack-destination ../dist)
+          ls -l npm/dist
+      - name: install and run it the way a user would
+        id: install
+        run: |
+          node npm/scripts/verify-install.mjs --dist npm/dist --keep | tee verify.log
+          echo "dir=$(grep '^install=' verify.log | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
+      - name: the npm SBOM of the installation
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          mkdir -p sbom
+          (cd "${{ steps.install.outputs.dir }}" && npm sbom --sbom-format cyclonedx --omit dev) \
+            > "sbom/fireemu-${VERSION}.npm.cdx.json"
+          node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "sbom/fireemu-${VERSION}.npm.cdx.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-npm
+          path: sbom/*
+          if-no-files-found: error
+      - name: the conformance corpus against the installed binary
+        env:
+          FIREEMU_BIN: ${{ steps.install.outputs.dir }}/node_modules/@fireemu/linux-x64/bin/fireemu
+        run: |
+          pnpm -C conformance install --frozen-lockfile
+          test -x "$FIREEMU_BIN"
+          pnpm -C conformance run check
+
+  publish:
+    needs: [plan, build, verify-artifact]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release and attach its assets
@@ -218,6 +316,25 @@ jobs:
         run: node npm/scripts/stamp-version.mjs ${{ needs.plan.outputs.version }}
       - name: prepare the launcher package
         run: node npm/scripts/prepare-launcher.mjs
+
+      # Software bills of materials: the Rust dependency graph of the daemon (CycloneDX from
+      # Cargo.lock, licences included) and the npm tree of an installation (from
+      # verify-artifact). Both are release assets and both are in SHA256SUMS.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+      - name: the cargo SBOM
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          cargo cyclonedx --manifest-path crates/fireemu/Cargo.toml --format json --all
+          mv crates/fireemu/*.cdx.json "dist/fireemu-${VERSION}.cargo.cdx.json"
+      - name: collect the npm SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom-npm
+          path: dist
 
       - name: checksums
         run: |

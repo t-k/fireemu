@@ -133,8 +133,19 @@ versions and paths only -- never tokens, keys or configuration contents.
   (`--omit=optional`, `--no-optional`, a lockfile built on another platform).
 
 Release archives with SHA-256 sums are attached to each GitHub Release for users who do not want
-npm; they are the same trees as the npm packages. `npm/` holds the launcher, the platform-package
-generator and the release scripts.
+npm; they are the same trees as the npm packages. Two software bills of materials sit beside
+them, both in `SHA256SUMS`: `fireemu-<version>.cargo.cdx.json`, the daemon's Rust dependency
+graph with licences (CycloneDX, from `Cargo.lock`), and `fireemu-<version>.npm.cdx.json`, the npm
+tree of an installation. Every build uses the compiler `rust-toolchain.toml` pins, with the
+checkout and cargo-home paths remapped to fixed names, and the release workflow builds linux-x64
+twice under different directories and reports whether the bytes agree; the Linux archives are
+written with a fixed member order, owner and mtime. Before publishing, the release installs the
+packed linux-x64 packages offline into a project (a path with a space and non-ASCII characters,
+through a symlink, from a read-only directory) and replays the conformance corpus against that
+installed binary rather than the workspace build; `node npm/scripts/pack-local.mjs && node
+npm/scripts/verify-install.mjs --dist npm/dist` runs the same installation proof on a developer
+machine and in CI. `npm/` holds the launcher, the platform-package generator and the release
+scripts.
 
 ## Run
 

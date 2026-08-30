@@ -29,6 +29,10 @@ fireemu-adapter-ui = { path = "../fireemu-adapter-ui" }
 fireemu-core-functions = { path = "../fireemu-core-functions" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
 tonic = { version = "0.13", features = ["transport"] }
 
 [lints]

@@ -24,18 +24,20 @@ use crate::config::RuntimeConfig;
 /// would change what the functions themselves answer.
 const DEBUG_FEATURES: &str = r#"{"skipTokenVerification":true}"#;
 
-/// Addresses the runner's functions need to reach the daemon.
+/// Addresses the runner's functions need to reach the daemon. `None` means the service was
+/// not selected by `--only`: its variable is then left unset in the runner, so a handler
+/// cannot reach a product this run is not serving.
 pub struct EmulatorHosts {
     /// Firestore gRPC / REST.
-    pub firestore: String,
+    pub firestore: Option<String>,
     /// Auth REST.
-    pub auth: String,
+    pub auth: Option<String>,
     /// Storage.
-    pub storage: String,
+    pub storage: Option<String>,
 }
 
 /// The bundled Node runner (overridable with `FIREEMU_RUNNER_NODE`).
-fn default_runner() -> Vec<String> {
+pub fn default_runner() -> Vec<String> {
     let script = std::env::var("FIREEMU_RUNNER_NODE").unwrap_or_else(|_| {
         concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -69,23 +71,10 @@ pub async fn start(
     command.push("--source".to_owned());
     command.push(source.clone());
     let default_bucket = format!("{}.appspot.com", cfg.auth_project);
-    let env = vec![
+    let mut env = vec![
         ("GCLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
         ("GOOGLE_CLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
         ("FUNCTIONS_EMULATOR".to_owned(), "true".to_owned()),
-        (
-            "FIRESTORE_EMULATOR_HOST".to_owned(),
-            hosts.firestore.clone(),
-        ),
-        ("FIREBASE_AUTH_EMULATOR_HOST".to_owned(), hosts.auth.clone()),
-        (
-            "FIREBASE_STORAGE_EMULATOR_HOST".to_owned(),
-            hosts.storage.clone(),
-        ),
-        (
-            "STORAGE_EMULATOR_HOST".to_owned(),
-            format!("http://{}", hosts.storage),
-        ),
         (
             "FIREBASE_CONFIG".to_owned(),
             serde_json::json!({"projectId": cfg.auth_project, "storageBucket": default_bucket})
@@ -94,10 +83,23 @@ pub async fn start(
         ("FIREEMU_RUNNER".to_owned(), "1".to_owned()),
         ("FIREEMU_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
     ];
+    if let Some(host) = &hosts.firestore {
+        env.push(("FIRESTORE_EMULATOR_HOST".to_owned(), host.clone()));
+        env.push((
+            "FIREBASE_FIRESTORE_EMULATOR_ADDRESS".to_owned(),
+            host.clone(),
+        ));
+    }
+    if let Some(host) = &hosts.auth {
+        env.push(("FIREBASE_AUTH_EMULATOR_HOST".to_owned(), host.clone()));
+    }
+    if let Some(host) = &hosts.storage {
+        env.push(("FIREBASE_STORAGE_EMULATOR_HOST".to_owned(), host.clone()));
+        env.push(("STORAGE_EMULATOR_HOST".to_owned(), format!("http://{host}")));
+    }
     // Debug mode is granted only when the daemon is the sole source of both callable
     // credentials. The runner inherits an allowlist that does not contain these names, and
     // `SpawnSpec::env` is applied last, so neither can be shadowed from the host environment.
-    let mut env = env;
     if callable_trusted_protocol {
         env.push(("FIREBASE_DEBUG_MODE".to_owned(), "true".to_owned()));
         env.push((

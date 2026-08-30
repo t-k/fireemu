@@ -341,6 +341,7 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 name = "fireemu"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "fireemu-adapter-functions",
  "fireemu-adapter-grpc",
  "fireemu-adapter-http",
@@ -355,6 +356,9 @@ dependencies = [
  "fireemu-core-storage",
  "fireemu-core-types",
  "fireemu-proto-firestore",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "serde_json",
  "tokio",
  "tonic",

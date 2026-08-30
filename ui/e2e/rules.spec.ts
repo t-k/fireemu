@@ -18,7 +18,9 @@ test.describe("Rules", () => {
     await expect(page.getByText("Not loaded: every request is allowed").first()).toBeVisible();
     await page.locator("#rules-firestore").fill(RULES);
     await page.getByTestId("rules-firestore-save").click();
-    await expect(page.getByRole("status")).toContainText("Rules replaced");
+    await expect(page.getByRole("status").filter({ hasNotText: "Loading" })).toContainText(
+      "Rules replaced",
+    );
     await expect(page.getByText("Loaded", { exact: true }).first()).toBeVisible();
     const info = (await api(request, "GET", "control/v1/rules")) as { loaded: boolean };
     expect(info.loaded).toBe(true);

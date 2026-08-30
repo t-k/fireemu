@@ -28,7 +28,9 @@ test.describe("Runtime controls", () => {
     await api(request, "DELETE", `${DOCS}/snap/a`);
     await page.getByTestId("snapshot-restore-seeded").click();
     await page.getByTestId("snapshot-restore-seeded-confirm").click();
-    await expect(page.getByRole("status")).toContainText("seeded");
+    await expect(page.getByRole("status").filter({ hasNotText: "Loading" })).toContainText(
+      "seeded",
+    );
     const doc = (await api(request, "GET", `${DOCS}/snap/a`)) as {
       fields: { v: { integerValue: string } };
     };

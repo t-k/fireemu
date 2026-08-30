@@ -1,21 +1,21 @@
 # Conformance suite
 
 An opt-in, black-box differential suite. One scenario corpus runs twice -- against the official
-Local Emulator Suite (the **oracle**) and against `firebase-testd` -- and every step is recorded
+Local Emulator Suite (the **oracle**) and against `fireemu` -- and every step is recorded
 as `parity`, `documented-divergence`, `debt` or `pending`.
 
 Nothing here runs in the default CI gate. Recording needs Java, a 136 MB Firestore emulator jar
-and several minutes; checking needs a built `firebase-testd` and about two minutes.
+and several minutes; checking needs a built `fireemu` and about two minutes.
 
 ```sh
 pnpm -C conformance install
 pnpm -C conformance run corpus     # what the suite covers, starts nothing
 pnpm -C conformance run selftest   # the gate's own tests, no emulator
 pnpm -C conformance run oracle     # records fixtures/, ORACLE.md and DEBT.md (needs Java)
-pnpm -C conformance run check      # replays firebase-testd and diffs; fails the process on drift
+pnpm -C conformance run check      # replays fireemu and diffs; fails the process on drift
 ```
 
-`check` needs `cargo build -p firebase-testd` first (or `FTD_BIN=/path/to/firebase-testd`).
+`check` needs `cargo build -p fireemu` first (or `FIREEMU_BIN=/path/to/fireemu`).
 `CONFORMANCE_VERBOSE=1` streams both supervisors' output.
 
 ## What it compares
@@ -30,7 +30,7 @@ collides with the default emulator ports or with `tools/sdk-smoke`.
 | Auth | client sign-up / sign-in errors; the raw Identity Toolkit envelopes; out-of-band code shapes; multi-factor enrolment and sign-in errors |
 | Storage | Admin JSON API uploads, downloads, metadata and listing; the Firebase protocol with resumable uploads; Rules denials on both dialects |
 | Functions | the callable envelope for a result and every `HttpsError` code; the Auth context for an anonymous, signed-in, forged and privileged caller |
-| App Check | the exchange and JWKS routes; the `X-Firebase-AppCheck` matrix (missing / valid / unverifiable / duplicate) across Firestore, Auth, Storage, an enforcing callable, a non-enforcing callable and an `onRequest` function, both with enforcement off and with firebase-testd enforcing |
+| App Check | the exchange and JWKS routes; the `X-Firebase-AppCheck` matrix (missing / valid / unverifiable / duplicate) across Firestore, Auth, Storage, an enforcing callable, a non-enforcing callable and an `onRequest` function, both with enforcement off and with fireemu enforcing |
 
 ## What it normalizes
 
@@ -49,7 +49,7 @@ clock or a counter, so a re-record produces a byte-identical fixture tree.
 | Status | Meaning | Does `check` gate it? |
 | --- | --- | --- |
 | `parity` | both sides produced the same normalized value | yes, against that value |
-| `documented-divergence` | they differ on purpose; `divergences.json` names the text that publishes it | yes, against the recorded firebase-testd value |
+| `documented-divergence` | they differ on purpose; `divergences.json` names the text that publishes it | yes, against the recorded fireemu value |
 | `debt` | they differ and nobody has decided; listed in `DEBT.md` | no -- reported only |
 | `pending` | no local oracle can answer; recorded with a reason | no -- and a run that _does_ produce a value here fails |
 
@@ -82,7 +82,7 @@ is `pending`, never invented.
 ```
 firebase.json .firebaserc          the official suite's project (ports 32xxx)
 firestore.rules storage.rules      one source of rules text for both sides
-firebase-testd.*.json              the two firebase-testd configurations
+fireemu.*.json              the two fireemu configurations
 functions/                         one callable codebase both sides load
 src/corpus/                        the scenarios, in the order they run
 src/run-corpus.mjs                 what each supervisor executes

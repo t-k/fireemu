@@ -1,5 +1,5 @@
 // Security Rules for the conformance corpus. The official emulator reads this file through
-// firebase.json; firebase-testd receives the same text through its control API (PUT /v1/rules),
+// firebase.json; fireemu receives the same text through its control API (PUT /v1/rules),
 // so both sides evaluate byte-identical rules.
 rules_version = '2';
 service cloud.firestore {

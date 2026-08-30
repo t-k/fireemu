@@ -1,0 +1,18 @@
+[package]
+name = "fireemu-core-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only Cloud Storage for Firebase core: versioned objects, metadata, listing, resumable uploads"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

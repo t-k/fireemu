@@ -1,6 +1,6 @@
 // Normalization of documented nondeterminism, and nothing else.
 //
-// Every rule here erases a value that both a correct oracle and a correct firebase-testd are
+// Every rule here erases a value that both a correct oracle and a correct fireemu are
 // free to choose differently on two runs of the same corpus: wall-clock instants, generated
 // identifiers, credentials, host:port pairs and object generations. Statuses, error codes,
 // error messages, payload shapes, listener sequences and Rules decisions are never touched --

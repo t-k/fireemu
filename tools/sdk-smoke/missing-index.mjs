@@ -1,5 +1,5 @@
 // Missing-index smoke: the real `firebase` client SDK against a conservative
-// firebase-testd that declares exactly one composite index
+// fireemu that declares exactly one composite index
 // (`tasks`: ownerId ASCENDING, createdAt DESCENDING).
 //
 // A query the index does not cover must reach the application as

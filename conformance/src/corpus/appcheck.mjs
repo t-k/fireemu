@@ -255,7 +255,7 @@ const enforcedMatrix = {
   variant: VARIANTS.appCheckEnforced,
   sdks: ["rest"],
   title:
-    "The same matrix with firebase-testd enforcing Firestore, Storage and Auth; the official suite cannot enforce",
+    "The same matrix with fireemu enforcing Firestore, Storage and Auth; the official suite cannot enforce",
   async run(ctx) {
     // Seed through the privileged dialects, which bypass App Check on both sides. Without
     // this the enforced rows could not tell an App Check denial from a plain 404.
@@ -303,7 +303,7 @@ const enforcedMatrix = {
       "needs a real project",
       "Section 23 records the behaviour of an already open Firestore stream whose token expires, " +
         "or whose enforcement changes, as unresolved debt. Neither local side can answer it: the " +
-        "official suite never enforces, and firebase-testd's answer is the one under test.",
+        "official suite never enforces, and fireemu's answer is the one under test.",
     );
 
     ctx.pending(

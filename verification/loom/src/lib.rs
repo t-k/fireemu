@@ -7,7 +7,7 @@
 //! Run with:
 //!
 //! ```text
-//! RUSTFLAGS="--cfg loom" cargo test -p ftd-verification-loom --release
+//! RUSTFLAGS="--cfg loom" cargo test -p fireemu-verification-loom --release
 //! ```
 //!
 //! Loom is a dev-time dependency only and is never linked into the release binary.
@@ -17,10 +17,10 @@ mod scenarios {
     use loom::sync::{Arc, Mutex};
     use loom::thread;
 
-    use ftd_core_session::idle::{AwaitIdleOptions, IdleVerdict, WorkKind, WorkLedger};
-    use ftd_core_session::session::{Session, WorkResult};
-    use ftd_core_types::ids::{Epoch, SessionId};
-    use ftd_core_types::time::LogicalInstant;
+    use fireemu_core_session::idle::{AwaitIdleOptions, IdleVerdict, WorkKind, WorkLedger};
+    use fireemu_core_session::session::{Session, WorkResult};
+    use fireemu_core_types::ids::{Epoch, SessionId};
+    use fireemu_core_types::time::LogicalInstant;
 
     /// Shared state of the session core: the session plus the log of applied effects, each
     /// tagged with the work item's epoch and the session epoch at apply time.
@@ -207,11 +207,11 @@ mod scenarios {
     /// Succeeded.
     #[test]
     fn event_success_races_with_retry_timer() {
-        use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
-        use ftd_core_events::retry::RetryPolicy;
-        use ftd_core_events::state::{EventRecord, EventState};
-        use ftd_core_types::ids::{CorrelationId, EventId};
-        use ftd_core_types::time::LogicalDuration;
+        use fireemu_core_events::event::{EventSource, EventType, LogicalEvent};
+        use fireemu_core_events::retry::RetryPolicy;
+        use fireemu_core_events::state::{EventRecord, EventState};
+        use fireemu_core_types::ids::{CorrelationId, EventId};
+        use fireemu_core_types::time::LogicalDuration;
 
         loom::model(|| {
             let event = LogicalEvent {
@@ -306,15 +306,15 @@ mod scenarios {
         });
     }
     fn auth_fixture() -> (
-        Arc<Mutex<ftd_core_auth::store::AuthStore>>,
-        ftd_core_auth::store::LocalId,
+        Arc<Mutex<fireemu_core_auth::store::AuthStore>>,
+        fireemu_core_auth::store::LocalId,
         Vec<u8>,
         LogicalInstant,
     ) {
-        use ftd_core_auth::mfa::TotpPolicy;
-        use ftd_core_auth::store::{AuthStore, NewUser};
-        use ftd_core_auth::totp::totp_at;
-        use ftd_core_types::determinism::SplitMix64;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_auth::totp::totp_at;
+        use fireemu_core_types::determinism::SplitMix64;
 
         let t0 = LogicalInstant::from_unix_seconds(1_788_004_860);
         let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
@@ -334,9 +334,9 @@ mod scenarios {
     /// other sees CodeAlreadyUsed, regardless of a concurrent clock advance.
     #[test]
     fn totp_verify_races_with_clock_advance() {
-        use ftd_core_auth::mfa::MfaError;
-        use ftd_core_auth::totp::totp_at;
-        use ftd_core_types::time::LogicalDuration;
+        use fireemu_core_auth::mfa::MfaError;
+        use fireemu_core_auth::totp::totp_at;
+        use fireemu_core_types::time::LogicalDuration;
 
         loom::model(|| {
             let (store, uid, secret, t0) = auth_fixture();
@@ -371,11 +371,11 @@ mod scenarios {
     /// carries a second factor claim only if the enrollment actually finalized.
     #[test]
     fn enrollment_finalize_races_with_expiry() {
-        use ftd_core_auth::mfa::TotpPolicy;
-        use ftd_core_auth::store::{AuthStore, NewUser};
-        use ftd_core_auth::totp::totp_at;
-        use ftd_core_types::determinism::SplitMix64;
-        use ftd_core_types::time::LogicalDuration;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_auth::totp::totp_at;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalDuration;
 
         loom::model(|| {
             let t0 = LogicalInstant::from_unix_seconds(1_788_004_860);
@@ -424,7 +424,7 @@ mod scenarios {
     /// token issued after revocation stays valid.
     #[test]
     fn token_revocation_races_with_sign_in() {
-        use ftd_core_types::time::LogicalDuration;
+        use fireemu_core_types::time::LogicalDuration;
 
         loom::model(|| {
             let (store, uid, _secret, t0) = auth_fixture();

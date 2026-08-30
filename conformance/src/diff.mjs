@@ -2,7 +2,7 @@
 //
 // Recording folds the two sides of one scenario into a fixture: a step both sides answered
 // identically is `parity`; a step listed in `divergences.json` is a `documented-divergence`;
-// anything else that differs is `debt`. Checking replays only firebase-testd and asks whether
+// anything else that differs is `debt`. Checking replays only fireemu and asks whether
 // the fixture still describes it.
 
 import { err, ok } from "neverthrow";
@@ -84,7 +84,7 @@ export function classifyScenario({ scenarioId, oracleScenario, testdScenario, an
 }
 
 /**
- * Compares a replayed firebase-testd scenario against its fixture.
+ * Compares a replayed fireemu scenario against its fixture.
  *
  * @returns Result of `{scenarioId, checked, warnings}`, or the failures that fail the gate.
  */
@@ -129,7 +129,7 @@ export function compareScenario({ fixture, testdScenario }) {
       checked += 1;
       if (!deepEqual(step.testd, value)) {
         failures.push(
-          `${fixture.id}#${step.id}: documented divergence drifted from its recorded firebase-testd value\n` +
+          `${fixture.id}#${step.id}: documented divergence drifted from its recorded fireemu value\n` +
             `  documents: ${step.documents}\n  fixture: ${JSON.stringify(step.testd)}\n  run:     ${JSON.stringify(value)}`,
         );
       }

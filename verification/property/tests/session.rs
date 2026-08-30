@@ -1,14 +1,14 @@
 //! Property artifacts for INV-EPOCH-001, INV-TIME-001 and INV-IDLE-001 (spec 7.4, 8.2, 12).
 
-use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
-use ftd_core_events::retry::RetryPolicy;
-use ftd_core_events::state::EventRecord;
-use ftd_core_session::clock::{ClockError, VirtualClock};
-use ftd_core_session::idle::{AwaitIdleOptions, IdleVerdict, WorkKind, WorkLedger};
-use ftd_core_session::session::{Session, WorkResult};
-use ftd_core_types::determinism::Clock;
-use ftd_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
-use ftd_core_types::time::{LogicalDuration, LogicalInstant};
+use fireemu_core_events::event::{EventSource, EventType, LogicalEvent};
+use fireemu_core_events::retry::RetryPolicy;
+use fireemu_core_events::state::EventRecord;
+use fireemu_core_session::clock::{ClockError, VirtualClock};
+use fireemu_core_session::idle::{AwaitIdleOptions, IdleVerdict, WorkKind, WorkLedger};
+use fireemu_core_session::session::{Session, WorkResult};
+use fireemu_core_types::determinism::Clock;
+use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use proptest::prelude::*;
 
 fn event(epoch: Epoch) -> LogicalEvent {

@@ -1,4 +1,4 @@
-// The runtime configuration the daemon injects into index.html (`window.__FTD__`). During
+// The runtime configuration the daemon injects into index.html (`window.__FIREEMU__`). During
 // `vite` development nothing is injected; the token then comes from `?token=` in the page
 // URL and is kept in memory only (never in storage another script could read later).
 
@@ -25,7 +25,7 @@ export type RuntimeConfig = {
 
 declare global {
   interface Window {
-    __FTD__?: Partial<RuntimeConfig>;
+    __FIREEMU__?: Partial<RuntimeConfig>;
   }
 }
 
@@ -51,7 +51,7 @@ const tokenFromLocation = (): string | null => {
   }
 };
 
-const injected = (): Partial<RuntimeConfig> => window.__FTD__ ?? {};
+const injected = (): Partial<RuntimeConfig> => window.__FIREEMU__ ?? {};
 
 /** The control token every API request presents (empty when unknown). */
 export const controlToken = (): string => injected().controlToken ?? tokenFromLocation() ?? "";

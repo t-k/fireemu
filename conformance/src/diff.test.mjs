@@ -21,7 +21,7 @@ const fixture = {
       oracle: { status: 200 },
       testd: { status: 403 },
       documents: "README.md",
-      reason: "firebase-testd enforces here",
+      reason: "fireemu enforces here",
     },
     { id: "known-debt", status: "debt", oracle: { m: "a" }, testd: { m: "b" } },
     { id: "unanswerable", status: "pending", reason: "needs a real project", production: "..." },

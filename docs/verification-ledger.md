@@ -78,8 +78,8 @@ at least one requirement.
 ```sh
 cargo run -p traceability-check              # the gate; exits non-zero on any problem
 cargo test -p traceability-check             # the checker's own fixtures
-cargo test -p ftd-verification-property      # the property artifacts
-cargo kani -p ftd-verification-kani          # the Kani harnesses
+cargo test -p fireemu-verification-property      # the property artifacts
+cargo kani -p fireemu-verification-kani          # the Kani harnesses
 ```
 
 `tools/traceability-check/tests/artifact_references.rs` holds table-driven fixtures: for every

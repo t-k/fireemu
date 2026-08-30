@@ -1,6 +1,6 @@
 //! Canonical config schema check (spec 17, CI 31.1 #15).
 //!
-//! - every file under `spec/config/examples/` must satisfy `firebase-testd.schema.json` and
+//! - every file under `spec/config/examples/` must satisfy `fireemu.schema.json` and
 //!   the cross-field rules below;
 //! - every file under `spec/config/invalid-examples/` must be rejected by at least one of them;
 //! - referenced limit catalogs must exist under `spec/limits/`.
@@ -235,7 +235,7 @@ fn json_files(dir: &Path) -> Vec<PathBuf> {
 
 fn run(root: &Path) -> Result<(), Vec<String>> {
     let mut problems = Vec::new();
-    let schema_path = root.join("spec/config/firebase-testd.schema.json");
+    let schema_path = root.join("spec/config/fireemu.schema.json");
     let schema = read_json(&schema_path).map_err(|e| vec![e])?;
     let validator = jsonschema::validator_for(&schema)
         .map_err(|e| vec![format!("{}: invalid schema: {e}", schema_path.display())])?;

@@ -3,7 +3,7 @@
 // A scenario never learns which side it is running on for the purpose of *behaving*
 // differently: `ctx.side` exists only for the two setup differences the two products cannot
 // share (Security Rules are loaded from firebase.json by the official suite and through the
-// control API by firebase-testd, and only firebase-testd can mint an App Check token).
+// control API by fireemu, and only fireemu can mint an App Check token).
 
 import { APP_CHECK, BUCKET, PROJECT, REGION } from "../config.mjs";
 import { normalize, normalizeError } from "../normalize.mjs";
@@ -20,7 +20,7 @@ export function hostsFromEnv() {
     auth: required("FIREBASE_AUTH_EMULATOR_HOST"),
     storage: required("FIREBASE_STORAGE_EMULATOR_HOST"),
     functions: required("CONFORMANCE_FUNCTIONS_HOST"),
-    appCheck: process.env.FTD_APP_CHECK_EMULATOR_HOST ?? null,
+    appCheck: process.env.FIREEMU_APP_CHECK_EMULATOR_HOST ?? null,
   };
 }
 

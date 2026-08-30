@@ -36,7 +36,7 @@
         "message": "9 FAILED_PRECONDITION: The query requires an index. missing index (age Ascending, name Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"conf_index\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"age\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"name\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}"
       },
       "documents": "README.md, \"Composite indexes\"",
-      "reason": "Under firestore.indexValidationPolicy = firebase, a query whose composite index is not in the index file is refused with FAILED_PRECONDITION and the fragment production would need. The official Firestore emulator serves the query as if the index existed; firebase-testd offers that as the `emulator` policy instead of as the default."
+      "reason": "Under firestore.indexValidationPolicy = firebase, a query whose composite index is not in the index file is refused with FAILED_PRECONDITION and the fragment production would need. The official Firestore emulator serves the query as if the index existed; fireemu offers that as the `emulator` policy instead of as the default."
     },
     {
       "id": "admin-equality-plus-inequality",

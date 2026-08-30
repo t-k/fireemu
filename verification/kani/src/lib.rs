@@ -1,23 +1,23 @@
 //! Kani harnesses for the pure core (spec 22).
 //!
-//! Each harness names the requirement it covers. Run with `cargo kani -p ftd-verification-kani`.
+//! Each harness names the requirement it covers. Run with `cargo kani -p fireemu-verification-kani`.
 //! The harnesses compile only under `cfg(kani)`; a normal build sees an empty crate.
 
 #[cfg(kani)]
 mod harnesses {
-    use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
-    use ftd_core_events::retry::RetryPolicy;
-    use ftd_core_events::state::{EventRecord, EventTransitionError};
-    use ftd_core_limits::evaluate::{
+    use fireemu_core_events::event::{EventSource, EventType, LogicalEvent};
+    use fireemu_core_events::retry::RetryPolicy;
+    use fireemu_core_events::state::{EventRecord, EventTransitionError};
+    use fireemu_core_limits::evaluate::{
         classify_severity, ratio_micros, violates_boundary, DEFAULT_THRESHOLDS,
     };
-    use ftd_core_limits::model::LimitBoundary;
-    use ftd_core_session::clock::VirtualClock;
-    use ftd_core_session::idle::{AwaitIdleOptions, WorkKind};
-    use ftd_core_session::session::{Session, WorkResult};
-    use ftd_core_types::determinism::Clock;
-    use ftd_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
-    use ftd_core_types::time::{LogicalDuration, LogicalInstant};
+    use fireemu_core_limits::model::LimitBoundary;
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_session::idle::{AwaitIdleOptions, WorkKind};
+    use fireemu_core_session::session::{Session, WorkResult};
+    use fireemu_core_types::determinism::Clock;
+    use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
+    use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
     /// INV-LIMIT-001 (boundary part): inclusive allows N, exclusive rejects N, and a boundary
     /// rejection always takes precedence over warnings.
@@ -105,7 +105,7 @@ mod harnesses {
         let options = AwaitIdleOptions::default();
         assert!(kinds[pick].is_fenced(&options));
         let ignore = AwaitIdleOptions {
-            text_index_builds: ftd_core_session::idle::IdleWaitPolicy::Ignore,
+            text_index_builds: fireemu_core_session::idle::IdleWaitPolicy::Ignore,
             ..AwaitIdleOptions::default()
         };
         assert_eq!(

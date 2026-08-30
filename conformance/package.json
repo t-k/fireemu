@@ -1,7 +1,7 @@
 {
-  "name": "ftd-conformance",
+  "name": "fireemu-conformance",
   "private": true,
-  "description": "Opt-in differential conformance suite: one scenario corpus run against the official Local Emulator Suite (the oracle) and against firebase-testd.",
+  "description": "Opt-in differential conformance suite: one scenario corpus run against the official Local Emulator Suite (the oracle) and against fireemu.",
   "type": "module",
   "scripts": {
     "oracle": "node src/oracle.mjs",

@@ -83,8 +83,8 @@
         },
         "status": 200
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
-      "reason": "The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. firebase-testd verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
+      "reason": "The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all."
     },
     {
       "id": "bearer-owner-is-not-a-callable-identity",
@@ -113,8 +113,8 @@
         },
         "status": 200
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
-      "reason": "`Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; firebase-testd never treats it as a callable user identity."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
+      "reason": "`Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity."
     },
     {
       "id": "an-http-function-sees-the-raw-request",

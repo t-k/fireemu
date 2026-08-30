@@ -26,7 +26,7 @@ const splitHost = (hostPort) => {
 
 /**
  * Creates the shared handles. `hosts` comes from the supervisor's environment, so the same
- * code addresses the official suite and firebase-testd.
+ * code addresses the official suite and fireemu.
  */
 export function createShared(hosts) {
   const cache = new Map();

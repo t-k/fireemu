@@ -1,7 +1,7 @@
 # cargo-mutants configuration (spec 27). Generated code, tools and verification crates are
 # excluded; retries are never used (ADR-006).
 exclude_globs = [
-    "crates/ftd-core-limits/src/generated/**",
+    "crates/fireemu-core-limits/src/generated/**",
     "tools/**",
     "verification/**",
 ]

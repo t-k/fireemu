@@ -4,8 +4,8 @@
 # Leak detection (`leak-timeout`) covers exactly one thing: a process started by a test that
 # still holds the test's captured stdout or stderr after the test process exited. It says
 # nothing about a process that closed or redirected those handles; that is what the process
-# census in `crates/firebase-testd/tests/census/mod.rs` is for, and
-# `crates/firebase-testd/tests/leak_fixture.rs` gates both.
+# census in `crates/fireemu/tests/census/mod.rs` is for, and
+# `crates/fireemu/tests/leak_fixture.rs` gates both.
 #
 # The 30s period is measured, not guessed. Sweeping it over ~100 workspace runs on an 18-core
 # machine, with and without 9 competing busy loops (the numbers are in the work log for this
@@ -52,7 +52,7 @@ test-threads = "num-cpus"
 retries = 3
 fail-fast = false
 
-# Drives the intentional-leak fixtures in `crates/firebase-testd/tests/leak_fixture.rs`. The
+# Drives the intentional-leak fixtures in `crates/fireemu/tests/leak_fixture.rs`. The
 # fixture children live far longer than any period, so this only has to be short enough to keep
 # the nested run quick.
 [profile.leak-fixture]

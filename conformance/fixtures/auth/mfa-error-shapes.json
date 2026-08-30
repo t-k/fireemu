@@ -115,7 +115,7 @@
       "id": "totp-enrolment-secret-shape",
       "status": "pending",
       "reason": "needs a real project",
-      "production": "Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor firebase-testd can produce the production shape, so no local run may stand in for it."
+      "production": "Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it."
     }
   ]
 }

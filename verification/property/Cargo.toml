@@ -1,5 +1,5 @@
 [package]
-name = "ftd-verification-property"
+name = "fireemu-verification-property"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,12 +9,12 @@ publish.workspace = true
 description = "Property tests named by verification/requirements/requirements.json; run with cargo test"
 
 [dev-dependencies]
-ftd-core-app-check = { path = "../../crates/ftd-core-app-check" }
-ftd-core-auth = { path = "../../crates/ftd-core-auth" }
-ftd-core-events = { path = "../../crates/ftd-core-events" }
-ftd-core-limits = { path = "../../crates/ftd-core-limits" }
-ftd-core-session = { path = "../../crates/ftd-core-session" }
-ftd-core-types = { path = "../../crates/ftd-core-types" }
+fireemu-core-app-check = { path = "../../crates/fireemu-core-app-check" }
+fireemu-core-auth = { path = "../../crates/fireemu-core-auth" }
+fireemu-core-events = { path = "../../crates/fireemu-core-events" }
+fireemu-core-limits = { path = "../../crates/fireemu-core-limits" }
+fireemu-core-session = { path = "../../crates/fireemu-core-session" }
+fireemu-core-types = { path = "../../crates/fireemu-core-types" }
 proptest.workspace = true
 
 [lints]

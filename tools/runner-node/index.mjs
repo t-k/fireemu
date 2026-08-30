@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// firebase-testd Node runner: loads a Firebase Functions codebase (firebase-functions v2,
+// fireemu Node runner: loads a Firebase Functions codebase (firebase-functions v2,
 // plus v1 HTTP functions), discovers its functions, and serves invocations sent by the
 // daemon over stdin/stdout (length-prefixed JSON frames). HTTP and callable functions are
 // hosted on a local express server whose port is announced in the hello frame.
@@ -341,7 +341,7 @@ function makeHttpServer(functions, manifest) {
   const major = Number.parseInt(String(require("express/package.json").version).split(".")[0], 10);
   // Express 5 (path-to-regexp 8) and Express 4 spell the optional rest differently.
   const route = major >= 5 ? "/:project/:region/:name{/*rest}" : "/:project/:region/:name*";
-  const secret = process.env.FTD_RUNNER_SECRET || "";
+  const secret = process.env.FIREEMU_RUNNER_SECRET || "";
   const project = process.env.GCLOUD_PROJECT || "";
   app.all(route, (req, res, next) => {
     // Only the daemon's proxy may reach this server (it carries the per-runner secret and has
@@ -351,15 +351,15 @@ function makeHttpServer(functions, manifest) {
     // honours the auth-override headers, so an unguarded runner would be an open
     // impersonation endpoint for anything else on the loopback interface.
     if (!secret) {
-      res.status(500).send("FTD_RUNNER_SECRET is required");
+      res.status(500).send("FIREEMU_RUNNER_SECRET is required");
       return;
     }
-    if (!secretMatches(req.get("x-ftd-runner-secret"), secret)) {
-      res.status(403).send("not the firebase-testd proxy");
+    if (!secretMatches(req.get("x-fireemu-runner-secret"), secret)) {
+      res.status(403).send("not the fireemu proxy");
       return;
     }
     // The secret is not part of the request the function sees.
-    delete req.headers["x-ftd-runner-secret"];
+    delete req.headers["x-fireemu-runner-secret"];
     const spec = manifest.functions.find((f) => f.name === req.params.name && f.trigger?.type === "http");
     const fn = spec && functions.get(spec.entryPoint);
     const region = spec?.region || "us-central1";

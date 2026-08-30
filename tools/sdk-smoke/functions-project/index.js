@@ -1,4 +1,4 @@
-// Firebase Functions (v2) exercised by tools/sdk-smoke/functions.mjs against firebase-testd.
+// Firebase Functions (v2) exercised by tools/sdk-smoke/functions.mjs against fireemu.
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { onDocumentCreated, onDocumentWritten, onDocumentDeleted } = require("firebase-functions/v2/firestore");

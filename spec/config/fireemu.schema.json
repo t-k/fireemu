@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "title": "fireemu canonical configuration",
+  "description": "Single source of truth for the daemon configuration (spec section 17). Unknown keys are errors everywhere. Cross-field constraints that JSON Schema cannot express are enforced by tools/config-schema-check and by the Rust config loader.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profile", "firestore"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "profile": { "enum": ["deterministic", "compat", "chaos", "conformance"] },
+    "bind": { "type": "string", "default": "127.0.0.1" },
+    "projects": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requireDemoPrefix": { "type": "boolean", "default": true }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "catalog": { "type": "string", "pattern": "^firestore-(standard|enterprise-native)-[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "queryCatalog": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^firestore-standard-query-[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+          ]
+        },
+        "rulesCatalog": { "type": "string", "pattern": "^firebase-rules-[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "enforcement": { "enum": ["strict", "observe"] },
+        "warningThresholds": { "$ref": "#/$defs/thresholds" },
+        "perLimitWarningThresholds": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Z0-9-]+$" },
+          "additionalProperties": { "$ref": "#/$defs/thresholds" }
+        },
+        "warningsAsErrors": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^([A-Z0-9-]+|notice|warning|critical)$" },
+          "uniqueItems": true
+        },
+        "quotaAccounting": { "enum": ["off", "observe", "enforce"] },
+        "firestorePlan": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "billingEnabled": { "type": "boolean" },
+            "compositeIndexLimitOverride": { "$ref": "#/$defs/optionalCount" },
+            "singleFieldConfigLimitOverride": { "$ref": "#/$defs/optionalCount" },
+            "enterpriseIndexLimitOverride": { "$ref": "#/$defs/optionalCount" }
+          }
+        }
+      }
+    },
+    "firestore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edition", "apiMode"],
+      "properties": {
+        "edition": { "enum": ["standard", "enterprise"] },
+        "apiMode": { "enum": ["native", "mongodb-compatible"] },
+        "indexValidationPolicy": { "enum": ["firebase", "conservative", "emulator"] },
+        "indexFile": { "type": "string" },
+        "textIndexDefinitionFile": { "type": "string" },
+        "enforceLimits": { "type": "boolean" },
+        "explain": { "type": "boolean" },
+        "pipeline": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "executionMode": { "enum": ["strict-native", "proxy", "record-only"] },
+            "unknownStagePolicy": { "enum": ["reject"] },
+            "writeStagePolicy": { "enum": ["reject-unimplemented"] }
+          }
+        },
+        "textSearch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fidelity": { "enum": ["strict-validation-only", "deterministic-basic", "external-analyzer", "upstream-proxy"] },
+            "analyzer": { "type": "string" },
+            "scorePrecision": { "enum": ["exact", "approximate", "oracle-only", "unsupported"] },
+            "multipleIndexPolicy": { "enum": ["warn-and-deterministic", "reject", "oracle"] },
+            "indexBuildPolicy": { "enum": ["synchronous", "virtual-async", "manual"] },
+            "visibilityPolicy": { "enum": ["atomic-with-commit", "virtual-lag", "oracle-defined"] },
+            "visibilityLag": {
+              "oneOf": [
+                { "type": "null" },
+                { "type": "object", "additionalProperties": false, "required": ["maxLogicalDelayMillis"], "properties": { "maxLogicalDelayMillis": { "type": "integer", "minimum": 0 } } }
+              ]
+            },
+            "queryLanguagePolicy": { "enum": ["index-default-or-autodetect", "detect-query-text", "analyze-per-indexed-language", "oracle-defined"] },
+            "backendDefaultLanguageOverride": { "enum": ["implicit-language-field", "disabled", "unresolved"] },
+            "snapshotPolicy": { "enum": ["materialized", "rebuild"] },
+            "warnings": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "broadCandidateCount": { "type": "integer", "minimum": 0 },
+                "scoreCandidateCount": { "type": "integer", "minimum": 0 },
+                "warningsAsErrors": { "type": "array", "items": { "type": "string", "pattern": "^FS_[A-Z0-9_]+$" }, "uniqueItems": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "executionMode": { "enum": ["admin-bypass", "native", "oracle", "disabled"] },
+        "source": { "type": "string" },
+        "staticLimitChecks": { "type": "boolean" },
+        "runtimeBudgets": { "type": "boolean" },
+        "compiledSize": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["estimate", "off"] },
+            "oracle": { "enum": ["off", "projects-test", "disposable-ruleset"] }
+          }
+        },
+        "diagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "format": { "enum": ["human", "json", "sarif"] },
+            "largestContributors": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$" },
+        "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
+        "totp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "periodSeconds": { "type": "integer", "minimum": 1 },
+            "digits": { "type": "integer", "minimum": 6, "maximum": 8 },
+            "windowSteps": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "enrollmentSessionTtlSeconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "secretMaterialization": { "enum": ["redact", "allow"] }
+      }
+    },
+    "appCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Firebase App Check (docs/specifications/firebase-app-check.md section 8). Defaults to off, so an existing configuration keeps its behaviour. Cross-field rules (a non-off service mode needs enabled, one project ID per project number and back, one app ID per project, an embedded project number that matches) are enforced by tools/config-schema-check and by the Rust loader.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "tokenSigning": { "enum": ["instance-rsa"], "default": "instance-rsa" },
+        "tokenTtlSeconds": { "type": "integer", "minimum": 1800, "maximum": 604800, "default": 3600 },
+        "apps": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["projectId", "projectNumber", "appId"],
+            "properties": {
+              "projectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+              "projectNumber": { "type": "string", "pattern": "^[1-9][0-9]{0,31}$" },
+              "appId": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "enabled": { "type": "boolean", "default": true },
+              "debugTokenSha256": {
+                "type": "array",
+                "maxItems": 128,
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          }
+        },
+        "services": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "auth": { "$ref": "#/$defs/appCheckMode" },
+            "firestore": { "$ref": "#/$defs/appCheckMode" },
+            "storage": { "$ref": "#/$defs/appCheckMode" }
+          }
+        }
+      }
+    },
+    "daemon": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "firestorePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "httpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "storagePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "functionsPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "clockStart": { "type": "string", "format": "date-time" },
+        "seed": { "type": "integer", "minimum": 0 },
+        "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rules": { "type": "string", "description": "Path of the Storage Security Rules file (service firebase.storage)." },
+        "mode": { "enum": ["native"] },
+        "objectNameNormalization": { "enum": ["preserve"] },
+        "persistence": { "enum": ["memory", "snapshot-files", "redb"] }
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delivery": { "enum": ["exactly-once-test", "at-least-once", "chaos"] },
+        "maxAttempts": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "clock": { "enum": ["virtual", "wall"] },
+        "defaultTimeZone": { "type": "string" },
+        "catchUp": { "enum": ["all", "latest", "none"] },
+        "maxCatchUpRuns": { "type": "integer", "minimum": 0 },
+        "overlap": { "enum": ["allow", "skip", "queue", "reject"] }
+      }
+    },
+    "functions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "manifest": { "type": "string" },
+        "source": { "type": "string", "description": "Functions codebase directory loaded by the runner (discovery)." },
+        "runner": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Runner command; default: node tools/runner-node/index.mjs" },
+        "maxGlobalConcurrency": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "canonical": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "appCheckMode": { "enum": ["off", "unenforced", "enforced"], "default": "off" },
+    "optionalCount": { "oneOf": [ { "type": "null" }, { "type": "integer", "minimum": 0 } ] },
+    "thresholds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["basisPoints", "severity"],
+        "properties": {
+          "basisPoints": { "type": "integer", "minimum": 1, "maximum": 10000 },
+          "severity": { "enum": ["notice", "warning", "critical"] }
+        }
+      }
+    }
+  }
+}

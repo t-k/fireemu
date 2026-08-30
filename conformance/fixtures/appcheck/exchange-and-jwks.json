@@ -33,8 +33,8 @@
         "status": 200,
         "ttl": "3600s"
       },
-      "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 10.1",
-      "reason": "The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. firebase-testd issues a locally signed token for a registered debug secret."
+      "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.1",
+      "reason": "The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. fireemu issues a locally signed token for a registered debug secret."
     },
     {
       "id": "exchange-an-unknown-secret",
@@ -65,8 +65,8 @@
         },
         "status": 403
       },
-      "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 17",
-      "reason": "No route on the oracle (404) against the specified 403 PERMISSION_DENIED \"App attestation failed.\" that firebase-testd returns for an unknown project, app, disabled app or secret alike."
+      "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 17",
+      "reason": "No route on the oracle (404) against the specified 403 PERMISSION_DENIED \"App attestation failed.\" that fireemu returns for an unknown project, app, disabled app or secret alike."
     },
     {
       "id": "exchange-a-limited-use-token",
@@ -98,8 +98,8 @@
         },
         "status": 501
       },
-      "documents": "capability manifest APPCHECK-REPLAY-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23",
-      "reason": "No route on the oracle (404). firebase-testd fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request."
+      "documents": "capability manifest APPCHECK-REPLAY-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23",
+      "reason": "No route on the oracle (404). fireemu fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request."
     },
     {
       "id": "jwks",
@@ -121,8 +121,8 @@
         ],
         "status": 200
       },
-      "documents": "capability manifest APPCHECK-JWKS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 10.2",
-      "reason": "The official suite serves no JWKS route (404). firebase-testd publishes this instance's single public App Check key as an RFC 7517 JWK Set."
+      "documents": "capability manifest APPCHECK-JWKS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.2",
+      "reason": "The official suite serves no JWKS route (404). fireemu publishes this instance's single public App Check key as an RFC 7517 JWK Set."
     },
     {
       "id": "production-limited-use-token-claims",

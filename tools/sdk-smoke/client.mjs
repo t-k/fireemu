@@ -1,5 +1,5 @@
 // Client SDK smoke: the real `firebase` JS SDK (Auth + Firestore over gRPC) against
-// firebase-testd with Security Rules loaded through the control API.
+// fireemu with Security Rules loaded through the control API.
 //
 // Env: FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, GOOGLE_CLOUD_PROJECT (demo-app)
 import { initializeApp } from "firebase/app";

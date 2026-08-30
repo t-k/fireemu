@@ -1,22 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/ftd-core-types",
-    "crates/ftd-core-limits",
-    "crates/ftd-core-session",
-    "crates/ftd-core-events",
-    "crates/ftd-core-firestore",
-    "crates/ftd-core-rules",
-    "crates/ftd-core-auth",
-    "crates/ftd-core-app-check",
-    "crates/ftd-core-storage",
-    "crates/ftd-core-functions",
-    "crates/ftd-proto-firestore",
-    "crates/ftd-adapter-grpc",
-    "crates/ftd-adapter-http",
-    "crates/ftd-adapter-functions",
-    "crates/ftd-adapter-ui",
-    "crates/firebase-testd",
+    "crates/fireemu-core-types",
+    "crates/fireemu-core-limits",
+    "crates/fireemu-core-session",
+    "crates/fireemu-core-events",
+    "crates/fireemu-core-firestore",
+    "crates/fireemu-core-rules",
+    "crates/fireemu-core-auth",
+    "crates/fireemu-core-app-check",
+    "crates/fireemu-core-storage",
+    "crates/fireemu-core-functions",
+    "crates/fireemu-proto-firestore",
+    "crates/fireemu-adapter-grpc",
+    "crates/fireemu-adapter-http",
+    "crates/fireemu-adapter-functions",
+    "crates/fireemu-adapter-ui",
+    "crates/fireemu",
     "tools/limit-catalog-gen",
     "tools/traceability-check",
     "tools/config-schema-check",
@@ -31,7 +31,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
-repository = "https://github.com/reckona/firebase-testd"
+repository = "https://github.com/reckona/fireemu"
 publish = false
 
 [workspace.lints.rust]

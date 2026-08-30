@@ -1,0 +1,35 @@
+[package]
+name = "fireemu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Deterministic, test-only local Firebase runtime (Firestore gRPC, Auth REST, control API)"
+
+[[bin]]
+name = "fireemu"
+path = "src/main.rs"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+fireemu-core-limits = { path = "../fireemu-core-limits" }
+fireemu-core-session = { path = "../fireemu-core-session" }
+fireemu-core-firestore = { path = "../fireemu-core-firestore" }
+fireemu-core-rules = { path = "../fireemu-core-rules" }
+fireemu-core-storage = { path = "../fireemu-core-storage" }
+fireemu-core-auth = { path = "../fireemu-core-auth" }
+fireemu-core-app-check = { path = "../fireemu-core-app-check" }
+fireemu-proto-firestore = { path = "../fireemu-proto-firestore" }
+fireemu-adapter-grpc = { path = "../fireemu-adapter-grpc" }
+fireemu-adapter-http = { path = "../fireemu-adapter-http" }
+fireemu-adapter-functions = { path = "../fireemu-adapter-functions" }
+fireemu-adapter-ui = { path = "../fireemu-adapter-ui" }
+fireemu-core-functions = { path = "../fireemu-core-functions" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync"] }
+tonic = { version = "0.13", features = ["transport"] }
+
+[lints]
+workspace = true

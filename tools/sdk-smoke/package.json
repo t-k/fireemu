@@ -1,8 +1,8 @@
 {
-  "name": "ftd-sdk-smoke",
+  "name": "fireemu-sdk-smoke",
   "private": true,
   "type": "module",
-  "description": "Runs the real firebase-admin SDK against a running firebase-testd (manual / CI smoke).",
+  "description": "Runs the real firebase-admin SDK against a running fireemu (manual / CI smoke).",
   "scripts": {
     "smoke": "node smoke.mjs",
     "smoke:client": "node client.mjs",

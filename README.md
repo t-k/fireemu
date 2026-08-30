@@ -1,8 +1,8 @@
-# firebase-testd
+# fireemu
 
 A deterministic, test-only local runtime for Firebase SDK and Functions code, written in Rust.
 
-`firebase-testd` is not a faster re-implementation of the Firebase Emulator Suite. Its core is a
+`fireemu` is not a faster re-implementation of the Firebase Emulator Suite. Its core is a
 deterministic state machine that:
 
 - detects missing Firestore indexes, production limit violations and inefficient queries locally;
@@ -18,26 +18,26 @@ deterministic state machine that:
 
 ## Status
 
-Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols; Storage Security Rules evaluated at upload finalization against the received bytes), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth over the Identity Toolkit REST subset: password / anonymous / custom token / email link / phone / fixture identity provider sign-in, email actions with codes readable from `/emulator/v1/projects/{p}/oobCodes`, TOTP and phone second factors, Admin SDK account endpoints) native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/ftd-adapter-grpc/src/rules.rs`), and Milestone C (Cloud Functions: a `firebase-functions` v2 codebase runs in the bundled Node runner; Firestore document triggers, Storage object triggers, `onSchedule` driven by the virtual clock, `onRequest` / `onCall` over an HTTP port, retries with virtual-time backoff, `await-idle`).
+Implemented: Milestone A (verification-ready core), Milestone B (strict Firestore gateway: query / index / limit validation), Milestone D core (`ST-OBJ-1`: Cloud Storage objects with generations, listing, resumable uploads on both the Firebase and the JSON API protocols; Storage Security Rules evaluated at upload finalization against the received bytes), Milestone E (local Firestore execution: versioned documents, atomic commits with preconditions / masks / transforms, MVCC transactions with read-set and query re-validation, queries, aggregations, `Write` and `Listen` streams), `FS-REST-1` (the Firestore REST API on the same port as gRPC), Milestone H0 (Auth over the Identity Toolkit REST subset: password / anonymous / custom token / email link / phone / fixture identity provider sign-in, email actions with codes readable from `/emulator/v1/projects/{p}/oobCodes`, TOTP and phone second factors, Admin SDK account endpoints) native Security Rules enforcement on every Firestore surface (`Bearer owner` bypass, ID tokens verified against the Auth store, reads checked against the returned snapshot, writes checked inside the commit, queries proven from their constraints; see `RULES-QUERY-CONSTRAINTS` in `crates/fireemu-adapter-grpc/src/rules.rs`), and Milestone C (Cloud Functions: a `firebase-functions` v2 codebase runs in the bundled Node runner; Firestore document triggers, Storage object triggers, `onSchedule` driven by the virtual clock, `onRequest` / `onCall` over an HTTP port, retries with virtual-time backoff, `await-idle`).
 
 The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChannel transport on the same port), and `firebase/firestore/lite` (REST) SDKs run against the daemon; `tools/sdk-smoke` holds the smoke scripts and a browser page. Rules cover `get()` / `exists()` / `getAfter()`, the `timestamp` / `duration` / `latlng` / `math` / `hashing` namespaces, `map.diff()`, query proofs from equality / `in` / `!=` / `not-in` / array / range constraints and `request.query`, and `firestore.get()` in Storage rules. `Listen` resumes from a token or read time by replaying only the changes since (MVCC history), and `PartitionQuery` splits collection groups for parallel readers. A target whose own query is refused (a missing composite index, a malformed query) is removed with its cause -- `TargetChange REMOVE` carrying `FAILED_PRECONDITION` and the actionable index diagnostic -- on both gRPC and WebChannel, and the stream stays open for its other targets; a stream-level error is reserved for session-wide or database-wide failures. Not implemented yet: `ExecutePipeline`, Storage object versioning / signed URLs / compose.
 
 ## Run
 
 ```sh
-cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
-#   optional: --config firebase-testd.json  (see spec/config/firebase-testd.schema.json)
+cargo run -p fireemu -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
+#   optional: --config fireemu.json  (see spec/config/fireemu.schema.json)
 #   optional: --functions ./functions --functions-port 5001   (a firebase-functions v2 codebase)
 #   optional: --firebase-json firebase.json --project my-app   (rules, indexes, ports from a Firebase project)
 ```
 
-`firebase-testd exec` is the `firebase emulators:exec` equivalent: it serves the same, runs a command once every listener is bound, stops everything when the command exits and exits with its status.
+`fireemu exec` is the `firebase emulators:exec` equivalent: it serves the same, runs a command once every listener is bound, stops everything when the command exits and exits with its status.
 
 ```sh
-firebase-testd exec --firebase-json firebase.json --project my-app --only auth,firestore,storage -- vitest run
+fireemu exec --firebase-json firebase.json --project my-app --only auth,firestore,storage -- vitest run
 ```
 
-The command receives `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST` (those named by `--only`; every service listens regardless), `FTD_FUNCTIONS_HOST` when a functions codebase is loaded, `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`, and `FTD_CONTROL_TOKEN` / `FTD_CONTROL_URL` for the control API. SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signal`) and nothing is left listening or running. `--firebase-json` maps `firestore.rules`, `firestore.indexes`, `storage.rules`, `emulators.*.port` and, when `functions` is selected, `functions.source`; entries without an equivalent (`emulators.pubsub`, `database`, ...) are named in a notice and ignored. Ports given on the command line override it.
+The command receives `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST` (those named by `--only`; every service listens regardless), `FIREEMU_FUNCTIONS_HOST` when a functions codebase is loaded, `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`, and `FIREEMU_CONTROL_TOKEN` / `FIREEMU_CONTROL_URL` for the control API. SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signal`) and nothing is left listening or running. `--firebase-json` maps `firestore.rules`, `firestore.indexes`, `storage.rules`, `emulators.*.port` and, when `functions` is selected, `functions.source`; entries without an equivalent (`emulators.pubsub`, `database`, ...) are named in a notice and ignored. Ports given on the command line override it.
 
 The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`). Storage rules load from `storage.rules` in the config or `PUT /v1/storage/rules`. Security Rules come from `rules.source` in the config file or at runtime:
 
@@ -55,19 +55,19 @@ Sessions are isolated by project: `POST /v1/sessions -d '{"project": "demo-b", "
 
 Snapshots copy what the session owns (its Firestore databases, Storage objects, Auth users, fault plan and text indexes) and, for the default session, the shared parts (the clock, both rulesets, the auto-ID generator) in one exclusive section (a restore of the default session is a new epoch: streams end, the functions runtime resets; outstanding functions work is not captured); they live in memory. A capture is all or nothing too: every part is copied before any of it is retained, so a store that cannot be read refuses the snapshot instead of retaining an empty part. A restore validates every part, takes a pre-image of every store and only then applies them in order; a store that refuses the apply is reported and the stores already written are put back, so the session is never half of one snapshot and half of another. Each session retains at most 16 named snapshots, since each one is a full copy of what the session owned: a seventeenth name is `RESOURCE_EXHAUSTED` (429) and changes nothing, while capturing over a name the session already holds is always admitted and releases the copy it held. `GET /v1/sessions/{s}/snapshots` reports `retained`, `limit` and `remaining`. Fault plans (spec 18) name an operation (`firestore.commit` / `read` / `beginTransaction`, `storage.upload` / `read` / `delete` / `list`, `functions.invoke` / `deliver`; a rule with only an `eventType` is a `functions.deliver` rule), optionally the nth occurrence (counted per function when one is named) and a function, and an action that applies to that operation (`returnError` with a gRPC name or HTTP code, `delay` seconds, `duplicate` count, `crashRunner`, `timeout`, `deadLetter`, `transactionConflict`, `dropConnection`); a combination the adapters would ignore is refused. `functions.invoke` rules also apply to HTTP invocations and to scheduled or manual runs; a `delay` holds an event until the virtual clock reaches the instant and then applies the other actions of the rule set. `dropConnection` closes the connection (or resets the gRPC stream) instead of answering on the Firestore, Storage and functions ports; over WebChannel it is reported as `UNAVAILABLE`, and for event invocations it is a failed attempt. `GET .../faultPlan` shows what fired.
 
-Without rules every request is allowed (the daemon says so at start). `firebase-testd doctor` prints versions and catalogs; `firebase-testd capabilities` prints the Capability Manifest.
+Without rules every request is allowed (the daemon says so at start). `fireemu doctor` prints versions and catalogs; `fireemu capabilities` prints the Capability Manifest.
 
 ### Emulator UI
 
 The daemon serves an Emulator UI on `--ui-port` (default 4000, best effort: a busy port only disables it; `--ui-port 0` turns it off) at `http://127.0.0.1:4000/ui`: an overview, a Firestore data browser with a typed field editor and live updates, Auth users with custom claims / second factors / pending action codes, Storage objects, Functions (registered triggers, invocation history, a live log stream, manual schedule runs and Pub/Sub publishes), both rulesets, App Check (the configured apps, the baseline modes, debug tokens and the observation counters), and the runtime controls (virtual clock, snapshots, fault plans, sessions). Its API under `/ui/api/` is a same-origin, privileged front to the existing surfaces (Firestore REST as owner, the Identity Toolkit admin routes, the Storage JSON API, the App Check debug-token routes, the control API); every request to it must present the control token in `Authorization: Bearer` (the served page carries it; a query parameter is not accepted), the listener answers only to loopback `Host`s, the page ships a Content Security Policy that keeps it out of other sites' frames, object downloads through the front are always attachments, and at most 64 event streams are open at once. Functions and Pub/Sub routes belong to the default session; the Storage page lists the selected session's buckets.
 
-The App Check page shows this instance's JWKS `kid` and token TTL, the effective baseline mode of every service, the apps registered for the selected session's project with their configured digest count against their dynamic registrations, the debug tokens of one app, and the counters and recent observations of the session. Registering a debug token returns the raw secret exactly once: the page shows it in a copyable field behind a warning and drops it when it is dismissed or the page is left. It is never stored in the browser, never put in a URL, and never appears in a list, in `window.__FTD__` or in an observation — the daemon keeps only its SHA-256 digest and cannot show it again. A runtime with `appCheck.enabled` false says so on the page instead of offering the surface.
+The App Check page shows this instance's JWKS `kid` and token TTL, the effective baseline mode of every service, the apps registered for the selected session's project with their configured digest count against their dynamic registrations, the debug tokens of one app, and the counters and recent observations of the session. Registering a debug token returns the raw secret exactly once: the page shows it in a copyable field behind a warning and drops it when it is dismissed or the page is left. It is never stored in the browser, never put in a URL, and never appears in a list, in `window.__FIREEMU__` or in an observation — the daemon keeps only its SHA-256 digest and cannot show it again. A runtime with `appCheck.enabled` false says so on the page instead of offering the surface.
 
 The app lives in `ui/` (Solid, Vite, Tailwind) and is embedded into the binary at compile time; a binary built without it serves a placeholder page that says so:
 
 ```sh
 pnpm -C ui install && pnpm -C ui build     # writes ui/dist (not committed)
-cargo build --release -p firebase-testd    # embeds it
+cargo build --release -p fireemu    # embeds it
 pnpm -C ui test && pnpm -C ui e2e          # unit tests; Playwright against a real daemon
 ```
 
@@ -139,14 +139,14 @@ curl http://127.0.0.1:9099/v1/jwks            # this instance's public App Check
 
 # privileged: the control token is required for every method, whatever the Origin
 curl -X POST "http://127.0.0.1:9099/emulator/v1/projects/demo-app/apps/1:1234567890:web:local-test-app/debugTokens" \
-     -H "authorization: Bearer $FTD_CONTROL_TOKEN" -H 'content-type: application/json' \
+     -H "authorization: Bearer $FIREEMU_CONTROL_TOKEN" -H 'content-type: application/json' \
      -d '{"displayName": "ci runner", "generate": true}'
 # -> the raw secret exactly once; a later list shows only the id, name, creation time and digest prefix
 ```
 
-The signing key is a dedicated 2048-bit RSA key drawn from the operating system CSPRNG once per daemon instance (`instance-rsa`); its `kid` starts with `ftd-app-check-` and it is never the Auth session key. Two normally started daemons therefore reject each other's tokens, and a restart invalidates the previous instance's JWKS. Tokens carry the production claim shape (`iss`, `sub`, both `projects/{projectNumber}` and `projects/{projectId}` audiences, `iat`, `exp`, `jti`) plus a local private `ftd_epoch` claim that binds a token to the project session epoch. Expiry is decided on the virtual clock: `iat <= now < exp`, with `now == exp` already expired.
+The signing key is a dedicated 2048-bit RSA key drawn from the operating system CSPRNG once per daemon instance (`instance-rsa`); its `kid` starts with `fireemu-app-check-` and it is never the Auth session key. Two normally started daemons therefore reject each other's tokens, and a restart invalidates the previous instance's JWKS. Tokens carry the production claim shape (`iss`, `sub`, both `projects/{projectNumber}` and `projects/{projectId}` audiences, `iat`, `exp`, `jti`) plus a local private `fireemu_epoch` claim that binds a token to the project session epoch. Expiry is decided on the virtual clock: `iat <= now < exp`, with `now == exp` already expired.
 
-`--only appcheck` selects the service, and `firebase-testd exec` then exports `FTD_APP_CHECK_EMULATOR_HOST=host:port` and `FTD_APP_CHECK_JWKS_URL=http://host:port/v1/jwks`. Selecting `functions` selects App Check implicitly when it is enabled. No raw debug secret is ever generated or exported implicitly.
+`--only appcheck` selects the service, and `fireemu exec` then exports `FIREEMU_APP_CHECK_EMULATOR_HOST=host:port` and `FIREEMU_APP_CHECK_JWKS_URL=http://host:port/v1/jwks`. Selecting `functions` selects App Check implicitly when it is enabled. No raw debug secret is ever generated or exported implicitly.
 
 **Enforcement.** `appCheck.services.{auth,firestore,storage}` is `off`, `unenforced` or `enforced`. `off` does no token work at all — the header is never even read. `unenforced` classifies and records every request but denies none, and a missing or invalid token never becomes an app identity. `enforced` admits only a verified token or an explicit privileged bypass; a client sends the token as `X-Firebase-AppCheck`, exactly once. Firestore covers unary gRPC, REST, the `Write` and `Listen` streams and the browser WebChannel transport; Storage covers resumable uploads as well as everything else.
 
@@ -160,7 +160,7 @@ The signing key is a dedicated 2048-bit RSA key drawn from the operating system 
 
 Only an `enforced` policy binds a channel or an upload session. Under `unenforced` a client may legitimately stop presenting a token, and binding it would enforce by the back door.
 
-A denial happens before Security Rules and before any side effect: no user, no issued or rotated credential, no consumed action or phone code, no MFA change, no object generation, no upload session, no Firestore mutation. It renders as `PERMISSION_DENIED` with the public code in the `ftd-code` metadata on Firestore gRPC, as an HTTP 403 Google JSON error on Firestore REST and on Auth, and as the Firebase Storage JSON error envelope with 403 on Storage. The public code is `APP_CHECK_REQUIRED` or `APP_CHECK_INVALID`; the detailed reason stays in the privileged observations.
+A denial happens before Security Rules and before any side effect: no user, no issued or rotated credential, no consumed action or phone code, no MFA change, no object generation, no upload session, no Firestore mutation. It renders as `PERMISSION_DENIED` with the public code in the `fireemu-code` metadata on Firestore gRPC, as an HTTP 403 Google JSON error on Firestore REST and on Auth, and as the Firebase Storage JSON error envelope with 403 on Storage. The public code is `APP_CHECK_REQUIRED` or `APP_CHECK_INVALID`; the detailed reason stays in the privileged observations.
 
 The bypasses are explicit, and each one requires that route's own credential rather than a header shape or a path fragment:
 
@@ -169,7 +169,7 @@ The bypasses are explicit, and each one requires that route's own credential rat
 | Firestore unary gRPC and REST | yes | `Authorization: Bearer owner` exactly |
 | Identity Toolkit `projects/{p}/...` Admin routes | yes | `Authorization: Bearer owner` exactly |
 | Auth JWKS | yes | public-key discovery; it carries no state |
-| `/emulator/v1/...` inspection routes | yes | `Authorization: Bearer $FTD_CONTROL_TOKEN`. Their own guard only challenges browser requests, so the App Check path checks the token itself rather than inheriting a guard that does not run for a command-line caller |
+| `/emulator/v1/...` inspection routes | yes | `Authorization: Bearer $FIREEMU_CONTROL_TOKEN`. Their own guard only challenges browser requests, so the App Check path checks the token itself rather than inheriting a guard that does not run for a command-line caller |
 | Control API, Emulator UI API, App Check exchange and JWKS | yes | the control token, or bootstrap and public-key discovery |
 | Storage JSON API dialect (`/storage/v1/...`, Admin SDK, `gcloud`) | yes | `Authorization: Bearer owner` exactly. The dialect bypasses Security Rules without a credential, as the official Emulator does; the App Check bypass deliberately does not, or rewriting `/v0/b/...` to `/storage/v1/b/...` would defeat enforcement |
 | Storage Firebase download URL | yes | a `?token=` bound in constant time to the resolved bucket, object and generation |
@@ -179,7 +179,7 @@ Disabling Security Rules is not a bypass: with rules off every Firestore caller 
 
 Reset, project deletion and snapshot restore replace the project's App Check epoch, so every token issued before the transition fails at its next verification; the observation counters reset with it. A project that has no static `appCheck.apps` registration cannot use App Check at all, so an `enforced` service denies every request that targets it.
 
-Privileged counters and observations are at `GET /v1/sessions/{session}/appCheck/observations`, and the Emulator UI's App Check page shows them next to the configuration and the debug tokens. Unlike the rest of the control API it needs `Authorization: Bearer $FTD_CONTROL_TOKEN` for every method whether or not an `Origin` is present, and its response is `Cache-Control: no-store`. Counters are grouped by service, verified app ID, callable function name for the `functions` service, category and outcome; an unverified identity aggregates into a bounded `unknown` bucket, so nothing a caller controls becomes a label. Each project -- a registered session's project and the default project alike -- keeps its own bounded ring of 256 observations and its own counters, created on first use and dropped when its session is deleted, so a flood of requests to one project never pushes another project's recent observations out of the window, and a session is served its own project and nothing else. The counters are not derived from the ring: they count every classified request since the project's state was last reset, including the observations the ring has since dropped.
+Privileged counters and observations are at `GET /v1/sessions/{session}/appCheck/observations`, and the Emulator UI's App Check page shows them next to the configuration and the debug tokens. Unlike the rest of the control API it needs `Authorization: Bearer $FIREEMU_CONTROL_TOKEN` for every method whether or not an `Origin` is present, and its response is `Cache-Control: no-store`. Counters are grouped by service, verified app ID, callable function name for the `functions` service, category and outcome; an unverified identity aggregates into a bounded `unknown` bucket, so nothing a caller controls becomes a label. Each project -- a registered session's project and the default project alike -- keeps its own bounded ring of 256 observations and its own counters, created on first use and dropped when its session is deleted, so a flood of requests to one project never pushes another project's recent observations out of the window, and a session is served its own project and nothing else. The counters are not derived from the ring: they count every classified request since the project's state was last reset, including the observations the ring has since dropped.
 
 **Callable Functions.** There is no `appCheck.services.functions` mode: callable enforcement is per function, as in production. Enabling App Check and selecting `functions` activates the trusted callable protocol, and the daemon proxy then owns verification for every callable request:
 
@@ -203,7 +203,7 @@ initializeAppCheck(app, {
   isTokenAutoRefreshEnabled: false,
   provider: new CustomProvider({
     getToken: async () => {
-      // FTD_APP_CHECK_EMULATOR_HOST, or the Auth/control port.
+      // FIREEMU_APP_CHECK_EMULATOR_HOST, or the Auth/control port.
       const url = `http://${host}/v1/projects/demo-app/apps/${encodeURIComponent(APP_ID)}:exchangeDebugToken`;
       const r = await fetch(url, {
         method: "POST",
@@ -217,7 +217,7 @@ initializeAppCheck(app, {
 });
 ```
 
-The Firestore, Storage, Auth and Functions SDKs then attach the token themselves. `tools/sdk-smoke/appcheck.mjs` runs exactly this against `tools/sdk-smoke/firebase-testd.appcheck.json`. Use a clearly fake local debug secret and never a production App Check debug token.
+The Firestore, Storage, Auth and Functions SDKs then attach the token themselves. `tools/sdk-smoke/appcheck.mjs` runs exactly this against `tools/sdk-smoke/fireemu.appcheck.json`. Use a clearly fake local debug secret and never a production App Check debug token.
 
 **What is not supported.** Apps can only be registered in configuration, and adding one needs a daemon restart; the Emulator UI page manages debug tokens, not apps. Observations are polled rather than streamed, and the table of per-project rings is bounded in turn: at most 256 projects hold one at once, because a target project is resolved from a request path before anything validates it. Limited-use tokens are unsupported: `limitedUse: true` fails closed with `501 APP_CHECK_REPLAY_UNSUPPORTED` and never returns a reusable token. Production attestation providers (Play Integrity, App Attest, DeviceCheck, reCAPTCHA) are out of scope; a local token proves nothing about device integrity. Precision is `boundary-conformance`: the exact wire messages are the ones documented here, not a recording of the real services. `GET /v1/capabilities` states the exact status of all nine `APPCHECK-*` capabilities.
 
@@ -225,7 +225,7 @@ The Firestore, Storage, Auth and Functions SDKs then attach the token themselves
 
 An object is at most 256 MiB; a request body is at most 260 MiB (the object boundary plus multipart framing) and is refused with `413` beyond that. Upload bytes are never duplicated on the way in: the request buffer is handed to the object store as it is, and a multipart data part is carved out of the same allocation, so a near-limit upload costs one payload-sized buffer, not two or three.
 
-The request bodies buffered at the same time are admitted against a process-wide budget of 1 GiB (`ftd_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES`, about four near-limit uploads). An upload that does not fit is refused with `503` and `Retry-After: 1` before its buffer is allocated; a body without a `Content-Length` is charged as it grows. Every charge is released as soon as the request ends, including when the upload fails on rules, a checksum or a precondition. A failed upload publishes no object.
+The request bodies buffered at the same time are admitted against a process-wide budget of 1 GiB (`fireemu_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES`, about four near-limit uploads). An upload that does not fit is refused with `503` and `Retry-After: 1` before its buffer is allocated; a body without a `Content-Length` is charged as it grows. Every charge is released as soon as the request ends, including when the upload fails on rules, a checksum or a precondition. A failed upload publishes no object.
 
 ### Functions
 
@@ -242,30 +242,30 @@ Invocations have a real-time deadline (`timeoutSeconds`); a handler that overrun
 
 Diagnostic retention is bounded by a fixed budget: the daemon keeps the 1000 most recent invocation records, the 500 most recent dead letters and the 1000 most recent terminal event records, and drops the older ones. `GET .../functions` and the UI show that window; the `succeeded`, `deadLettered` and `overlapRejected` counters in the queue status are cumulative and unaffected by it, so a long-running session keeps exact totals with bounded memory. Every retained record carries a monotonic sequence inside an explicit generation (a reset bumps the generation), and the UI's log stream asks only for the records after the cursor it holds; when its cursor is from another generation or older than the retained window, the stream sends a `resync` event with the current window instead of a delta with a hole in it. The browser keeps at most the 500 most recent invocation rows.
 
-Browser pages on a loopback origin must send `Authorization: Bearer <control token>` (printed at start as `FTD_CONTROL_TOKEN`) to privileged control routes (reset, clock, rules, functions, `awaitIdle`); command-line clients need no token.
+Browser pages on a loopback origin must send `Authorization: Bearer <control token>` (printed at start as `FIREEMU_CONTROL_TOKEN`) to privileged control routes (reset, clock, rules, functions, `awaitIdle`); command-line clients need no token.
 
-Pub/Sub topic triggers (`onMessagePublished`, v1 `topic().onPublish`) receive messages published through the control API (`POST /v1/sessions/default/pubsub/topics/{topic}:publish` with `{"messages": [{"json": {...}, "attributes": {...}}]}`, or the Pub/Sub REST shape `/v1/projects/{project}/topics/{topic}:publish` with base64 `data`). Auth user created / deleted events reach v1 `auth.user().onCreate` / `onDelete` handlers. `*WithAuthContext` Firestore triggers carry `authtype` / `authid` of the principal that committed. `scheduler.catchUp` chooses what happens to schedule runs that became due while the clock moved: `all` (default), `latest` (one run per job), `none`. `latest` and `none` compute the run they keep directly instead of walking the missed ones, so a jump of years costs the same as a jump of minutes; what they drop appears as one `skipped: catch-up ...` record per job and clock change, carrying a count that is exact up to `scheduler.maxCatchUpRuns` (1000) and reported as `at least N runs` beyond it (an `every N minutes` schedule is always counted exactly). `tools/sdk-smoke/functions.mjs` with `tools/sdk-smoke/functions-project/` exercises all of it (pin the clock with `--config tools/sdk-smoke/firebase-testd.smoke.json`: schedule counts depend on it). Not modelled: blocking identity functions (`beforeUserCreated` / `beforeUserSignedIn`), Realtime Database and Remote Config triggers (there is no such service in the daemon).
+Pub/Sub topic triggers (`onMessagePublished`, v1 `topic().onPublish`) receive messages published through the control API (`POST /v1/sessions/default/pubsub/topics/{topic}:publish` with `{"messages": [{"json": {...}, "attributes": {...}}]}`, or the Pub/Sub REST shape `/v1/projects/{project}/topics/{topic}:publish` with base64 `data`). Auth user created / deleted events reach v1 `auth.user().onCreate` / `onDelete` handlers. `*WithAuthContext` Firestore triggers carry `authtype` / `authid` of the principal that committed. `scheduler.catchUp` chooses what happens to schedule runs that became due while the clock moved: `all` (default), `latest` (one run per job), `none`. `latest` and `none` compute the run they keep directly instead of walking the missed ones, so a jump of years costs the same as a jump of minutes; what they drop appears as one `skipped: catch-up ...` record per job and clock change, carrying a count that is exact up to `scheduler.maxCatchUpRuns` (1000) and reported as `at least N runs` beyond it (an `every N minutes` schedule is always counted exactly). `tools/sdk-smoke/functions.mjs` with `tools/sdk-smoke/functions-project/` exercises all of it (pin the clock with `--config tools/sdk-smoke/fireemu.smoke.json`: schedule counts depend on it). Not modelled: blocking identity functions (`beforeUserCreated` / `beforeUserSignedIn`), Realtime Database and Remote Config triggers (there is no such service in the daemon).
 
-Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, "127.0.0.1", 8080)`, `connectAuthEmulator(auth, "http://127.0.0.1:9099")`); the Firestore port serves gRPC, REST and the WebChannel transport, and both ports answer CORS preflights. `FTD_TRACE_WEBCHANNEL=1` traces the channel protocol on stderr.
+Browser apps point the web SDK at the same ports (`connectFirestoreEmulator(db, "127.0.0.1", 8080)`, `connectAuthEmulator(auth, "http://127.0.0.1:9099")`); the Firestore port serves gRPC, REST and the WebChannel transport, and both ports answer CORS preflights. `FIREEMU_TRACE_WEBCHANNEL=1` traces the channel protocol on stderr.
 
 | Crate | Purpose | Dependencies |
 |---|---|---|
-| `ftd-core-types` | validated identifiers, logical time, edition capabilities, deterministic adapters | none |
-| `ftd-core-limits` | versioned limit catalogs and the warning / rejection engine | none |
-| `ftd-core-session` | session lifecycle, epoch isolation, virtual clock, idle ledger | none |
-| `ftd-core-events` | event state machine, retry policy, outbox | none |
-| `ftd-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator, local execution store (MVCC, transactions, queries, aggregations) | none |
-| `ftd-core-rules` | Security Rules parser, static limit linter (`RULES-LINT-1`) and evaluator subset with runtime budgets | none |
-| `ftd-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens and the `IdTokenSigner` contract for signed ones, TOTP second factor (RFC 6238) | none |
-| `ftd-core-storage` | Cloud Storage objects: opaque UTF-8 names, generations, metadata, listing, resumable uploads, MD5 / CRC32C | none |
-| `ftd-core-functions` | function manifest, document path patterns, cron / App Engine schedules, CloudEvents attributes | none |
-| `ftd-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
-| `ftd-adapter-grpc` | Firestore v1 service: strict gateway, local backend, `Write` / `Listen` streams, Rules enforcement, optional upstream proxy | tonic, tokio |
-| `ftd-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts), RS256 session signing + JWKS, the Storage surface and the control API (clock, rules, capabilities, await-idle) | hyper, tokio, serde_json, rsa, sha2 |
-| `ftd-adapter-functions` | runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy | tokio, hyper, serde_json |
-| `firebase-testd` | the daemon binary (`up`, `doctor`, `capabilities`) | tokio, serde_json |
+| `fireemu-core-types` | validated identifiers, logical time, edition capabilities, deterministic adapters | none |
+| `fireemu-core-limits` | versioned limit catalogs and the warning / rejection engine | none |
+| `fireemu-core-session` | session lifecycle, epoch isolation, virtual clock, idle ledger | none |
+| `fireemu-core-events` | event state machine, retry policy, outbox | none |
+| `fireemu-core-firestore` | field paths, value ordering, storage-size formula, query AST + Standard limits, conservative index validator, local execution store (MVCC, transactions, queries, aggregations) | none |
+| `fireemu-core-rules` | Security Rules parser, static limit linter (`RULES-LINT-1`) and evaluator subset with runtime budgets | none |
+| `fireemu-core-auth` | users, custom claims, ID token claims, unsigned emulator tokens and the `IdTokenSigner` contract for signed ones, TOTP second factor (RFC 6238) | none |
+| `fireemu-core-storage` | Cloud Storage objects: opaque UTF-8 names, generations, metadata, listing, resumable uploads, MD5 / CRC32C | none |
+| `fireemu-core-functions` | function manifest, document path patterns, cron / App Engine schedules, CloudEvents attributes | none |
+| `fireemu-proto-firestore` | vendored Firestore v1 protos and checked-in generated code | prost, prost-types, tonic |
+| `fireemu-adapter-grpc` | Firestore v1 service: strict gateway, local backend, `Write` / `Listen` streams, Rules enforcement, optional upstream proxy | tonic, tokio |
+| `fireemu-adapter-http` | Identity Toolkit REST subset (sign-up, password sign-in, custom claims, TOTP MFA, refresh, Admin SDK accounts), RS256 session signing + JWKS, the Storage surface and the control API (clock, rules, capabilities, await-idle) | hyper, tokio, serde_json, rsa, sha2 |
+| `fireemu-adapter-functions` | runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy | tokio, hyper, serde_json |
+| `fireemu` | the daemon binary (`up`, `doctor`, `capabilities`) | tokio, serde_json |
 
-`ftd-core-*` crates are `std`-only and forbid `unsafe` (ADR-001, ADR-007).
+`fireemu-core-*` crates are `std`-only and forbid `unsafe` (ADR-001, ADR-007).
 
 ## Layout
 
@@ -290,7 +290,7 @@ cargo run -p limit-catalog-gen -- check
 cargo run -p traceability-check
 cargo run -p config-schema-check
 cargo run -p proto-gen -- check            # needs protoc
-RUSTFLAGS="--cfg loom" cargo test -p ftd-verification-loom --release
+RUSTFLAGS="--cfg loom" cargo test -p fireemu-verification-loom --release
 TLA2TOOLS_JAR=/path/to/tla2tools.jar verification/tla/run-tlc.sh
 ```
 
@@ -306,8 +306,8 @@ The `pr` and `ci` profiles fail a run in which a process started by a test still
 captured stdout or stderr 30 seconds after the test process exited (`leak-timeout` in
 `.config/nextest.toml`, which records how the period was measured). That signal cannot see a
 process that closed or redirected those handles, so tests that start daemons or shells also assert
-a process census (`crates/firebase-testd/tests/census/mod.rs`);
-`crates/firebase-testd/tests/leak_fixture.rs` proves both, by running intentional-leak fixtures
+a process census (`crates/fireemu/tests/census/mod.rs`);
+`crates/fireemu/tests/leak_fixture.rs` proves both, by running intentional-leak fixtures
 through a nested nextest in their own process group and reaping them unconditionally.
 
 TLC needs Java 21 and TLA+ Tools 1.8.0
@@ -318,14 +318,14 @@ is unreachable"); the allocation-free harnesses verify. Tracked as a known envir
 
 ## Protobuf
 
-`crates/ftd-proto-firestore/proto/` vendors the Firestore v1 protos from googleapis at the commit
+`crates/fireemu-proto-firestore/proto/` vendors the Firestore v1 protos from googleapis at the commit
 in `proto/UPSTREAM_COMMIT`; `tools/proto-gen` regenerates the checked-in Rust code (ADR-008).
 A normal build never runs `protoc`.
 
 ## Limit catalogs
 
 Limit values are declared once in `spec/limits/<catalog-id>.json` and rendered into
-`crates/ftd-core-limits/src/generated/` by `tools/limit-catalog-gen`. Catalogs are immutable:
+`crates/fireemu-core-limits/src/generated/` by `tools/limit-catalog-gen`. Catalogs are immutable:
 when an official document changes, add a new catalog ID instead of editing an existing one.
 
 ```sh
@@ -346,17 +346,17 @@ artifact.
 
 `conformance/` is an opt-in, black-box differential suite: one Node scenario corpus runs against
 the official Local Emulator Suite (`firebase-tools`, pinned to an exact version in
-`conformance/package.json`) and against `firebase-testd`, and every step is recorded as `parity`,
+`conformance/package.json`) and against `fireemu`, and every step is recorded as `parity`,
 `documented-divergence`, `debt` or `pending`.
 
 ```sh
 pnpm -C conformance install
 pnpm -C conformance run oracle   # record fixtures/, ORACLE.md and DEBT.md (needs Java)
-pnpm -C conformance run check    # replay firebase-testd against the fixtures; fails on drift
+pnpm -C conformance run check    # replay fireemu against the fixtures; fails on drift
 ```
 
 `run oracle` is the only step that needs Java and the downloadable emulator jars. `run check`
-needs a built `firebase-testd` and replays the corpus against the committed fixtures, so it is
+needs a built `fireemu` and replays the corpus against the committed fixtures, so it is
 the part a contributor runs; it fails the process on a `parity` row that drifted, a documented
 divergence that moved off its recorded value, a step no fixture describes, or a scenario that
 faulted. `debt` rows are reported and never gate: gating them would only freeze the mismatch.
@@ -373,7 +373,7 @@ at all, so every row that would need a real project is recorded `pending` with t
 than invented, and no `boundary-conformance` precision is raised on this evidence.
 
 Not covered in the current slice: browser / WebChannel, the Android, Apple, Unity, Java, Python
-and Go SDKs, import / export, and the official products firebase-testd does not implement.
+and Go SDKs, import / export, and the official products fireemu does not implement.
 
 ## License
 

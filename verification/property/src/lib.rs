@@ -2,4 +2,4 @@
 //!
 //! The crate itself is empty: `verification/requirements/requirements.json` names the property
 //! tests in `tests/`, and `tools/traceability-check` resolves those names to the functions
-//! defined there. Run them with `cargo test -p ftd-verification-property`.
+//! defined there. Run them with `cargo test -p fireemu-verification-property`.

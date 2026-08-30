@@ -1,11 +1,11 @@
 //! Property artifact for INV-LIMIT-001 (spec 8.10.8, 8.10.10).
 
-use ftd_core_limits::evaluate::{evaluate, ratio_micros, LimitDisposition, DEFAULT_THRESHOLDS};
-use ftd_core_limits::model::{
+use fireemu_core_limits::evaluate::{evaluate, ratio_micros, LimitDisposition, DEFAULT_THRESHOLDS};
+use fireemu_core_limits::model::{
     EnforcementPrecision, EnforcementStage, ImplementationStatus, LimitBoundary, LimitClass,
     LimitDefinition, LimitMaximum, LimitUnit,
 };
-use ftd_core_limits::plan::FirestorePlanProfile;
+use fireemu_core_limits::plan::FirestorePlanProfile;
 use proptest::prelude::*;
 
 const fn def(boundary: LimitBoundary, maximum: u64, stage: EnforcementStage) -> LimitDefinition {

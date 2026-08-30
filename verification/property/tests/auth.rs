@@ -1,9 +1,9 @@
 //! Property artifacts for INV-AUTH-001 and INV-AUTH-003 (spec 33, RFC 6238).
 
-use ftd_core_auth::base32;
-use ftd_core_auth::mfa::{match_code, CodeMatch, PendingEnrollment, TotpFactor, TotpSecret};
-use ftd_core_auth::totp::{time_step, totp_at, TotpParams};
-use ftd_core_types::time::LogicalInstant;
+use fireemu_core_auth::base32;
+use fireemu_core_auth::mfa::{match_code, CodeMatch, PendingEnrollment, TotpFactor, TotpSecret};
+use fireemu_core_auth::totp::{time_step, totp_at, TotpParams};
+use fireemu_core_types::time::LogicalInstant;
 use proptest::prelude::*;
 
 fn params(period_seconds: u32, digits: u8) -> TotpParams {

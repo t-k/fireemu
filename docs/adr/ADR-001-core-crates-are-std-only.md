@@ -4,7 +4,7 @@
 
 ## Decision
 
-Every `ftd-core-*` crate has zero normal external dependencies, forbids `unsafe`, exposes no
+Every `fireemu-core-*` crate has zero normal external dependencies, forbids `unsafe`, exposes no
 async runtime types, never reads wall-clock time, thread-local RNGs or environment variables,
 and returns typed errors instead of panicking on input. `HashMap` iteration order carries no
 meaning; canonical output uses `BTreeMap` or explicit sorting.

@@ -1,8 +1,8 @@
 // Functions smoke: firebase-admin writes and uploads trigger the functions in
-// functions-project/ through firebase-testd; the control API's awaitIdle waits for them.
+// functions-project/ through fireemu; the control API's awaitIdle waits for them.
 //
 //   FIRESTORE_EMULATOR_HOST=... FIREBASE_AUTH_EMULATOR_HOST=... FIREBASE_STORAGE_EMULATOR_HOST=...
-//   FTD_FUNCTIONS_HOST=127.0.0.1:5001 node functions.mjs
+//   FIREEMU_FUNCTIONS_HOST=127.0.0.1:5001 node functions.mjs
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
@@ -10,7 +10,7 @@ import { getStorage } from "firebase-admin/storage";
 
 const project = process.env.GOOGLE_CLOUD_PROJECT || "demo-app";
 const control = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`;
-const functionsHost = process.env.FTD_FUNCTIONS_HOST || "127.0.0.1:5001";
+const functionsHost = process.env.FIREEMU_FUNCTIONS_HOST || "127.0.0.1:5001";
 const app = initializeApp({ projectId: project, storageBucket: `${project}.appspot.com` });
 const db = getFirestore(app);
 const results = [];

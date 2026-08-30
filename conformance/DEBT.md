@@ -5,99 +5,99 @@
 
 Three kinds of row appear here, and none of them fails `pnpm -C conformance run check`:
 
-- **debt** -- firebase-testd and the official emulator disagree and nobody has decided whether
+- **debt** -- fireemu and the official emulator disagree and nobody has decided whether
   the difference is intended. Until a row leaves this list, no parity claim may cover it.
 - **pending** -- no local oracle can answer the row. The official emulators cannot produce the
   behaviour, so the row is recorded with a reason and never with an invented result.
 - **documented divergence** -- a difference that is intended and written down. These are listed
-  for completeness; `check` does gate them, against the recorded firebase-testd value.
+  for completeness; `check` does gate them, against the recorded fireemu value.
 
 ## Debt (17)
 
 ### `firestore/rules-decisions#anonymous-read-of-a-closed-document`
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"\nfalse for 'get' @ L20"}`
-- firebase-testd: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_closed/x denied by Security Rules: no allow statement evaluated to true"}`
+- fireemu: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_closed/x denied by Security Rules: no allow statement evaluated to true"}`
 
 ### `firestore/rules-decisions#anonymous-write-to-an-owner-document`
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: \nfalse for 'create' @ L17, false for 'update' @ L17"}`
-- firebase-testd: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: create on conf_rules_owner/nobody denied by Security Rules: no allow statement evaluated to true"}`
+- fireemu: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: create on conf_rules_owner/nobody denied by Security Rules: no allow statement evaluated to true"}`
 
 ### `firestore/rules-decisions#owner-cannot-write-another-document`
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: \nfalse for 'create' @ L17, false for 'update' @ L17"}`
-- firebase-testd: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: create on conf_rules_owner/someone-else denied by Security Rules: no allow statement evaluated to true"}`
+- fireemu: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: create on conf_rules_owner/someone-else denied by Security Rules: no allow statement evaluated to true"}`
 
 ### `firestore/rules-decisions#after-sign-out-the-document-is-protected-again`
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"\nfalse for 'get' @ L17"}`
-- firebase-testd: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_owner/<uid> denied by Security Rules: no allow statement evaluated to true"}`
+- fireemu: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_owner/<uid> denied by Security Rules: no allow statement evaluated to true"}`
 
 ### `firestore/rest-error-shapes#runQuery-with-an-unknown-operator`
 
 - oracle: `{"body":{"error":{"code":400,"message":"Payload isn't valid for request.","status":"INVALID_ARGUMENT"}},"status":400}`
-- firebase-testd: `{"body":{"error":{"code":400,"message":"unknown field filter operator \"NOT_A_REAL_OPERATOR\"","status":"INVALID_ARGUMENT"}},"status":400}`
+- fireemu: `{"body":{"error":{"code":400,"message":"unknown field filter operator \"NOT_A_REAL_OPERATOR\"","status":"INVALID_ARGUMENT"}},"status":400}`
 
 ### `firestore/rest-error-shapes#get-a-missing-document`
 
 - oracle: `{"body":{"error":{"code":404,"message":"Document (projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing) not found.","status":"NOT_FOUND"}},"status":404}`
-- firebase-testd: `{"body":{"error":{"code":404,"message":"Document not found: projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing","status":"NOT_FOUND"}},"status":404}`
+- fireemu: `{"body":{"error":{"code":404,"message":"Document not found: projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing","status":"NOT_FOUND"}},"status":404}`
 
 ### `firestore/lite-rest-transport#write-into-a-rules-closed-collection-is-denied`
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: \nfalse for 'create' @ L20, false for 'update' @ L20"}`
-- firebase-testd: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: create on conf_rules_closed/lite denied by Security Rules: no allow statement evaluated to true"}`
+- fireemu: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: create on conf_rules_closed/lite denied by Security Rules: no allow statement evaluated to true"}`
 
 ### `auth/sign-up-and-sign-in-errors#sign-up`
 
 - oracle: `{"email":"conf-auth-signin-primary@example.com","emailVerified":false,"isAnonymous":false,"providerId":"password","uidLength":28}`
-- firebase-testd: `{"email":"conf-auth-signin-primary@example.com","emailVerified":false,"isAnonymous":false,"providerId":"password","uidLength":21}`
+- fireemu: `{"email":"conf-auth-signin-primary@example.com","emailVerified":false,"isAnonymous":false,"providerId":"password","uidLength":21}`
 
 ### `auth/sign-up-and-sign-in-errors#sign-in-with-the-wrong-password`
 
 - oracle: `{"thrown":true,"code":"auth/wrong-password","message":"Firebase: Error (auth/wrong-password)."}`
-- firebase-testd: `{"thrown":true,"code":"auth/invalid-credential","message":"Firebase: Error (auth/invalid-credential)."}`
+- fireemu: `{"thrown":true,"code":"auth/invalid-credential","message":"Firebase: Error (auth/invalid-credential)."}`
 
 ### `auth/sign-up-and-sign-in-errors#sign-in-as-an-unknown-user`
 
 - oracle: `{"thrown":true,"code":"auth/user-not-found","message":"Firebase: Error (auth/user-not-found)."}`
-- firebase-testd: `{"thrown":true,"code":"auth/invalid-credential","message":"Firebase: Error (auth/invalid-credential)."}`
+- fireemu: `{"thrown":true,"code":"auth/invalid-credential","message":"Firebase: Error (auth/invalid-credential)."}`
 
 ### `auth/identity-toolkit-error-shapes#signInWithPassword-for-an-unknown-user`
 
 - oracle: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"EMAIL_NOT_FOUND","reason":"invalid"}],"message":"EMAIL_NOT_FOUND"}},"status":400}`
-- firebase-testd: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"INVALID_LOGIN_CREDENTIALS","reason":"invalid"}],"message":"INVALID_LOGIN_CREDENTIALS"}},"status":400}`
+- fireemu: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"INVALID_LOGIN_CREDENTIALS","reason":"invalid"}],"message":"INVALID_LOGIN_CREDENTIALS"}},"status":400}`
 
 ### `auth/identity-toolkit-error-shapes#signInWithPassword-with-a-missing-field`
 
 - oracle: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"MISSING_EMAIL","reason":"invalid"}],"message":"MISSING_EMAIL"}},"status":400}`
-- firebase-testd: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"MISSING_PASSWORD","reason":"invalid"}],"message":"MISSING_PASSWORD"}},"status":400}`
+- fireemu: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"MISSING_PASSWORD","reason":"invalid"}],"message":"MISSING_PASSWORD"}},"status":400}`
 
 ### `auth/identity-toolkit-error-shapes#unknown-method`
 
 - oracle: `{"body":{"error":{"code":404,"errors":[{"message":"Not Found","reason":"notFound"}],"message":"Not Found","status":"NOT_FOUND"}},"status":404}`
-- firebase-testd: `{"body":{"error":{"code":404,"errors":[{"domain":"global","message":"NOT_FOUND","reason":"invalid"}],"message":"NOT_FOUND"}},"status":404}`
+- fireemu: `{"body":{"error":{"code":404,"errors":[{"domain":"global","message":"NOT_FOUND","reason":"invalid"}],"message":"NOT_FOUND"}},"status":404}`
 
 ### `auth/oob-code-shapes#create-the-user`
 
 - oracle: `{"keys":["email","expiresIn","idToken","kind","localId","refreshToken"],"status":200}`
-- firebase-testd: `{"keys":["email","expiresIn","idToken","localId","refreshToken"],"status":200}`
+- fireemu: `{"keys":["email","expiresIn","idToken","localId","refreshToken"],"status":200}`
 
 ### `auth/mfa-error-shapes#start-enrolment-without-a-verified-email`
 
 - oracle: `{"body":{"error":{"code":400,"errors":[{"domain":"global","message":"UNVERIFIED_EMAIL : Need to verify email first before enrolling second factors.","reason":"invalid"}],"message":"UNVERIFIED_EMAIL : Need to verify email first before enr...`
-- firebase-testd: `{"body":{"phoneSessionInfo":{"sessionInfo":"sms-3235199f792bbcf70012"}},"status":200}`
+- fireemu: `{"body":{"phoneSessionInfo":{"sessionInfo":"sms-3235199f792bbcf70012"}},"status":200}`
 
 ### `storage/admin-upload-download-metadata#download-a-missing-object`
 
 - oracle: `{"thrown":true,"code":"404","message":"No such object: demo-conformance.appspot.com/conf_public/definitely-missing.txt"}`
-- firebase-testd: `{"thrown":true,"code":"404","message":"{\"error\":{\"code\":404,\"errors\":[{\"domain\":\"global\",\"message\":\"Not Found. Could not get object\",\"reason\":\"notFound\"}],\"message\":\"Not Found. Could not get object\"}}"}`
+- fireemu: `{"thrown":true,"code":"404","message":"{\"error\":{\"code\":404,\"errors\":[{\"domain\":\"global\",\"message\":\"Not Found. Could not get object\",\"reason\":\"notFound\"}],\"message\":\"Not Found. Could not get object\"}}"}`
 
 ### `functions/callable-error-envelope#unknown-callable`
 
 - oracle: `{"bodyLength":216,"status":404}`
-- firebase-testd: `{"bodyLength":70,"status":404}`
+- fireemu: `{"bodyLength":70,"status":404}`
 
 
 ## Pending: needs a real project (6)
@@ -105,7 +105,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 ### `auth/mfa-error-shapes#totp-enrolment-secret-shape`
 
 - reason: **needs a real project**
-- what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor firebase-testd can produce the production shape, so no local run may stand in for it.
+- what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it.
 
 ### `appcheck/exchange-and-jwks#production-limited-use-token-claims`
 
@@ -125,7 +125,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 ### `appcheck/enforced-header-matrix#production-open-stream-when-a-token-expires`
 
 - reason: **needs a real project**
-- what a real project would settle: Section 23 records the behaviour of an already open Firestore stream whose token expires, or whose enforcement changes, as unresolved debt. Neither local side can answer it: the official suite never enforces, and firebase-testd's answer is the one under test.
+- what a real project would settle: Section 23 records the behaviour of an already open Firestore stream whose token expires, or whose enforcement changes, as unresolved debt. Neither local side can answer it: the official suite never enforces, and fireemu's answer is the one under test.
 
 ### `appcheck/enforced-header-matrix#production-storage-download-token-under-enforcement`
 
@@ -135,7 +135,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 
 ## Documented divergences (36)
 
-- `firestore/missing-composite-index#admin-two-equality-filters` -- Under firestore.indexValidationPolicy = firebase, a query whose composite index is not in the index file is refused with FAILED_PRECONDITION and the fragment production would need. The official Firestore emulator serves the query as if the index existed; firebase-testd offers that as the `emulator` policy instead of as the default.  
+- `firestore/missing-composite-index#admin-two-equality-filters` -- Under firestore.indexValidationPolicy = firebase, a query whose composite index is not in the index file is refused with FAILED_PRECONDITION and the fragment production would need. The official Firestore emulator serves the query as if the index existed; fireemu offers that as the `emulator` policy instead of as the default.  
   documented in: README.md, "Composite indexes"
 - `firestore/missing-composite-index#admin-equality-plus-inequality` -- Same policy difference for an equality plus an inequality on another field.  
   documented in: README.md, "Composite indexes"
@@ -145,68 +145,68 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
   documented in: README.md, "Composite indexes"
 - `firestore/lite-rest-transport#query-needing-a-composite-index` -- The same policy difference over the REST transport, where the SDK surfaces it as `failed-precondition`.  
   documented in: README.md, "Composite indexes"
-- `functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity` -- The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. firebase-testd verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
-- `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; firebase-testd never treats it as a callable user identity.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
-- `appcheck/exchange-and-jwks#exchange-a-registered-debug-secret` -- The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. firebase-testd issues a locally signed token for a registered debug secret.  
-  documented in: capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 10.1
-- `appcheck/exchange-and-jwks#exchange-an-unknown-secret` -- No route on the oracle (404) against the specified 403 PERMISSION_DENIED "App attestation failed." that firebase-testd returns for an unknown project, app, disabled app or secret alike.  
-  documented in: capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 17
-- `appcheck/exchange-and-jwks#exchange-a-limited-use-token` -- No route on the oracle (404). firebase-testd fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request.  
-  documented in: capability manifest APPCHECK-REPLAY-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23
-- `appcheck/exchange-and-jwks#jwks` -- The official suite serves no JWKS route (404). firebase-testd publishes this instance's single public App Check key as an RFC 7517 JWK Set.  
-  documented in: capability manifest APPCHECK-JWKS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 10.2
+- `functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity` -- The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
+- `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
+- `appcheck/exchange-and-jwks#exchange-a-registered-debug-secret` -- The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. fireemu issues a locally signed token for a registered debug secret.  
+  documented in: capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.1
+- `appcheck/exchange-and-jwks#exchange-an-unknown-secret` -- No route on the oracle (404) against the specified 403 PERMISSION_DENIED "App attestation failed." that fireemu returns for an unknown project, app, disabled app or secret alike.  
+  documented in: capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 17
+- `appcheck/exchange-and-jwks#exchange-a-limited-use-token` -- No route on the oracle (404). fireemu fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request.  
+  documented in: capability manifest APPCHECK-REPLAY-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23
+- `appcheck/exchange-and-jwks#jwks` -- The official suite serves no JWKS route (404). fireemu publishes this instance's single public App Check key as an RFC 7517 JWK Set.  
+  documented in: capability manifest APPCHECK-JWKS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.2
 - `appcheck/unenforced-header-matrix#firestore-rest-valid-token` -- The oracle issues no App Check token, so it cannot run the valid-token column at all; the row records the same request without the field and marks itself `noTokenIssuedBySide`.  
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
 - `appcheck/unenforced-header-matrix#auth-signup-valid-token` -- The oracle issues no App Check token; see the Firestore row.  
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
 - `appcheck/unenforced-header-matrix#storage-metadata-valid-token` -- The oracle issues no App Check token; see the Firestore row.  
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/unenforced-header-matrix#callable-unenforcing-valid-token` -- The oracle issues no token, so its callable sees no app. firebase-testd forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/unenforced-header-matrix#callable-unenforcing-unverifiable-token` -- The official Functions emulator runs the runtime with token verification skipped, so any value in the field becomes an app with a null id. firebase-testd removes an unverifiable field before the runner can decode it, so the callable sees no app: strictly safer, and deliberately different.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/unenforced-header-matrix#callable-unenforcing-duplicate-fields` -- Two App Check fields are ambiguous. The official emulator accepts the folded value as an app; firebase-testd classifies it as malformed and removes it.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/unenforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401. firebase-testd presents a verified token and the callable runs with request.app populated.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs)
-- `appcheck/unenforced-header-matrix#callable-enforcing-unverifiable-token` -- With verification skipped, the official emulator admits an unverifiable token into an enforceAppCheck callable. firebase-testd refuses it with the callable 401 UNAUTHENTICATED envelope before the handler runs.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/unenforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate App Check fields are admitted by the official emulator and refused by firebase-testd, for the same reason as the unenforcing row.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
+- `appcheck/unenforced-header-matrix#callable-unenforcing-valid-token` -- The oracle issues no token, so its callable sees no app. fireemu forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
+- `appcheck/unenforced-header-matrix#callable-unenforcing-unverifiable-token` -- The official Functions emulator runs the runtime with token verification skipped, so any value in the field becomes an app with a null id. fireemu removes an unverifiable field before the runner can decode it, so the callable sees no app: strictly safer, and deliberately different.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
+- `appcheck/unenforced-header-matrix#callable-unenforcing-duplicate-fields` -- Two App Check fields are ambiguous. The official emulator accepts the folded value as an app; fireemu classifies it as malformed and removes it.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
+- `appcheck/unenforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401. fireemu presents a verified token and the callable runs with request.app populated.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)
+- `appcheck/unenforced-header-matrix#callable-enforcing-unverifiable-token` -- With verification skipped, the official emulator admits an unverifiable token into an enforceAppCheck callable. fireemu refuses it with the callable 401 UNAUTHENTICATED envelope before the handler runs.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
+- `appcheck/unenforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate App Check fields are admitted by the official emulator and refused by fireemu, for the same reason as the unenforcing row.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
 - `appcheck/unenforced-header-matrix#on-request-valid-token` -- The oracle issues no token, so it sends no field and its onRequest handler counts zero. Both sides pass the raw field list through unclassified, which is what the row is about.  
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: firebase-testd denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
+- `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.  
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
 - `appcheck/enforced-header-matrix#firestore-rest-valid-token` -- Both sides admit, but the oracle admits because it never looked and cannot present a token; the row is marked `noTokenIssuedBySide` so the agreement is not read as parity.  
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/enforced-header-matrix#firestore-rest-unverifiable-token` -- Same: no enforcement on the oracle; 403 PERMISSION_DENIED on firebase-testd.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
-- `appcheck/enforced-header-matrix#firestore-rest-duplicate-fields` -- Same: no enforcement on the oracle; firebase-testd treats duplicate fields as malformed and denies.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/enforced-header-matrix#auth-signup-no-app-check-field` -- No enforcement on the oracle; firebase-testd denies the end-user Identity Toolkit route with 403 and consumes no credential.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.3
+- `appcheck/enforced-header-matrix#firestore-rest-unverifiable-token` -- Same: no enforcement on the oracle; 403 PERMISSION_DENIED on fireemu.  
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
+- `appcheck/enforced-header-matrix#firestore-rest-duplicate-fields` -- Same: no enforcement on the oracle; fireemu treats duplicate fields as malformed and denies.  
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
+- `appcheck/enforced-header-matrix#auth-signup-no-app-check-field` -- No enforcement on the oracle; fireemu denies the end-user Identity Toolkit route with 403 and consumes no credential.  
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.3
 - `appcheck/enforced-header-matrix#auth-signup-valid-token` -- Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.  
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
 - `appcheck/enforced-header-matrix#auth-signup-unverifiable-token` -- Same as the missing-field row.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.3
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.3
 - `appcheck/enforced-header-matrix#auth-signup-duplicate-fields` -- Same as the missing-field row, for an ambiguous duplicate field.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/enforced-header-matrix#storage-metadata-no-app-check-field` -- No enforcement on the oracle; firebase-testd denies the Firebase Storage dialect with the 403 Storage JSON error envelope.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.2
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
+- `appcheck/enforced-header-matrix#storage-metadata-no-app-check-field` -- No enforcement on the oracle; fireemu denies the Firebase Storage dialect with the 403 Storage JSON error envelope.  
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.2
 - `appcheck/enforced-header-matrix#storage-metadata-valid-token` -- Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.  
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
 - `appcheck/enforced-header-matrix#storage-metadata-unverifiable-token` -- Same as the missing-field row.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.2
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.2
 - `appcheck/enforced-header-matrix#storage-metadata-duplicate-fields` -- Same as the missing-field row, for an ambiguous duplicate field.  
-  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/enforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401; firebase-testd presents a verified token and the handler runs with request.app.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs)
-- `appcheck/enforced-header-matrix#callable-enforcing-unverifiable-token` -- The official Functions emulator skips token verification and admits an unverifiable token; firebase-testd refuses it with the callable 401 envelope before the handler runs.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/enforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate fields are admitted by the official emulator and refused by firebase-testd.  
-  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
+  documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
+- `appcheck/enforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401; fireemu presents a verified token and the handler runs with request.app.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)
+- `appcheck/enforced-header-matrix#callable-enforcing-unverifiable-token` -- The official Functions emulator skips token verification and admits an unverifiable token; fireemu refuses it with the callable 401 envelope before the handler runs.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
+- `appcheck/enforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate fields are admitted by the official emulator and refused by fireemu.  
+  documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
 
 ## Standing proposal: precision of the App Check boundary rows
 

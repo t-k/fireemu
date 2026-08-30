@@ -1,0 +1,19 @@
+[package]
+name = "fireemu-core-firestore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only Firestore core: field paths, value ordering, logical size, query AST, index validation"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+fireemu-core-limits = { path = "../fireemu-core-limits" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

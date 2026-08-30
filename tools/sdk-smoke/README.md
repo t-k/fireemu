@@ -1,8 +1,8 @@
 # SDK smoke tests
 
-Exercise a running `firebase-testd` with the real Firebase SDKs.
+Exercise a running `fireemu` with the real Firebase SDKs.
 
-`firebase-testd.smoke.json` pins the virtual clock and enables App Check with one registered
+`fireemu.smoke.json` pins the virtual clock and enables App Check with one registered
 app and every service `unenforced`: the daemon then classifies and records every request
 without denying any, which is what the Emulator UI's App Check page (and its Playwright
 suite) needs, and what leaves the other smokes working without attaching a token.
@@ -23,15 +23,15 @@ suite) needs, and what leaves the other smokes working without attaching a token
 - `functions.mjs`: the functions in `functions-project/` (firebase-functions v2: Firestore
   and Storage triggers, `onSchedule`, `onRequest`, `onCall`, retries) driven through
   `awaitIdle` and the virtual clock; start the daemon with
-  `--config tools/sdk-smoke/firebase-testd.smoke.json --functions tools/sdk-smoke/functions-project --functions-port 5001` (the config pins the virtual clock; schedule counts depend on it) and set
-  `FTD_FUNCTIONS_HOST=127.0.0.1:5001`. Run it on a fresh daemon (it fills the database).
+  `--config tools/sdk-smoke/fireemu.smoke.json --functions tools/sdk-smoke/functions-project --functions-port 5001` (the config pins the virtual clock; schedule counts depend on it) and set
+  `FIREEMU_FUNCTIONS_HOST=127.0.0.1:5001`. Run it on a fresh daemon (it fills the database).
 - `appcheck.mjs`: `firebase/app-check` `initializeAppCheck` with a `CustomProvider` that
   exchanges a registered local debug secret, then Firestore, Storage, Auth and an
   `enforceAppCheck` callable with the token attached; start the daemon with
-  `--config tools/sdk-smoke/firebase-testd.appcheck.json --functions tools/sdk-smoke/functions-project --functions-port 5001`
+  `--config tools/sdk-smoke/fireemu.appcheck.json --functions tools/sdk-smoke/functions-project --functions-port 5001`
   (that config registers the same app as the smoke config but puts Firestore and Storage in
-  `enforced`, which is what the refusal checks need) and set `FTD_FUNCTIONS_HOST`.
-  `FTD_APP_CHECK_EMULATOR_HOST` is exported by `firebase-testd exec`; it defaults to the Auth
+  `enforced`, which is what the refusal checks need) and set `FIREEMU_FUNCTIONS_HOST`.
+  `FIREEMU_APP_CHECK_EMULATOR_HOST` is exported by `fireemu exec`; it defaults to the Auth
   port. No browser shims are needed: `CustomProvider` touches no browser global, and the SDK
   guards its `indexedDB` token cache. The SDK never dials the local exchange endpoint itself
   (`@firebase/app-check` hard-codes the production base URL), which is why the provider calls
@@ -43,15 +43,15 @@ suite) needs, and what leaves the other smokes working without attaching a token
   the same client, and a raw WebChannel handshake carrying the failing `AddTarget` must answer
   the first back channel with `TargetChange REMOVE` instead of `Unknown SID` (the Node build of
   the SDK speaks gRPC, so that transport is probed directly). Run it with
-  `firebase-testd exec --config tools/sdk-smoke/firebase-testd.missing-index.json --firebase-json tools/sdk-smoke/missing-index.firebase.json`.
+  `fireemu exec --config tools/sdk-smoke/fireemu.missing-index.json --firebase-json tools/sdk-smoke/missing-index.firebase.json`.
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) and open
-  `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FTD_CONTROL_TOKEN>`; the page prints
-  its checks as JSON. `FTD_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.
+  `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FIREEMU_CONTROL_TOKEN>`; the page prints
+  its checks as JSON. `FIREEMU_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.
 
 ```sh
-# one-shot: firebase-testd exec --firestore-port 8080 --http-port 9099 --storage-port 9199 -- npm run smoke
-cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 &
+# one-shot: fireemu exec --firestore-port 8080 --http-port 9099 --storage-port 9199 -- npm run smoke
+cargo run -p fireemu -- up --firestore-port 8080 --http-port 9099 &
 cd tools/sdk-smoke && npm install
 export FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GOOGLE_CLOUD_PROJECT=demo-app
 npm run smoke        # firebase-admin
@@ -59,7 +59,7 @@ npm run smoke:client # firebase client SDK + rules
 npm run smoke:lite   # Firestore Lite (REST) + rules
 
 # App Check (needs the appCheck config and the functions codebase):
-firebase-testd exec --config tools/sdk-smoke/firebase-testd.appcheck.json \
+fireemu exec --config tools/sdk-smoke/fireemu.appcheck.json \
   --firestore-port 8080 --http-port 9099 --storage-port 9199 \
   --functions tools/sdk-smoke/functions-project --functions-port 5001 \
   -- sh -c 'cd tools/sdk-smoke && npm run smoke:appcheck'

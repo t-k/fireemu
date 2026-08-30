@@ -1,7 +1,7 @@
 // Callable Cloud Functions for the conformance corpus.
 //
 // Deliberately narrow: only callables and one onRequest function, no Admin SDK and no
-// triggers, so that both the official Functions emulator and the firebase-testd runner load
+// triggers, so that both the official Functions emulator and the fireemu runner load
 // the same codebase quickly and the rows compare callable envelopes rather than trigger
 // scheduling.
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");

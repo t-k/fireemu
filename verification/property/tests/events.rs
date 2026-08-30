@@ -1,10 +1,10 @@
 //! Property artifact for INV-EVENT-001 (spec 10.2).
 
-use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
-use ftd_core_events::retry::RetryPolicy;
-use ftd_core_events::state::{EventRecord, EventState, EventTransitionError};
-use ftd_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
-use ftd_core_types::time::{LogicalDuration, LogicalInstant};
+use fireemu_core_events::event::{EventSource, EventType, LogicalEvent};
+use fireemu_core_events::retry::RetryPolicy;
+use fireemu_core_events::state::{EventRecord, EventState, EventTransitionError};
+use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use proptest::prelude::*;
 
 fn event(epoch: Epoch) -> LogicalEvent {

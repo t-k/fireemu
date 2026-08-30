@@ -42,7 +42,7 @@
       "enforcementStage": "request",
       "implemented": "implemented",
       "officialText": "Constraints on collection IDs: valid UTF-8 characters, no longer than 1,500 bytes, cannot contain a forward slash (/), cannot solely consist of a single period (.) or double periods (..), cannot match the regular expression __.*__",
-      "notes": "Implemented by ftd_core_types::ids::CollectionId. Local hardening: NUL and other control characters are rejected (INTENTIONAL_STRICTER)."
+      "notes": "Implemented by fireemu_core_types::ids::CollectionId. Local hardening: NUL and other control characters are rejected (INTENTIONAL_STRICTER)."
     },
     {
       "id": "FS-LIMIT-SUBCOLLECTION-DEPTH",
@@ -66,7 +66,7 @@
       "enforcementStage": "request",
       "implemented": "implemented",
       "officialText": "Constraints on document IDs: valid UTF-8 characters, no longer than 1,500 bytes, cannot contain a forward slash (/), cannot solely consist of a single period (.) or double periods (..), cannot match the regular expression __.*__",
-      "notes": "Implemented by ftd_core_types::ids::DocumentId. Local hardening: NUL and other control characters are rejected (INTENTIONAL_STRICTER)."
+      "notes": "Implemented by fireemu_core_types::ids::DocumentId. Local hardening: NUL and other control characters are rejected (INTENTIONAL_STRICTER)."
     },
     {
       "id": "FS-LIMIT-DOCUMENT-NAME-BYTES",

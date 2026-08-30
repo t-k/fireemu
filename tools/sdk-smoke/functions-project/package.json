@@ -1,5 +1,5 @@
 {
-  "name": "ftd-smoke-functions",
+  "name": "fireemu-smoke-functions",
   "private": true,
   "main": "index.js",
   "description": "Firebase Functions codebase used by the functions smoke (loaded by tools/runner-node)."

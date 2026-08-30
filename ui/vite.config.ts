@@ -3,8 +3,8 @@ import solid from "vite-plugin-solid";
 import tailwindcss from "@tailwindcss/vite";
 
 // The app is served by the daemon under /ui; in development `vite` proxies the API to a
-// running daemon (FTD_UI_PROXY, default http://127.0.0.1:4000).
-const proxyTarget = process.env.FTD_UI_PROXY ?? "http://127.0.0.1:4000";
+// running daemon (FIREEMU_UI_PROXY, default http://127.0.0.1:4000).
+const proxyTarget = process.env.FIREEMU_UI_PROXY ?? "http://127.0.0.1:4000";
 
 export default defineConfig({
   base: "/ui/",

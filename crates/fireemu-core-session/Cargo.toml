@@ -1,0 +1,18 @@
+[package]
+name = "fireemu-core-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only session, epoch, virtual clock and idle fence state machine"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -2,7 +2,7 @@
 //
 // This is the one place the two sides are configured differently, and the difference is in
 // deployment rather than behaviour: the official suite reads `firestore.rules` and
-// `storage.rules` from firebase.json when it starts, while firebase-testd takes rules text
+// `storage.rules` from firebase.json when it starts, while fireemu takes rules text
 // through its control API. Both therefore evaluate the same bytes, which is what makes the
 // Rules-decision rows comparable at all.
 
@@ -31,7 +31,7 @@ export async function loadRules(side, hosts) {
   }
   const firestore = await readFile(join(CONFORMANCE_DIR, "firestore.rules"), "utf8");
   const storage = await readFile(join(CONFORMANCE_DIR, "storage.rules"), "utf8");
-  const token = process.env.FTD_CONTROL_TOKEN ?? null;
+  const token = process.env.FIREEMU_CONTROL_TOKEN ?? null;
   const firestoreStatus = await put(`http://${hosts.auth}/v1/rules`, firestore, token);
   const storageStatus = await put(`http://${hosts.auth}/v1/storage/rules`, storage, token);
   return { via: "control API", firestoreStatus, storageStatus };

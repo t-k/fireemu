@@ -29,7 +29,7 @@ test.describe("App Check", () => {
   test("shows the signing key, the baseline modes and the configured app", async ({ page }) => {
     await gotoApp(page, "/appcheck");
     await expect(page.getByTestId("appcheck-disabled")).toHaveCount(0);
-    await expect(page.getByTestId("appcheck-kid")).toContainText("ftd-app-check-");
+    await expect(page.getByTestId("appcheck-kid")).toContainText("fireemu-app-check-");
 
     const modes = page.getByTestId("appcheck-mode-table");
     for (const service of ["auth", "firestore", "storage"]) {
@@ -76,7 +76,7 @@ test.describe("App Check", () => {
       JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }),
     );
     expect(stored).not.toContain(secret);
-    const injected = await page.evaluate(() => JSON.stringify(window.__FTD__ ?? {}));
+    const injected = await page.evaluate(() => JSON.stringify(window.__FIREEMU__ ?? {}));
     expect(injected).not.toContain(secret);
 
     // The summary counts it as a dynamic registration, not as a configured digest.

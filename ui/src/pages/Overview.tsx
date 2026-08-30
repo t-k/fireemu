@@ -16,8 +16,8 @@ const Overview: Component = () => {
       `FIREBASE_STORAGE_EMULATOR_HOST=${config().storageAddr}`,
       `STORAGE_EMULATOR_HOST=http://${config().storageAddr}`,
       `GOOGLE_CLOUD_PROJECT=${config().project}`,
-      `FTD_CONTROL_URL=http://${config().httpAddr}/v1/`,
-      ...(config().functionsAddr ? [`FTD_FUNCTIONS_HOST=${config().functionsAddr}`] : []),
+      `FIREEMU_CONTROL_URL=http://${config().httpAddr}/v1/`,
+      ...(config().functionsAddr ? [`FIREEMU_FUNCTIONS_HOST=${config().functionsAddr}`] : []),
     ].join("\n");
   return (
     <div>

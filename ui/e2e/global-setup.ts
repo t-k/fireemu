@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
 const candidates = [
-  process.env.FTD_BIN,
-  resolve(repo, "target/release/firebase-testd"),
-  resolve(repo, "target/debug/firebase-testd"),
+  process.env.FIREEMU_BIN,
+  resolve(repo, "target/release/fireemu"),
+  resolve(repo, "target/debug/fireemu"),
 ].filter((p): p is string => Boolean(p));
 
 export const PORTS = { firestore: 18080, http: 19099, storage: 19199, functions: 15001, ui: 14000 };
@@ -32,12 +32,12 @@ const waitFor = async (url: string, attempts: number): Promise<void> => {
 export default async function globalSetup(): Promise<void> {
   const bin = candidates.find((p) => existsSync(p));
   if (!bin) {
-    throw new Error("no firebase-testd binary: cargo build -p firebase-testd first");
+    throw new Error("no fireemu binary: cargo build -p fireemu first");
   }
   const args = [
     "up",
     "--config",
-    resolve(repo, "tools/sdk-smoke/firebase-testd.smoke.json"),
+    resolve(repo, "tools/sdk-smoke/fireemu.smoke.json"),
     "--firestore-port",
     String(PORTS.firestore),
     "--http-port",

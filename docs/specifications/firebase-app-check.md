@@ -2,13 +2,13 @@
 
 - Status: proposed (review decisions of 2026-08-30 applied; see section 25)
 - Specification date: 2026-08-30
-- Target: `firebase-testd`
+- Target: `fireemu`
 - Initial delivery: baseline App Check for Auth, Cloud Firestore, Cloud Storage for Firebase, and callable Cloud Functions
 - Enforcement precision: `boundary-conformance` until the product-specific conformance fixtures in this document pass
 
 ## 1. Decision summary
 
-`firebase-testd` does not currently model Firebase App Check. It has no App Check configuration, app registry, debug-token exchange, token issuer, verifier, request admission decision, metrics, capability entry, or tests. Some request paths forward `X-Firebase-AppCheck` accidentally, while other paths discard it. Accidental forwarding is not support.
+`fireemu` does not currently model Firebase App Check. It has no App Check configuration, app registry, debug-token exchange, token issuer, verifier, request admission decision, metrics, capability entry, or tests. Some request paths forward `X-Firebase-AppCheck` accidentally, while other paths discard it. Accidental forwarding is not support.
 
 The selected design adds a reproducible-under-test local App Check issuer and one transport-neutral verification and enforcement core. Normal daemon instances use cryptographically independent signing material; an explicitly injected test seed makes focused tests deterministic. Client test code exchanges a registered local debug secret for a session-scoped RS256 JWT. Firebase product adapters read `X-Firebase-AppCheck`, resolve the target project, ask the common core for one decision, and apply a product-specific enforcement policy before Security Rules or state mutation. Firebase Authentication and Security Rules remain independent layers; a request may have any combination of valid, missing, or invalid Auth and App Check credentials.
 
@@ -50,7 +50,7 @@ The initial delivery shall not:
 - emulate Play Integrity, App Attest, DeviceCheck, reCAPTCHA, or any other production attestation provider;
 - attest a real device or claim that a local token proves device integrity;
 - proxy token exchange or verification to a production Firebase project;
-- enable App Check for products that `firebase-testd` does not emulate;
+- enable App Check for products that `fireemu` does not emulate;
 - add App Check data to Firestore or Storage Security Rules; App Check is a service admission layer, not `request.auth`;
 - automatically enforce App Check on ordinary `onRequest` functions;
 - make the unmodified Firebase Admin SDK use the local JWKS endpoint when that SDK hard-codes Google's JWKS URL;
@@ -95,7 +95,7 @@ The capability manifest shall add the following entries. An entry must remain `u
 
 ### 7.1 Core crate
 
-A new `ftd-core-app-check` crate shall contain only deterministic domain logic and shall follow ADR-001. Network I/O, HTTP, process environment, RSA key ownership, and every cryptographic primitive remain outside the core: the core defines small traits for the SHA-256 digest of a debug secret and for constant-time digest comparison (and for the RS256 signer, matching the existing Auth pattern), and the runtime shell implements them with standard crates (`sha2`, `subtle`, `rsa`). The core never contains a hand-written hash or comparison routine; in particular the Rules `hashing` namespace implementation in `ftd-core-rules` is not shared, since it declares itself unsuitable for runtime collision resistance.
+A new `fireemu-core-app-check` crate shall contain only deterministic domain logic and shall follow ADR-001. Network I/O, HTTP, process environment, RSA key ownership, and every cryptographic primitive remain outside the core: the core defines small traits for the SHA-256 digest of a debug secret and for constant-time digest comparison (and for the RS256 signer, matching the existing Auth pattern), and the runtime shell implements them with standard crates (`sha2`, `subtle`, `rsa`). The core never contains a hand-written hash or comparison routine; in particular the Rules `hashing` namespace implementation in `fireemu-core-rules` is not shared, since it declares itself unsuitable for runtime collision resistance.
 
 The core owns these concepts:
 
@@ -114,7 +114,7 @@ App Check identity must not be added to the existing Auth `Principal`. The crede
 
 The runtime shell owns a dedicated App Check RS256 key pair, generated once per daemon instance (never per project). It must not reuse the Firebase Auth signing key. On a normal start, the key is generated from the operating system CSPRNG and is never exported (the daemon already draws its control token and runner secret from the CSPRNG, so it is not a seed-only reproducible process). Tests inject a seed through constructor injection of an `AppCheckKeySource` / signer factory, never through a `RuntimeConfig` field: configuration values and test dependencies stay separate, and the seam is unavailable in canonical configuration and production-like CLI startup. When both `auth.idTokenSigning = "session-rsa"` and `appCheck.enabled` are set, two keys are generated; they may be generated concurrently (`spawn_blocking`). Derivation from an injected seed uses an App Check-specific domain separator. Two normal daemon instances with identical project configuration must still reject each other's tokens.
 
-The signer implements a small core trait with `alg`, `kid`, `sign`, `verify`, and `public_jwk_json`, matching the existing Auth key-isolation pattern. Its `kid` begins with `ftd-app-check-` and is derived from the public key. Each project epoch is an unpredictable 128-bit value generated at project creation and every invalidating lifecycle transition. Key or epoch rotation and publication occur under the admission barrier: new requests see either the entire old state or the entire new state. Private keys and instance secrets use zeroizing, redacting non-`Debug` wrappers. Epochs use a redacting non-`Debug` wrapper. The raw epoch necessarily appears as the signed `ftd_epoch` claim and in decoded callable claims returned to the token holder; it is an opaque binding value, not an independent credential. It must not additionally appear in configuration output, traces, snapshots, logs, UI responses, panic messages, or debug formatting.
+The signer implements a small core trait with `alg`, `kid`, `sign`, `verify`, and `public_jwk_json`, matching the existing Auth key-isolation pattern. Its `kid` begins with `fireemu-app-check-` and is derived from the public key. Each project epoch is an unpredictable 128-bit value generated at project creation and every invalidating lifecycle transition. Key or epoch rotation and publication occur under the admission barrier: new requests see either the entire old state or the entire new state. Private keys and instance secrets use zeroizing, redacting non-`Debug` wrappers. Epochs use a redacting non-`Debug` wrapper. The raw epoch necessarily appears as the signed `fireemu_epoch` claim and in decoded callable claims returned to the token holder; it is an opaque binding value, not an independent credential. It must not additionally appear in configuration output, traces, snapshots, logs, UI responses, panic messages, or debug formatting.
 
 ### 7.3 Canonical credential-header handling
 
@@ -190,7 +190,7 @@ The schema and Rust loader shall enforce the same rules:
 
 At most 1,024 apps may be configured per daemon and at most 128 debug-token digests may be registered per app. App IDs are limited to 256 UTF-8 bytes, display names to 128 UTF-8 bytes, JWT/header values to 16 KiB, and exchange JSON bodies to 16 KiB with no trailing JSON value. Observations aggregate unknown and invalid identities into bounded buckets; they never create a metric label from unverified input.
 
-`--only appcheck` shall be accepted as a logical service selection even though App Check shares the Auth/control HTTP listener. `firebase-testd exec` shall export `FTD_APP_CHECK_EMULATOR_HOST=host:port` and `FTD_APP_CHECK_JWKS_URL=http://host:port/v1/jwks` when App Check is selected. No raw debug secret is generated or exported implicitly.
+`--only appcheck` shall be accepted as a logical service selection even though App Check shares the Auth/control HTTP listener. `fireemu exec` shall export `FIREEMU_APP_CHECK_EMULATOR_HOST=host:port` and `FIREEMU_APP_CHECK_JWKS_URL=http://host:port/v1/jwks` when App Check is selected. No raw debug secret is generated or exported implicitly.
 
 The activation contract is:
 
@@ -275,7 +275,7 @@ The local session token is an RS256 JWT with `typ: JWT`, the local App Check `ki
 | `iat` | virtual-clock Unix seconds at exchange |
 | `exp` | `iat + tokenTtlSeconds` |
 | `jti` | unique token ID within the project epoch (epoch plus an atomic counter) |
-| `ftd_epoch` | current project session epoch; local-only private claim |
+| `fireemu_epoch` | current project session epoch; local-only private claim |
 
 The verifier shall require:
 
@@ -286,14 +286,14 @@ The verifier shall require:
 5. an issuer exactly equal to `https://firebaseappcheck.googleapis.com/{projectNumber}`;
 6. both project audiences;
 7. a non-empty `sub` naming an enabled app registered in the target project;
-8. an `ftd_epoch` equal to the current project session epoch;
+8. an `fireemu_epoch` equal to the current project session epoch;
 9. a non-empty `jti`.
 
 The issuer creates `jti` from the project epoch and an atomic per-epoch counter. No separate HMAC is needed: the whole JWT is RS256-signed, so `jti` is authenticated by the signature; uniqueness comes from the epoch plus the counter. Concurrent exchanges cannot reuse a token ID. Reset and restore rotate the epoch before resetting the counter, so counter reuse cannot recreate a valid token. Focused tests may reproduce IDs only by injecting the same test seed and operation order.
 
 Token verification uses the virtual clock. It does not consult Auth users, API keys, request origins, or Security Rules. The token's `app_id` convenience property is derived from `sub` when exposing callable context; it need not be a duplicate JWT claim.
 
-The private `ftd_epoch` claim intentionally makes local tokens non-portable across reset, restore, project deletion, or daemon instances. This is a published local-runtime divergence that prevents a pre-reset token or cleared replay ledger from authorizing a post-reset request.
+The private `fireemu_epoch` claim intentionally makes local tokens non-portable across reset, restore, project deletion, or daemon instances. This is a published local-runtime divergence that prevents a pre-reset token or cleared replay ledger from authorizing a post-reset request.
 
 ## 12. Enforcement semantics
 
@@ -345,7 +345,7 @@ Unary requests classify `x-firebase-appcheck` metadata once. gRPC streams classi
 
 WebChannel classifies the opening request and binds the channel to the admitted app ID and epoch. Later envelopes may omit the header and reuse the channel admission. A presented replacement token must be valid for the same app and current channel epoch. A different app ID or invalid replacement closes the channel with the selected error.
 
-App Check denial maps to gRPC `PERMISSION_DENIED` and Firestore REST HTTP 403 with stable `ftd-code` metadata. The external message remains compatible with the SDK's permission-denied handling. Exact production wording remains a conformance fixture rather than a hard-coded claim.
+App Check denial maps to gRPC `PERMISSION_DENIED` and Firestore REST HTTP 403 with stable `fireemu-code` metadata. The external message remains compatible with the SDK's permission-denied handling. Exact production wording remains a conformance fixture rather than a hard-coded claim.
 
 App Check does not populate Security Rules `request.auth` and does not create a new Rules variable. Rules execute only after baseline admission succeeds or is allowed by `unenforced` mode.
 
@@ -448,7 +448,7 @@ Product mapping is:
 
 | Surface | Missing or invalid under enforcement |
 |---|---|
-| Firestore gRPC and streams | `PERMISSION_DENIED` with `ftd-code` metadata |
+| Firestore gRPC and streams | `PERMISSION_DENIED` with `fireemu-code` metadata |
 | Firestore REST and WebChannel | HTTP 403 Google JSON `PERMISSION_DENIED` |
 | Firebase Storage dialect | HTTP 403 Firebase Storage JSON error |
 | Firebase Auth client route | HTTP 403 Google JSON `PERMISSION_DENIED` |
@@ -633,7 +633,7 @@ The following behaviors require bounded real-service fixtures before their preci
 - extra claims on production limited-use tokens;
 - SDK behavior across selected Web, Android, Apple, and Flutter versions.
 
-Until these fixtures exist, the specified local behavior in this document is normative for `firebase-testd` and must be published as such rather than presented as exact production emulation.
+Until these fixtures exist, the specified local behavior in this document is normative for `fireemu` and must be published as such rather than presented as exact production emulation.
 
 ## 24. References
 
@@ -655,7 +655,7 @@ Until these fixtures exist, the specified local behavior in this document is nor
 Decisions taken on the implementation review, applied to the sections above:
 
 1. The App Check key is generated from the OS CSPRNG once per daemon instance; the test seam is constructor injection (`AppCheckKeySource` / signer factory), not a configuration field. `tokenSigning` is `instance-rsa`.
-2. No cryptographic primitive lives in `ftd-core-app-check`: SHA-256 and constant-time comparison come from standard crates behind core-defined traits implemented by the shell; the Rules hashing implementation is not reused. `jti` is epoch plus an atomic counter, authenticated by the JWT signature itself.
+2. No cryptographic primitive lives in `fireemu-core-app-check`: SHA-256 and constant-time comparison come from standard crates behind core-defined traits implemented by the shell; the Rules hashing implementation is not reused. `jti` is epoch plus an atomic counter, authenticated by the JWT signature itself.
 3. The callable trusted protocol verifies the Authorization ID token against the target project's `AuthRegistry` and the virtual clock, admits only `Principal::User` (never `Bearer owner`), rejects duplicate Authorization fields, and strips every original Authorization before reinserting exactly one verified token; the unsafe decoder in `firebase-functions` fills `uid` from `sub`, so RS256 session tokens populate callable context too.
 4. `consumeAppCheckToken` detection is three-valued and fail-closed as described in section 13.4; an undeterminable value fails Functions startup with App Check enabled.
 5. Sessions: only projects with a static `appCheck.apps` registration can use App Check; `POST /v1/sessions` neither registers apps nor blocks a statically registered project.

@@ -3,8 +3,8 @@
 // callable function (APPCHECK-SDK-WEB-1, specification section 10.3).
 //
 // Env: FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, FIREBASE_STORAGE_EMULATOR_HOST,
-//      FTD_APP_CHECK_EMULATOR_HOST, FTD_FUNCTIONS_HOST, GOOGLE_CLOUD_PROJECT.
-// Run it against `--config tools/sdk-smoke/firebase-testd.appcheck.json`, whose `appCheck`
+//      FIREEMU_APP_CHECK_EMULATOR_HOST, FIREEMU_FUNCTIONS_HOST, GOOGLE_CLOUD_PROJECT.
+// Run it against `--config tools/sdk-smoke/fireemu.appcheck.json`, whose `appCheck`
 // section registers the app and the digest of the clearly fake debug secret below.
 //
 // `initializeAppCheck` needs no browser shims here: `CustomProvider` never touches
@@ -40,11 +40,11 @@ const project = process.env.GOOGLE_CLOUD_PROJECT ?? "demo-app";
 const fsHost = process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080";
 const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? "127.0.0.1:9099";
 const storageHost = process.env.FIREBASE_STORAGE_EMULATOR_HOST ?? "127.0.0.1:9199";
-const appCheckHost = process.env.FTD_APP_CHECK_EMULATOR_HOST ?? authHost;
-const functionsHost = process.env.FTD_FUNCTIONS_HOST ?? "127.0.0.1:5001";
+const appCheckHost = process.env.FIREEMU_APP_CHECK_EMULATOR_HOST ?? authHost;
+const functionsHost = process.env.FIREEMU_FUNCTIONS_HOST ?? "127.0.0.1:5001";
 
 // A clearly fake local debug secret. Its SHA-256 digest is what
-// firebase-testd.appcheck.json registers; never reuse a production App Check debug token.
+// fireemu.appcheck.json registers; never reuse a production App Check debug token.
 const APP_ID = "1:1234567890:web:local-test-app";
 const DEBUG_SECRET = "deadbeef-0000-4000-8000-000000000001";
 

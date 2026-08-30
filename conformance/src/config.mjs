@@ -16,11 +16,11 @@ export const PROJECT = "demo-conformance";
 export const BUCKET = `${PROJECT}.appspot.com`;
 export const REGION = "us-central1";
 
-/** The app the App Check rows use; only firebase-testd can actually issue tokens for it. */
+/** The app the App Check rows use; only fireemu can actually issue tokens for it. */
 export const APP_CHECK = Object.freeze({
   appId: "1:1234567890:web:conformance",
   projectNumber: "1234567890",
-  // A clearly fake local debug secret; its SHA-256 digest is what the firebase-testd
+  // A clearly fake local debug secret; its SHA-256 digest is what the fireemu
   // configs register. Never reuse a production App Check debug token.
   debugSecret: "deadbeef-0000-4000-8000-000000000001",
 });
@@ -35,7 +35,7 @@ export const OFFICIAL_PORTS = Object.freeze({
   logging: 32500,
 });
 
-/** Ports firebase-testd binds; distinct so a stray daemon cannot answer for the oracle. */
+/** Ports fireemu binds; distinct so a stray daemon cannot answer for the oracle. */
 export const TESTD_PORTS = Object.freeze({
   firestore: 32180,
   http: 32198,
@@ -51,16 +51,16 @@ export const TESTD_PORTS = Object.freeze({
 export const VARIANTS = Object.freeze({
   /** App Check present but every service `unenforced`, which is what the official suite does. */
   baseline: "baseline",
-  /** firebase-testd with Firestore, Storage and Auth `enforced`; the official suite cannot do this. */
+  /** fireemu with Firestore, Storage and Auth `enforced`; the official suite cannot do this. */
   appCheckEnforced: "appCheckEnforced",
 });
 
 /** Fixture and comparison statuses. */
 export const STATUS = Object.freeze({
-  /** firebase-testd and the oracle agree; drift here fails `check`. */
+  /** fireemu and the oracle agree; drift here fails `check`. */
   parity: "parity",
   /** They differ on purpose and the difference is documented; drift from the recorded
-   *  firebase-testd value still fails `check`. */
+   *  fireemu value still fails `check`. */
   documentedDivergence: "documented-divergence",
   /** They differ and the difference is not documented yet; listed in DEBT.md, never a gate. */
   debt: "debt",

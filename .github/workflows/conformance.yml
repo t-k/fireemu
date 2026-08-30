@@ -10,7 +10,7 @@ on:
     inputs:
       mode:
         description: >-
-          check: replay firebase-testd against the committed fixtures (no Java, no oracle).
+          check: replay fireemu against the committed fixtures (no Java, no oracle).
           record: also run the official Local Emulator Suite and report the fixture diff.
         type: choice
         options: [check, record]
@@ -51,12 +51,12 @@ jobs:
           pnpm -C conformance run lint
           pnpm -C conformance run fmt:check
 
-      - name: build firebase-testd
-        run: cargo build --release -p firebase-testd
+      - name: build fireemu
+        run: cargo build --release -p fireemu
 
       - name: replay against the committed fixtures
         env:
-          FTD_BIN: ${{ github.workspace }}/target/release/firebase-testd
+          FIREEMU_BIN: ${{ github.workspace }}/target/release/fireemu
         run: pnpm -C conformance run check
 
       # `record` re-derives the fixtures from the official emulators. It never commits: a
@@ -65,7 +65,7 @@ jobs:
       - name: re-record against the official Local Emulator Suite
         if: inputs.mode == 'record'
         env:
-          FTD_BIN: ${{ github.workspace }}/target/release/firebase-testd
+          FIREEMU_BIN: ${{ github.workspace }}/target/release/fireemu
         run: pnpm -C conformance run oracle
 
       - name: report the fixture diff

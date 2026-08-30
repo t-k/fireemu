@@ -2,7 +2,7 @@
 //
 // Both supervisors are spawned as process-group leaders (`detached: true`). The official
 // suite starts a Java child per downloadable emulator and a Node child per functions
-// codebase, and firebase-testd starts a Node runner; killing the leader alone would orphan
+// codebase, and fireemu starts a Node runner; killing the leader alone would orphan
 // them. Every exit path here signals the whole group, waits, and escalates to SIGKILL, so a
 // conformance run never leaves an emulator behind.
 
@@ -118,16 +118,16 @@ export function runOfficial({ variant, outPath, timeoutMs = 600_000 }) {
   });
 }
 
-/** firebase-testd, built from this checkout. */
+/** fireemu, built from this checkout. */
 export function runTestd({ variant, outPath, config, timeoutMs = 600_000 }) {
   const binary =
-    process.env.FTD_BIN ??
-    ["target/release/firebase-testd", "target/debug/firebase-testd"]
+    process.env.FIREEMU_BIN ??
+    ["target/release/fireemu", "target/debug/fireemu"]
       .map((p) => join(REPO_ROOT, p))
       .find((p) => existsSync(p));
   if (!binary) {
     throw new Error(
-      "firebase-testd is not built: run `cargo build -p firebase-testd` (or set FTD_BIN)",
+      "fireemu is not built: run `cargo build -p fireemu` (or set FIREEMU_BIN)",
     );
   }
   return runSupervisor({
@@ -166,11 +166,11 @@ export function runTestd({ variant, outPath, config, timeoutMs = 600_000 }) {
   });
 }
 
-/** The firebase-testd configuration a variant runs under. */
+/** The fireemu configuration a variant runs under. */
 export const configFor = (variant) =>
   join(
     CONFORMANCE_DIR,
     variant === "appCheckEnforced"
-      ? "firebase-testd.appcheck-enforced.json"
-      : "firebase-testd.baseline.json",
+      ? "fireemu.appcheck-enforced.json"
+      : "fireemu.baseline.json",
   );

@@ -1,11 +1,11 @@
-//! Generates `crates/ftd-core-limits/src/generated/*.rs` from `spec/limits/*.json`.
+//! Generates `crates/fireemu-core-limits/src/generated/*.rs` from `spec/limits/*.json`.
 //!
 //! This is a development tool. It is never linked into the release binary and a normal build
 //! never runs it; the generated files are checked in.
 //!
 //! ```text
-//! limit-catalog-gen generate [--spec-dir spec/limits] [--out-dir crates/ftd-core-limits/src/generated]
-//! limit-catalog-gen check    [--spec-dir spec/limits] [--out-dir crates/ftd-core-limits/src/generated]
+//! limit-catalog-gen generate [--spec-dir spec/limits] [--out-dir crates/fireemu-core-limits/src/generated]
+//! limit-catalog-gen check    [--spec-dir spec/limits] [--out-dir crates/fireemu-core-limits/src/generated]
 //! ```
 
 use std::collections::BTreeSet;
@@ -449,7 +449,7 @@ fn expected_files(spec_dir: &Path) -> Result<Vec<(String, String)>, String> {
 fn run(args: &[String]) -> Result<(), String> {
     let mode = args.first().map_or("check", String::as_str);
     let mut spec_dir = PathBuf::from("spec/limits");
-    let mut out_dir = PathBuf::from("crates/ftd-core-limits/src/generated");
+    let mut out_dir = PathBuf::from("crates/fireemu-core-limits/src/generated");
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {

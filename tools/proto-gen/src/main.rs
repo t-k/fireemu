@@ -1,4 +1,4 @@
-//! Regenerates `crates/ftd-proto-firestore/src/generated/` from the vendored protos
+//! Regenerates `crates/fireemu-proto-firestore/src/generated/` from the vendored protos
 //! (ADR-008). A normal build never runs this; the generated files are checked in and
 //! `check` mode fails CI on drift.
 //!
@@ -11,8 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const PROTO_ROOT: &str = "crates/ftd-proto-firestore/proto";
-const OUT_DIR: &str = "crates/ftd-proto-firestore/src/generated";
+const PROTO_ROOT: &str = "crates/fireemu-proto-firestore/proto";
+const OUT_DIR: &str = "crates/fireemu-proto-firestore/src/generated";
 const FILES: &[&str] = &[
     "google/firestore/v1/firestore.proto",
     "google/firestore/v1/pipeline.proto",
@@ -76,7 +76,8 @@ fn main() -> ExitCode {
             }
         },
         "check" => {
-            let tmp = std::env::temp_dir().join(format!("ftd-proto-gen-{}", std::process::id()));
+            let tmp =
+                std::env::temp_dir().join(format!("fireemu-proto-gen-{}", std::process::id()));
             let outcome = generate(&tmp).and_then(|()| {
                 let expected = read_dir_sorted(&tmp);
                 let actual = read_dir_sorted(out);

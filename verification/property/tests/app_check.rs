@@ -6,25 +6,25 @@
 //! The core owns no primitive, so these tests supply keyed, deterministic stand-ins for RS256
 //! and SHA-256. They are reproducible and collision-free over the generated inputs, and they
 //! are not cryptography; the real `rsa` / `sha2` / `subtle` implementations are exercised by
-//! `crates/ftd-adapter-http/tests/app_check.rs`.
+//! `crates/fireemu-adapter-http/tests/app_check.rs`.
 
-use ftd_core_app_check::admission::{
+use fireemu_core_app_check::admission::{
     AdmissionRequest, AppCheckGate, PrivilegedBypass, ServiceAdmission,
 };
-use ftd_core_app_check::crypto::{AppCheckSigner, ConstantTimeEq, DebugTokenHasher};
-use ftd_core_app_check::exchange::{
+use fireemu_core_app_check::crypto::{AppCheckSigner, ConstantTimeEq, DebugTokenHasher};
+use fireemu_core_app_check::exchange::{
     canonical_debug_token, exchange, ExchangeOutcome, ExchangeRequest,
 };
-use ftd_core_app_check::header::{classify_app_check_header, HeaderClassification};
-use ftd_core_app_check::jwt::encode;
-use ftd_core_app_check::limits::MAX_TOKEN_BYTES;
-use ftd_core_app_check::observe::{CredentialCategory, UNKNOWN_APP_LABEL};
-use ftd_core_app_check::registry::{
+use fireemu_core_app_check::header::{classify_app_check_header, HeaderClassification};
+use fireemu_core_app_check::jwt::encode;
+use fireemu_core_app_check::limits::MAX_TOKEN_BYTES;
+use fireemu_core_app_check::observe::{CredentialCategory, UNKNOWN_APP_LABEL};
+use fireemu_core_app_check::registry::{
     AppCheckRegistry, AppRegistration, DebugTokenDigest, ProjectEpoch,
 };
-use ftd_core_app_check::verify::{verify_token, AppCheckFailure, BaselineMode};
-use ftd_core_types::determinism::{DeterministicRng, SplitMix64};
-use ftd_core_types::time::LogicalInstant;
+use fireemu_core_app_check::verify::{verify_token, AppCheckFailure, BaselineMode};
+use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::time::LogicalInstant;
 use proptest::prelude::*;
 
 const APP_ID: &str = "1:1234567890:web:local-test-app";
@@ -51,7 +51,7 @@ impl TestSigner {
     fn new(key: u64) -> Self {
         Self {
             key,
-            kid: format!("ftd-app-check-{key:016x}"),
+            kid: format!("fireemu-app-check-{key:016x}"),
         }
     }
 }
@@ -218,10 +218,10 @@ proptest! {
         );
         // Signed by the other instance but relabelled with this instance's key ID.
         let relabelled = theirs_token.replacen(
-            &ftd_core_app_check::jwt::base64url_encode(
+            &fireemu_core_app_check::jwt::base64url_encode(
                 format!(r#"{{"alg":"RS256","kid":"{}","typ":"JWT"}}"#, theirs.kid()).as_bytes(),
             ),
-            &ftd_core_app_check::jwt::base64url_encode(
+            &fireemu_core_app_check::jwt::base64url_encode(
                 format!(r#"{{"alg":"RS256","kid":"{}","typ":"JWT"}}"#, mine.kid()).as_bytes(),
             ),
             1,
@@ -483,7 +483,7 @@ proptest! {
     ///
     /// The proxy-level behaviour itself (stripping, byte-for-byte reinsertion, the 401 for an
     /// enforcing callable) is checked against a real runner in
-    /// `crates/ftd-adapter-functions/tests/app_check_callable.rs`.
+    /// `crates/fireemu-adapter-functions/tests/app_check_callable.rs`.
     #[test]
     fn prop_app_check_callable_admits_only_one_instance_of_a_verifying_token(
         pattern in proptest::collection::vec(0usize..6, 0..4),

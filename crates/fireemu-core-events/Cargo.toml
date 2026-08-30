@@ -1,0 +1,18 @@
+[package]
+name = "fireemu-core-events"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only logical event state machine and outbox"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

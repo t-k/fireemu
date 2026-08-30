@@ -242,7 +242,7 @@ const mfaErrors = {
       "totp-enrolment-secret-shape",
       "needs a real project",
       "Identity Platform issues TOTP secrets only for a project with multi-factor authentication " +
-        "enabled in the console; neither the official Auth emulator nor firebase-testd can produce " +
+        "enabled in the console; neither the official Auth emulator nor fireemu can produce " +
         "the production shape, so no local run may stand in for it.",
     );
   },

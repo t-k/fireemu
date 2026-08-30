@@ -20,8 +20,8 @@
           "M-EPOCH-001"
         ],
         "integration": [
-          "crates/ftd-core-session/tests/session.rs",
-          "crates/ftd-core-events/tests/outbox.rs"
+          "crates/fireemu-core-session/tests/session.rs",
+          "crates/fireemu-core-events/tests/outbox.rs"
         ]
       }
     },
@@ -39,7 +39,7 @@
           "M-SCHED-001"
         ],
         "integration": [
-          "crates/ftd-core-session/tests/clock.rs"
+          "crates/fireemu-core-session/tests/clock.rs"
         ]
       }
     },
@@ -61,7 +61,7 @@
           "M-RETRY-002"
         ],
         "integration": [
-          "crates/ftd-core-events/tests/state_machine.rs"
+          "crates/fireemu-core-events/tests/state_machine.rs"
         ]
       },
       "note": "terminal_event_rejects_every_transition builds a real event, so it allocates: on macOS with Kani 0.67 it hits the known 'malloc with missing definition' limitation recorded in the README and only verifies where the allocator is modelled."
@@ -87,7 +87,7 @@
           "M-IDLE-003"
         ],
         "integration": [
-          "crates/ftd-core-session/tests/idle.rs"
+          "crates/fireemu-core-session/tests/idle.rs"
         ]
       }
     },
@@ -103,7 +103,7 @@
           "M-EPOCH-001"
         ],
         "integration": [
-          "crates/ftd-core-session/tests/session.rs"
+          "crates/fireemu-core-session/tests/session.rs"
         ]
       }
     },
@@ -120,7 +120,7 @@
           "M-RETRY-002"
         ],
         "integration": [
-          "crates/ftd-core-events/tests/state_machine.rs"
+          "crates/fireemu-core-events/tests/state_machine.rs"
         ]
       }
     },
@@ -136,7 +136,7 @@
           "M-IDLE-002"
         ],
         "integration": [
-          "crates/ftd-core-session/tests/idle.rs"
+          "crates/fireemu-core-session/tests/idle.rs"
         ]
       }
     },
@@ -158,8 +158,8 @@
           "M-LIMIT-006"
         ],
         "integration": [
-          "crates/ftd-core-limits/tests/evaluate.rs",
-          "crates/ftd-core-limits/tests/properties.rs"
+          "crates/fireemu-core-limits/tests/evaluate.rs",
+          "crates/fireemu-core-limits/tests/properties.rs"
         ]
       }
     },
@@ -231,10 +231,10 @@
           "M-INDEX-003"
         ],
         "integration": [
-          "crates/ftd-core-firestore/tests/index.rs"
+          "crates/fireemu-core-firestore/tests/index.rs"
         ]
       },
-      "note": "Conservative validator implemented in ftd-core-firestore; the Kani harness and reference-rule conformance fixtures are pending."
+      "note": "Conservative validator implemented in fireemu-core-firestore; the Kani harness and reference-rule conformance fixtures are pending."
     },
     {
       "id": "INV-RULES-001",
@@ -428,10 +428,10 @@
           "M-RULES-013"
         ],
         "integration": [
-          "crates/ftd-core-rules/tests/lint.rs"
+          "crates/fireemu-core-rules/tests/lint.rs"
         ]
       },
-      "note": "Static linter implemented in ftd-core-rules; projects.test conformance pending."
+      "note": "Static linter implemented in fireemu-core-rules; projects.test conformance pending."
     },
     {
       "id": "REQ-STORAGE-NAME-001",
@@ -464,11 +464,11 @@
           "M-AUTH-002"
         ],
         "integration": [
-          "crates/ftd-core-auth/tests/mfa.rs",
-          "crates/ftd-core-auth/tests/totp.rs"
+          "crates/fireemu-core-auth/tests/mfa.rs",
+          "crates/fireemu-core-auth/tests/totp.rs"
         ]
       },
-      "note": "The Kani harness is pending: the acceptance window is decided from HMAC-SHA1 codes and from a 128-bit division in time_step, which bounded model checking does not finish in usable time. The window and replay boundary are covered by AuthTotp.tla, prop_same_step_same_code and the RFC 6238 vectors in crates/ftd-core-auth/tests/totp.rs."
+      "note": "The Kani harness is pending: the acceptance window is decided from HMAC-SHA1 codes and from a 128-bit division in time_step, which bounded model checking does not finish in usable time. The window and replay boundary are covered by AuthTotp.tla, prop_same_step_same_code and the RFC 6238 vectors in crates/fireemu-core-auth/tests/totp.rs."
     },
     {
       "id": "INV-AUTH-002",
@@ -486,7 +486,7 @@
           "M-AUTH-003"
         ],
         "integration": [
-          "crates/ftd-core-auth/tests/mfa.rs"
+          "crates/fireemu-core-auth/tests/mfa.rs"
         ]
       }
     },
@@ -502,7 +502,7 @@
           "M-AUTH-004"
         ],
         "integration": [
-          "crates/ftd-core-auth/tests/mfa.rs"
+          "crates/fireemu-core-auth/tests/mfa.rs"
         ]
       }
     },
@@ -518,7 +518,7 @@
           "M-AUTH-001"
         ],
         "integration": [
-          "crates/ftd-core-auth/tests/mfa.rs"
+          "crates/fireemu-core-auth/tests/mfa.rs"
         ]
       }
     },
@@ -526,13 +526,13 @@
       "id": "AC-CFG-001",
       "statement": "App Check defaults preserve current behaviour, and invalid keys, types, service modes, token TTLs, app IDs, project numbers and debug-token digests fail closed in both the canonical JSON Schema and the Rust loader.",
       "criticality": "important",
-      "owner": "firebase-testd",
+      "owner": "fireemu",
       "status": "implemented",
       "note": "The loader delegates every binding rule to the core registry, so the schema, the loader and the runtime cannot disagree; tools/config-schema-check checks the same rules over spec/config/examples and spec/config/invalid-examples.",
       "artifacts": {
         "integration": [
-          "crates/ftd-core-app-check/tests/config.rs",
-          "crates/firebase-testd/tests/exec.rs"
+          "crates/fireemu-core-app-check/tests/config.rs",
+          "crates/fireemu/tests/exec.rs"
         ],
         "conformance": "spec/config/invalid-examples"
       }
@@ -543,11 +543,11 @@
       "criticality": "critical",
       "owner": "core-app-check",
       "status": "implemented",
-      "note": "prop_app_check_foreign_keys_never_verify covers INV-APPCHECK-011 alongside the window property; the real RSA key isolation is checked in crates/ftd-adapter-http/tests/app_check.rs.",
+      "note": "prop_app_check_foreign_keys_never_verify covers INV-APPCHECK-011 alongside the window property; the real RSA key isolation is checked in crates/fireemu-adapter-http/tests/app_check.rs.",
       "artifacts": {
         "integration": [
-          "crates/ftd-core-app-check/tests/token.rs",
-          "crates/ftd-core-app-check/tests/jwt.rs"
+          "crates/fireemu-core-app-check/tests/token.rs",
+          "crates/fireemu-core-app-check/tests/jwt.rs"
         ],
         "property": "prop_app_check_token_window_is_half_open",
         "mutation": [
@@ -567,8 +567,8 @@
       "note": "The exchange scans the fixed-capacity digest set without an early exit and performs equivalent dummy work for an unknown app; that limits timing differences and does not claim resistance to a local process-level side channel.",
       "artifacts": {
         "integration": [
-          "crates/ftd-adapter-http/tests/app_check.rs",
-          "crates/ftd-core-app-check/tests/exchange.rs"
+          "crates/fireemu-adapter-http/tests/app_check.rs",
+          "crates/fireemu-core-app-check/tests/exchange.rs"
         ],
         "property": "prop_app_check_exchange_needs_the_registered_digest",
         "mutation": [
@@ -586,11 +586,11 @@
       "note": "Milestone AC0 implemented and proved the transport-neutral classifier; AC1 adopted it on the Firebase Auth HTTP surface, the Storage HTTP surface, Firestore unary gRPC metadata and Firestore REST; AC2 adopted it on the WebChannel init header block -- where the parser now keeps every instance in wire order instead of collapsing them into a map -- and on the callable Functions proxy, where an ambiguous field list is never a credential and is stripped before the runner can decode it. Every transport covers duplicate, folded, empty and oversized values.",
       "artifacts": {
         "integration": [
-          "crates/ftd-core-app-check/tests/header.rs",
-          "crates/ftd-adapter-http/tests/app_check_auth.rs",
-          "crates/ftd-adapter-http/tests/app_check_storage.rs",
-          "crates/ftd-adapter-grpc/tests/app_check.rs",
-          "crates/ftd-adapter-functions/tests/app_check_callable.rs"
+          "crates/fireemu-core-app-check/tests/header.rs",
+          "crates/fireemu-adapter-http/tests/app_check_auth.rs",
+          "crates/fireemu-adapter-http/tests/app_check_storage.rs",
+          "crates/fireemu-adapter-grpc/tests/app_check.rs",
+          "crates/fireemu-adapter-functions/tests/app_check_callable.rs"
         ],
         "property": "prop_app_check_header_never_selects_one_of_several",
         "mutation": [
@@ -607,9 +607,9 @@
       "note": "Each product is checked independently: Auth by an observable absence (no user, a refresh token that still works, an MFA assertion that still finalizes), Storage by an unchanged object store and an unconsumed upload-session identifier, Firestore by the App Check reason preceding a rules denial the same request would also have earned.",
       "artifacts": {
         "integration": [
-          "crates/ftd-adapter-http/tests/app_check_auth.rs",
-          "crates/ftd-adapter-http/tests/app_check_storage.rs",
-          "crates/ftd-adapter-grpc/tests/app_check.rs"
+          "crates/fireemu-adapter-http/tests/app_check_auth.rs",
+          "crates/fireemu-adapter-http/tests/app_check_storage.rs",
+          "crates/fireemu-adapter-grpc/tests/app_check.rs"
         ],
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
@@ -628,7 +628,7 @@
       "note": "The published route classification is `identity_toolkit::end_user_operation`, which also bounds the observation label. Both bypasses require their own credential: the Admin routes the owner credential, the emulator inspection routes the control token. The latter is checked by the App Check path itself because the routes' own guard only challenges browser requests, so an Origin-less caller would otherwise bypass unguarded.",
       "artifacts": {
         "integration": [
-          "crates/ftd-adapter-http/tests/app_check_auth.rs"
+          "crates/fireemu-adapter-http/tests/app_check_auth.rs"
         ],
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
@@ -646,7 +646,7 @@
       "note": "Milestone AC1 covered unary gRPC and REST; AC2 added the Write and Listen streams and the WebChannel transport with their lifetime contract. A stream classifies its opening metadata once and is decided as soon as its first request names the database, then stays admitted for its whole life: token expiry does not end it, and reconnecting is a new admission. A WebChannel binds to the admitted app and the session epoch of that admission; a later envelope may omit the field, but a replacement for another app or one that does not verify closes the channel. Resolving the Firebase Auth credential no longer fails a stream at open, because the App Check decision is not available yet at that point and section 7.4 puts Auth after it.",
       "artifacts": {
         "integration": [
-          "crates/ftd-adapter-grpc/tests/app_check.rs"
+          "crates/fireemu-adapter-grpc/tests/app_check.rs"
         ],
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
@@ -665,7 +665,7 @@
       "note": "Milestone AC1 covered the non-resumable operations and admitted every resumable request; AC2 bound the session to the app that started it. An enforced initiation records the admitted app and the epoch of that admission in the upload session, and every later request on it -- continuation, status query, cancel and finalization -- must present a valid token for the same app; the check runs before the command is read, so a refused request neither advances nor deletes the upload and token expiry mid-upload preserves the resumable state. Only an enforced policy binds: under unenforced a client may legitimately stop presenting a token, and binding it would enforce by the back door. The download token is compared in constant time and must bind to the resolved bucket, object name and generation. The JSON API bypass requires the owner credential: the dialect bypasses Security Rules without one, as the official Emulator does, but a path shape is not a credential and would otherwise let a caller defeat enforcement by rewriting /v0/b/... to /storage/v1/b/...",
       "artifacts": {
         "integration": [
-          "crates/ftd-adapter-http/tests/app_check_storage.rs"
+          "crates/fireemu-adapter-http/tests/app_check_storage.rs"
         ],
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
         "mutation": [
@@ -684,8 +684,8 @@
       "note": "The daemon proxy is the trust boundary: the SDK wrapper decodes both callable credentials without verifying either under the skipTokenVerification debug feature, so the daemon verifies first and strips every caller-supplied copy of the fields it owns -- the App Check field, Authorization, the runner secret and the x-callable-context-auth / x-original-auth channels firebase-functions honours to override v1 callable auth context. The integration test asserts on the bytes that actually reach the runner, through an echoing runner HTTP server, rather than on the daemon's intent. Three fail-open paths the security review found are closed: the runner refuses every request when it has no per-runner secret instead of serving them unguarded, the runner reports the auth-override header names the installed SDK honours so a renamed one fails startup rather than silently escaping the proxy's strip list, and a configured functions.manifest may not reclassify a callable as an onRequest function and route it around the boundary. consumeAppCheckToken is read by a version-bounded loader instrumentation that hooks onCallHandler, withInit and wrapTraceContext, the one path every v1, v2, builder and genkit spelling passes through; the value is three-valued and never guessed as false.",
       "artifacts": {
         "integration": [
-          "crates/ftd-adapter-functions/tests/app_check_callable.rs",
-          "crates/firebase-testd/src/functions.rs"
+          "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+          "crates/fireemu/src/functions.rs"
         ],
         "property": "prop_app_check_callable_admits_only_one_instance_of_a_verifying_token",
         "mutation": [
@@ -706,22 +706,22 @@
         "integration": [
           "tools/sdk-smoke/appcheck.mjs"
         ],
-        "conformance": "tools/sdk-smoke/firebase-testd.appcheck.json"
+        "conformance": "tools/sdk-smoke/fireemu.appcheck.json"
       }
     },
     {
       "id": "AC-LIFE-001",
       "statement": "Reset, restore, project deletion and session isolation invalidate or isolate App Check tokens and counters as specified.",
       "criticality": "critical",
-      "owner": "firebase-testd",
+      "owner": "fireemu",
       "status": "implemented",
       "note": "Creating, resetting and deleting a project rotates its epoch through the ProjectHooks seam; a snapshot restore replaces the scope's dynamic debug-token registrations and then rotates the epoch. The epochs are drawn from the operating system CSPRNG in the probe phase, before the first store is wiped and before any registration is replaced, so a failing draw leaves the session exactly as it was rather than a wiped session still admitting its old tokens; the installation is one write under the exclusive admission barrier.",
       "artifacts": {
         "integration": [
-          "crates/firebase-testd/src/sessions.rs",
-          "crates/firebase-testd/src/snapshots.rs",
-          "crates/ftd-adapter-grpc/tests/app_check.rs",
-          "crates/ftd-core-app-check/tests/admission.rs"
+          "crates/fireemu/src/sessions.rs",
+          "crates/fireemu/src/snapshots.rs",
+          "crates/fireemu-adapter-grpc/tests/app_check.rs",
+          "crates/fireemu-core-app-check/tests/admission.rs"
         ],
         "property": "prop_app_check_epoch_rotation_invalidates_every_earlier_token",
         "mutation": [
@@ -738,9 +738,9 @@
       "note": "The registry keeps one bounded ring and one set of counters per project, created on first use and dropped whole when the project's state is cleared (reset, project deletion, snapshot restore), so a flood of requests to one project never evicts another project's recent observations and the counters reset with the state they describe. Counters are keyed by service, verified app ID (or the bounded unknown label), callable function name for the functions service, category and outcome, and they count every classified request since the last reset rather than only what the ring still holds. GET /v1/sessions/{session}/appCheck/observations serves the session's project alone, requires the control token for every method whatever the Origin and sets Cache-Control: no-store; the Emulator UI page at /ui/appcheck and the same-origin fronts behind it (GET /ui/api/appcheck/config, the debug-token routes, and the observation route through the control front) are each Cache-Control: no-store, and a generated debug secret reaches the page in the creation response alone. The table of rings is bounded in turn (at most 256 projects, no ring for an ID no session could name, a registered project displacing the least recently used unregistered one), because a target project is resolved from a request path before anything validates it. Core ring isolation: heavy_traffic_to_one_project_never_evicts_another_projects_observations, counters_outlive_the_observations_the_ring_evicted, clearing_observations_touches_only_the_named_scope, deleting_a_project_drops_its_ring_and_a_later_request_opens_a_fresh_one, callable_counters_group_by_function_and_other_services_do_not, an_unregistered_project_never_displaces_a_registered_ones_ring, an_unnameable_project_id_opens_no_ring. Control route scoping: a_session_reads_only_its_own_projects_observations, one_projects_flood_never_shortens_another_projects_window, counters_group_callables_by_function_name, unknown_token_input_does_not_create_an_unbounded_metrics_label. UI front: the_observation_front_serves_only_the_selected_sessions_project.",
       "artifacts": {
         "integration": [
-          "crates/ftd-adapter-http/tests/app_check_control.rs",
-          "crates/ftd-core-app-check/tests/admission.rs",
-          "crates/ftd-adapter-ui/tests/ui.rs",
+          "crates/fireemu-adapter-http/tests/app_check_control.rs",
+          "crates/fireemu-core-app-check/tests/admission.rs",
+          "crates/fireemu-adapter-ui/tests/ui.rs",
           "ui/e2e/appcheck.spec.ts"
         ],
         "property": "prop_app_check_enforced_admits_only_a_verified_token_or_a_bypass",
@@ -753,12 +753,12 @@
       "id": "AC-CAP-001",
       "statement": "The capability manifest states every APPCHECK-* capability with its status and precision, the surfaces and bypasses App Check enforcement covers, the published local divergences, and that replay protection and production attestation providers are unsupported.",
       "criticality": "important",
-      "owner": "firebase-testd",
+      "owner": "fireemu",
       "status": "implemented",
-      "note": "crates/firebase-testd/tests/capabilities.rs reads GET /v1/capabilities from a daemon started on ephemeral ports, so the assertions cover what the shipped binary publishes rather than the constant behind it. It pins the status and precision of all nine capabilities of specification section 6, refuses an undeclared APPCHECK-* entry, and checks that the enforcement entry names the three baseline modes, the supported product surfaces and transports and every row of the bypass matrix of section 12.2 with the credential it requires; that the ftd_epoch and JWKS no-store divergences are published; and that the unsupported entries say how they fail closed.",
+      "note": "crates/fireemu/tests/capabilities.rs reads GET /v1/capabilities from a daemon started on ephemeral ports, so the assertions cover what the shipped binary publishes rather than the constant behind it. It pins the status and precision of all nine capabilities of specification section 6, refuses an undeclared APPCHECK-* entry, and checks that the enforcement entry names the three baseline modes, the supported product surfaces and transports and every row of the bypass matrix of section 12.2 with the credential it requires; that the fireemu_epoch and JWKS no-store divergences are published; and that the unsupported entries say how they fail closed.",
       "artifacts": {
         "integration": [
-          "crates/firebase-testd/tests/capabilities.rs"
+          "crates/fireemu/tests/capabilities.rs"
         ]
       }
     },
@@ -768,7 +768,7 @@
       "criticality": "important",
       "owner": "conformance",
       "status": "partial",
-      "note": "conformance/ runs one corpus against the official Local Emulator Suite (firebase-tools pinned to an exact version, provenance regenerated into conformance/ORACLE.md) and against firebase-testd, then records each step as parity, documented-divergence, debt or pending. The App Check rows cover the exchange and JWKS routes and the X-Firebase-AppCheck matrix (missing / valid / unverifiable / duplicate) across Firestore REST, the Identity Toolkit end-user route, the Storage Firebase dialect, an enforcing callable, a non-enforcing callable and an onRequest function, both with enforcement off and with firebase-testd enforcing. It is partial, not implemented, because the obligation names production fixtures too: the official emulators implement no App Check surface, so what a real project denies under enforcement, the claims on a production limited-use token, and the exact set of Identity Toolkit methods App Check protects are recorded as pending with the reason \"needs a real project\". No precision is raised on this evidence; conformance/DEBT.md carries the standing proposal for a credentialed second oracle.",
+      "note": "conformance/ runs one corpus against the official Local Emulator Suite (firebase-tools pinned to an exact version, provenance regenerated into conformance/ORACLE.md) and against fireemu, then records each step as parity, documented-divergence, debt or pending. The App Check rows cover the exchange and JWKS routes and the X-Firebase-AppCheck matrix (missing / valid / unverifiable / duplicate) across Firestore REST, the Identity Toolkit end-user route, the Storage Firebase dialect, an enforcing callable, a non-enforcing callable and an onRequest function, both with enforcement off and with fireemu enforcing. It is partial, not implemented, because the obligation names production fixtures too: the official emulators implement no App Check surface, so what a real project denies under enforcement, the claims on a production limited-use token, and the exact set of Identity Toolkit methods App Check protects are recorded as pending with the reason \"needs a real project\". No precision is raised on this evidence; conformance/DEBT.md carries the standing proposal for a credentialed second oracle.",
       "artifacts": {
         "conformance": "conformance/fixtures/appcheck",
         "integration": [
@@ -797,7 +797,7 @@
       "criticality": "important",
       "owner": "conformance",
       "status": "partial",
-      "note": "conformance/src/normalize.mjs erases exactly five classes of value -- RFC 3339 instants, twenty-character generated ids, JWTs, UUID-shaped opaque codes and object generations -- plus the host:port the two sides deliberately bind differently; ordering is normalized only where a scenario opts in and the ordering is documented as unspecified. Everything else is compared. `pnpm -C conformance run check` exits non-zero on a parity row that drifted, a documented divergence that moved off its recorded firebase-testd value, a step no fixture describes, a step that vanished, a pending row that produced an observation, or a scenario that faulted; debt rows are reported and never gate. conformance/src/diff.test.mjs proves each of those without an emulator. Partial: events, logs, exported files, environment variables and process exit behaviour are compared only where a scenario already covers them, and the corpus is Node-only.",
+      "note": "conformance/src/normalize.mjs erases exactly five classes of value -- RFC 3339 instants, twenty-character generated ids, JWTs, UUID-shaped opaque codes and object generations -- plus the host:port the two sides deliberately bind differently; ordering is normalized only where a scenario opts in and the ordering is documented as unspecified. Everything else is compared. `pnpm -C conformance run check` exits non-zero on a parity row that drifted, a documented divergence that moved off its recorded fireemu value, a step no fixture describes, a step that vanished, a pending row that produced an observation, or a scenario that faulted; debt rows are reported and never gate. conformance/src/diff.test.mjs proves each of those without an emulator. Partial: events, logs, exported files, environment variables and process exit behaviour are compared only where a scenario already covers them, and the corpus is Node-only.",
       "artifacts": {
         "conformance": "conformance/fixtures",
         "integration": [

@@ -1,0 +1,905 @@
+//! Email actions (oob codes), email link and phone sign-in, fixture identity providers,
+//! phone second factors and the emulator inspection routes.
+
+use std::sync::{Arc, Mutex};
+
+use fireemu_adapter_http::identity_toolkit::{handle, handle_with, AuthState, RequestHeaders};
+use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
+use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::store::AuthStore;
+use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_types::determinism::SplitMix64;
+use fireemu_core_types::time::LogicalInstant;
+use serde_json::{json, Value};
+
+const V1: &str = "/identitytoolkit.googleapis.com/v1";
+const V2: &str = "/identitytoolkit.googleapis.com/v2";
+const EMU: &str = "/emulator/v1/projects/demo-app";
+
+fn state() -> AuthState {
+    AuthState {
+        store: Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(5),
+            TotpPolicy::default(),
+        ))),
+        clock: Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        ))),
+        barrier: None,
+        events: None,
+        control_token: None,
+        registry: None,
+        app_check: None,
+        app_check_policy: None,
+        tenancy: None,
+    }
+}
+
+fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
+    let r = handle(state, "POST", path, body);
+    (r.status, r.body)
+}
+
+fn get(state: &AuthState, path: &str) -> (u16, Value) {
+    let r = handle(state, "GET", path, &json!({}));
+    (r.status, r.body)
+}
+
+fn owner() -> RequestHeaders {
+    RequestHeaders {
+        authorization: Some("Bearer owner".to_owned()),
+        origin: None,
+        content_type: Some("application/json".to_owned()),
+        host: Some("127.0.0.1:9099".to_owned()),
+        app_check: Vec::new(),
+    }
+}
+
+fn admin(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
+    let r = handle_with(state, "POST", path, &owner(), body);
+    (r.status, r.body)
+}
+
+fn sign_up(state: &AuthState, email: &str) -> Value {
+    let (status, body) = post(
+        state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": email, "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body
+}
+
+fn claims(id_token: &str) -> Value {
+    serde_json::from_str(&decode_unsigned(id_token).unwrap().payload_json).unwrap()
+}
+
+#[test]
+fn password_reset_goes_through_an_oob_code_the_test_can_read() {
+    let s = state();
+    sign_up(&s, "a@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "a@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["email"], "a@example.com");
+    assert!(body.get("oobCode").is_none(), "clients never see the code");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["message"], "EMAIL_NOT_FOUND");
+    // The inspection route lists it with its link.
+    let (status, codes) = get(&s, &format!("{EMU}/oobCodes"));
+    assert_eq!(status, 200);
+    let entry = &codes["oobCodes"][0];
+    assert_eq!(entry["email"], "a@example.com");
+    assert_eq!(entry["requestType"], "PASSWORD_RESET");
+    let code = entry["oobCode"].as_str().unwrap().to_owned();
+    assert!(entry["oobLink"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("mode=resetPassword&lang=en&oobCode={code}")));
+    // verifyPasswordResetCode, then confirmPasswordReset.
+    let (status, verified) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 200, "{verified}");
+    assert_eq!(verified["email"], "a@example.com");
+    let (status, weak) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": "short"}),
+    );
+    assert_eq!(status, 400, "{weak}");
+    let (status, done) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": "newpassword1"}),
+    );
+    assert_eq!(status, 200, "{done}");
+    // Consumed: a second use fails; the new password signs in, the old one does not.
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": "another1"}),
+    );
+    assert_eq!(status, 400);
+    assert!(get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "a@example.com", "password": "newpassword1"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(
+        claims(signed["idToken"].as_str().unwrap())["email_verified"],
+        true
+    );
+}
+
+#[test]
+fn email_verification_and_email_change_apply_action_codes() {
+    let s = state();
+    let user = sign_up(&s, "v@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    assert_eq!(claims(&id_token)["email_verified"], false);
+    // sendEmailVerification (with the session) and the Admin link generator (returnOobLink).
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "idToken": id_token}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, link) = admin(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_EMAIL", "email": "v@example.com", "returnOobLink": true, "continueUrl": "https://app.example/x?y=1"}),
+    );
+    assert_eq!(status, 200, "{link}");
+    let code = link["oobCode"].as_str().unwrap().to_owned();
+    assert!(link["oobLink"]
+        .as_str()
+        .unwrap()
+        .ends_with("&continueUrl=https%3A%2F%2Fapp.example%2Fx%3Fy%3D1"));
+    // applyActionCode: accounts:update with the code.
+    let (status, applied) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(applied["emailVerified"], true);
+    let (status, again) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(again["error"]["message"], "INVALID_OOB_CODE");
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": id_token}),
+    );
+    assert_eq!(lookup["users"][0]["emailVerified"], true);
+    // verifyBeforeUpdateEmail.
+    let (status, change) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": id_token, "newEmail": "new@example.com", "returnOobLink": true}),
+    );
+    assert_eq!(status, 200, "{change}");
+    let code = change["oobCode"].as_str().unwrap().to_owned();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": code}),
+    );
+    assert_eq!(status, 200);
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": id_token}),
+    );
+    assert_eq!(lookup["users"][0]["email"], "new@example.com");
+}
+
+#[test]
+fn email_link_sign_in_creates_a_verified_passwordless_user() {
+    let s = state();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "continueUrl": "https://app.example/finish"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
+    let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap().to_owned();
+    assert_eq!(codes["oobCodes"][0]["requestType"], "EMAIL_SIGNIN");
+    // The email must match the code.
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "other@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 400);
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    let c = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(c["email_verified"], true);
+    assert_eq!(c["firebase"]["sign_in_provider"], "emailLink");
+    // fetchSignInMethodsForEmail sees a passwordless user.
+    let (_, methods) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "link@example.com", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(methods["registered"], true);
+    assert_eq!(methods["signinMethods"], json!(["emailLink"]));
+    let (_, unknown) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "nobody@example.com", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(unknown["registered"], false);
+}
+
+#[test]
+fn phone_sign_in_uses_a_deterministic_code_from_the_inspection_route() {
+    let s = state();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15551234567", "recaptchaToken": "ignored"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let session = body["sessionInfo"].as_str().unwrap().to_owned();
+    let (status, bad) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "555"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(bad["error"]["message"], "INVALID_PHONE_NUMBER");
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let entry = &codes["verificationCodes"][0];
+    assert_eq!(entry["phoneNumber"], "+15551234567");
+    assert_eq!(entry["sessionInfo"], session);
+    let code = entry["code"].as_str().unwrap().to_owned();
+    assert_eq!(code.len(), 6);
+    let (status, wrong) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": session, "code": "000000"}),
+    );
+    assert!(status == 400 || code == "000000", "{wrong}");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": session, "code": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(signed["phoneNumber"], "+15551234567");
+    let c = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(c["phone_number"], "+15551234567");
+    assert_eq!(c["firebase"]["sign_in_provider"], "phone");
+    assert_eq!(
+        c["firebase"]["identities"]["phone"],
+        json!(["+15551234567"])
+    );
+    // A consumed code cannot be replayed; a second sign-in finds the same user.
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": session, "code": code}),
+    );
+    assert_eq!(status, 400);
+    let (_, again) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15551234567"}),
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, second) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": again["sessionInfo"], "code": code}),
+    );
+    assert_eq!(second["isNewUser"], false);
+    assert_eq!(second["localId"], signed["localId"]);
+    // Linking a number to a password user.
+    let user = sign_up(&s, "p@example.com");
+    let (_, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15550000001"}),
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": code, "idToken": user["idToken"]}),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["localId"], user["localId"]);
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"phoneNumber": ["+15550000001"]}),
+    );
+    assert_eq!(lookup["users"][0]["localId"], user["localId"]);
+}
+
+fn idp_jwt(payload: &Value) -> String {
+    format!(
+        "{}.{}.",
+        base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#),
+        base64url_encode(payload.to_string().as_bytes())
+    )
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn fixture_identity_providers_sign_in_link_and_show_up_as_provider_info() {
+    let s = state();
+    let google = json!({"sub": "g-123", "email": "g@example.com", "name": "G User", "picture": "https://p/x.png", "email_verified": true});
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=google.com", idp_jwt(&google)), "requestUri": "http://localhost", "returnIdpCredential": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(signed["providerId"], "google.com");
+    assert_eq!(signed["federatedId"], "g-123");
+    assert_eq!(signed["displayName"], "G User");
+    assert_eq!(signed["emailVerified"], true);
+    let c = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(c["firebase"]["sign_in_provider"], "google.com");
+    assert_eq!(c["firebase"]["identities"]["google.com"], json!(["g-123"]));
+    assert_eq!(c["email"], "g@example.com");
+    // A bare JSON assertion works too, and finds the same user.
+    let (status, again) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=google.com", percent(&google.to_string())), "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again["isNewUser"], false);
+    assert_eq!(again["localId"], signed["localId"]);
+    // The provider shows in lookups (by federatedUserId too) and in sign-in methods.
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"federatedUserId": [{"providerId": "google.com", "rawId": "g-123"}]}),
+    );
+    let info = &lookup["users"][0]["providerUserInfo"];
+    assert!(info
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["providerId"] == "google.com" && p["rawId"] == "g-123"));
+    let (_, methods) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "g@example.com", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(methods["signinMethods"], json!(["google.com"]));
+    // A password user with the same email gets the identity linked; the sub cannot be
+    // linked to a second user.
+    let user = sign_up(&s, "pw@example.com");
+    let apple = json!({"sub": "a-1", "email": "pw@example.com", "email_verified": true});
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=apple.com", idp_jwt(&apple)), "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["localId"], user["localId"]);
+    assert_eq!(linked["isNewUser"], false);
+    let other = sign_up(&s, "other@example.com");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=apple.com", idp_jwt(&apple)), "requestUri": "http://localhost", "idToken": other["idToken"]}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        refused["error"]["message"],
+        "FEDERATED_USER_ID_ALREADY_LINKED"
+    );
+    // Malformed assertions.
+    for post_body in [
+        "providerId=google.com",
+        "id_token=notjson&providerId=google.com",
+        &format!(
+            "id_token={}&providerId=google.com",
+            percent(r#"{"email":"x@y"}"#)
+        ),
+    ] {
+        let (status, _) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({"postBody": post_body, "requestUri": "http://localhost"}),
+        );
+        assert_eq!(status, 400, "{post_body}");
+    }
+    // Admin: link and unlink providers.
+    let (status, _) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": other["localId"], "linkProviderUserInfo": {"providerId": "github.com", "rawId": "gh-9", "email": "gh@example.com"}}),
+    );
+    assert_eq!(status, 200);
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [other["localId"]]}),
+    );
+    assert!(lookup["users"][0]["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["providerId"] == "github.com"));
+    let (status, _) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": other["localId"], "deleteProvider": ["github.com"]}),
+    );
+    assert_eq!(status, 200);
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [other["localId"]]}),
+    );
+    assert!(!lookup["users"][0]["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["providerId"] == "github.com"));
+}
+
+fn percent(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() {
+            out.push(b as char);
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+#[test]
+fn phone_second_factor_enrollment_and_sign_in() {
+    let s = state();
+    let user = sign_up(&s, "mfa@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    let (status, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543", "recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{start}");
+    let session = start["phoneSessionInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, done) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "displayName": "my phone", "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(status, 200, "{done}");
+    let enrollment_id = done["mfaEnrollmentId"].as_str().unwrap().to_owned();
+    let c = claims(done["idToken"].as_str().unwrap());
+    assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
+    assert_eq!(c["firebase"]["second_factor_identifier"], enrollment_id);
+    // Password sign-in now stops at the second factor.
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "mfa@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none());
+    assert_eq!(pending["mfaInfo"][0]["phoneInfo"], "+15559876543");
+    assert_eq!(pending["mfaInfo"][0]["displayName"], "my phone");
+    let credential = pending["mfaPendingCredential"].as_str().unwrap().to_owned();
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": credential, "mfaEnrollmentId": enrollment_id, "phoneSignInInfo": {"recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let session = started["phoneResponseInfo"]["sessionInfo"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, wrong) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": "999999"}}),
+    );
+    assert!(status == 400 || code == "999999", "{wrong}");
+    // Wrong code consumed nothing: the session is still there if the code differed.
+    if code != "999999" {
+        let (status, signed) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:finalize"),
+            &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let c = claims(signed["idToken"].as_str().unwrap());
+        assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
+    }
+    // Admin: users created with phone factors, listed in mfaInfo; withdraw removes them.
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"email": "admin-mfa@example.com", "password": "hunter22", "mfaInfo": [{"phoneInfo": "+15550001111", "displayName": "work"}]}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": [created["localId"]]}),
+    );
+    assert_eq!(
+        lookup["users"][0]["mfaInfo"][0]["phoneInfo"],
+        "+15550001111"
+    );
+    let (status, withdrawn) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:withdraw"),
+        &json!({"idToken": done["idToken"], "mfaEnrollmentId": enrollment_id}),
+    );
+    assert_eq!(status, 200, "{withdrawn}");
+    let (status, direct) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "mfa@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200);
+    assert!(direct.get("idToken").is_some());
+}
+
+#[test]
+fn the_inspection_routes_are_project_scoped_and_can_wipe_accounts() {
+    let s = state();
+    sign_up(&s, "w@example.com");
+    assert_eq!(get(&s, "/emulator/v1/projects/other/oobCodes").0, 400);
+    assert_eq!(get(&s, &format!("{EMU}/nothing")).0, 404);
+    assert_eq!(post(&s, &format!("{EMU}/oobCodes"), &json!({})).0, 405);
+    let foreign = RequestHeaders {
+        origin: Some("https://evil.example".to_owned()),
+        ..RequestHeaders::default()
+    };
+    assert_eq!(
+        handle_with(&s, "GET", &format!("{EMU}/oobCodes"), &foreign, &json!({})).status,
+        403
+    );
+    assert_eq!(
+        get(&s, &format!("{EMU}/config")).1["signIn"]["allowDuplicateEmails"],
+        false
+    );
+    let r = handle(&s, "DELETE", &format!("{EMU}/accounts"), &json!({}));
+    assert_eq!(r.status, 200);
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "w@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+}
+
+#[test]
+fn an_unverified_provider_email_never_claims_an_existing_account() {
+    let s = state();
+    let victim = sign_up(&s, "victim@example.com");
+    // An unverified email that belongs to someone else: the account is not taken over and
+    // no second account is created for the address (production's EMAIL_EXISTS, which the
+    // SDKs surface as account-exists-with-different-credential).
+    let forged = json!({"sub": "attacker", "email": "victim@example.com", "email_verified": false});
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=google.com", idp_jwt(&forged)), "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "EMAIL_EXISTS");
+    // Without the claim at all the email is treated as unverified too.
+    let silent = json!({"sub": "attacker-2", "email": "victim@example.com"});
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=github.com", idp_jwt(&silent)), "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 400);
+    let (_, lookup) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"email": ["victim@example.com"]}),
+    );
+    assert_eq!(lookup["users"].as_array().unwrap().len(), 1);
+    assert_eq!(lookup["users"][0]["localId"], victim["localId"]);
+    assert!(lookup["users"][0]["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|p| p["providerId"] == "password"));
+    // A fresh unverified email creates an unverified user.
+    let fresh = json!({"sub": "fresh-1", "email": "fresh@example.com"});
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=github.com", idp_jwt(&fresh)), "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(signed["emailVerified"], false);
+}
+
+#[test]
+fn second_factors_gate_every_sign_in_route() {
+    let s = state();
+    let user = sign_up(&s, "gated@example.com");
+    let id_token = user["idToken"].as_str().unwrap().to_owned();
+    let (_, start) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": id_token, "phoneEnrollmentInfo": {"phoneNumber": "+15550009999"}}),
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, _) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": id_token, "phoneVerificationInfo": {"sessionInfo": start["phoneSessionInfo"]["sessionInfo"], "code": code}}),
+    );
+    assert_eq!(status, 200);
+    // Email link for the same address: pending credential, no token.
+    post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "gated@example.com"}),
+    );
+    let (_, oob) = get(&s, &format!("{EMU}/oobCodes"));
+    let link_code = oob["oobCodes"][0]["oobCode"].as_str().unwrap().to_owned();
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "gated@example.com", "oobCode": link_code}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none());
+    assert!(pending["mfaPendingCredential"].is_string());
+    // A verified provider email matching the account: same gate.
+    let google = json!({"sub": "g-gated", "email": "gated@example.com", "email_verified": true});
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}&providerId=google.com", idp_jwt(&google)), "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none());
+    assert_eq!(pending["localId"], user["localId"]);
+    // Phone sign-in on a number linked to the gated user: same gate.
+    let (_, linked) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": user["localId"], "phoneNumber": "+15550001234"}),
+    );
+    assert!(linked["localId"].is_string());
+    let (_, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15550001234"}),
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let code = codes["verificationCodes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, pending) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": code}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("idToken").is_none());
+    assert!(pending["mfaPendingCredential"].is_string());
+}
+
+#[test]
+fn inspection_routes_need_the_control_token_from_browser_pages_and_codes_expire() {
+    let mut s = state();
+    sign_up(&s, "x@example.com");
+    post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "x@example.com"}),
+    );
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    // No token configured: pages are refused; command-line clients are not.
+    assert_eq!(
+        handle_with(&s, "GET", &format!("{EMU}/oobCodes"), &page, &json!({})).status,
+        403
+    );
+    assert_eq!(get(&s, &format!("{EMU}/oobCodes")).0, 200);
+    s.control_token = Some("secret-token".to_owned());
+    assert_eq!(
+        handle_with(&s, "GET", &format!("{EMU}/oobCodes"), &page, &json!({})).status,
+        403
+    );
+    let with_token = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        authorization: Some("Bearer secret-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let r = handle_with(
+        &s,
+        "GET",
+        &format!("{EMU}/oobCodes"),
+        &with_token,
+        &json!({}),
+    );
+    assert_eq!(r.status, 200);
+    let code = r.body["oobCodes"][0]["oobCode"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Codes expire on the virtual clock: an hour later the reset code is refused.
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
+            3601,
+        ))
+        .unwrap();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": "newpassword1"}),
+    );
+    assert_eq!(status, 400, "{body}");
+    let (_, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+15550007777"}),
+    );
+    let (_, codes) = get(&s, &format!("{EMU}/verificationCodes"));
+    let sms = codes["verificationCodes"][0]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(601))
+        .unwrap();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": sms}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "INVALID_SESSION_INFO");
+}
+
+#[test]
+fn a_registered_project_has_its_own_users_behind_the_project_scoped_routes() {
+    use fireemu_core_auth::store::AuthRegistry;
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    assert!(registry.register(
+        "demo-b",
+        AuthStore::new("demo-b", SplitMix64::new(9), TotpPolicy::default())
+    ));
+    assert!(!registry.register(
+        "demo-app",
+        AuthStore::new("demo-app", SplitMix64::new(9), TotpPolicy::default())
+    ));
+    s.registry = Some(registry.clone());
+    sign_up(&s, "default@example.com");
+    // The other project's admin routes see an empty store and create there.
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-b/accounts"),
+        &json!({"email": "b@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (_, in_b) = admin(
+        &s,
+        &format!("{V1}/projects/demo-b/accounts:lookup"),
+        &json!({"email": ["default@example.com", "b@example.com"]}),
+    );
+    assert_eq!(in_b["users"].as_array().unwrap().len(), 1);
+    assert_eq!(in_b["users"][0]["email"], "b@example.com");
+    let (_, in_default) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["default@example.com", "b@example.com"]}),
+    );
+    assert_eq!(in_default["users"].as_array().unwrap().len(), 1);
+    assert_eq!(in_default["users"][0]["email"], "default@example.com");
+    // Tokens issued for demo-b name it as their audience.
+    let store_b = registry.store_for("demo-b").unwrap();
+    let store_b = store_b.lock().unwrap();
+    let uid = store_b
+        .user_by_id(created["localId"].as_str().unwrap())
+        .unwrap()
+        .local_id
+        .clone();
+    let token = store_b
+        .id_token_claims(&uid, None, LogicalInstant::from_unix_seconds(1_788_004_860))
+        .unwrap();
+    assert_eq!(token.aud, "demo-b");
+    drop(store_b);
+    // An unregistered project is refused as before.
+    let (status, _) = admin(
+        &s,
+        &format!("{V1}/projects/demo-c/accounts:lookup"),
+        &json!({"email": ["x@example.com"]}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        registry.projects(),
+        vec!["demo-app".to_owned(), "demo-b".to_owned()]
+    );
+    assert!(registry.remove("demo-b"));
+    assert!(!registry.remove("demo-b"));
+}

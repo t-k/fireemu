@@ -1,7 +1,7 @@
 // English messages. Every user-visible string of the app lives here; components call
 // `t("key")`. Placeholders are `{name}`.
 export const en = {
-  "app.title": "firebase-testd",
+  "app.title": "fireemu",
   "app.subtitle": "Emulator UI",
   "app.loading": "Loading",
   "app.error": "Error",
@@ -21,7 +21,7 @@ export const en = {
   "app.notBundled":
     "This binary was built without the UI bundle; run pnpm -C ui build and rebuild the daemon.",
   "app.tokenMissing":
-    "No control token: open the UI from the daemon (http://127.0.0.1:4000/ui) or append ?token=<FTD_CONTROL_TOKEN> to this URL.",
+    "No control token: open the UI from the daemon (http://127.0.0.1:4000/ui) or append ?token=<FIREEMU_CONTROL_TOKEN> to this URL.",
 
   "nav.overview": "Overview",
   "nav.firestore": "Firestore",

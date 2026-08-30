@@ -1,12 +1,12 @@
 // `pnpm -C conformance run oracle`: record the fixtures.
 //
 // For each variant the corpus declares, this runs the same corpus twice -- once inside
-// `firebase emulators:exec` (the oracle) and once inside `firebase-testd exec` -- then folds
+// `firebase emulators:exec` (the oracle) and once inside `fireemu exec` -- then folds
 // the two runs into one fixture per scenario, regenerates ORACLE.md from the installed CLI
 // and rewrites DEBT.md from whatever did not reach parity.
 //
 // Recording is the only step that needs Java, a downloaded Firestore emulator jar and several
-// minutes. `pnpm run check` replays firebase-testd alone against what this wrote.
+// minutes. `pnpm run check` replays fireemu alone against what this wrote.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -38,7 +38,7 @@ for (const variant of variantsUsed()) {
     outPath: join(RUNS_DIR, `oracle.${variant}.json`),
   });
 
-  console.log("  testd:  firebase-testd exec ...");
+  console.log("  testd:  fireemu exec ...");
   const testd = await runTestd({
     variant,
     outPath: join(RUNS_DIR, `testd.${variant}.json`),

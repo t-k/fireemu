@@ -1,0 +1,16 @@
+[package]
+name = "fireemu-core-app-check"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only Firebase App Check core: app registry, debug-token digests, token claims, verification and the exchange decision"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+fireemu-core-auth = { path = "../fireemu-core-auth" }
+
+[lints]
+workspace = true

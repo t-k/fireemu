@@ -338,26 +338,248 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
-name = "firebase-testd"
+name = "fireemu"
 version = "0.1.0"
 dependencies = [
- "ftd-adapter-functions",
- "ftd-adapter-grpc",
- "ftd-adapter-http",
- "ftd-adapter-ui",
- "ftd-core-app-check",
- "ftd-core-auth",
- "ftd-core-firestore",
- "ftd-core-functions",
- "ftd-core-limits",
- "ftd-core-rules",
- "ftd-core-session",
- "ftd-core-storage",
- "ftd-core-types",
- "ftd-proto-firestore",
+ "fireemu-adapter-functions",
+ "fireemu-adapter-grpc",
+ "fireemu-adapter-http",
+ "fireemu-adapter-ui",
+ "fireemu-core-app-check",
+ "fireemu-core-auth",
+ "fireemu-core-firestore",
+ "fireemu-core-functions",
+ "fireemu-core-limits",
+ "fireemu-core-rules",
+ "fireemu-core-session",
+ "fireemu-core-storage",
+ "fireemu-core-types",
+ "fireemu-proto-firestore",
  "serde_json",
  "tokio",
  "tonic",
+]
+
+[[package]]
+name = "fireemu-adapter-functions"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "chrono-tz",
+ "fireemu-adapter-grpc",
+ "fireemu-core-app-check",
+ "fireemu-core-auth",
+ "fireemu-core-events",
+ "fireemu-core-firestore",
+ "fireemu-core-functions",
+ "fireemu-core-rules",
+ "fireemu-core-session",
+ "fireemu-core-storage",
+ "fireemu-core-types",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "fireemu-adapter-grpc"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "fireemu-core-app-check",
+ "fireemu-core-auth",
+ "fireemu-core-firestore",
+ "fireemu-core-limits",
+ "fireemu-core-rules",
+ "fireemu-core-session",
+ "fireemu-core-types",
+ "fireemu-proto-firestore",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "prost-types",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+]
+
+[[package]]
+name = "fireemu-adapter-http"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "fireemu-core-app-check",
+ "fireemu-core-auth",
+ "fireemu-core-firestore",
+ "fireemu-core-limits",
+ "fireemu-core-rules",
+ "fireemu-core-session",
+ "fireemu-core-storage",
+ "fireemu-core-types",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rsa",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
+name = "fireemu-adapter-ui"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "fireemu-adapter-functions",
+ "fireemu-adapter-grpc",
+ "fireemu-adapter-http",
+ "fireemu-core-app-check",
+ "fireemu-core-auth",
+ "fireemu-core-firestore",
+ "fireemu-core-functions",
+ "fireemu-core-rules",
+ "fireemu-core-session",
+ "fireemu-core-storage",
+ "fireemu-core-types",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "include_dir",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "fireemu-core-app-check"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-auth",
+ "fireemu-core-types",
+]
+
+[[package]]
+name = "fireemu-core-auth"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-limits",
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-events"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-firestore"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-limits",
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-functions"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-types",
+]
+
+[[package]]
+name = "fireemu-core-limits"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-rules"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-auth",
+ "fireemu-core-limits",
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-session"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-storage"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-types"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-proto-firestore"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-types",
+ "tonic",
+]
+
+[[package]]
+name = "fireemu-verification-kani"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-events",
+ "fireemu-core-limits",
+ "fireemu-core-session",
+ "fireemu-core-types",
+]
+
+[[package]]
+name = "fireemu-verification-loom"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-auth",
+ "fireemu-core-events",
+ "fireemu-core-session",
+ "fireemu-core-types",
+ "loom",
+]
+
+[[package]]
+name = "fireemu-verification-property"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-app-check",
+ "fireemu-core-auth",
+ "fireemu-core-events",
+ "fireemu-core-limits",
+ "fireemu-core-session",
+ "fireemu-core-types",
+ "proptest",
 ]
 
 [[package]]
@@ -391,228 +613,6 @@ checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
 dependencies = [
  "lazy_static",
  "num",
-]
-
-[[package]]
-name = "ftd-adapter-functions"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "chrono",
- "chrono-tz",
- "ftd-adapter-grpc",
- "ftd-core-app-check",
- "ftd-core-auth",
- "ftd-core-events",
- "ftd-core-firestore",
- "ftd-core-functions",
- "ftd-core-rules",
- "ftd-core-session",
- "ftd-core-storage",
- "ftd-core-types",
- "http-body-util",
- "hyper",
- "hyper-util",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "ftd-adapter-grpc"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "ftd-core-app-check",
- "ftd-core-auth",
- "ftd-core-firestore",
- "ftd-core-limits",
- "ftd-core-rules",
- "ftd-core-session",
- "ftd-core-types",
- "ftd-proto-firestore",
- "http-body-util",
- "hyper",
- "hyper-util",
- "prost-types",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tonic",
-]
-
-[[package]]
-name = "ftd-adapter-http"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "ftd-core-app-check",
- "ftd-core-auth",
- "ftd-core-firestore",
- "ftd-core-limits",
- "ftd-core-rules",
- "ftd-core-session",
- "ftd-core-storage",
- "ftd-core-types",
- "http-body-util",
- "hyper",
- "hyper-util",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
- "rsa",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
-]
-
-[[package]]
-name = "ftd-adapter-ui"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "ftd-adapter-functions",
- "ftd-adapter-grpc",
- "ftd-adapter-http",
- "ftd-core-app-check",
- "ftd-core-auth",
- "ftd-core-firestore",
- "ftd-core-functions",
- "ftd-core-rules",
- "ftd-core-session",
- "ftd-core-storage",
- "ftd-core-types",
- "http-body-util",
- "hyper",
- "hyper-util",
- "include_dir",
- "serde_json",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
-name = "ftd-core-app-check"
-version = "0.1.0"
-dependencies = [
- "ftd-core-auth",
- "ftd-core-types",
-]
-
-[[package]]
-name = "ftd-core-auth"
-version = "0.1.0"
-dependencies = [
- "ftd-core-limits",
- "ftd-core-types",
- "proptest",
-]
-
-[[package]]
-name = "ftd-core-events"
-version = "0.1.0"
-dependencies = [
- "ftd-core-types",
- "proptest",
-]
-
-[[package]]
-name = "ftd-core-firestore"
-version = "0.1.0"
-dependencies = [
- "ftd-core-limits",
- "ftd-core-types",
- "proptest",
-]
-
-[[package]]
-name = "ftd-core-functions"
-version = "0.1.0"
-dependencies = [
- "ftd-core-types",
-]
-
-[[package]]
-name = "ftd-core-limits"
-version = "0.1.0"
-dependencies = [
- "ftd-core-types",
- "proptest",
-]
-
-[[package]]
-name = "ftd-core-rules"
-version = "0.1.0"
-dependencies = [
- "ftd-core-auth",
- "ftd-core-limits",
- "ftd-core-types",
- "proptest",
-]
-
-[[package]]
-name = "ftd-core-session"
-version = "0.1.0"
-dependencies = [
- "ftd-core-types",
- "proptest",
-]
-
-[[package]]
-name = "ftd-core-storage"
-version = "0.1.0"
-dependencies = [
- "ftd-core-types",
- "proptest",
-]
-
-[[package]]
-name = "ftd-core-types"
-version = "0.1.0"
-dependencies = [
- "proptest",
-]
-
-[[package]]
-name = "ftd-proto-firestore"
-version = "0.1.0"
-dependencies = [
- "prost",
- "prost-types",
- "tonic",
-]
-
-[[package]]
-name = "ftd-verification-kani"
-version = "0.1.0"
-dependencies = [
- "ftd-core-events",
- "ftd-core-limits",
- "ftd-core-session",
- "ftd-core-types",
-]
-
-[[package]]
-name = "ftd-verification-loom"
-version = "0.1.0"
-dependencies = [
- "ftd-core-auth",
- "ftd-core-events",
- "ftd-core-session",
- "ftd-core-types",
- "loom",
-]
-
-[[package]]
-name = "ftd-verification-property"
-version = "0.1.0"
-dependencies = [
- "ftd-core-app-check",
- "ftd-core-auth",
- "ftd-core-events",
- "ftd-core-limits",
- "ftd-core-session",
- "ftd-core-types",
- "proptest",
 ]
 
 [[package]]

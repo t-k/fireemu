@@ -1,0 +1,261 @@
+//! Runtime values for Rules evaluation and the `request.auth` context (`AUTH-RULES-1`).
+
+use core::fmt;
+use std::collections::BTreeMap;
+
+use fireemu_core_types::json::{parse, JsonError, JsonValue};
+
+/// A Rules runtime value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RulesValue {
+    /// `null`
+    Null,
+    /// Boolean.
+    Bool(bool),
+    /// Integer.
+    Int(i64),
+    /// Float.
+    Float(f64),
+    /// String.
+    String(String),
+    /// List.
+    List(Vec<RulesValue>),
+    /// Map.
+    Map(BTreeMap<String, RulesValue>),
+    /// Path (segments without the leading slash).
+    Path(Vec<String>),
+    /// Timestamp as Unix nanoseconds (full Firestore precision, no saturation).
+    Timestamp(i128),
+    /// Bytes.
+    Bytes(Vec<u8>),
+    /// Geo point.
+    LatLng {
+        /// Latitude.
+        latitude: f64,
+        /// Longitude.
+        longitude: f64,
+    },
+    /// A value the request does not determine (query proofs: an unconstrained field, the
+    /// document id of a potential result). Every operation on it is undecidable.
+    Unknown,
+    /// A map whose listed keys are known; any other key may exist with any value.
+    PartialMap(BTreeMap<String, RulesValue>),
+    /// A list known to contain the listed members plus an unknown remainder.
+    PartialList(Vec<RulesValue>),
+    /// A list known to contain at least one of the listed candidates plus an unknown
+    /// remainder (query proofs: an `array-contains-any` filter).
+    PartialListAny(Vec<RulesValue>),
+    /// A value known only to lie within a range of one comparable type (query proofs: a
+    /// field constrained by inequality filters). Ordered comparisons and equality with a
+    /// concrete value are decided when every value of the range agrees.
+    Range(ValueRange),
+    /// A duration in nanoseconds (`duration` namespace, timestamp arithmetic).
+    Duration(i128),
+    /// `map.diff(other)`.
+    MapDiff(MapDiff),
+    /// A value known to be one of the listed concrete values (query proofs: an `in`
+    /// filter); non-empty. An operation is decided when every member agrees.
+    OneOf(Vec<RulesValue>),
+    /// A value known to exist, differ from every listed value and not be null (query
+    /// proofs: `!=` / `not-in` filters).
+    NotOneOf(Vec<RulesValue>),
+}
+
+/// The key sets of `map.diff(other)` (sorted).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapDiff {
+    /// Keys in the receiver only.
+    pub added: Vec<String>,
+    /// Keys in the argument only.
+    pub removed: Vec<String>,
+    /// Keys in both with different values.
+    pub changed: Vec<String>,
+    /// Keys in both with equal values.
+    pub unchanged: Vec<String>,
+}
+
+/// One end of a [`ValueRange`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeBound {
+    /// Concrete bound (`Int`, `Float`, `String`, `Timestamp` or `Bytes`).
+    pub value: Box<RulesValue>,
+    /// Whether the bound itself belongs to the range.
+    pub inclusive: bool,
+}
+
+/// A range of values of one comparable class (numbers, strings, timestamps or bytes);
+/// an absent end is unbounded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueRange {
+    /// Lower end.
+    pub lower: Option<RangeBound>,
+    /// Upper end.
+    pub upper: Option<RangeBound>,
+}
+
+impl ValueRange {
+    /// The class every member belongs to (`"number"`, `"string"`, `"timestamp"`, `"bytes"`),
+    /// taken from either bound.
+    #[must_use]
+    pub fn class(&self) -> Option<&'static str> {
+        self.lower
+            .as_ref()
+            .or(self.upper.as_ref())
+            .map(|b| RulesValue::compare_class(&b.value))
+    }
+}
+
+impl RulesValue {
+    /// Type name used by `is`.
+    #[must_use]
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Bool(_) => "bool",
+            Self::Int(_) => "int",
+            Self::Float(_) => "float",
+            Self::String(_) => "string",
+            Self::List(_) | Self::PartialList(_) | Self::PartialListAny(_) => "list",
+            Self::Map(_) | Self::PartialMap(_) => "map",
+            Self::Path(_) => "path",
+            Self::Timestamp(_) => "timestamp",
+            Self::Bytes(_) => "bytes",
+            Self::LatLng { .. } => "latlng",
+            Self::Duration(_) => "duration",
+            Self::MapDiff(_) => "map_diff",
+            Self::Unknown | Self::Range(_) | Self::OneOf(_) | Self::NotOneOf(_) => "unknown",
+        }
+    }
+
+    /// Class of values that compare with each other (`Int` and `Float` are one class).
+    #[must_use]
+    pub fn compare_class(&self) -> &'static str {
+        match self {
+            Self::Int(_) | Self::Float(_) => "number",
+            other => other.type_name(),
+        }
+    }
+
+    /// Converts a JSON value.
+    #[must_use]
+    pub fn from_json(v: &JsonValue) -> Self {
+        match v {
+            JsonValue::Null => Self::Null,
+            JsonValue::Bool(b) => Self::Bool(*b),
+            JsonValue::Int(i) => Self::Int(*i),
+            JsonValue::Float(f) => Self::Float(*f),
+            JsonValue::String(s) => Self::String(s.clone()),
+            JsonValue::Array(items) => Self::List(items.iter().map(Self::from_json).collect()),
+            JsonValue::Object(m) => Self::Map(
+                m.iter()
+                    .map(|(k, v)| (k.clone(), Self::from_json(v)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl fmt::Display for RulesValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => f.write_str("null"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Float(x) => write!(f, "{x}"),
+            Self::String(s) => write!(f, "{s:?}"),
+            Self::List(items) => {
+                f.write_str("[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                f.write_str("]")
+            }
+            Self::Map(m) => {
+                f.write_str("{")?;
+                for (i, (k, v)) in m.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{k}: {v}")?;
+                }
+                f.write_str("}")
+            }
+            Self::Path(segments) => write!(f, "/{}", segments.join("/")),
+            Self::Timestamp(t) => write!(f, "timestamp({t}ns)"),
+            Self::Bytes(b) => write!(f, "bytes({} bytes)", b.len()),
+            Self::LatLng {
+                latitude,
+                longitude,
+            } => write!(f, "latlng({latitude}, {longitude})"),
+            Self::Unknown => f.write_str("unknown"),
+            Self::Duration(d) => write!(f, "duration({d}ns)"),
+            Self::MapDiff(d) => write!(
+                f,
+                "map_diff(+{} -{} ~{} ={})",
+                d.added.len(),
+                d.removed.len(),
+                d.changed.len(),
+                d.unchanged.len()
+            ),
+            Self::OneOf(items) => write!(f, "one_of({} values)", items.len()),
+            Self::NotOneOf(items) => write!(f, "not_one_of({} values)", items.len()),
+            Self::PartialMap(m) => write!(f, "map({} known keys, ...)", m.len()),
+            Self::PartialList(l) => write!(f, "list({} known members, ...)", l.len()),
+            Self::PartialListAny(l) => write!(f, "list(one of {} candidates, ...)", l.len()),
+            Self::Range(r) => {
+                f.write_str("range(")?;
+                match &r.lower {
+                    Some(b) => write!(f, "{} {}", if b.inclusive { ">=" } else { ">" }, b.value)?,
+                    None => f.write_str("..")?,
+                }
+                f.write_str(", ")?;
+                match &r.upper {
+                    Some(b) => write!(f, "{} {}", if b.inclusive { "<=" } else { "<" }, b.value)?,
+                    None => f.write_str("..")?,
+                }
+                f.write_str(")")
+            }
+        }
+    }
+}
+
+/// `request.auth`: the verified identity of the caller.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthContext {
+    /// `request.auth.uid`
+    pub uid: String,
+    /// `request.auth.token` claims.
+    pub token: BTreeMap<String, RulesValue>,
+}
+
+impl AuthContext {
+    /// Builds the context from ID token claims JSON (the payload of a verified token).
+    pub fn from_id_token_json(json: &str) -> Result<Self, JsonError> {
+        let parsed = parse(json)?;
+        let uid = parsed
+            .get("sub")
+            .and_then(JsonValue::as_str)
+            .ok_or(JsonError {
+                offset: 0,
+                expected: "a sub claim",
+            })?
+            .to_owned();
+        let token = match RulesValue::from_json(&parsed) {
+            RulesValue::Map(m) => m,
+            _ => BTreeMap::new(),
+        };
+        Ok(Self { uid, token })
+    }
+
+    /// The `request.auth` value.
+    #[must_use]
+    pub fn to_value(&self) -> RulesValue {
+        let mut m = BTreeMap::new();
+        m.insert("uid".to_owned(), RulesValue::String(self.uid.clone()));
+        m.insert("token".to_owned(), RulesValue::Map(self.token.clone()));
+        RulesValue::Map(m)
+    }
+}

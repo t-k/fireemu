@@ -1,9 +1,9 @@
-// `pnpm -C conformance run check`: replay the corpus against firebase-testd and diff.
+// `pnpm -C conformance run check`: replay the corpus against fireemu and diff.
 //
 // This side needs no Java, no downloaded emulator and no network: the oracle's answers are
 // already committed under `fixtures/`. It exits non-zero on the first kind of drift that
 // matters -- a `parity` row that changed, a `documented-divergence` row that moved away from
-// its recorded firebase-testd value, a step the fixtures do not describe, or a scenario that
+// its recorded fireemu value, a step the fixtures do not describe, or a scenario that
 // faulted. Rows recorded as `debt` are reported and never gate.
 
 import { mkdir } from "node:fs/promises";

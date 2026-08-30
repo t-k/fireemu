@@ -1,6 +1,6 @@
 // Runs one variant of the corpus inside whichever emulator supervisor started it.
 //
-// Invoked as the command of `firebase emulators:exec` and of `firebase-testd exec`, so its
+// Invoked as the command of `firebase emulators:exec` and of `fireemu exec`, so its
 // only inputs are the emulator host variables in the environment plus two of its own:
 //
 //   CONFORMANCE_SIDE       oracle | testd        (recorded with the run, never branched on)
@@ -47,7 +47,7 @@ if (!process.env.STORAGE_EMULATOR_HOST && process.env.FIREBASE_STORAGE_EMULATOR_
 const hosts = hostsFromEnv();
 const shared = createShared(hosts);
 
-// The official suite loads Security Rules from firebase.json at startup; firebase-testd takes
+// The official suite loads Security Rules from firebase.json at startup; fireemu takes
 // them through its control API. Loading them here keeps one source of rules text for both.
 const rulesLoad = await loadRules(side, hosts);
 

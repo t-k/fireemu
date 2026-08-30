@@ -205,8 +205,8 @@
         },
         "status": 200
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
-      "reason": "The oracle issues no token, so its callable sees no app. firebase-testd forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
+      "reason": "The oracle issues no token, so its callable sees no app. fireemu forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable."
     },
     {
       "id": "callable-unenforcing-unverifiable-token",
@@ -235,8 +235,8 @@
         },
         "status": 200
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
-      "reason": "The official Functions emulator runs the runtime with token verification skipped, so any value in the field becomes an app with a null id. firebase-testd removes an unverifiable field before the runner can decode it, so the callable sees no app: strictly safer, and deliberately different."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
+      "reason": "The official Functions emulator runs the runtime with token verification skipped, so any value in the field becomes an app with a null id. fireemu removes an unverifiable field before the runner can decode it, so the callable sees no app: strictly safer, and deliberately different."
     },
     {
       "id": "callable-unenforcing-duplicate-fields",
@@ -265,8 +265,8 @@
         },
         "status": 200
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
-      "reason": "Two App Check fields are ambiguous. The official emulator accepts the folded value as an app; firebase-testd classifies it as malformed and removes it."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Two App Check fields are ambiguous. The official emulator accepts the folded value as an app; fireemu classifies it as malformed and removes it."
     },
     {
       "id": "callable-enforcing-no-app-check-field",
@@ -303,8 +303,8 @@
         },
         "status": 200
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs)",
-      "reason": "The oracle issues no token, so its enforcing callable answers 401. firebase-testd presents a verified token and the callable runs with request.app populated."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)",
+      "reason": "The oracle issues no token, so its enforcing callable answers 401. fireemu presents a verified token and the callable runs with request.app populated."
     },
     {
       "id": "callable-enforcing-unverifiable-token",
@@ -327,8 +327,8 @@
         },
         "status": 401
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
-      "reason": "With verification skipped, the official emulator admits an unverifiable token into an enforceAppCheck callable. firebase-testd refuses it with the callable 401 UNAUTHENTICATED envelope before the handler runs."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4",
+      "reason": "With verification skipped, the official emulator admits an unverifiable token into an enforceAppCheck callable. fireemu refuses it with the callable 401 UNAUTHENTICATED envelope before the handler runs."
     },
     {
       "id": "callable-enforcing-duplicate-fields",
@@ -351,8 +351,8 @@
         },
         "status": 401
       },
-      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/firebase-testd/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
-      "reason": "Duplicate App Check fields are admitted by the official emulator and refused by firebase-testd, for the same reason as the unenforcing row."
+      "documents": "capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3",
+      "reason": "Duplicate App Check fields are admitted by the official emulator and refused by fireemu, for the same reason as the unenforcing row."
     },
     {
       "id": "on-request-no-app-check-field",

@@ -1,5 +1,5 @@
 {
-  "name": "ftd-conformance-functions",
+  "name": "fireemu-conformance-functions",
   "private": true,
   "description": "Callable Cloud Functions codebase loaded by both sides of the conformance suite.",
   "main": "index.js",

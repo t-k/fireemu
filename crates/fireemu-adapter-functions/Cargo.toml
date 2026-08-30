@@ -1,0 +1,34 @@
+[package]
+name = "fireemu-adapter-functions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Functions shell: runner process protocol, event dispatch with retries, scheduler, await-idle, HTTP function proxy"
+
+[dependencies]
+fireemu-core-app-check = { path = "../fireemu-core-app-check" }
+fireemu-core-auth = { path = "../fireemu-core-auth" }
+fireemu-core-types = { path = "../fireemu-core-types" }
+fireemu-core-events = { path = "../fireemu-core-events" }
+fireemu-core-functions = { path = "../fireemu-core-functions" }
+fireemu-core-firestore = { path = "../fireemu-core-firestore" }
+fireemu-core-storage = { path = "../fireemu-core-storage" }
+fireemu-core-session = { path = "../fireemu-core-session" }
+fireemu-adapter-grpc = { path = "../fireemu-adapter-grpc" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util", "process", "time"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+chrono-tz = "0.10"
+chrono = "0.4"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+fireemu-core-rules = { path = "../fireemu-core-rules" }

@@ -32,6 +32,7 @@ fn state(rules: Option<&str>) -> StorageState {
         project: "demo-app".to_owned(),
         events: None,
         barrier: None,
+        firestore: None,
     }
 }
 
@@ -1222,4 +1223,59 @@ service firebase.storage {
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     assert_eq!(json_body(&r)["size"], data.len().to_string());
+}
+
+struct Flags(Vec<String>);
+
+impl ftd_core_rules::eval::DocumentAccess for Flags {
+    fn get(&self, segments: &[String]) -> Option<ftd_core_rules::value::RulesValue> {
+        let path = segments.join("/");
+        self.0.contains(&path).then(|| {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(
+                "data".to_owned(),
+                ftd_core_rules::value::RulesValue::Map(std::collections::BTreeMap::from([(
+                    "open".to_owned(),
+                    ftd_core_rules::value::RulesValue::Bool(true),
+                )])),
+            );
+            ftd_core_rules::value::RulesValue::Map(m)
+        })
+    }
+}
+
+#[test]
+fn storage_rules_can_read_firestore_documents() {
+    let rules = "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /gated/{file} {
+      allow read: if firestore.exists(/databases/(default)/documents/flags/open)
+                  && firestore.get(/databases/(default)/documents/flags/open).data.open == true;
+    }
+  }
+}";
+    let mut s = state(Some(rules));
+    let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
+    let upload = format!("/v0/b/{BUCKET}/o?name=gated%2Fa.txt&uploadType=multipart");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &upload,
+            &[("authorization", "Bearer owner"), ("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let read = format!("/v0/b/{BUCKET}/o/gated%2Fa.txt?alt=media");
+    // No Firestore access: the rule fails closed.
+    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 403);
+    // The flag is absent: denied; present: allowed.
+    s.firestore = Some(Arc::new(Flags(vec![])));
+    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 403);
+    s.firestore = Some(Arc::new(Flags(vec![
+        "databases/(default)/documents/flags/open".to_owned(),
+    ])));
+    assert_eq!(handle(&s, &req("GET", &read, &[], b"")).status, 200);
 }

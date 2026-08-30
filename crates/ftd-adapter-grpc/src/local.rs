@@ -309,6 +309,22 @@ impl LocalBackend {
             .unwrap_or(ftd_core_types::time::LogicalInstant::UNIX_EPOCH)
     }
 
+    /// Reads a database without taking a session admission: for callers that already
+    /// hold one (a Storage request evaluating `firestore.get()` in its rules). `None` when
+    /// the database does not exist yet or the lock is poisoned.
+    pub fn read_unadmitted<T>(
+        &self,
+        parent: &Parent,
+        f: impl FnOnce(&FirestoreState) -> T,
+    ) -> Option<T> {
+        let dbs = self.databases.lock().ok()?;
+        dbs.get(&(
+            parent.project.as_str().to_owned(),
+            parent.database.as_str().to_owned(),
+        ))
+        .map(f)
+    }
+
     fn with_db<T>(
         &self,
         parent: &Parent,

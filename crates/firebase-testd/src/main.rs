@@ -418,17 +418,28 @@ fn storage_state(
     auth_store: &Arc<Mutex<AuthStore>>,
     storage_rules: &Arc<RwLock<LoadedRules>>,
     events: Option<ftd_adapter_http::storage::StorageEventSink>,
-    barrier: &Arc<ftd_core_session::barrier::AdmissionBarrier>,
-) -> Arc<ftd_adapter_http::storage::StorageState> {
-    Arc::new(ftd_adapter_http::storage::StorageState {
+    backend: &Arc<LocalBackend>,
+) -> Result<Arc<ftd_adapter_http::storage::StorageState>, String> {
+    let parent = ftd_adapter_grpc::decode::Parent {
+        project: ftd_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
+            .map_err(|e| format!("project id: {e}"))?,
+        database: ftd_core_types::ids::DatabaseId::try_new("(default)")
+            .map_err(|e| format!("database id: {e}"))?,
+        document: None,
+    };
+    Ok(Arc::new(ftd_adapter_http::storage::StorageState {
         store: Mutex::new(ftd_core_storage::store::StorageState::new(cfg.seed ^ 0x57)),
         clock: clock.clone(),
         auth: auth_store.clone(),
         rules: storage_rules.clone(),
         project: cfg.auth_project.clone(),
         events,
-        barrier: Some(barrier.clone()),
-    })
+        barrier: Some(backend.barrier()),
+        firestore: Some(Arc::new(ftd_adapter_grpc::rules::LatestReader {
+            backend: backend.clone(),
+            parent,
+        })),
+    }))
 }
 
 async fn bind_listeners(
@@ -675,8 +686,8 @@ fn run(cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             &auth_store,
             &storage_rules,
             functions_runtime.as_ref().map(functions::storage_sink),
-            &barrier,
-        );
+            &backend,
+        )?;
         let control = Arc::new(control_state(
             &cfg,
             &clock,

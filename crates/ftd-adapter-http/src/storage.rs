@@ -15,7 +15,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use ftd_core_auth::jwt::verify_id_token_decoded;
 use ftd_core_auth::store::AuthStore;
 use ftd_core_rules::eval::{
-    evaluate_request, Decision, DenyReason, Method, RequestContext, RulesService,
+    evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
+    RulesService,
 };
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_rules::value::{AuthContext, RulesValue};
@@ -81,6 +82,9 @@ pub struct StorageState {
     pub events: Option<StorageEventSink>,
     /// Session admission barrier (reset waits for requests in flight), when shared.
     pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
+    /// `firestore.get()` / `firestore.exists()` in Storage rules: the latest Firestore
+    /// state of the project; `None` makes those calls fail closed.
+    pub firestore: Option<Arc<dyn DocumentAccess + Send + Sync>>,
 }
 
 /// One HTTP request of the Storage surface.
@@ -703,7 +707,8 @@ impl StorageState {
             abstract_path: false,
             request_query: None,
         };
-        match evaluate_request(ruleset, &ctx).decision {
+        let access = self.firestore.as_deref().map(|a| a as &dyn DocumentAccess);
+        match evaluate_request_with(ruleset, &ctx, access).decision {
             Decision::Allow => Ok(()),
             Decision::Deny(reason) => Err(format!(
                 "{} on {} denied by Storage Rules: {}",

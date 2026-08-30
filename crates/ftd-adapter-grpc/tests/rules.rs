@@ -929,3 +929,251 @@ service cloud.firestore {
     }
     h.handle.abort();
 }
+
+async fn query_code(
+    h: &mut Harness,
+    token: &str,
+    req: pb::RunQueryRequest,
+) -> Result<(), tonic::Code> {
+    h.client
+        .run_query(with_bearer(req, token))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.code())
+}
+
+fn arr(items: Vec<pb::Value>) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+            values: items,
+        })),
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn queries_are_proven_from_in_not_in_not_equal_and_order_by() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /posts/{id} { allow list: if resource.data.status in ['published', 'archived']; }
+    match /live/{id} { allow list: if resource.data.status != 'deleted'; }
+    match /typed/{id} { allow list: if resource.data.kind is string; }
+    match /ordered/{id} { allow list: if request.query.orderBy == 'createdAt DESC'; }
+  }
+}",
+    )
+    .unwrap();
+    let denied = Err(tonic::Code::PermissionDenied);
+    // `in` with candidates all inside the rule's set proves it; one outside does not.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("posts", "status", Op::In, arr(vec![s("published")]), None)
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "posts",
+                "status",
+                Op::In,
+                arr(vec![s("published"), s("archived")]),
+                None
+            )
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_where("posts", "status", s("archived"))
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "posts",
+                "status",
+                Op::In,
+                arr(vec![s("published"), s("draft")]),
+                None
+            )
+        )
+        .await,
+        denied
+    );
+    assert_eq!(
+        query_code(&mut h, &alice_token, list("posts")).await,
+        denied
+    );
+    // `!=` and `not-in` prove a `!=` rule when the excluded value is among the filter's.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("live", "status", Op::NotEqual, s("deleted"), None)
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range(
+                "live",
+                "status",
+                Op::NotIn,
+                arr(vec![s("deleted"), s("hidden")]),
+                None
+            )
+        )
+        .await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("live", "status", Op::NotEqual, s("hidden"), None)
+        )
+        .await,
+        denied
+    );
+    // A type check is proven by an `in` over one type only.
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("typed", "kind", Op::In, arr(vec![s("a"), s("b")]), None)
+        )
+        .await,
+        Ok(())
+    );
+    let int = |v: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
+    };
+    assert_eq!(
+        query_code(
+            &mut h,
+            &alice_token,
+            list_range("typed", "kind", Op::In, arr(vec![s("a"), int(1)]), None)
+        )
+        .await,
+        denied
+    );
+    // request.query.orderBy
+    let ordered = |direction: sq::Direction| {
+        let mut req = list("ordered");
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut req.query_type {
+            sq.order_by = vec![sq::Order {
+                field: Some(sq::FieldReference {
+                    field_path: "createdAt".to_owned(),
+                }),
+                direction: direction as i32,
+            }];
+        }
+        req
+    };
+    assert_eq!(
+        query_code(&mut h, &alice_token, ordered(sq::Direction::Descending)).await,
+        Ok(())
+    );
+    assert_eq!(
+        query_code(&mut h, &alice_token, ordered(sq::Direction::Ascending)).await,
+        denied
+    );
+    assert_eq!(
+        query_code(&mut h, &alice_token, list("ordered")).await,
+        denied
+    );
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn get_after_reads_the_state_the_whole_commit_leaves_behind() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // A post may be created only together with the counter increment.
+    match /posts/{id} {
+      allow create: if getAfter(/databases/$(database)/documents/stats/posts).data.count
+                       == get(/databases/$(database)/documents/stats/posts).data.count + 1;
+    }
+    match /stats/{id} {
+      allow update: if request.resource.data.count == resource.data.count + 1;
+    }
+  }
+}",
+    )
+    .unwrap();
+    let int = |v: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
+    };
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("stats/posts", &[("count", int(0))])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    // The post alone: the counter would stay at 0 after the commit.
+    let err = h
+        .client
+        .commit(with_bearer(
+            commit(vec![set_write("posts/p1", &[("title", s("hi"))])]),
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // Post first, counter second: getAfter() sees the whole batch.
+    assert!(h
+        .client
+        .commit(with_bearer(
+            commit(vec![
+                set_write("posts/p1", &[("title", s("hi"))]),
+                set_write("stats/posts", &[("count", int(1))]),
+            ]),
+            &alice_token,
+        ))
+        .await
+        .is_ok());
+    // A read cannot use getAfter(): fails closed with the reason.
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /posts/{id} { allow read: if getAfter(/databases/$(database)/documents/stats/posts).data.count == 1; }
+  }
+}",
+    )
+    .unwrap();
+    let err = h
+        .client
+        .get_document(with_bearer(get("posts/p1"), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(err.message().contains("getAfter()"), "{}", err.message());
+    h.handle.abort();
+}

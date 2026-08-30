@@ -17,8 +17,12 @@
 //! disjunctive normal form a synthetic `resource` is built from the equality /
 //! `array-contains` constraints and the rule must accept it (`RULES-QUERY-CONSTRAINTS`).
 //! A rule that reads a field the query does not constrain fails closed, as it does in
-//! production; inequality constraints are not used to prove rules yet (conservative). The
-//! decision never depends on stored data, so it leaks nothing about it.
+//! production; inequality constraints become ranges, `in` a set of candidates, `!=` /
+//! `not-in` an exclusion set, and `request.query` carries `limit`, `offset` and `orderBy`
+//! (`"field ASC, other DESC"`, the Emulator's rendering). The decision never depends on
+//! stored data, so it leaks nothing about it.
+//!
+//! Writes serve `getAfter()` from the state every write of the commit will leave behind.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
@@ -31,7 +35,7 @@ use ftd_core_auth::jwt::verify_id_token_decoded;
 use ftd_core_auth::store::AuthStore;
 use ftd_core_firestore::field_path::FieldPath;
 use ftd_core_firestore::path::DocumentPath;
-use ftd_core_firestore::query::{FieldOp, FilterExpr, Query, UnaryOp};
+use ftd_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, UnaryOp};
 use ftd_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, WriteOp};
 use ftd_core_firestore::value::Value;
 use ftd_core_rules::ast::Ruleset;
@@ -103,6 +107,63 @@ impl DocumentAccess for AggregateReader<'_> {
             seen.insert(segments.to_vec());
         }
         self.inner.get(segments)
+    }
+
+    fn get_after(&self, segments: &[String]) -> Option<Option<RulesValue>> {
+        if let Ok(mut seen) = self.seen.try_borrow_mut() {
+            // A distinct access from `get()` of the same path.
+            let mut key = vec![AFTER_MARKER.to_owned()];
+            key.extend_from_slice(segments);
+            seen.insert(key);
+        }
+        self.inner.get_after(segments)
+    }
+}
+
+/// Segment prefix distinguishing `getAfter()` accesses in the aggregate budget.
+const AFTER_MARKER: &str = "\u{0}after";
+
+/// `get()` over the current state and `getAfter()` over the state the commit being
+/// authorized will leave behind (every write of the batch applied).
+struct WriteReader<'a> {
+    db: &'a FirestoreState,
+    parent: &'a Parent,
+    after: &'a BTreeMap<DocumentPath, Option<Document>>,
+}
+
+impl DocumentAccess for WriteReader<'_> {
+    fn get(&self, segments: &[String]) -> Option<RulesValue> {
+        let path = rules_segments_to_path(self.parent, segments)?;
+        self.db.get(&path).map(resource_value)
+    }
+
+    fn get_after(&self, segments: &[String]) -> Option<Option<RulesValue>> {
+        let Some(path) = rules_segments_to_path(self.parent, segments) else {
+            return Some(None);
+        };
+        Some(match self.after.get(&path) {
+            Some(staged) => staged.as_ref().map(resource_value),
+            None => self.db.get(&path).map(resource_value),
+        })
+    }
+}
+
+/// `get()` / `exists()` over the latest state of one database for callers outside the
+/// Firestore surfaces (Storage rules' `firestore.get()`). The caller already holds a
+/// session admission; the read takes only the database lock.
+pub struct LatestReader {
+    /// Backend.
+    pub backend: Arc<crate::local::LocalBackend>,
+    /// Project / database the rules paths resolve in.
+    pub parent: Parent,
+}
+
+impl DocumentAccess for LatestReader {
+    fn get(&self, segments: &[String]) -> Option<RulesValue> {
+        let path = rules_segments_to_path(&self.parent, segments)?;
+        self.backend
+            .read_unadmitted(&self.parent, |db| db.get(&path).map(resource_value))
+            .flatten()
     }
 }
 
@@ -489,10 +550,28 @@ impl RulesEnforcer {
             return Ok(());
         };
         let at = db.next_commit_time(now);
-        let state_reader = StateReader {
+        // The state after the whole commit, for `getAfter()`.
+        let mut after: BTreeMap<DocumentPath, Option<Document>> = BTreeMap::new();
+        for write in writes {
+            if matches!(write.op, WriteOp::Verify { .. }) {
+                continue;
+            }
+            let path = write.op.path();
+            let current = match after.get(path) {
+                Some(s) => s.clone(),
+                None => db.get(path).cloned(),
+            };
+            let next = match &write.op {
+                WriteOp::Delete { .. } => None,
+                _ => FirestoreState::preview_from(current, write, at)
+                    .map_err(|e| crate::encode::status_from_error(&e))?,
+            };
+            after.insert(path.clone(), next);
+        }
+        let state_reader = WriteReader {
             db,
             parent,
-            version: None,
+            after: &after,
         };
         let reader = AggregateReader {
             inner: &state_reader,
@@ -664,6 +743,35 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                         );
                     }
                 }
+                // One of the candidates (an empty `in` matches nothing; left undetermined).
+                FieldOp::In => {
+                    if let Value::Array(items) = value {
+                        if !items.is_empty() {
+                            set_nested(
+                                &mut data,
+                                field,
+                                RulesValue::OneOf(items.iter().map(rules_value).collect()),
+                            );
+                        }
+                    }
+                }
+                // Exists, is not null and differs from the listed values.
+                FieldOp::NotEqual => {
+                    set_nested(
+                        &mut data,
+                        field,
+                        RulesValue::NotOneOf(vec![rules_value(value)]),
+                    );
+                }
+                FieldOp::NotIn => {
+                    if let Value::Array(items) = value {
+                        set_nested(
+                            &mut data,
+                            field,
+                            RulesValue::NotOneOf(items.iter().map(rules_value).collect()),
+                        );
+                    }
+                }
                 _ => {}
             },
             FilterExpr::Unary {
@@ -743,9 +851,9 @@ fn tighten(mut range: ValueRange, (bound, is_lower): (RangeBound, bool)) -> Opti
     Some(range)
 }
 
-/// `request.query` of a list request: `limit`, `offset` and `orderBy`. `orderBy` is not
-/// modelled (its production string form is not pinned down here), so rules reading it stay
-/// unproven.
+/// `request.query` of a list request: `limit`, `offset` and `orderBy`. `orderBy` is the
+/// explicit ordering rendered as `"field ASC, other DESC"` (the Emulator's form; the
+/// production rendering is not documented) and `null` without one.
 fn query_value(query: &Query) -> RulesValue {
     let mut m = BTreeMap::new();
     m.insert(
@@ -758,7 +866,30 @@ fn query_value(query: &Query) -> RulesValue {
         "offset".to_owned(),
         RulesValue::Int(i64::from(query.offset)),
     );
-    m.insert("orderBy".to_owned(), RulesValue::Unknown);
+    m.insert(
+        "orderBy".to_owned(),
+        if query.order_by.is_empty() {
+            RulesValue::Null
+        } else {
+            RulesValue::String(
+                query
+                    .order_by
+                    .iter()
+                    .map(|o| {
+                        format!(
+                            "{} {}",
+                            o.field.canonical(),
+                            match o.direction {
+                                Direction::Ascending => "ASC",
+                                Direction::Descending => "DESC",
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        },
+    );
     RulesValue::Map(m)
 }
 

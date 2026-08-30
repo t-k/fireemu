@@ -436,13 +436,18 @@ impl<'a> Parser<'a> {
                     segments.push(PathSegment::Capture { name, span });
                 }
             } else {
-                let end = rest
-                    .char_indices()
-                    .find(|(_, c)| {
-                        c.is_whitespace()
-                            || matches!(c, '/' | '{' | '}' | '(' | ')' | ',' | ';' | '[' | ']')
-                    })
-                    .map_or(rest.len(), |(i, _)| i);
+                // `(default)`: a parenthesised literal segment (Storage rules address the
+                // Firestore database that way); otherwise the segment ends at a delimiter.
+                let end = if rest.starts_with('(') {
+                    rest.find(')').map_or(0, |close| close + 1)
+                } else {
+                    rest.char_indices()
+                        .find(|(_, c)| {
+                            c.is_whitespace()
+                                || matches!(c, '/' | '{' | '}' | '(' | ')' | ',' | ';' | '[' | ']')
+                        })
+                        .map_or(rest.len(), |(i, _)| i)
+                };
                 if end == 0 {
                     self.pos = at;
                     return Err(self.error("empty path segment"));

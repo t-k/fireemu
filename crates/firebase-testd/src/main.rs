@@ -663,11 +663,6 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             }
         }
         let barrier = backend.barrier();
-        let auth = Arc::new(AuthState {
-            store: auth_store.clone(),
-            clock: clock.clone(),
-            barrier: Some(barrier.clone()),
-        });
         let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
         let storage_rules = Arc::new(RwLock::new(load_storage_rules(&cfg)?));
         let (grpc_listener, http_listener, storage_listener, functions_listener) =
@@ -699,6 +694,13 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             ),
             None => None,
         };
+        // Auth user events reach the functions runtime after each Auth request.
+        let auth = Arc::new(AuthState {
+            store: auth_store.clone(),
+            clock: clock.clone(),
+            barrier: Some(barrier.clone()),
+            events: functions_runtime.as_ref().map(functions::auth_sink),
+        });
         let storage = storage_state(
             &cfg,
             &clock,

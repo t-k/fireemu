@@ -192,6 +192,7 @@ fn handle_write_request(
     // after the check above cannot be raced by this write.
     let epoch = ctx.epoch;
     let local = ctx.local.clone();
+    let actor = crate::local::Actor::from_principal(&principal);
     let guarded = move |db: &ftd_core_firestore::store::FirestoreState,
                         writes: &[Write],
                         now: ftd_core_types::time::LogicalInstant|
@@ -199,6 +200,7 @@ fn handle_write_request(
         if local.epoch() != epoch {
             return Err(Status::aborted("the session was reset"));
         }
+        local.set_actor(actor.clone());
         guard(db, writes, now)
     };
     let result = ctx.local.commit_writes(parent, &writes, &guarded)?;

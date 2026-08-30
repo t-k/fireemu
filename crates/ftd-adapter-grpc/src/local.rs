@@ -40,6 +40,9 @@ pub struct LocalBackend {
     gateway: Gateway,
     clock: Arc<Mutex<VirtualClock>>,
     databases: Mutex<BTreeMap<(String, String), FirestoreState>>,
+    /// The actor of the commit in progress, staged by the write guard inside the critical
+    /// section and consumed by `publish` (same critical section, so never another's).
+    pending_actor: Mutex<Option<Actor>>,
     ids: Mutex<SplitMix64>,
     commits: tokio::sync::broadcast::Sender<CommitEvent>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
@@ -59,6 +62,8 @@ pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
 /// Published after every successful commit (drives `Listen` streams).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommitEvent {
+    /// Who made the commit (`withAuthContext` triggers).
+    pub actor: Actor,
     /// Project.
     pub project: String,
     /// Database.
@@ -73,6 +78,45 @@ pub struct CommitEvent {
 
 fn status(e: DecodeError) -> Status {
     Rejection::Decode(e).to_status()
+}
+
+/// The principal behind a commit, in Eventarc's `authtype` / `authid` terms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actor {
+    /// `app_user`, `service_account`, `unauthenticated`, `system`.
+    pub auth_type: String,
+    /// The user ID (`app_user`) or the service account (`service_account`).
+    pub auth_id: Option<String>,
+}
+
+impl Actor {
+    /// The runtime itself (resets, internal writes).
+    #[must_use]
+    pub fn system() -> Self {
+        Self {
+            auth_type: "system".to_owned(),
+            auth_id: None,
+        }
+    }
+
+    /// The actor behind a request principal.
+    #[must_use]
+    pub fn from_principal(principal: &crate::rules::Principal) -> Self {
+        match principal {
+            crate::rules::Principal::Owner => Self {
+                auth_type: "service_account".to_owned(),
+                auth_id: Some("owner".to_owned()),
+            },
+            crate::rules::Principal::User(a) => Self {
+                auth_type: "app_user".to_owned(),
+                auth_id: Some(a.uid.clone()),
+            },
+            crate::rules::Principal::Anonymous => Self {
+                auth_type: "unauthenticated".to_owned(),
+                auth_id: None,
+            },
+        }
+    }
 }
 
 fn lock_poisoned() -> Status {
@@ -163,6 +207,7 @@ impl LocalBackend {
             gateway,
             clock,
             databases: Mutex::new(BTreeMap::new()),
+            pending_actor: Mutex::new(None),
             ids: Mutex::new(SplitMix64::new(seed)),
             commits: tokio::sync::broadcast::channel(1024).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
@@ -206,6 +251,7 @@ impl LocalBackend {
         };
         for (project, database) in cleared {
             let _ = self.commits.send(CommitEvent {
+                actor: Actor::system(),
                 project,
                 database,
                 version: 0,
@@ -223,8 +269,23 @@ impl LocalBackend {
 
     /// Publishes a commit: the change sink first (synchronously, inside the database
     /// critical section the caller holds), then the `Listen` broadcast.
+    /// Stages the actor of the commit about to be published (called by write guards inside
+    /// the database critical section).
+    pub fn set_actor(&self, actor: Actor) {
+        if let Ok(mut slot) = self.pending_actor.lock() {
+            *slot = Some(actor);
+        }
+    }
+
     fn publish(&self, parent: &Parent, result: &CommitResult) {
+        let actor = self
+            .pending_actor
+            .lock()
+            .ok()
+            .and_then(|mut a| a.take())
+            .unwrap_or_else(Actor::system);
         let event = CommitEvent {
+            actor,
             project: parent.project.as_str().to_owned(),
             database: parent.database.as_str().to_owned(),
             version: result.version.value(),

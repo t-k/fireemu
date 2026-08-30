@@ -97,6 +97,47 @@ impl ObjectEvent {
     }
 }
 
+/// Auth user lifecycle event kinds (v1 `auth.user().onCreate` / `onDelete`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AuthEvent {
+    /// A user was created.
+    Created,
+    /// A user was deleted.
+    Deleted,
+}
+
+impl AuthEvent {
+    /// Canonical event type.
+    #[must_use]
+    pub const fn event_type(self) -> &'static str {
+        match self {
+            Self::Created => "google.firebase.auth.user.v1.created",
+            Self::Deleted => "google.firebase.auth.user.v1.deleted",
+        }
+    }
+
+    /// The legacy (v1) event type the SDK declares.
+    #[must_use]
+    pub const fn legacy_event_type(self) -> &'static str {
+        match self {
+            Self::Created => "providers/firebase.auth/eventTypes/user.create",
+            Self::Deleted => "providers/firebase.auth/eventTypes/user.delete",
+        }
+    }
+
+    /// Parses either form.
+    #[must_use]
+    pub fn from_event_type(s: &str) -> Option<Self> {
+        match s {
+            "google.firebase.auth.user.v1.created"
+            | "providers/firebase.auth/eventTypes/user.create" => Some(Self::Created),
+            "google.firebase.auth.user.v1.deleted"
+            | "providers/firebase.auth/eventTypes/user.delete" => Some(Self::Deleted),
+            _ => None,
+        }
+    }
+}
+
 /// What invokes a function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
@@ -113,6 +154,18 @@ pub enum Trigger {
         database: String,
         /// Document path pattern.
         document: PathPattern,
+        /// `*.withAuthContext`: events carry the principal that made the change.
+        with_auth_context: bool,
+    },
+    /// A Pub/Sub message on a topic (short name).
+    PubSub {
+        /// Topic.
+        topic: String,
+    },
+    /// An Auth user lifecycle event.
+    Auth {
+        /// Event kind.
+        event: AuthEvent,
     },
     /// Cloud Storage object change.
     Storage {
@@ -250,6 +303,7 @@ impl FunctionManifest {
                     event,
                     database: db,
                     document,
+                    ..
                 } if db == database && event.accepts(actual) => {
                     document.matches(path).map(|params| FirestoreMatch {
                         function: f,
@@ -279,6 +333,24 @@ impl FunctionManifest {
                 } => *e == event && b.as_deref().unwrap_or(default_bucket) == bucket,
                 _ => false,
             })
+            .collect()
+    }
+
+    /// Functions subscribed to `topic`.
+    #[must_use]
+    pub fn pubsub_matches(&self, topic: &str) -> Vec<&FunctionSpec> {
+        self.functions
+            .iter()
+            .filter(|f| matches!(&f.trigger, Trigger::PubSub { topic: t } if t == topic))
+            .collect()
+    }
+
+    /// Functions listening to `event` on users.
+    #[must_use]
+    pub fn auth_matches(&self, event: AuthEvent) -> Vec<&FunctionSpec> {
+        self.functions
+            .iter()
+            .filter(|f| matches!(&f.trigger, Trigger::Auth { event: e } if *e == event))
             .collect()
     }
 

@@ -1,7 +1,7 @@
 //! `CloudEvents` attributes of the events firebase-testd delivers (the payload JSON is built
 //! by the runtime shell from the document / object it already encodes for the APIs).
 
-use crate::manifest::{DocumentEvent, ObjectEvent};
+use crate::manifest::{AuthEvent, DocumentEvent, ObjectEvent};
 
 /// `CloudEvents` context attributes (spec version 1.0) with the extensions the Firebase SDKs
 /// read (`document`, `database`, `namespace`, `project`, `location`, `bucket`).
@@ -37,6 +37,40 @@ pub fn firestore_attributes(
             ("document".into(), document_path.to_owned()),
             ("location".into(), location.to_owned()),
         ],
+    }
+}
+
+/// Adds the `withAuthContext` variant: the event type gains the suffix and the principal
+/// that made the change travels as `authtype` / `authid` (Eventarc's extensions).
+pub fn with_auth_context(attrs: &mut EventAttributes, auth_type: &str, auth_id: Option<&str>) {
+    attrs.event_type.push_str(".withAuthContext");
+    attrs
+        .extensions
+        .push(("authtype".into(), auth_type.to_owned()));
+    if let Some(id) = auth_id {
+        attrs.extensions.push(("authid".into(), id.to_owned()));
+    }
+}
+
+/// Attributes of a Pub/Sub message event.
+#[must_use]
+pub fn pubsub_attributes(project: &str, topic: &str) -> EventAttributes {
+    EventAttributes {
+        event_type: "google.cloud.pubsub.topic.v1.messagePublished".to_owned(),
+        source: format!("//pubsub.googleapis.com/projects/{project}/topics/{topic}"),
+        subject: None,
+        extensions: Vec::new(),
+    }
+}
+
+/// Attributes of an Auth user event.
+#[must_use]
+pub fn auth_attributes(project: &str, kind: AuthEvent) -> EventAttributes {
+    EventAttributes {
+        event_type: kind.event_type().to_owned(),
+        source: format!("//firebaseauth.googleapis.com/projects/{project}"),
+        subject: None,
+        extensions: Vec::new(),
     }
 }
 

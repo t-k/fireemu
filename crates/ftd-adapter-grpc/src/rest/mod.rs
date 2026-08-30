@@ -221,8 +221,11 @@ impl RestState {
         let inner = rules::write_guard(self.rules.as_ref(), &caller.principal);
         let barrier = self.local.barrier();
         let epoch = caller.epoch;
+        let actor = crate::local::Actor::from_principal(&caller.principal);
+        let local = self.local.clone();
         Box::new(move |db, writes, now| {
             rules::same_epoch(&barrier, epoch)?;
+            local.set_actor(actor.clone());
             inner(db, writes, now)
         })
     }

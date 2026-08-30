@@ -63,6 +63,8 @@ pub struct RuntimeConfig {
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
     pub scheduler_default_time_zone: Option<String>,
+    /// Catch-up policy of schedules (`scheduler.catchUp`: all, latest, none).
+    pub scheduler_catch_up: String,
     /// Overlap policy of schedules (`scheduler.overlap`).
     pub scheduler_overlap: String,
     /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
@@ -96,6 +98,7 @@ impl Default for RuntimeConfig {
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
             scheduler_overlap: "allow".to_owned(),
+            scheduler_catch_up: "all".to_owned(),
             id_token_signing: ftd_core_auth::jwt::SigningMode::UnsignedEmulator,
         }
     }
@@ -376,15 +379,21 @@ impl RuntimeConfig {
             }
             text.clone_into(&mut cfg.scheduler_overlap);
         }
-        for (key, allowed) in [("clock", "virtual"), ("catchUp", "all")] {
-            match s.get(key).and_then(Value::as_str) {
-                None => {}
-                Some(v) if v == allowed => {}
-                Some(other) => {
-                    return Err(ConfigError(format!(
-                        "scheduler.{key} {other:?} is declared but not implemented; use {allowed:?}"
-                    )))
-                }
+        if let Some(v) = s.get("catchUp") {
+            let text = v.as_str().unwrap_or("");
+            if !["all", "latest", "none"].contains(&text) {
+                return Err(ConfigError(
+                    "scheduler.catchUp must be one of all, latest, none".into(),
+                ));
+            }
+            text.clone_into(&mut cfg.scheduler_catch_up);
+        }
+        match s.get("clock").and_then(Value::as_str) {
+            None | Some("virtual") => {}
+            Some(other) => {
+                return Err(ConfigError(format!(
+                    "scheduler.clock {other:?} is declared but not implemented; use \"virtual\""
+                )))
             }
         }
         if let Some(v) = s.get("maxCatchUpRuns") {

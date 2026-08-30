@@ -8,14 +8,18 @@
 //!    "timeoutSeconds": 60, "retry": false, "concurrency": 1},
 //!   {"name": "api", "trigger": {"type": "http", "callable": false}},
 //!   {"name": "onUpload", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized", "bucket": "demo-app.appspot.com"}},
-//!   {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo"}}
+//!   {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo"}},
+//!   {"name": "onMessage", "trigger": {"type": "pubsub", "topic": "jobs"}},
+//!   {"name": "onUser", "trigger": {"type": "auth", "eventType": "google.firebase.auth.user.v1.created"}}
 //! ]}
+//!
+//! A Firestore `eventType` ending in `.withAuthContext` asks for the principal of the change.
 //! ```
 
 use ftd_core_functions::cron::Schedule;
 use ftd_core_functions::manifest::{
-    DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger, DEFAULT_CONCURRENCY,
-    DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    AuthEvent, DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger,
+    DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use ftd_core_functions::pattern::PathPattern;
 use serde_json::{json, Value};
@@ -35,6 +39,7 @@ pub fn parse_manifest(v: &Value) -> Result<FunctionManifest, String> {
     Ok(manifest)
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
     let name = f
         .get("name")
@@ -78,7 +83,28 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 event,
                 database: s(trigger, "database").unwrap_or_else(|| "(default)".to_owned()),
                 document,
+                with_auth_context: event_type.ends_with(".withAuthContext"),
             }
+        }
+        "pubsub" => {
+            let topic = s(trigger, "topic")
+                .ok_or_else(|| format!("manifest: function {name:?}: topic is required"))?;
+            // Full resource names are accepted; the short name is what matches.
+            let topic = topic
+                .rsplit_once("/topics/")
+                .map_or(topic.clone(), |(_, t)| t.to_owned());
+            if topic.is_empty() {
+                return Err(format!("manifest: function {name:?}: topic is empty"));
+            }
+            Trigger::PubSub { topic }
+        }
+        "auth" => {
+            let event_type = s(trigger, "eventType")
+                .ok_or_else(|| format!("manifest: function {name:?}: eventType is required"))?;
+            let event = AuthEvent::from_event_type(&event_type).ok_or_else(|| {
+                format!("manifest: function {name:?}: unknown Auth event type {event_type:?}")
+            })?;
+            Trigger::Auth { event }
         }
         "storage" => {
             let event_type = s(trigger, "eventType")
@@ -143,7 +169,12 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                     event,
                     database,
                     document,
-                } => json!({"type": "firestore", "eventType": event.event_type(), "database": database, "document": document.as_str()}),
+                    with_auth_context,
+                } => json!({"type": "firestore", "eventType": format!("{}{}", event.event_type(), if *with_auth_context { ".withAuthContext" } else { "" }), "database": database, "document": document.as_str()}),
+                Trigger::PubSub { topic } => json!({"type": "pubsub", "topic": topic}),
+                Trigger::Auth { event } => {
+                    json!({"type": "auth", "eventType": event.event_type()})
+                }
                 Trigger::Storage { event, bucket } => {
                     json!({"type": "storage", "eventType": event.event_type(), "bucket": bucket})
                 }

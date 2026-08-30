@@ -27,6 +27,7 @@ fn state() -> AuthState {
             LogicalInstant::from_unix_seconds(1_788_004_860),
         ))),
         barrier: None,
+        events: None,
     }
 }
 

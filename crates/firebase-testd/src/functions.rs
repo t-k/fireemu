@@ -39,6 +39,7 @@ fn default_runner() -> Vec<String> {
 /// Starts the runner and the runtime for `cfg.functions_source` and installs it as the
 /// backend's synchronous commit observer (Storage events are wired by the caller through
 /// [`storage_sink`]).
+#[allow(clippy::too_many_lines)]
 pub async fn start(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -133,6 +134,8 @@ pub async fn start(
         runner_secret: runner_secret.to_owned(),
         overlap: ftd_adapter_functions::runtime::OverlapPolicy::parse(&cfg.scheduler_overlap)
             .unwrap_or_default(),
+        catch_up: ftd_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
+            .unwrap_or_default(),
     };
     let runtime = FunctionsRuntime::new(
         manifest,
@@ -157,6 +160,14 @@ pub fn storage_sink(
     Arc::new(move |event| runtime.on_storage_event(event))
 }
 
+/// The Auth user event observer for `runtime` (called after each Auth request).
+pub fn auth_sink(
+    runtime: &Arc<FunctionsRuntime>,
+) -> ftd_adapter_http::identity_toolkit::AuthEventSink {
+    let runtime = runtime.clone();
+    Arc::new(move |event| runtime.on_user_event(event))
+}
+
 /// The runtime as the control API's hook.
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
@@ -179,5 +190,12 @@ impl FunctionsHook for Hook {
 
     fn status(&self) -> serde_json::Value {
         self.0.status()
+    }
+
+    fn publish(&self, topic: &str, messages: &[serde_json::Value]) -> Result<Vec<String>, String> {
+        if topic.is_empty() || topic.len() > 255 {
+            return Err("topic must be 1..=255 characters".to_owned());
+        }
+        Ok(self.0.publish(topic, messages))
     }
 }

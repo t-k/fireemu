@@ -124,6 +124,24 @@ function describeV1Event(base, type, resource, schedule, retry) {
       trigger: { type: "schedule", schedule: schedule.schedule, timeZone: schedule.timeZone || undefined },
     };
   }
+  const authMatch = type.match(/^providers\/firebase\.auth\/eventTypes\/user\.(create|delete)$/);
+  if (authMatch) {
+    return {
+      ...base,
+      ...v1,
+      retry,
+      trigger: { type: "auth", eventType: `google.firebase.auth.user.v1.${{ create: "created", delete: "deleted" }[authMatch[1]]}` },
+    };
+  }
+  if (type === "providers/cloud.pubsub/eventTypes/topic.publish" || type === "google.pubsub.topic.publish") {
+    const topicMatch = resource.match(/\/topics\/([^/]+)$/);
+    return {
+      ...base,
+      ...v1,
+      retry,
+      trigger: { type: "pubsub", topic: topicMatch ? topicMatch[1] : resource },
+    };
+  }
   return { ...base, unsupported: `v1 event type ${type}` };
 }
 
@@ -185,7 +203,14 @@ function describe(name, fn) {
           trigger: { type: "storage", eventType: type, bucket: (et.eventFilters || {}).bucket || undefined },
         };
       }
+      if (type === "google.cloud.pubsub.topic.v1.messagePublished") {
+        const topic = String((et.eventFilters || {}).topic || "");
+        return { ...base, trigger: { type: "pubsub", topic: topic.replace(/^.*\/topics\//, "") } };
+      }
       return { ...base, unsupported: `event type ${type}` };
+    }
+    if (ep.blockingTrigger) {
+      return { ...base, unsupported: "blocking identity functions (beforeUserCreated / beforeUserSignedIn) are not modelled" };
     }
     return { ...base, unsupported: "unknown endpoint shape" };
   }
@@ -246,6 +271,28 @@ function v1Context(msg) {
         resource: { service: "pubsub.googleapis.com", name: event.data.jobName },
         params: {},
       };
+    case "pubsub": {
+      const topic = String(event.source || "").replace(/^\/\/pubsub\.googleapis\.com\//, "");
+      return {
+        eventId: event.id,
+        timestamp: event.time,
+        eventType: "google.pubsub.topic.publish",
+        resource: { service: "pubsub.googleapis.com", name: topic },
+        params: {},
+      };
+    }
+    case "auth": {
+      // A string resource: the SDK rewrites a legacy event type's resource into
+      // { service, name } itself.
+      const project = String(event.source || "").replace(/^\/\/firebaseauth\.googleapis\.com\//, "");
+      return {
+        eventId: event.id,
+        timestamp: event.time,
+        eventType: event.type === "google.firebase.auth.user.v1.deleted" ? "providers/firebase.auth/eventTypes/user.delete" : "providers/firebase.auth/eventTypes/user.create",
+        resource: project,
+        params: {},
+      };
+    }
     default:
       return { eventId: event.id, timestamp: event.time, eventType: event.type, resource: event.source, params: {} };
   }
@@ -312,7 +359,10 @@ async function invoke(functions, msg) {
   if (!fn) throw new Error(`unknown function ${msg.function}`);
   if (isV1(fn)) {
     const context = v1Context(msg);
-    const data = msg.trigger === "schedule" ? {} : msg.event.data;
+    let data = msg.event.data;
+    if (msg.trigger === "schedule") data = {};
+    // v1 `topic().onPublish(message, context)`: the message itself is the data.
+    if (msg.trigger === "pubsub") data = msg.event.data.message;
     await fn(data, context);
     return;
   }
@@ -324,8 +374,11 @@ async function invoke(functions, msg) {
     }
     case "firestore":
     case "storage":
+    case "pubsub":
       await fn(msg.event);
       return;
+    case "auth":
+      throw new Error("Auth user events are delivered to v1 auth.user() handlers only");
     default:
       throw new Error(`unsupported trigger ${msg.trigger}`);
   }

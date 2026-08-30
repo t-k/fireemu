@@ -32,6 +32,10 @@ use ftd_core_types::json::JsonValue;
 use ftd_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
+/// Observer of user lifecycle events (Auth triggers), called after each request while
+/// the store is locked, in the order the events happened.
+pub type AuthEventSink = Arc<dyn Fn(&ftd_core_auth::store::UserEvent) + Send + Sync>;
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
@@ -40,6 +44,29 @@ pub struct AuthState {
     pub clock: Arc<Mutex<VirtualClock>>,
     /// Session admission barrier (reset waits for requests in flight), when shared.
     pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
+    /// User lifecycle observer; `None` drops the events.
+    pub events: Option<AuthEventSink>,
+}
+
+/// Hands the user events a request produced to the sink once the handler released the
+/// store (drops after it; before the admission is released).
+struct EventDrain<'a> {
+    store: &'a Arc<Mutex<AuthStore>>,
+    sink: Option<&'a AuthEventSink>,
+}
+
+impl Drop for EventDrain<'_> {
+    fn drop(&mut self) {
+        let Ok(mut store) = self.store.lock() else {
+            return;
+        };
+        let events = store.take_user_events();
+        if let Some(sink) = self.sink {
+            for e in &events {
+                sink(e);
+            }
+        }
+    }
 }
 
 /// An HTTP response: status code and JSON body.
@@ -276,6 +303,10 @@ pub fn handle_with(
     };
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    let _drain = EventDrain {
+        store: &state.store,
+        sink: state.events.as_ref(),
+    };
     let Ok(mut store) = state.store.lock() else {
         return error(500, "INTERNAL");
     };

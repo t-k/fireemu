@@ -399,6 +399,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "ftd-adapter-grpc",
+ "ftd-core-auth",
  "ftd-core-events",
  "ftd-core-firestore",
  "ftd-core-functions",

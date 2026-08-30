@@ -42,6 +42,7 @@ fn doc(path: &str, v: i64) -> Document {
 
 fn commit(changes: Vec<DocumentChange>) -> CommitEvent {
     CommitEvent {
+        actor: ftd_adapter_grpc::local::Actor::system(),
         project: "demo-app".into(),
         database: "(default)".into(),
         version: 1,
@@ -56,6 +57,13 @@ async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
 
 async fn start_with(
     overlap: ftd_adapter_functions::runtime::OverlapPolicy,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with_policies(overlap, ftd_adapter_functions::runtime::CatchUpPolicy::All).await
+}
+
+async fn start_with_policies(
+    overlap: ftd_adapter_functions::runtime::OverlapPolicy,
+    catch_up: ftd_adapter_functions::runtime::CatchUpPolicy,
 ) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
@@ -79,6 +87,7 @@ async fn start_with(
             max_catch_up_runs: 1000,
             runner_secret: "s".into(),
             overlap,
+            catch_up,
         },
         clock.clone(),
         Arc::new(runner),
@@ -257,6 +266,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
         Some(&before),
         Some(&after),
         START,
+        None,
     );
     assert_eq!(e["type"], "google.cloud.firestore.document.v1.updated");
     assert_eq!(
@@ -280,6 +290,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
         None,
         Some(&after),
         START,
+        None,
     );
     assert!(created["data"].get("oldValue").is_none());
     assert!(created["data"].get("updateMask").is_none());
@@ -411,4 +422,170 @@ async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
         2
     );
     runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn pubsub_messages_and_auth_user_events_reach_their_functions() {
+    use ftd_core_auth::mfa::TotpPolicy;
+    use ftd_core_auth::store::{AuthStore, NewUser};
+    use ftd_core_types::determinism::SplitMix64;
+    let (runtime, _clock) = start().await;
+    // Two messages on a subscribed topic, one on a topic nobody listens to.
+    let ids = runtime.publish(
+        "jobs",
+        &[
+            serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}}),
+            serde_json::json!({"data": "d29ybGQ=", "orderingKey": "o1"}),
+        ],
+    );
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+    let silent = runtime.publish("nobody", &[serde_json::json!({"data": ""})]);
+    assert_eq!(silent.len(), 1, "message ids are assigned regardless");
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    let on_job = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "onJob" && r.outcome == "ok")
+        .count();
+    assert_eq!(on_job, 2);
+    // A user created and deleted in the Auth store.
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("u@example.com"), START)
+        .unwrap();
+    store.delete_user_by_id(uid.as_str()).unwrap();
+    let events = store.take_user_events();
+    assert_eq!(events.len(), 2);
+    assert!(store.take_user_events().is_empty(), "drained once");
+    for e in &events {
+        runtime.on_user_event(e);
+    }
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    let names: Vec<String> = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function.starts_with("on") && r.function != "onJob")
+        .map(|r| r.function.clone())
+        .collect();
+    assert_eq!(names, vec!["onUser".to_owned(), "onGone".to_owned()]);
+}
+
+#[test]
+fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
+    use ftd_adapter_functions::events::{auth_event, firestore_event, pubsub_event};
+    use ftd_core_auth::mfa::TotpPolicy;
+    use ftd_core_auth::store::{AuthStore, NewUser};
+    use ftd_core_functions::manifest::{AuthEvent, DocumentEvent};
+    use ftd_core_types::determinism::SplitMix64;
+    let msg = serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}, "orderingKey": "o"});
+    let e = pubsub_event("m1", "demo-app", "jobs", &msg, START);
+    assert_eq!(e["type"], "google.cloud.pubsub.topic.v1.messagePublished");
+    assert_eq!(
+        e["source"],
+        "//pubsub.googleapis.com/projects/demo-app/topics/jobs"
+    );
+    assert_eq!(e["data"]["message"]["messageId"], "m1");
+    assert_eq!(e["data"]["message"]["data"], "aGVsbG8=");
+    assert_eq!(e["data"]["message"]["attributes"]["k"], "v");
+    assert_eq!(e["data"]["message"]["orderingKey"], "o");
+    assert!(e["data"]["subscription"]
+        .as_str()
+        .unwrap()
+        .starts_with("projects/demo-app/subscriptions/"));
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("u@example.com"), START)
+        .unwrap();
+    let user = store.user(&uid).unwrap().clone();
+    let e = auth_event("a1", "demo-app", AuthEvent::Created, &user, START);
+    assert_eq!(e["type"], "google.firebase.auth.user.v1.created");
+    assert_eq!(e["data"]["uid"], uid.as_str());
+    assert_eq!(e["data"]["email"], "u@example.com");
+    assert_eq!(e["data"]["emailVerified"], false);
+    assert_eq!(e["data"]["providerData"][0]["providerId"], "password");
+    assert!(e["data"]["metadata"]["creationTime"].is_string());
+    // withAuthContext: the type gains the suffix and the principal travels as attributes.
+    let d = doc("audited/x", 1);
+    let plain = firestore_event(
+        "f1",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "audited/x",
+        DocumentEvent::Created,
+        None,
+        Some(&d),
+        START,
+        None,
+    );
+    assert_eq!(plain["type"], "google.cloud.firestore.document.v1.created");
+    assert!(plain.get("authtype").is_none());
+    let with = firestore_event(
+        "f2",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "audited/x",
+        DocumentEvent::Created,
+        None,
+        Some(&d),
+        START,
+        Some(("app_user", Some("u1"))),
+    );
+    assert_eq!(
+        with["type"],
+        "google.cloud.firestore.document.v1.created.withAuthContext"
+    );
+    assert_eq!(with["authtype"], "app_user");
+    assert_eq!(with["authid"], "u1");
+}
+
+#[tokio::test]
+async fn with_auth_context_triggers_see_the_committing_principal() {
+    let (runtime, _clock) = start().await;
+    let mut ev = commit(vec![DocumentChange {
+        path: doc("audited/a", 1).path,
+        before: None,
+        after: Some(doc("audited/a", 1)),
+    }]);
+    ev.actor = ftd_adapter_grpc::local::Actor {
+        auth_type: "app_user".into(),
+        auth_id: Some("alice".into()),
+    };
+    runtime.on_commit(&ev);
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "withAuth" && r.outcome == "ok"));
+}
+
+#[tokio::test]
+async fn catch_up_policies_keep_all_the_latest_or_no_due_runs() {
+    use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for (policy, expected_runs, expected_skips) in [
+        (CatchUpPolicy::All, 3, 0),
+        (CatchUpPolicy::Latest, 1, 2),
+        (CatchUpPolicy::None, 0, 3),
+    ] {
+        let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(15 * 60))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+        let history = runtime.history();
+        let runs = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count();
+        let skips = history
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
+            .count();
+        assert_eq!((runs, skips), (expected_runs, expected_skips), "{policy:?}");
+    }
 }

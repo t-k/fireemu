@@ -12,12 +12,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ftd_adapter_grpc::local::CommitEvent;
+use ftd_core_auth::store::{UserEvent, UserEventKind};
 use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
 use ftd_core_events::outbox::Outbox;
 use ftd_core_events::retry::RetryPolicy;
 use ftd_core_events::state::{EventState, FailureOutcome};
 use ftd_core_functions::cron::Schedule;
-use ftd_core_functions::manifest::{FunctionManifest, FunctionSpec, ObjectEvent, Trigger};
+use ftd_core_functions::manifest::{
+    AuthEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger,
+};
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_storage::store::StorageEvent;
 use ftd_core_types::determinism::Clock;
@@ -26,7 +29,9 @@ use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 use tokio::sync::Notify;
 
-use crate::events::{change_kind, firestore_event, schedule_event, storage_event};
+use crate::events::{
+    auth_event, change_kind, firestore_event, pubsub_event, schedule_event, storage_event,
+};
 use crate::http::{forward, ProxiedResponse};
 use crate::runner::{Invocation, InvokeOutcome, Runner, SpawnSpec};
 
@@ -70,6 +75,33 @@ pub struct FunctionsConfig {
     pub runner_secret: String,
     /// Overlap policy of schedules.
     pub overlap: OverlapPolicy,
+    /// What happens to schedule runs that became due while the clock moved.
+    pub catch_up: CatchUpPolicy,
+}
+
+/// Which of the schedule runs that became due during a clock move are enqueued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CatchUpPolicy {
+    /// Every run (capped by `maxCatchUpRuns`).
+    #[default]
+    All,
+    /// Only the most recent run of each job; the earlier ones are recorded as skipped.
+    Latest,
+    /// None: due runs are recorded as skipped and the job continues from now.
+    None,
+}
+
+impl CatchUpPolicy {
+    /// Parses the configuration value.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "all" => Some(Self::All),
+            "latest" => Some(Self::Latest),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
 }
 
 struct ScheduledJob {
@@ -309,6 +341,13 @@ impl FunctionsRuntime {
                 } else {
                     kind
                 };
+                let with_auth = matches!(
+                    &m.function.trigger,
+                    Trigger::Firestore {
+                        with_auth_context: true,
+                        ..
+                    }
+                );
                 let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
                 let mut payload = firestore_event(
                     &id,
@@ -320,14 +359,23 @@ impl FunctionsRuntime {
                     change.before.as_ref(),
                     change.after.as_ref(),
                     time,
+                    with_auth.then_some((
+                        commit.actor.auth_type.as_str(),
+                        commit.actor.auth_id.as_deref(),
+                    )),
                 );
                 payload["params"] = json!(m.params);
+                let event_type = payload
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or(reported.event_type())
+                    .to_owned();
                 Self::enqueue(
                     &mut inner,
                     self.config.session,
                     EventSource::Firestore,
                     &m.function.name,
-                    reported.event_type(),
+                    &event_type,
                     format!("documents/{relative}"),
                     time,
                     payload,
@@ -377,8 +425,76 @@ impl FunctionsRuntime {
         }
     }
 
-    /// Enqueues every schedule run that became due up to the current virtual time
-    /// (catch-up `all`, capped at [`MAX_CATCH_UP_RUNS`]) and releases due retries.
+    /// Publishes messages on `topic`: one event per message and subscribed function.
+    /// Returns the message IDs (assigned even when nothing is subscribed, as Pub/Sub does).
+    pub fn publish(&self, topic: &str, messages: &[Value]) -> Vec<String> {
+        let time = self.now();
+        let Ok(mut inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        let mut ids = Vec::with_capacity(messages.len());
+        let mut enqueued = false;
+        for message in messages {
+            inner.next_event += 1;
+            let message_id = format!("{}-{}", self.config.session.value(), inner.next_event);
+            ids.push(message_id.clone());
+            for f in self.manifest.pubsub_matches(topic) {
+                let payload = pubsub_event(&message_id, &self.config.project, topic, message, time);
+                Self::enqueue(
+                    &mut inner,
+                    self.config.session,
+                    EventSource::PubSub,
+                    &f.name,
+                    "google.cloud.pubsub.topic.v1.messagePublished",
+                    format!("topics/{topic}"),
+                    time,
+                    payload,
+                );
+                enqueued = true;
+            }
+        }
+        drop(inner);
+        if enqueued {
+            self.wake.notify_one();
+        }
+        ids
+    }
+
+    /// Turns a user lifecycle event into events for every matching Auth trigger.
+    pub fn on_user_event(&self, event: &UserEvent) {
+        let kind = match event.kind {
+            UserEventKind::Created => AuthEvent::Created,
+            UserEventKind::Deleted => AuthEvent::Deleted,
+        };
+        let time = self.now();
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        let mut enqueued = false;
+        for f in self.manifest.auth_matches(kind) {
+            let id = format!("{}-{}", self.config.session.value(), inner.next_event + 1);
+            let payload = auth_event(&id, &self.config.project, kind, &event.user, time);
+            Self::enqueue(
+                &mut inner,
+                self.config.session,
+                EventSource::Auth,
+                &f.name,
+                kind.event_type(),
+                format!("users/{}", event.user.local_id.as_str()),
+                time,
+                payload,
+            );
+            enqueued = true;
+        }
+        drop(inner);
+        if enqueued {
+            self.wake.notify_one();
+        }
+    }
+
+    /// Enqueues the schedule runs that became due up to the current virtual time according
+    /// to the catch-up policy (`all` capped at `maxCatchUpRuns`, `latest`, `none`) and
+    /// releases due retries.
     pub fn on_clock_changed(&self) {
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
@@ -424,6 +540,7 @@ impl FunctionsRuntime {
             })
             .collect();
         inner.catch_up_pending = pending;
+        let runs = self.apply_catch_up_policy(&mut inner, runs);
         for (function, region, at) in runs {
             if !self.admit_scheduled_run(&mut inner, &function) {
                 continue;
@@ -451,6 +568,42 @@ impl FunctionsRuntime {
         drop(inner);
         if enqueued {
             self.wake.notify_one();
+        }
+    }
+
+    /// Applies the catch-up policy to the runs that became due: `latest` keeps the last run
+    /// of each job, `none` keeps nothing; the dropped runs are recorded as skipped.
+    fn apply_catch_up_policy(
+        &self,
+        inner: &mut Inner,
+        runs: Vec<(String, String, LogicalInstant)>,
+    ) -> Vec<(String, String, LogicalInstant)> {
+        match self.config.catch_up {
+            CatchUpPolicy::All => runs,
+            CatchUpPolicy::Latest | CatchUpPolicy::None => {
+                let mut kept: Vec<(String, String, LogicalInstant)> = Vec::new();
+                let mut iter = runs.into_iter().peekable();
+                while let Some(run) = iter.next() {
+                    let last_of_job = iter.peek().is_none_or(|next| next.0 != run.0);
+                    if last_of_job && self.config.catch_up == CatchUpPolicy::Latest {
+                        kept.push(run);
+                    } else {
+                        inner.history.push(InvocationRecord {
+                            event_id: 0,
+                            function: run.0,
+                            attempt: 0,
+                            outcome: format!(
+                                "skipped: catch-up {}",
+                                match self.config.catch_up {
+                                    CatchUpPolicy::Latest => "latest",
+                                    _ => "none",
+                                }
+                            ),
+                        });
+                    }
+                }
+                kept
+            }
         }
     }
 
@@ -869,6 +1022,8 @@ impl FunctionsRuntime {
             Trigger::Storage { .. } => "storage",
             Trigger::Schedule { .. } => "schedule",
             Trigger::Http { .. } => "http",
+            Trigger::PubSub { .. } => "pubsub",
+            Trigger::Auth { .. } => "auth",
         };
         json!({
             "invocationId": format!("{}-{attempt}", id.value()),

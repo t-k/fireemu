@@ -140,6 +140,24 @@ pub struct OobCode {
     pub created_at: LogicalInstant,
 }
 
+/// A user lifecycle event (Auth triggers).
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserEvent {
+    /// Created or deleted.
+    pub kind: UserEventKind,
+    /// The user as created / as it was before deletion.
+    pub user: UserRecord,
+}
+
+/// User lifecycle event kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserEventKind {
+    /// Created.
+    Created,
+    /// Deleted.
+    Deleted,
+}
+
 /// What a phone verification code is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerificationPurpose {
@@ -403,6 +421,7 @@ pub struct AuthStore {
     signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
     oob_codes: BTreeMap<String, OobCode>,
     verification_codes: BTreeMap<String, VerificationCode>,
+    user_events: Vec<UserEvent>,
 }
 
 impl AuthStore {
@@ -433,7 +452,13 @@ impl AuthStore {
             signer: None,
             oob_codes: BTreeMap::new(),
             verification_codes: BTreeMap::new(),
+            user_events: Vec::new(),
         }
+    }
+
+    /// User lifecycle events recorded since the last call (Auth triggers).
+    pub fn take_user_events(&mut self) -> Vec<UserEvent> {
+        std::mem::take(&mut self.user_events)
     }
 
     /// TOTP policy.
@@ -502,8 +527,12 @@ impl AuthStore {
     /// Deletes a user and its refresh tokens.
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
         let key = LocalId(uid.to_owned());
-        self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
+        let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
         self.refresh_tokens.retain(|_, s| s.uid != key);
+        self.user_events.push(UserEvent {
+            kind: UserEventKind::Deleted,
+            user,
+        });
         Ok(())
     }
 
@@ -644,6 +673,12 @@ impl AuthStore {
             federated: Vec::new(),
             password: None,
         });
+        if let Some(user) = self.users.get(&local_id) {
+            self.user_events.push(UserEvent {
+                kind: UserEventKind::Created,
+                user: user.clone(),
+            });
+        }
         Ok(local_id)
     }
 

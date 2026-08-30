@@ -112,8 +112,11 @@ impl GatewayService {
         };
         let barrier = local.barrier();
         let epoch = caller.epoch;
+        let actor = crate::local::Actor::from_principal(&caller.principal);
+        let local = local.clone();
         Box::new(move |db, writes, now| {
             same_epoch(&barrier, epoch)?;
+            local.set_actor(actor.clone());
             inner(db, writes, now)
         })
     }

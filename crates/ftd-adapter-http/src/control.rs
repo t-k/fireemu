@@ -40,6 +40,9 @@ pub trait FunctionsHook: Send + Sync {
     fn idle_notify(&self) -> Arc<tokio::sync::Notify>;
     /// Status JSON (queue depths, functions).
     fn status(&self) -> Value;
+    /// Publishes Pub/Sub messages (`{data, attributes, orderingKey}` each) on `topic`;
+    /// returns the message IDs.
+    fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String>;
 }
 
 /// Shared control-plane state.
@@ -135,6 +138,19 @@ pub fn handle_with(
             })).collect::<Vec<_>>()
         })),
         (m, p) if p.starts_with("/v1/sessions/") => session_route(state, m, p, body),
+        // The Pub/Sub REST shape (`projects/{p}/topics/{t}:publish`), for clients that speak it.
+        ("POST", p) if p.starts_with("/v1/projects/") && p.ends_with(":publish") => {
+            let _admitted = state.barrier.as_ref().map(|b| b.admit());
+            match p["/v1/projects/".len()..]
+                .strip_suffix(":publish")
+                .and_then(|r| r.split_once("/topics/"))
+            {
+                Some((_, topic)) if !topic.is_empty() && !topic.contains('/') => {
+                    publish_route(state, topic, body)
+                }
+                _ => error(404, "NOT_FOUND"),
+            }
+        }
         ("GET" | "PUT" | "DELETE", "/v1/storage/rules") => {
             rules_route(&state.storage_rules, method, body)
         }
@@ -224,6 +240,14 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if let Some(rest) = action.strip_prefix("functions") {
         return functions_route(state, method, rest);
     }
+    if let Some(rest) = action.strip_prefix("pubsub/topics/") {
+        return match (method, rest.strip_suffix(":publish")) {
+            ("POST", Some(topic)) if !topic.is_empty() && !topic.contains('/') => {
+                publish_route(state, topic, body)
+            }
+            _ => error(404, "NOT_FOUND"),
+        };
+    }
     let response = clock_route(state, session, method, action, body);
     if response.status == 200 && action.starts_with("clock:") {
         if let Some(f) = &state.functions {
@@ -248,6 +272,69 @@ fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonRespon
         },
         _ => error(404, "NOT_FOUND"),
     }
+}
+
+/// `POST .../topics/{topic}:publish` with `{"messages": [{"data": <base64>, "attributes":
+/// {...}, "orderingKey": "..."}]}` (a `json` value is accepted in place of `data` and
+/// encoded for the function). Returns `{"messageIds": [...]}`.
+fn publish_route(state: &ControlState, topic: &str, body: &Value) -> JsonResponse {
+    let Some(functions) = &state.functions else {
+        return error(404, "NOT_FOUND : no functions runtime is configured");
+    };
+    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+        return error(400, "INVALID_ARGUMENT : messages must be an array");
+    };
+    let mut normalised = Vec::with_capacity(messages.len());
+    for m in messages {
+        let Some(obj) = m.as_object() else {
+            return error(400, "INVALID_ARGUMENT : each message must be an object");
+        };
+        let mut msg = m.clone();
+        match (obj.get("data"), obj.get("json")) {
+            (Some(Value::String(_)), _) => {}
+            (None | Some(Value::Null), Some(json)) => {
+                msg["data"] = Value::String(base64_encode(json.to_string().as_bytes()));
+            }
+            (None | Some(Value::Null), None) => msg["data"] = Value::String(String::new()),
+            _ => return error(400, "INVALID_ARGUMENT : data must be a base64 string"),
+        }
+        if let Some(attrs) = obj.get("attributes") {
+            if !attrs.is_null()
+                && !attrs
+                    .as_object()
+                    .is_some_and(|a| a.values().all(Value::is_string))
+            {
+                return error(
+                    400,
+                    "INVALID_ARGUMENT : attributes must be an object of strings",
+                );
+            }
+        }
+        normalised.push(msg);
+    }
+    match functions.publish(topic, &normalised) {
+        Ok(ids) => ok(json!({"messageIds": ids})),
+        Err(e) => error(400, &format!("INVALID_ARGUMENT : {e}")),
+    }
+}
+
+/// Standard base64 with padding.
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let mut buf = [0u8; 3];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        let bits = (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((bits >> (18 - i * 6)) & 0x3F) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// The browser policy of every control route (also applied by the asynchronous

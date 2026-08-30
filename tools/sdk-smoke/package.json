@@ -9,6 +9,7 @@
     "smoke:lite": "node lite.mjs",
     "smoke:storage": "node storage.mjs",
     "smoke:functions": "node functions.mjs",
+    "smoke:pubsub": "node pubsub.mjs",
     "smoke:appcheck": "node appcheck.mjs",
     "smoke:missing-index": "node missing-index.mjs",
     "smoke:rules-unit-testing": "node rules-unit-testing.mjs"
@@ -17,6 +18,7 @@
     "firebase": "^12",
     "firebase-admin": "^13",
     "firebase-functions": ">=6 <8",
-    "@firebase/rules-unit-testing": "5.0.2"
+    "@firebase/rules-unit-testing": "5.0.2",
+    "@google-cloud/pubsub": "^4"
   }
 }

@@ -111,10 +111,11 @@ fn uuid_v4(bytes: [u8; 16]) -> String {
     b[6] = (b[6] & 0x0F) | 0x40;
     b[8] = (b[8] & 0x3F) | 0x80;
     let hex = |slice: &[u8]| {
-        slice
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
+        slice.iter().fold(String::new(), |mut acc, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        })
     };
     format!(
         "{}-{}-{}-{}-{}",
@@ -221,8 +222,8 @@ proptest! {
         let outcome = exchange(
             &registry,
             &ExchangeRequest {
-                project_selector: &project,
-                app_id: &app,
+                project_selector: project,
+                app_id: app,
                 debug_token: &presented_text,
                 limited_use: false,
             },
@@ -258,7 +259,7 @@ proptest! {
         let outcome = exchange(
             &registry,
             &ExchangeRequest {
-                project_selector: &project,
+                project_selector: project,
                 app_id: APP_ID,
                 debug_token: &registered,
                 limited_use: true,

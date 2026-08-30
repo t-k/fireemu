@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "firestore": { "edition": "standard", "apiMode": "native" },
+  "rules": { "source": "tools/sdk-smoke/rules-unit-testing.rules" },
+  "functions": { "source": "tools/sdk-smoke/functions-project" }
+}

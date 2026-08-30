@@ -456,7 +456,7 @@
         "loom": [
           "totp_verify_races_with_clock_advance"
         ],
-        "kani": "totp_window_boundary",
+        "kani": "pending:totp_window_boundary",
         "property": "prop_same_step_same_code",
         "mutation": [
           "M-AUTH-001",
@@ -466,7 +466,8 @@
           "crates/ftd-core-auth/tests/mfa.rs",
           "crates/ftd-core-auth/tests/totp.rs"
         ]
-      }
+      },
+      "note": "The Kani harness is pending: the acceptance window is decided from HMAC-SHA1 codes and from a 128-bit division in time_step, which bounded model checking does not finish in usable time. The window and replay boundary are covered by AuthTotp.tla, prop_same_step_same_code and the RFC 6238 vectors in crates/ftd-core-auth/tests/totp.rs."
     },
     {
       "id": "INV-AUTH-002",

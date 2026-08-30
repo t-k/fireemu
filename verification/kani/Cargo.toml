@@ -9,7 +9,6 @@ publish.workspace = true
 description = "Kani bounded model checking harnesses; run with `cargo kani`"
 
 [dependencies]
-ftd-core-auth = { path = "../../crates/ftd-core-auth" }
 ftd-core-types = { path = "../../crates/ftd-core-types" }
 ftd-core-limits = { path = "../../crates/ftd-core-limits" }
 ftd-core-session = { path = "../../crates/ftd-core-session" }

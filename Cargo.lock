@@ -570,7 +570,6 @@ dependencies = [
 name = "ftd-verification-kani"
 version = "0.1.0"
 dependencies = [
- "ftd-core-auth",
  "ftd-core-events",
  "ftd-core-limits",
  "ftd-core-session",

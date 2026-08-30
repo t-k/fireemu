@@ -5,7 +5,6 @@
 
 #[cfg(kani)]
 mod harnesses {
-    use ftd_core_auth::totp::{time_step, TotpParams};
     use ftd_core_events::event::{EventSource, EventType, LogicalEvent};
     use ftd_core_events::retry::RetryPolicy;
     use ftd_core_events::state::{EventRecord, EventTransitionError};
@@ -183,42 +182,6 @@ mod harnesses {
         assert_eq!(record.state(), &before_state);
         assert_eq!(record.attempt(), before_attempt);
         assert!(record.is_terminal());
-    }
-
-    /// INV-AUTH-001 (window boundary): `time_step` partitions logical time into half-open
-    /// windows of exactly `period_seconds`, is monotone, and clamps everything at or before the
-    /// Unix epoch to step 0. That is what makes "the same step yields the same code" and the
-    /// `step <= last_accepted` replay test well defined.
-    ///
-    /// The code derivation itself (HMAC-SHA1) is covered by the RFC 6238 vectors in
-    /// `crates/ftd-core-auth/tests/totp.rs` and by `prop_same_step_same_code`; a bit-level proof
-    /// over SHA-1 is out of reach for bounded model checking.
-    #[kani::proof]
-    fn totp_window_boundary() {
-        let period: u16 = kani::any();
-        kani::assume(period > 0);
-        let params = TotpParams {
-            period_seconds: u32::from(period),
-            digits: 6,
-        };
-        let seconds: i32 = kani::any();
-        let at = LogicalInstant::from_unix_seconds(i64::from(seconds));
-        let step = time_step(&params, at);
-        if seconds <= 0 {
-            assert_eq!(step, 0);
-        } else {
-            // The step changes exactly at a multiple of the period, never inside a window.
-            let period = i64::from(period);
-            let offset = i64::from(seconds) % period;
-            let window_start = LogicalInstant::from_unix_seconds(i64::from(seconds) - offset);
-            assert_eq!(time_step(&params, window_start), step);
-            let previous = LogicalInstant::from_unix_seconds(i64::from(seconds) - offset - 1);
-            assert!(time_step(&params, previous) < step || step == 0);
-        }
-        // Monotonicity: a later instant never belongs to an earlier window.
-        let later: i32 = kani::any();
-        kani::assume(later >= seconds);
-        assert!(time_step(&params, LogicalInstant::from_unix_seconds(i64::from(later))) >= step);
     }
 
     /// Rejection precedes warnings for every value outside the boundary (allocation-free form

@@ -128,7 +128,11 @@ fn request(method: &str, target: &str, body: &Value) -> UiRequest {
         method: method.to_owned(),
         path: path.to_owned(),
         query: query.to_owned(),
-        headers: BTreeMap::from([("host".to_owned(), "127.0.0.1:4000".to_owned())]),
+        // Every API request presents the token; `browser(.., None)` drops it.
+        headers: BTreeMap::from([
+            ("host".to_owned(), "127.0.0.1:4000".to_owned()),
+            ("authorization".to_owned(), format!("Bearer {TOKEN}")),
+        ]),
         body: if body.is_null() {
             Vec::new()
         } else {
@@ -140,6 +144,7 @@ fn request(method: &str, target: &str, body: &Value) -> UiRequest {
 fn browser(mut req: UiRequest, token: Option<&str>) -> UiRequest {
     req.headers
         .insert("origin".to_owned(), "http://127.0.0.1:4000".to_owned());
+    req.headers.remove("authorization");
     if let Some(t) = token {
         req.headers
             .insert("authorization".to_owned(), format!("Bearer {t}"));
@@ -222,7 +227,8 @@ async fn browser_requests_need_a_loopback_origin_host_and_the_control_token() {
             .status,
         200
     );
-    // With the token (header or query) it is admitted.
+    // With the token in the header it is admitted; in the query it is not (histories and
+    // logs would keep it).
     let (status, _) = call(
         &s,
         browser(request("GET", "/ui/api/config", &Value::Null), Some(TOKEN)),
@@ -241,7 +247,34 @@ async fn browser_requests_need_a_loopback_origin_host_and_the_control_token() {
         ),
     )
     .await;
-    assert_eq!(status, 200);
+    assert_eq!(status, 403);
+    // Without an Origin (a navigation, an <iframe> or <script src> from another site, a
+    // script on the loopback machine) the token is required all the same.
+    let mut bare = request("GET", "/ui/api/config", &Value::Null);
+    bare.headers.remove("authorization");
+    let (status, body) = call(&s, bare).await;
+    assert_eq!(status, 403, "{body}");
+    // The served page carries the policy that keeps it out of other sites' frames and
+    // lets only its bundle and the nonced configuration script run.
+    let page = handle(&s, &browser(request("GET", "/ui/", &Value::Null), None)).await;
+    let header = |name: &str| {
+        page.headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(header("x-frame-options"), "DENY");
+    let csp = header("content-security-policy");
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    let nonce = csp
+        .split("'nonce-")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!nonce.is_empty(), "{csp}");
+    assert!(text(&page.body).contains(&format!("<script nonce=\"{nonce}\">")));
     // A wrong token, a foreign origin, a foreign host: refused.
     let (status, _) = call(
         &s,
@@ -563,4 +596,34 @@ fn host_and_control_character_checks() {
     assert!(has_control_chars("a\u{0}b"));
     assert!(has_control_chars("a\nb"));
     assert!(!has_control_chars("/ui/api/config?x=%00"));
+}
+
+#[tokio::test]
+async fn buckets_are_listed_per_session_project_and_a_missing_host_is_refused() {
+    let s = state();
+    let (status, body) = call(
+        &s,
+        request(
+            "GET",
+            "/ui/api/storage/buckets?project=demo-app",
+            &Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["buckets"][0]["name"], "demo-app.appspot.com");
+    let (status, _) = call(
+        &s,
+        request(
+            "GET",
+            "/ui/api/storage/buckets?project=demo-z",
+            &Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, 404);
+    let mut hostless = request("GET", "/ui/api/config", &Value::Null);
+    hostless.headers.remove("host");
+    let (status, body) = call(&s, hostless).await;
+    assert_eq!(status, 403, "{body}");
 }

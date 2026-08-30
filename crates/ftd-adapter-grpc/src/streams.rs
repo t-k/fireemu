@@ -475,6 +475,17 @@ fn refresh_all(
             return Err(e);
         }
     };
+    // A refresh is a read: the fault plan has its say like for any other read.
+    if let Err(e) = ctx
+        .local
+        .consult_faults(parent.project.as_str(), "firestore.read")
+    {
+        for id in targets.keys() {
+            out.push(removed_with_cause(*id, &e));
+        }
+        targets.clear();
+        return Err(e);
+    }
     // One critical section: every target sees the same version, read time and documents.
     let expected_epoch = ctx.epoch;
     let local = ctx.local.clone();

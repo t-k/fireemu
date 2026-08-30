@@ -155,9 +155,26 @@ pub async fn start(
 /// The Storage event observer for `runtime` (called inside the store's critical section).
 pub fn storage_sink(
     runtime: &Arc<FunctionsRuntime>,
+    tenancy: &ftd_core_session::tenancy::SharedTenancy,
 ) -> Arc<dyn Fn(&ftd_core_storage::store::StorageEvent) + Send + Sync> {
     let runtime = runtime.clone();
-    Arc::new(move |event| runtime.on_storage_event(event))
+    let tenancy = tenancy.clone();
+    Arc::new(move |event| {
+        use ftd_core_storage::store::StorageEvent;
+        let bucket = match event {
+            StorageEvent::Finalized(m)
+            | StorageEvent::Deleted(m)
+            | StorageEvent::MetadataUpdated(m) => m.bucket.as_str(),
+        };
+        // The runtime belongs to the default session: other sessions' buckets do not
+        // trigger its functions.
+        let owned = tenancy
+            .read()
+            .is_ok_and(|t| t.project_of_bucket(bucket) == runtime.project());
+        if owned {
+            runtime.on_storage_event(event);
+        }
+    })
 }
 
 /// The Auth user event observer for `runtime` (called after each Auth request).

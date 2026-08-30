@@ -1109,6 +1109,7 @@ fn base64_decode(text: &str) -> Result<Vec<u8>, ()> {
 
 /// Handles one request.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
     let params = query_params(&req.query);
     let host = req.host.clone().unwrap_or_else(|| "127.0.0.1".to_owned());
@@ -1123,7 +1124,8 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
     let operation = match (&route, req.method.as_str()) {
         (Route::Object { .. }, "GET") => "storage.read",
         (Route::Object { .. }, "DELETE") => "storage.delete",
-        (Route::Object { .. }, _) | (Route::Bucket { .. }, "POST" | "PUT") => "storage.upload",
+        (Route::Object { .. }, _)
+        | (Route::Bucket { .. } | Route::GcsUpload { .. }, "POST" | "PUT") => "storage.upload",
         (Route::Bucket { .. }, _) => "storage.list",
         _ => "storage.request",
     };
@@ -1156,15 +1158,20 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
         },
     };
     if let Route::Rewrite { dst_bucket, .. } = &route {
-        // An end user never copies across sessions; the destination is the same project's.
-        if !matches!(principal, Principal::Owner)
-            && state.project_of_bucket(dst_bucket) != bucket_project
-        {
-            return error_response(
-                dialect,
-                403,
-                "the destination bucket belongs to another project",
-            );
+        let dst_project = state.project_of_bucket(dst_bucket);
+        if dst_project != bucket_project {
+            // An end user never copies across sessions; an owner may, and the
+            // destination's upload plan has its say too.
+            if !matches!(principal, Principal::Owner) {
+                return error_response(
+                    dialect,
+                    403,
+                    "the destination bucket belongs to another project",
+                );
+            }
+            if let Some(refused) = fault_response(state, dialect, &dst_project, "storage.upload") {
+                return refused;
+            }
         }
     }
     let outcome = match route {
@@ -1315,7 +1322,7 @@ fn upload(
     let now = state.now();
     // Continuation of a resumable upload.
     if let Some(upload_id) = params.get("upload_id") {
-        return resumable_continue(state, dialect, upload_id, req, host);
+        return resumable_continue(state, dialect, &b, upload_id, req, host);
     }
     let upload_type = params.get("uploadType").map(String::as_str);
     let protocol = req.header("x-goog-upload-protocol");
@@ -1558,6 +1565,7 @@ fn finalize_resumable(
 fn resumable_continue(
     state: &StorageState,
     dialect: Dialect,
+    bucket: &BucketName,
     upload_id: &str,
     req: &StorageRequest,
     host: &str,
@@ -1565,6 +1573,14 @@ fn resumable_continue(
     let id = UploadId::from_str_unchecked(upload_id);
     let now = state.now();
     let mut store = state.store()?;
+    // The upload belongs to the bucket its URL names: another bucket's URL (and so
+    // another session's fault plan and ownership) cannot drive it.
+    if store
+        .pending_upload(&id, now)
+        .is_ok_and(|pending| pending.bucket != bucket)
+    {
+        return Err((404, "no such upload session for this bucket".to_owned()));
+    }
     // Firebase X-Goog-Upload protocol.
     if let Some(command) = req.header("x-goog-upload-command") {
         let commands: Vec<&str> = command.split(',').map(str::trim).collect();
@@ -1930,7 +1946,7 @@ fn object(
         "POST" if dialect == Dialect::Firebase => {
             // Resumable continuation posts to the object URL with upload_id.
             if let Some(upload_id) = params.get("upload_id") {
-                return resumable_continue(state, dialect, upload_id, req, host);
+                return resumable_continue(state, dialect, &b, upload_id, req, host);
             }
             Err((405, "method not allowed".to_owned()))
         }

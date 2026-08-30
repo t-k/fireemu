@@ -44,6 +44,10 @@ use serde_json::{json, Value};
 /// Maximum accepted body of a JSON route.
 pub const MAX_JSON_BODY_BYTES: usize = 256 * 1024;
 
+/// Header a response carries when the fault plan's `dropConnection` fired behind this
+/// front: the listener closes the connection instead of sending it.
+pub const DROP_CONNECTION_HEADER: &str = "x-ftd-drop-connection";
+
 /// What the UI shows about this runtime (fixed at start).
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeInfo {
@@ -151,10 +155,13 @@ impl UiResponse {
     pub fn json(status: u16, body: &Value) -> Self {
         Self {
             status,
-            headers: vec![(
-                "content-type".to_owned(),
-                "application/json; charset=utf-8".to_owned(),
-            )],
+            headers: vec![
+                (
+                    "content-type".to_owned(),
+                    "application/json; charset=utf-8".to_owned(),
+                ),
+                ("x-content-type-options".to_owned(), "nosniff".to_owned()),
+            ],
             body: UiBody::Full(serde_json::to_vec(body).unwrap_or_default()),
         }
     }
@@ -222,13 +229,12 @@ pub fn has_control_chars(s: &str) -> bool {
 /// The browser policy (see the module documentation). `None` admits the request.
 #[must_use]
 pub fn guard(state: &UiState, req: &UiRequest) -> Option<UiResponse> {
-    if let Some(host) = req.header("host") {
-        if !host_is_local(host) {
-            return Some(UiResponse::error(
-                403,
-                "FORBIDDEN_HOST : the UI answers only to localhost / 127.0.0.1 / [::1]",
-            ));
-        }
+    // A request without a Host is not one a browser on this machine sent to this port.
+    if !req.header("host").is_some_and(host_is_local) {
+        return Some(UiResponse::error(
+            403,
+            "FORBIDDEN_HOST : the UI answers only to localhost / 127.0.0.1 / [::1]",
+        ));
     }
     if has_control_chars(&req.path) || has_control_chars(&req.query) {
         return Some(UiResponse::error(
@@ -239,22 +245,41 @@ pub fn guard(state: &UiState, req: &UiRequest) -> Option<UiResponse> {
     if !req.path.starts_with("/ui/api/") && req.path != "/ui/api" {
         return None;
     }
-    let origin = req.header("origin")?;
-    if !ftd_adapter_http::identity_toolkit::origin_is_local(origin) {
-        return Some(UiResponse::error(403, "FORBIDDEN_ORIGIN"));
+    if let Some(origin) = req.header("origin") {
+        if !ftd_adapter_http::identity_toolkit::origin_is_local(origin) {
+            return Some(UiResponse::error(403, "FORBIDDEN_ORIGIN"));
+        }
     }
+    // Every API request presents the token in the header, whether or not it carries an
+    // `Origin`: browsers omit `Origin` on navigations and sub-resource loads (`<iframe>`,
+    // `<script src>`, `<img>`), which would otherwise read this privileged surface from a
+    // page on another site. The page the daemon serves always sends it; a query
+    // parameter is not accepted (it would land in histories and logs).
     let presented = req
         .header("authorization")
         .and_then(|a| a.strip_prefix("Bearer "))
-        .map(|t| t.trim().to_owned())
-        .or_else(|| req.param("token"));
-    if presented.as_deref() != Some(state.control_token.as_str()) {
+        .map(str::trim);
+    if presented != Some(state.control_token.as_str()) {
         return Some(UiResponse::error(
             403,
-            "CONTROL_TOKEN_REQUIRED : browser requests to the UI API need Authorization: Bearer <control token>",
+            "CONTROL_TOKEN_REQUIRED : requests to the UI API need Authorization: Bearer <control token>",
         ));
     }
     None
+}
+
+/// The nonce of the configuration script the page carries (stable for the daemon's
+/// lifetime, unguessable without the token it derives from).
+fn script_nonce(state: &UiState) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in state
+        .control_token
+        .bytes()
+        .chain(b"ftd-ui-nonce".iter().copied())
+    {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 /// The configuration the page receives (`window.__FTD__`) and `GET /ui/api/config` returns.
@@ -308,13 +333,25 @@ pub async fn handle(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
             return UiResponse::error(405, "METHOD_NOT_ALLOWED");
         }
         let rel = path.strip_prefix("/ui").unwrap_or("");
-        return match assets::resolve(rel, &config_json(state)) {
+        let nonce = script_nonce(state);
+        return match assets::resolve(rel, &config_json(state), &nonce) {
             Some(asset) => UiResponse {
                 status: 200,
                 headers: vec![
                     ("content-type".to_owned(), asset.content_type.to_owned()),
                     ("cache-control".to_owned(), asset.cache_control.to_owned()),
                     ("x-content-type-options".to_owned(), "nosniff".to_owned()),
+                    // The app never runs inside another site's frame, loads nothing from
+                    // elsewhere, and only its own bundle plus the nonced configuration
+                    // script may run.
+                    ("x-frame-options".to_owned(), "DENY".to_owned()),
+                    ("referrer-policy".to_owned(), "no-referrer".to_owned()),
+                    (
+                        "content-security-policy".to_owned(),
+                        format!(
+                            "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+                        ),
+                    ),
                 ],
                 body: UiBody::Full(asset.body),
             },

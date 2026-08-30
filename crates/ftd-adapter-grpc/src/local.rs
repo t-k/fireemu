@@ -454,6 +454,11 @@ impl LocalBackend {
         }
     }
 
+    /// [`Self::fault`] for the surfaces outside this module (Listen refreshes).
+    pub fn consult_faults(&self, project: &str, operation: &str) -> Result<(), Status> {
+        self.fault(project, operation)
+    }
+
     /// Applies `project`'s fault plan to `operation` (spec 18): an error action fails the
     /// request here, a delay moves the virtual clock before it runs.
     fn fault(&self, project: &str, operation: &str) -> Result<(), Status> {
@@ -624,6 +629,7 @@ impl LocalBackend {
                 "PartitionQuery requires a structured_query",
             ));
         };
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let query = self.accepted_query(&parent, sq)?.query;
         let name_ascending_only = query.order_by.iter().all(|o| {
             o.field.is_document_name()

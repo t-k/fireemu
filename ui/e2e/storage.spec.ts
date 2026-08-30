@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoApp, resetSession } from "./helpers";
+import { controlToken, gotoApp, resetSession } from "./helpers";
 
 test.describe("Storage", () => {
   test.beforeEach(async ({ request }) => {
@@ -34,7 +34,10 @@ test.describe("Storage", () => {
     const upload = async (name: string) => {
       const r = await request.post(
         `/ui/api/storage/upload/storage/v1/b/demo-app.appspot.com/o?uploadType=media&name=${encodeURIComponent(name)}`,
-        { headers: { "content-type": "text/plain" }, data: "x" },
+        {
+          headers: { "content-type": "text/plain", authorization: `Bearer ${controlToken()}` },
+          data: "x",
+        },
       );
       expect(r.ok()).toBeTruthy();
     };

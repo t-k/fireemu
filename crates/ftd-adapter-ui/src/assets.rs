@@ -52,14 +52,18 @@ fn script_json(config: &Value) -> String {
 }
 
 /// `index.html` with `window.__FTD__` (the runtime configuration the app needs before its
-/// first request) injected at the end of `<head>`.
+/// first request) injected at the end of `<head>` as a script carrying `nonce` (the page's
+/// Content Security Policy allows only it and the bundle).
 #[must_use]
-pub fn index_html(config: &Value) -> Vec<u8> {
+pub fn index_html(config: &Value, nonce: &str) -> Vec<u8> {
     let template = UI_DIR
         .get_file("index.html")
         .and_then(|f| f.contents_utf8())
         .unwrap_or("<!doctype html><html><head></head><body></body></html>");
-    let script = format!("<script>window.__FTD__ = {};</script>", script_json(config));
+    let script = format!(
+        "<script nonce=\"{nonce}\">window.__FTD__ = {};</script>",
+        script_json(config)
+    );
     let injected = match template.find("</head>") {
         Some(at) => format!("{}{script}{}", &template[..at], &template[at..]),
         None => format!("{script}{template}"),
@@ -71,13 +75,13 @@ pub fn index_html(config: &Value) -> Vec<u8> {
 /// app root). Unknown paths that look like app routes (no file extension) fall back to
 /// `index.html` so a deep link loads the app; unknown files are `None`.
 #[must_use]
-pub fn resolve(path: &str, config: &Value) -> Option<Asset> {
+pub fn resolve(path: &str, config: &Value, nonce: &str) -> Option<Asset> {
     let rel = path.trim_start_matches('/');
     if rel.is_empty() || rel == "index.html" {
         return Some(Asset {
             content_type: content_type("index.html"),
             cache_control: "no-cache",
-            body: index_html(config),
+            body: index_html(config, nonce),
         });
     }
     if rel == "ftd-ui.json" || rel.contains("..") {
@@ -102,6 +106,6 @@ pub fn resolve(path: &str, config: &Value) -> Option<Asset> {
     Some(Asset {
         content_type: content_type("index.html"),
         cache_control: "no-cache",
-        body: index_html(config),
+        body: index_html(config, nonce),
     })
 }

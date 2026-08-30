@@ -1422,3 +1422,93 @@ fn drop_connection_faults_mark_the_response_for_the_server_to_close() {
         .iter()
         .any(|(k, _)| k == ftd_adapter_http::storage::DROP_CONNECTION_HEADER));
 }
+
+#[test]
+fn json_api_uploads_count_as_uploads_for_fault_plans() {
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
+    let mut s = state(None);
+    let registry = Arc::new(ftd_core_session::fault::FaultRegistry::new());
+    registry.default_state().lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "storage.upload".into(),
+                nth: Some(1),
+                function: None,
+                event_type: None,
+            },
+            action: FaultAction::Timeout,
+        }],
+    });
+    s.faults = Some(registry.clone());
+    let (ct, body) = multipart(&json!({"name": "j.txt"}), "text/plain", b"x");
+    let path = format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart");
+    let r = handle(&s, &req("POST", &path, &[("content-type", &ct)], &body));
+    assert_eq!(r.status, 504, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        registry.default_state().lock().unwrap().counters()["storage.upload"],
+        1
+    );
+}
+
+#[test]
+fn resumable_uploads_answer_only_under_their_own_bucket() {
+    let s = state(None);
+    let start = format!("/v0/b/{BUCKET}/o?name=r.txt&uploadType=resumable");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &start,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+                ("x-goog-upload-header-content-type", "text/plain"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let upload_url = r
+        .headers
+        .iter()
+        .find(|(k, _)| k == "x-goog-upload-url")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let upload_id = upload_url.split("upload_id=").nth(1).unwrap().to_owned();
+    // The same upload ID under another bucket's URL: not this bucket's upload.
+    let elsewhere = format!("/v0/b/other-bucket/o?name=r.txt&upload_id={upload_id}");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &elsewhere,
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(r.status, 404, "{}", String::from_utf8_lossy(&r.body));
+    let own = format!("/v0/b/{BUCKET}/o?name=r.txt&upload_id={upload_id}");
+    let r = handle(
+        &s,
+        &req(
+            "POST",
+            &own,
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+}

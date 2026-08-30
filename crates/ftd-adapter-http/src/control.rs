@@ -319,6 +319,7 @@ fn rules_route(slot: &RwLock<LoadedRules>, method: &str, body: &Value) -> JsonRe
 
 /// `POST /v1/sessions {"name"?, "project"}`: a session isolated by project. The name
 /// defaults to the project; `demo-` projects only when `requireDemoPrefix` is set.
+#[allow(clippy::too_many_lines)]
 fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
     let Some(project) = body.get("project").and_then(Value::as_str) else {
         return error(400, "INVALID_ARGUMENT : project is required");
@@ -399,6 +400,11 @@ fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
         };
         api_keys.push(key.to_owned());
     }
+    // Exclusive while the session comes into being: no request observes the tenancy, the
+    // Auth store, the fault state and the session map in a half-registered state, and
+    // whatever the default session had stored under this project is wiped so the new
+    // session starts empty rather than inheriting it.
+    let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
     {
         let Ok(mut tenancy) = state.tenancy.write() else {
             return error(500, "INTERNAL");
@@ -414,6 +420,10 @@ fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
             }
             return error(500, &format!("INTERNAL : {e}"));
         }
+        hooks.reset_scope(&Scope::Project(project.to_owned()));
+    }
+    if let Ok(mut catalog) = state.text_indexes.lock() {
+        catalog.retain_others(|p| p == project);
     }
     if let Some(faults) = &state.faults {
         faults.register(project);
@@ -497,6 +507,13 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         return text_index_route(state, session, &project, method, rest, body);
     }
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    if !is_default && (action.starts_with("functions") || action.starts_with("pubsub/topics/")) {
+        // The functions runtime (and its fault plan) belongs to the default session.
+        return error(
+            400,
+            "FAILED_PRECONDITION : functions and Pub/Sub topics belong to the default session; use /v1/sessions/default/...",
+        );
+    }
     if let Some(rest) = action.strip_prefix("functions") {
         return functions_route(state, method, rest);
     }

@@ -319,9 +319,12 @@ pub fn handle_with(
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let store_arc = select_store(state, path, query, body);
+    // The functions runtime belongs to the default session: only its users' lifecycle
+    // events reach the Auth triggers.
+    let default_store = Arc::ptr_eq(&store_arc, &state.store);
     let _drain = EventDrain {
         store: store_arc.clone(),
-        sink: state.events.as_ref(),
+        sink: state.events.as_ref().filter(|_| default_store),
     };
     let Ok(mut store) = store_arc.lock() else {
         return error(500, "INTERNAL");
@@ -471,8 +474,11 @@ fn select_store(
             .store_for(project)
             .unwrap_or_else(|| state.store.clone());
     }
-    let api_key = query.and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("key=")));
-    if let Some(key) = api_key {
+    // Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode them.
+    let api_key = query
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("key=")))
+        .map(percent_decode);
+    if let Some(key) = api_key.as_deref() {
         let project = state
             .tenancy
             .as_ref()
@@ -502,6 +508,36 @@ fn select_store(
         }
     }
     state.store.clone()
+}
+
+/// `%XX` sequences and `+` decoded (invalid sequences are kept as they are).
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let digit = |b: u8| (b as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (digit(bytes[i + 1]), digit(bytes[i + 2])) {
+                    out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'?'));
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {

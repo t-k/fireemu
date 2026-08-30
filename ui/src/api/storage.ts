@@ -22,8 +22,8 @@ export type ObjectPage = { items?: ObjectInfo[]; prefixes?: string[]; nextPageTo
 
 const bucketUrl = (bucket: string): string => `storage/storage/v1/b/${encodeURIComponent(bucket)}`;
 
-export const listBuckets = (): ResultAsync<{ buckets: BucketInfo[] }, ApiError> =>
-  request("GET", "storage/buckets");
+export const listBuckets = (project: string): ResultAsync<{ buckets: BucketInfo[] }, ApiError> =>
+  request("GET", `storage/buckets?project=${encodeURIComponent(project)}`);
 
 /** One page of objects directly under `prefix` (folders come back as `prefixes`). */
 export const listObjects = (

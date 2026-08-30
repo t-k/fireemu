@@ -34,6 +34,45 @@ fn stream_response(rx: mpsc::Receiver<Bytes>) -> UiResponse {
     }
 }
 
+/// Streams open at once across the UI (a page opens a handful; a runaway client cannot
+/// pile up tasks that poll the runtime).
+pub const MAX_STREAMS: usize = 64;
+
+static OPEN_STREAMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// One of the [`MAX_STREAMS`] slots; released when the stream's task ends.
+struct StreamSlot;
+
+impl StreamSlot {
+    fn acquire() -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        let mut open = OPEN_STREAMS.load(Ordering::SeqCst);
+        loop {
+            if open >= MAX_STREAMS {
+                return None;
+            }
+            match OPEN_STREAMS.compare_exchange(open, open + 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return Some(Self),
+                Err(now) => open = now,
+            }
+        }
+    }
+}
+
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        OPEN_STREAMS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn too_many_streams() -> UiResponse {
+    UiResponse::error(
+        429,
+        "RESOURCE_EXHAUSTED : too many event streams are open; close some first",
+    )
+}
+
 /// `GET firestore/watch?project=&database=`: one `commit` event per commit of the selected
 /// project (and database, when given) with the changed paths; `resync` when the client fell
 /// behind and events were dropped; `reset` when the backend changed epoch (a session reset
@@ -43,6 +82,9 @@ pub fn firestore_watch(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     if req.method != "GET" {
         return UiResponse::error(405, "METHOD_NOT_ALLOWED");
     }
+    let Some(slot) = StreamSlot::acquire() else {
+        return too_many_streams();
+    };
     let project = req
         .param("project")
         .unwrap_or_else(|| state.info.project.clone());
@@ -50,6 +92,7 @@ pub fn firestore_watch(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_DEPTH);
     let mut commits = state.backend.subscribe();
     tokio::spawn(async move {
+        let _slot = slot;
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
         heartbeat.tick().await;
         if tx
@@ -146,8 +189,12 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     let Some(runtime) = state.functions.clone() else {
         return UiResponse::error(404, "NOT_FOUND : no functions runtime is configured");
     };
+    let Some(slot) = StreamSlot::acquire() else {
+        return too_many_streams();
+    };
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_DEPTH);
     tokio::spawn(async move {
+        let _slot = slot;
         let record = |r: &ftd_adapter_functions::runtime::InvocationRecord| json!({"eventId": r.event_id.to_string(), "function": r.function, "attempt": r.attempt, "outcome": r.outcome});
         let mut lines = runtime.runner().logs();
         let mut history = runtime.history();

@@ -24,7 +24,7 @@ pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiRespo
     }
     if let Some(path) = rest.strip_prefix("storage/") {
         return if path == "buckets" {
-            buckets(state)
+            buckets(state, req)
         } else {
             storage(state, path, req)
         };
@@ -66,7 +66,13 @@ fn firestore(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         authorization: Some("Bearer owner".to_owned()),
         body,
     });
-    UiResponse::json(response.status, &response.body)
+    let mut out = UiResponse::json(response.status, &response.body);
+    if ftd_adapter_grpc::rest::drops_connection(&response) {
+        // The fault plan's `dropConnection` keeps its meaning through this front.
+        out.headers
+            .push((crate::DROP_CONNECTION_HEADER.to_owned(), "1".to_owned()));
+    }
+    out
 }
 
 /// Identity Toolkit as owner: `auth/identitytoolkit.googleapis.com/v1/projects/{p}/...` and
@@ -93,7 +99,8 @@ fn auth(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         authorization: Some("Bearer owner".to_owned()),
         origin: None,
         content_type: Some("application/json".to_owned()),
-        host: req.header("host").map(str::to_owned),
+        // Action links point at the Auth listener, not at this one.
+        host: Some(state.info.http_addr.clone()),
     };
     let response = ftd_adapter_http::identity_toolkit::handle_with(
         &state.auth,
@@ -105,18 +112,35 @@ fn auth(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
     UiResponse::json(response.status, &response.body)
 }
 
-/// The default buckets of every session project (the store has no other buckets unless a
-/// request named one; those appear once listed by name).
-fn buckets(state: &UiState) -> UiResponse {
-    let projects: Vec<String> = state.control.sessions.lock().map_or_else(
-        |_| vec![state.info.project.clone()],
-        |s| s.values().cloned().collect(),
-    );
+/// The buckets of one session project (`?project=`, the default project otherwise): its
+/// two conventional buckets plus the ones the session declared.
+fn buckets(state: &UiState, req: &UiRequest) -> UiResponse {
+    let project = req
+        .param("project")
+        .unwrap_or_else(|| state.info.project.clone());
+    let known = state
+        .control
+        .sessions
+        .lock()
+        .is_ok_and(|s| s.values().any(|p| *p == project));
+    if !known {
+        return UiResponse::error(
+            404,
+            &format!("NOT_FOUND : no session owns project {project:?}"),
+        );
+    }
     let mut list = Vec::new();
-    for project in projects {
-        for suffix in ["appspot.com", "firebasestorage.app"] {
-            list.push(json!({"name": format!("{project}.{suffix}"), "project": project, "default": suffix == "appspot.com"}));
-        }
+    for suffix in ["appspot.com", "firebasestorage.app"] {
+        list.push(json!({"name": format!("{project}.{suffix}"), "project": project, "default": suffix == "appspot.com"}));
+    }
+    let declared = state
+        .control
+        .tenancy
+        .read()
+        .map(|t| t.declared_buckets(&project))
+        .unwrap_or_default();
+    for name in declared {
+        list.push(json!({"name": name, "project": project, "default": false}));
     }
     UiResponse::json(200, &json!({"buckets": list}))
 }
@@ -153,9 +177,18 @@ fn storage(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
             body: req.body.clone(),
         },
     );
+    let mut headers = response.headers;
+    if path.starts_with("download/storage/v1/") {
+        // Object bytes come back with the content type they were uploaded with; on this
+        // privileged origin they are never rendered, only saved (the app downloads them
+        // as blobs).
+        headers.retain(|(k, _)| k != "content-disposition" && k != "x-content-type-options");
+        headers.push(("content-disposition".to_owned(), "attachment".to_owned()));
+        headers.push(("x-content-type-options".to_owned(), "nosniff".to_owned()));
+    }
     UiResponse {
         status: response.status,
-        headers: response.headers,
+        headers,
         body: UiBody::Full(response.body),
     }
 }

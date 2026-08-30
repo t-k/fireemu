@@ -223,6 +223,17 @@ impl std::ops::Deref for Caller {
 }
 
 impl RestState {
+    /// A user token must be minted for the project of `database` (transaction requests
+    /// carry no document the guards could check).
+    fn check_database_audience(&self, caller: &Caller, database: &str) -> Result<(), Status> {
+        if self.rules.is_none() {
+            return Ok(());
+        }
+        let parent = crate::decode::parse_parent(&format!("{database}/documents"))
+            .map_err(|e| crate::gateway::Rejection::Decode(e).to_status())?;
+        rules::check_audience(&caller.principal, parent.project.as_str())
+    }
+
     fn principal(&self, authorization: Option<&str>) -> Result<Caller, Status> {
         let epoch = self.local.barrier().epoch();
         let principal = match &self.rules {
@@ -476,6 +487,7 @@ impl RestState {
             "batchGet" => self.batch_get(principal, resource, body),
             "beginTransaction" => {
                 let database = database_of(resource)?;
+                self.check_database_audience(principal, &database)?;
                 let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
                     database,
                     options: Some(
@@ -487,6 +499,7 @@ impl RestState {
             }
             "rollback" => {
                 let database = database_of(resource)?;
+                self.check_database_audience(principal, &database)?;
                 self.local.rollback(&pb::RollbackRequest {
                     database,
                     transaction: transaction_bytes(body.get("transaction"))?,

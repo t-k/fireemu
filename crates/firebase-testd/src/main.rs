@@ -779,7 +779,9 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             &registry,
             &tenancy,
             &storage_rules,
-            functions_runtime.as_ref().map(functions::storage_sink),
+            functions_runtime
+                .as_ref()
+                .map(|r| functions::storage_sink(r, &tenancy)),
             &backend,
             &faults,
             clock_observer,

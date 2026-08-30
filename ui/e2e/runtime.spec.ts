@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { api, gotoApp, resetSession } from "./helpers";
+import { api, controlToken, gotoApp, resetSession } from "./helpers";
 
 const DOCS = "firestore/v1/projects/demo-app/databases/(default)/documents";
 
@@ -42,6 +42,7 @@ test.describe("Runtime controls", () => {
     await api(request, "PATCH", `${DOCS}/f/one`, { fields: {} });
     const second = await request.fetch(`/ui/api/${DOCS}/f/two`, {
       method: "PATCH",
+      headers: { authorization: `Bearer ${controlToken()}` },
       data: { fields: {} },
     });
     expect(second.status()).toBe(409);

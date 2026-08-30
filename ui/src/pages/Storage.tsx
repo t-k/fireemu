@@ -116,12 +116,14 @@ const Storage: Component = () => {
   const params = useParams<{ path?: string }>();
   const [search, setSearch] = useSearchParams<{ bucket?: string }>();
   const navigate = useNavigate();
-  const [buckets] = createResource(() => settle(listBuckets()));
+  // The buckets of the selected session's project; the default one first.
+  const [buckets] = createResource(
+    () => appState.project(),
+    (project) => settle(listBuckets(project)),
+  );
   const bucketList = () => buckets()?.unwrapOr({ buckets: [] }).buckets ?? [];
   const bucket = () =>
-    (typeof search.bucket === "string" && search.bucket) ||
-    bucketList()[0]?.name ||
-    `${appState.project()}.appspot.com`;
+    (typeof search.bucket === "string" && search.bucket) || `${appState.project()}.appspot.com`;
   const prefix = () => {
     const p = (params.path ?? "").split("/").filter(Boolean).join("/");
     return p ? `${p}/` : "";

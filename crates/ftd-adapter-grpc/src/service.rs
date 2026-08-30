@@ -88,6 +88,17 @@ impl GatewayService {
         })
     }
 
+    /// A user token must be minted for the project of `database` (transaction requests
+    /// carry no document the guards could check).
+    fn check_database_audience(&self, caller: &Caller, database: &str) -> Result<(), Status> {
+        if self.rules.is_none() {
+            return Ok(());
+        }
+        let parent = crate::decode::parse_parent(&format!("{database}/documents"))
+            .map_err(|e| crate::gateway::Rejection::Decode(e).to_status())?;
+        crate::rules::check_audience(&caller.principal, parent.project.as_str())
+    }
+
     /// Read guard for the local backend (runs inside the read's critical section, after
     /// admission: a caller from a previous epoch is refused there).
     fn read_guard<'a>(&'a self, caller: &'a Caller) -> crate::rules::BoxedReadGuard<'a> {
@@ -283,6 +294,9 @@ impl Firestore for GatewayService {
     ) -> Result<Response<Self::BatchGetDocumentsStream>, Status> {
         if let Some(local) = self.local_backend() {
             let caller = self.caller(request.metadata())?;
+            // An empty batch never reaches the guard: the audience is checked here so a
+            // token of another project cannot open a transaction in this one.
+            self.check_database_audience(&caller, &request.get_ref().database)?;
             let guard = self.read_guard(&caller);
             let outcome = local.batch_get_documents(request.get_ref(), &*guard)?;
             let read_time = Some(crate::encode::encode_instant(outcome.read_time));
@@ -327,6 +341,8 @@ impl Firestore for GatewayService {
         request: Request<pb::BeginTransactionRequest>,
     ) -> Result<Response<pb::BeginTransactionResponse>, Status> {
         if let Some(local) = self.local_backend() {
+            let caller = self.caller(request.metadata())?;
+            self.check_database_audience(&caller, &request.get_ref().database)?;
             let transaction = local.begin_transaction(request.get_ref())?;
             return Ok(Response::new(pb::BeginTransactionResponse { transaction }));
         }
@@ -352,6 +368,8 @@ impl Firestore for GatewayService {
         request: Request<pb::RollbackRequest>,
     ) -> Result<Response<()>, Status> {
         if let Some(local) = self.local_backend() {
+            let caller = self.caller(request.metadata())?;
+            self.check_database_audience(&caller, &request.get_ref().database)?;
             return local.rollback(request.get_ref()).map(Response::new);
         }
         self.client()?.rollback(request.into_inner()).await

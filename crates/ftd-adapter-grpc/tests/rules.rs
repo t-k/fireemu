@@ -1265,3 +1265,52 @@ async fn id_tokens_are_bound_to_the_requested_project() {
     assert!(err.message().contains("audience"), "{err}");
     h.handle.abort();
 }
+
+#[tokio::test]
+async fn transactions_are_bound_to_the_token_audience_too() {
+    let mut h = start().await;
+    let (_, token) = h.user("t@example.com");
+    let err = h
+        .client
+        .begin_transaction(with_bearer(
+            pb::BeginTransactionRequest {
+                database: "projects/demo-b/databases/(default)".to_owned(),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    let err = h
+        .client
+        .batch_get_documents(with_bearer(
+            pb::BatchGetDocumentsRequest {
+                database: "projects/demo-b/databases/(default)".to_owned(),
+                documents: Vec::new(),
+                consistency_selector: Some(
+                    pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                        pb::TransactionOptions::default(),
+                    ),
+                ),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    // The token's own project is fine.
+    assert!(h
+        .client
+        .begin_transaction(with_bearer(
+            pb::BeginTransactionRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .is_ok());
+    h.handle.abort();
+}

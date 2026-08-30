@@ -1,5 +1,6 @@
 // The runtime configuration the daemon injects into index.html (`window.__FTD__`). During
-// `vite` development nothing is injected; the token then comes from `?token=` or storage.
+// `vite` development nothing is injected; the token then comes from `?token=` in the page
+// URL and is kept in memory only (never in storage another script could read later).
 
 export type Session = { name: string; project: string };
 
@@ -27,17 +28,23 @@ declare global {
   }
 }
 
-const STORAGE_KEY = "ftd.controlToken";
+let developmentToken: string | null = null;
 
 const tokenFromLocation = (): string | null => {
+  if (developmentToken !== null) {
+    return developmentToken;
+  }
   try {
     const url = new URL(window.location.href);
     const token = url.searchParams.get("token");
     if (token) {
-      window.localStorage.setItem(STORAGE_KEY, token);
+      developmentToken = token;
+      // Leave the URL without the token so it does not stay in the history.
+      url.searchParams.delete("token");
+      window.history.replaceState(null, "", url.toString());
       return token;
     }
-    return window.localStorage.getItem(STORAGE_KEY);
+    return null;
   } catch {
     return null;
   }

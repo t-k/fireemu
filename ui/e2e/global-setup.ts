@@ -61,7 +61,7 @@ export default async function globalSetup(): Promise<void> {
     banner += d.toString();
   });
   await waitFor(`http://127.0.0.1:${PORTS.http}/health/live`, 120);
-  await waitFor(`http://127.0.0.1:${PORTS.ui}/ui/api/config`, 40);
+  await waitFor(`http://127.0.0.1:${PORTS.ui}/ui/`, 40);
   writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner }));
   child.unref();
 }

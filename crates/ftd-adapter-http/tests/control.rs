@@ -598,6 +598,7 @@ fn sessions_are_created_listed_reset_and_deleted_per_project() {
         vec![
             "create demo-b",
             "reset demo-b",
+            "reset demo-b",
             "reset default",
             "remove demo-b"
         ]
@@ -653,7 +654,8 @@ fn sessions_scope_resets_snapshots_fault_plans_and_text_indexes_per_project() {
         400
     );
     assert!(s.tenancy.read().unwrap().is_registered("demo-b"));
-    // The default reset wipes everything except the registered projects.
+    // Creation wipes what the default session held under the project; the default reset
+    // wipes everything except the registered projects.
     assert_eq!(
         handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
         200
@@ -664,7 +666,12 @@ fn sessions_scope_resets_snapshots_fault_plans_and_text_indexes_per_project() {
     );
     assert_eq!(
         log.0.lock().unwrap().as_slice(),
-        ["create demo-b", "reset default", "reset demo-b"]
+        [
+            "create demo-b",
+            "reset demo-b",
+            "reset default",
+            "reset demo-b"
+        ]
     );
     // Fault plans: one state per session; B's counters are not A's.
     let plan = json!({"rules": [{"match": {"operation": "firestore.commit", "nth": 1}, "action": {"type": "timeout"}}]});
@@ -803,4 +810,26 @@ fn sessions_scope_resets_snapshots_fault_plans_and_text_indexes_per_project() {
         &registry.for_project("demo-b"),
         &registry.default_state()
     ));
+}
+
+#[test]
+fn functions_routes_belong_to_the_default_session() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.project_hooks = Some(Arc::new(ProjectLog(Mutex::new(Vec::new()))));
+    assert_eq!(
+        handle(&s, "POST", "/v1/sessions", &json!({"project": "demo-b"})).status,
+        200
+    );
+    for (method, path) in [
+        ("GET", "/v1/sessions/demo-b/functions"),
+        ("POST", "/v1/sessions/demo-b/functions/tick:run"),
+        ("POST", "/v1/sessions/demo-b/pubsub/topics/jobs:publish"),
+    ] {
+        let r = handle(&s, method, path, &json!({"messages": [{"data": ""}]}));
+        assert_eq!(r.status, 400, "{path}: {}", r.body);
+        assert!(r.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("FAILED_PRECONDITION"));
+    }
 }

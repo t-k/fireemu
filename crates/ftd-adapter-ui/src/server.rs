@@ -15,7 +15,7 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 
-use crate::{handle, UiBody, UiRequest, UiResponse, UiState};
+use crate::{guard, handle, UiBody, UiRequest, UiResponse, UiState};
 
 type OutBody = BoxBody<Bytes, Infallible>;
 
@@ -59,7 +59,7 @@ fn to_hyper(response: UiResponse) -> Response<OutBody> {
 async fn respond(
     state: Arc<UiState>,
     req: Request<Incoming>,
-) -> Result<Response<OutBody>, hyper::Error> {
+) -> Result<Response<OutBody>, std::io::Error> {
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
@@ -73,19 +73,34 @@ async fn respond(
             headers.insert((*name).to_owned(), v.to_owned());
         }
     }
-    let limit = body_limit(&path);
-    let body = match Limited::new(req.into_body(), limit).collect().await {
-        Ok(c) => c.to_bytes().to_vec(),
-        Err(_) => return Ok(to_hyper(UiResponse::error(413, "PAYLOAD_TOO_LARGE"))),
-    };
-    let request = UiRequest {
+    // Host, origin and token are checked before a byte of the body is read: a refused
+    // request never makes the listener buffer an upload.
+    let mut request = UiRequest {
         method,
         path,
         query,
         headers,
-        body,
+        body: Vec::new(),
     };
-    Ok(to_hyper(handle(&state, &request).await))
+    if let Some(refusal) = guard(&state, &request) {
+        return Ok(to_hyper(refusal));
+    }
+    let limit = body_limit(&request.path);
+    request.body = match Limited::new(req.into_body(), limit).collect().await {
+        Ok(c) => c.to_bytes().to_vec(),
+        Err(_) => return Ok(to_hyper(UiResponse::error(413, "PAYLOAD_TOO_LARGE"))),
+    };
+    let response = handle(&state, &request).await;
+    if response
+        .headers
+        .iter()
+        .any(|(k, _)| k == crate::DROP_CONNECTION_HEADER)
+    {
+        // A `dropConnection` fault behind the front: the connection closes without a
+        // response, as on the port the SDKs use.
+        return Err(std::io::Error::other("fault plan: connection dropped"));
+    }
+    Ok(to_hyper(response))
 }
 
 /// Serves the UI on `listener` until the task is aborted.

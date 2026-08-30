@@ -1,6 +1,20 @@
+import { readFileSync } from "node:fs";
+
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-/** The API of the daemon under test (no Origin: the control token is not needed). */
+import { STATE_FILE } from "./global-setup";
+
+/** The control token the daemon printed at start (every UI API request presents it). */
+export const controlToken = (): string => {
+  const state = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { banner?: string };
+  const match = /FTD_CONTROL_TOKEN=([0-9a-f]+)/.exec(state.banner ?? "");
+  if (!match) {
+    throw new Error("the daemon banner carries no FTD_CONTROL_TOKEN");
+  }
+  return match[1];
+};
+
+/** The API of the daemon under test, as the app calls it (token in the header). */
 export const api = async (
   request: APIRequestContext,
   method: string,
@@ -9,6 +23,7 @@ export const api = async (
 ): Promise<unknown> => {
   const r = await request.fetch(`/ui/api/${path}`, {
     method,
+    headers: { authorization: `Bearer ${controlToken()}` },
     ...(data === undefined ? {} : { data }),
   });
   expect(r.ok(), `${method} ${path}: ${r.status()} ${await r.text()}`).toBeTruthy();

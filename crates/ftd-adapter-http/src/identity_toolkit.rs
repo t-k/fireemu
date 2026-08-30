@@ -37,6 +37,8 @@ pub struct AuthState {
     pub store: Arc<Mutex<AuthStore>>,
     /// Virtual clock shared with the other adapters.
     pub clock: Arc<Mutex<VirtualClock>>,
+    /// Session admission barrier (reset waits for requests in flight), when shared.
+    pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
 }
 
 /// An HTTP response: status code and JSON body.
@@ -257,6 +259,7 @@ pub fn handle_with(
         None => (path, None),
     };
     let at = now(state);
+    let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let Ok(mut store) = state.store.lock() else {
         return error(500, "INTERNAL");
     };

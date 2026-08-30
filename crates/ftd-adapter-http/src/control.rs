@@ -60,6 +60,9 @@ pub struct ControlState {
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<dyn FunctionsHook>>,
+    /// Session admission barrier: a reset holds it exclusively across every hook, so no
+    /// request straddles a half-reset session; other control mutations are admitted.
+    pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
     /// Control token (spec 15.2): browser requests (those carrying an `Origin`) must present
     /// it as `Authorization: Bearer <token>` on privileged routes, so a page on localhost
     /// cannot reset state, move the clock or change rules; command-line clients on loopback
@@ -210,11 +213,14 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         return error(404, "NOT_FOUND");
     }
     if (method, action) == ("POST", "reset") {
+        // Exclusive across every hook: requests in flight finish first, new ones wait.
+        let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
         for hook in &state.reset_hooks {
             hook();
         }
         return ok(json!({"session": session, "reset": true, "hooks": state.reset_hooks.len()}));
     }
+    let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if let Some(rest) = action.strip_prefix("functions") {
         return functions_route(state, method, rest);
     }

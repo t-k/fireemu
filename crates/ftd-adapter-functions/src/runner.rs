@@ -66,6 +66,19 @@ pub const INHERITED_ENV: &[&str] = &[
 /// Variable prefixes inherited by a runner (Node version managers only).
 pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"];
 
+/// How to start (and restart) a runner.
+#[derive(Debug, Clone)]
+pub struct SpawnSpec {
+    /// Program and arguments.
+    pub command: Vec<String>,
+    /// Working directory.
+    pub cwd: Option<String>,
+    /// Extra environment (emulator endpoints, project settings).
+    pub env: Vec<(String, String)>,
+    /// How long to wait for the `hello`.
+    pub hello_timeout: Duration,
+}
+
 /// A running runner.
 pub struct Runner {
     child: AsyncMutex<Option<Child>>,
@@ -118,6 +131,31 @@ pub struct Invocation {
 }
 
 impl Runner {
+    /// Spawns a runner from its spec.
+    pub async fn spawn_spec(spec: &SpawnSpec) -> Result<Self, String> {
+        Self::spawn(
+            &spec.command,
+            spec.cwd.as_deref(),
+            &spec.env,
+            spec.hello_timeout,
+        )
+        .await
+    }
+
+    /// Kills the process immediately (session reset: handlers still running must not write
+    /// into the reset state). Waiters learn it through the reader task's exit.
+    pub fn kill_now(&self) {
+        self.alive.store(false, Ordering::SeqCst);
+        if let Ok(mut child) = self.child.try_lock() {
+            if let Some(child) = child.as_mut() {
+                let _ = child.start_kill();
+            }
+        }
+        if let Ok(mut stdin) = self.stdin.try_lock() {
+            *stdin = None;
+        }
+    }
+
     /// Spawns `command` (program + args) with `env`, in `cwd`, and waits for its `hello`.
     #[allow(clippy::too_many_lines)]
     pub async fn spawn(

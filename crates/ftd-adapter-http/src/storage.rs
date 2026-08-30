@@ -38,6 +38,8 @@ pub type StorageEventSink = Arc<dyn Fn(&StorageEvent) + Send + Sync>;
 pub struct StoreGuard<'a> {
     guard: std::sync::MutexGuard<'a, ObjectStore>,
     sink: Option<&'a StorageEventSink>,
+    /// Released after the store lock (field order): the reset barrier admission.
+    _admitted: Option<ftd_core_session::barrier::Admitted<'a>>,
 }
 
 impl std::ops::Deref for StoreGuard<'_> {
@@ -79,6 +81,8 @@ pub struct StorageState {
     /// Observer of object events (Storage triggers), called inside the store's critical
     /// section in commit order; `None` drops them.
     pub events: Option<StorageEventSink>,
+    /// Session admission barrier (reset waits for requests in flight), when shared.
+    pub barrier: Option<Arc<ftd_core_session::barrier::AdmissionBarrier>>,
 }
 
 /// One HTTP request of the Storage surface.
@@ -615,6 +619,7 @@ fn prospective_rules_value(m: &ObjectMetadata) -> RulesValue {
 impl StorageState {
     /// Locks the object store; events produced while locked reach the sink on release.
     pub fn store(&self) -> Result<StoreGuard<'_>, (u16, String)> {
+        let admitted = self.barrier.as_ref().map(|b| b.admit());
         let guard = self
             .store
             .lock()
@@ -622,6 +627,7 @@ impl StorageState {
         Ok(StoreGuard {
             guard,
             sink: self.events.as_ref(),
+            _admitted: admitted,
         })
     }
 

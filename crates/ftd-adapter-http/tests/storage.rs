@@ -31,6 +31,7 @@ fn state(rules: Option<&str>) -> StorageState {
         }))),
         project: "demo-app".to_owned(),
         events: None,
+        barrier: None,
     }
 }
 

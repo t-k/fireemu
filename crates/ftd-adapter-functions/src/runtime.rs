@@ -28,7 +28,7 @@ use tokio::sync::Notify;
 
 use crate::events::{change_kind, firestore_event, schedule_event, storage_event};
 use crate::http::{forward, ProxiedResponse};
-use crate::runner::{Invocation, InvokeOutcome, Runner};
+use crate::runner::{Invocation, InvokeOutcome, Runner, SpawnSpec};
 
 /// Default maximum schedule runs enqueued per clock advance and job (spec 11.6); the rest
 /// stays due and is enqueued as invocations complete, so nothing is discarded.
@@ -113,7 +113,9 @@ pub struct FunctionsRuntime {
     manifest: FunctionManifest,
     config: FunctionsConfig,
     clock: Arc<Mutex<VirtualClock>>,
-    runner: Arc<Runner>,
+    runner: std::sync::RwLock<Arc<Runner>>,
+    /// How to restart the runner after a reset; without it a reset only kills it.
+    spawn: Option<SpawnSpec>,
     inner: Mutex<Inner>,
     wake: Notify,
     idle: Arc<Notify>,
@@ -129,6 +131,7 @@ impl FunctionsRuntime {
         config: FunctionsConfig,
         clock: Arc<Mutex<VirtualClock>>,
         runner: Arc<Runner>,
+        spawn: Option<SpawnSpec>,
     ) -> Arc<Self> {
         let now = clock
             .lock()
@@ -161,7 +164,8 @@ impl FunctionsRuntime {
             manifest,
             config,
             clock,
-            runner,
+            runner: std::sync::RwLock::new(runner),
+            spawn,
             inner: Mutex::new(Inner {
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
@@ -185,10 +189,13 @@ impl FunctionsRuntime {
         &self.manifest
     }
 
-    /// The runner.
+    /// The current runner.
     #[must_use]
-    pub fn runner(&self) -> &Arc<Runner> {
-        &self.runner
+    pub fn runner(&self) -> Arc<Runner> {
+        match self.runner.read() {
+            Ok(r) => r.clone(),
+            Err(e) => e.into_inner().clone(),
+        }
     }
 
     fn now(&self) -> LogicalInstant {
@@ -439,25 +446,36 @@ impl FunctionsRuntime {
         Ok(())
     }
 
-    /// Session reset: every non-terminal event is discarded and schedules restart from now.
-    /// Invocations already running keep their slots until they finish (their results are
-    /// ignored), so `await-idle` does not return while old handlers can still write.
-    pub fn reset(&self) {
+    /// Session reset: the runner is killed (a handler still running must not write into the
+    /// reset session) and restarted from its spec, every non-terminal event is discarded,
+    /// and schedules restart from now. Dispatch resumes when the new runner is up.
+    pub fn reset(self: &Arc<Self>) {
         let now = self.now();
+        self.runner().kill_now();
         if let Ok(mut inner) = self.inner.lock() {
             inner.epoch = inner.epoch.next().unwrap_or(inner.epoch);
             let epoch = inner.epoch;
             inner.outbox.discard_stale(epoch);
-            let running: Vec<String> = inner.running.keys().cloned().collect();
-            inner.payloads.retain(|id, _| {
-                running
-                    .iter()
-                    .any(|k| k.starts_with(&format!("{}-", id.value())))
-            });
+            inner.payloads.clear();
+            inner.running.clear();
             inner.catch_up_pending = false;
             for job in &mut inner.jobs {
                 job.cursor = now;
             }
+        }
+        if let Some(spec) = self.spawn.clone() {
+            let runtime = self.clone();
+            tokio::spawn(async move {
+                match Runner::spawn_spec(&spec).await {
+                    Ok(runner) => {
+                        if let Ok(mut slot) = runtime.runner.write() {
+                            *slot = Arc::new(runner);
+                        }
+                        runtime.wake.notify_one();
+                    }
+                    Err(e) => eprintln!("[functions] runner restart failed: {e}"),
+                }
+            });
         }
         self.idle.notify_waiters();
         self.wake.notify_one();
@@ -483,7 +501,7 @@ impl FunctionsRuntime {
     /// Whether the runner process is alive (a dead runner leaves queued work pending).
     #[must_use]
     pub fn runner_alive(&self) -> bool {
-        self.runner.is_alive()
+        self.runner().is_alive()
     }
 
     /// Outstanding work, for `await-idle` timeouts and status output.
@@ -518,7 +536,7 @@ impl FunctionsRuntime {
             "succeeded": succeeded,
             "deadLettered": dead,
             "catchUpPending": inner.catch_up_pending,
-            "runnerAlive": self.runner.is_alive(),
+            "runnerAlive": self.runner().is_alive(),
             "epoch": inner.epoch.value(),
             "functions": self.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
         })
@@ -573,7 +591,7 @@ impl FunctionsRuntime {
         if !matches!(f.trigger, Trigger::Http { .. }) || f.region != region {
             return None;
         }
-        let port = self.runner.hello().http_port?;
+        let port = self.runner().hello().http_port?;
         Some(HttpTarget {
             function: function.to_owned(),
             addr: format!("127.0.0.1:{port}"),
@@ -662,7 +680,7 @@ impl FunctionsRuntime {
     }
 
     fn dispatch_ready(self: &Arc<Self>) {
-        if !self.runner.is_alive() {
+        if !self.runner().is_alive() {
             // Queued work stays pending and visible in the status; nothing is retried
             // against a dead process.
             return;
@@ -708,7 +726,7 @@ impl FunctionsRuntime {
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
             let retry = spec.retry;
             tokio::spawn(async move {
-                let Invocation { outcome, late } = runtime.runner.invoke(request, timeout).await;
+                let Invocation { outcome, late } = runtime.runner().invoke(request, timeout).await;
                 runtime.complete(id, &key, &function_name, attempt, epoch, retry, &outcome);
                 match late {
                     // The handler is still running: its slot stays taken until it finishes

@@ -191,6 +191,7 @@ fn storage_state(
     auth_store: &Arc<Mutex<AuthStore>>,
     storage_rules: &Arc<RwLock<LoadedRules>>,
     events: Option<ftd_adapter_http::storage::StorageEventSink>,
+    barrier: &Arc<ftd_core_session::barrier::AdmissionBarrier>,
 ) -> Arc<ftd_adapter_http::storage::StorageState> {
     Arc::new(ftd_adapter_http::storage::StorageState {
         store: Mutex::new(ftd_core_storage::store::StorageState::new(cfg.seed ^ 0x57)),
@@ -199,6 +200,7 @@ fn storage_state(
         rules: storage_rules.clone(),
         project: cfg.auth_project.clone(),
         events,
+        barrier: Some(barrier.clone()),
     })
 }
 
@@ -353,6 +355,7 @@ fn control_state(
                 as Arc<dyn ftd_adapter_http::control::FunctionsHook>
         }),
         control_token,
+        barrier: Some(backend.barrier()),
     }
 }
 
@@ -387,9 +390,11 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             SplitMix64::new(cfg.seed ^ 0xA0),
             TotpPolicy::default(),
         )));
+        let barrier = backend.barrier();
         let auth = Arc::new(AuthState {
             store: auth_store.clone(),
             clock: clock.clone(),
+            barrier: Some(barrier.clone()),
         });
         let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
         let storage_rules = Arc::new(RwLock::new(load_storage_rules(&cfg)?));
@@ -428,6 +433,7 @@ fn run_up(cfg: RuntimeConfig) -> ExitCode {
             &auth_store,
             &storage_rules,
             functions_runtime.as_ref().map(functions::storage_sink),
+            &barrier,
         );
         let control = Arc::new(control_state(
             &cfg,

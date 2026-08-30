@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ftd_adapter_functions::manifest_json::parse_manifest;
-use ftd_adapter_functions::runner::Runner;
+use ftd_adapter_functions::runner::{Runner, SpawnSpec};
 use ftd_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
 use ftd_adapter_grpc::local::LocalBackend;
 use ftd_adapter_http::control::FunctionsHook;
@@ -82,7 +82,13 @@ pub async fn start(
         ("FTD_RUNNER".to_owned(), "1".to_owned()),
         ("FTD_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
     ];
-    let runner = Runner::spawn(&command, None, &env, Duration::from_secs(60)).await?;
+    let spec = SpawnSpec {
+        command,
+        cwd: None,
+        env,
+        hello_timeout: Duration::from_secs(60),
+    };
+    let runner = Runner::spawn_spec(&spec).await?;
     let manifest_json = match &cfg.functions_manifest {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -126,7 +132,13 @@ pub async fn start(
         max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
         runner_secret: runner_secret.to_owned(),
     };
-    let runtime = FunctionsRuntime::new(manifest, config, clock.clone(), Arc::new(runner));
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        config,
+        clock.clone(),
+        Arc::new(runner),
+        Some(spec),
+    );
     tokio::spawn(runtime.clone().dispatch_loop());
     // Commits reach the runtime inside the database critical section: in order, never
     // dropped, and enqueued before the write returns to its caller.

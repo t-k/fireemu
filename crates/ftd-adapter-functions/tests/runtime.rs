@@ -7,7 +7,7 @@ use std::time::Duration;
 use ftd_adapter_functions::events::{firestore_event, storage_event};
 use ftd_adapter_functions::http::parse_response;
 use ftd_adapter_functions::manifest_json::{manifest_to_json, parse_manifest};
-use ftd_adapter_functions::runner::Runner;
+use ftd_adapter_functions::runner::{Runner, SpawnSpec};
 use ftd_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
 use ftd_adapter_grpc::local::CommitEvent;
 use ftd_core_firestore::path::DocumentPath;
@@ -52,14 +52,13 @@ fn commit(changes: Vec<DocumentChange>) -> CommitEvent {
 
 async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
-    let runner = Runner::spawn(
-        &["python3".to_owned(), script.to_owned()],
-        None,
-        &[],
-        Duration::from_secs(20),
-    )
-    .await
-    .unwrap();
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::new(
@@ -76,6 +75,7 @@ async fn start() -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
         },
         clock.clone(),
         Arc::new(runner),
+        Some(spec),
     );
     tokio::spawn(runtime.clone().dispatch_loop());
     (runtime, clock)
@@ -183,12 +183,30 @@ async fn reset_discards_in_flight_work() {
         before: Some(doc("items/b", 0)),
         after: Some(doc("items/b", 1)),
     }]));
-    // `fail` (written) will be retry-waiting; a reset drops it.
+    // `fail` (written) will be retry-waiting; a reset drops it, kills the runner and
+    // restarts it, after which dispatch resumes.
     let _ = runtime.await_idle(Duration::from_millis(500)).await;
     assert!(!runtime.is_idle());
     runtime.reset();
     assert!(runtime.is_idle());
     assert_eq!(runtime.status()["epoch"], 1);
+    for _ in 0..100 {
+        if runtime.runner_alive() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(runtime.runner_alive(), "the runner was restarted");
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/c", 1).path,
+        before: None,
+        after: Some(doc("items/c", 1)),
+    }]));
+    let _ = runtime.await_idle(Duration::from_secs(5)).await;
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|r| r.function == "ok" && r.outcome == "ok" && r.event_id > 1));
     runtime.runner().shutdown().await;
 }
 

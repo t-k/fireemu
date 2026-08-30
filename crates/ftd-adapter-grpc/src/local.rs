@@ -14,6 +14,7 @@ use ftd_core_firestore::store::{
     Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
     Precondition, TransactionId, Write, WriteOp,
 };
+use ftd_core_session::barrier::AdmissionBarrier;
 use ftd_core_session::clock::VirtualClock;
 use ftd_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
 use ftd_core_types::ids::{CollectionId, DocumentId};
@@ -43,6 +44,9 @@ pub struct LocalBackend {
     commits: tokio::sync::broadcast::Sender<CommitEvent>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
+    /// Session-wide admission barrier shared with the other surfaces (reset holds it
+    /// exclusively).
+    barrier: Arc<AdmissionBarrier>,
     /// Called for every commit inside the database critical section, in commit order and
     /// before the commit's response is returned (event triggers): nothing is lost or
     /// reordered, and `await-idle` sees the event as soon as the write returns.
@@ -163,7 +167,14 @@ impl LocalBackend {
             commits: tokio::sync::broadcast::channel(1024).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
+            barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// The session's admission barrier (share it with every other mutable surface).
+    #[must_use]
+    pub fn barrier(&self) -> Arc<AdmissionBarrier> {
+        self.barrier.clone()
     }
 
     /// Installs the synchronous commit observer (at most one). Contract: the sink runs
@@ -303,6 +314,9 @@ impl LocalBackend {
         parent: &Parent,
         f: impl FnOnce(&mut FirestoreState) -> Result<T, Status>,
     ) -> Result<T, Status> {
+        // Admitted for the whole critical section: a reset waits for it and nothing runs
+        // against a half-reset session.
+        let _admitted = self.barrier.admit();
         let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
         let db = dbs
             .entry((

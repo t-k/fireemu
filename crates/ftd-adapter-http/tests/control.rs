@@ -26,6 +26,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         })],
         functions: None,
         control_token: "test-token".to_owned(),
+        barrier: None,
     }
 }
 

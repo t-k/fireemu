@@ -18,6 +18,15 @@ use std::collections::BTreeMap;
 
 use crate::error::{PubSubError, Result};
 
+/// Maximum length of a filter expression, in bytes. Cloud Pub/Sub documents a 256-byte limit;
+/// enforcing it here also bounds the recursive-descent parser's depth, so a hostile or
+/// accidentally deeply-nested filter can never overflow the stack.
+pub const MAX_FILTER_BYTES: usize = 256;
+
+/// Maximum nesting depth the parser accepts. A 256-byte filter cannot reach this, so it is a
+/// defence-in-depth guard rather than a functional limit.
+const MAX_DEPTH: usize = 64;
+
 /// A parsed, validated filter. Cloning is cheap relative to re-parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filter {
@@ -43,7 +52,16 @@ impl Filter {
     }
 
     /// Parses a filter expression. An empty or whitespace-only string is [`Filter::always`].
+    ///
+    /// A filter longer than [`MAX_FILTER_BYTES`] is refused before it is parsed, which is both
+    /// the documented Pub/Sub limit and the bound that keeps the recursive-descent parser from
+    /// overflowing the stack on a deeply-nested input.
     pub fn parse(input: &str) -> Result<Self> {
+        if input.len() > MAX_FILTER_BYTES {
+            return Err(PubSubError::invalid_argument(format!(
+                "filter exceeds {MAX_FILTER_BYTES} bytes"
+            )));
+        }
         if input.trim().is_empty() {
             return Ok(Self::always());
         }
@@ -51,6 +69,7 @@ impl Filter {
         let mut parser = Parser {
             tokens: &tokens,
             pos: 0,
+            depth: 0,
         };
         let expr = parser.parse_or()?;
         if parser.pos != parser.tokens.len() {
@@ -215,6 +234,7 @@ const fn is_ident_byte(b: u8) -> bool {
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -260,17 +280,30 @@ impl Parser<'_> {
 
     fn parse_not(&mut self) -> Result<Expr> {
         if self.eat_keyword("NOT") {
+            self.enter()?;
             let inner = self.parse_not()?;
+            self.depth -= 1;
             return Ok(Expr::Not(Box::new(inner)));
         }
         self.parse_primary()
+    }
+
+    /// Descends one nesting level, refusing input that nests past [`MAX_DEPTH`].
+    fn enter(&mut self) -> Result<()> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(PubSubError::invalid_argument("filter nests too deeply"));
+        }
+        Ok(())
     }
 
     fn parse_primary(&mut self) -> Result<Expr> {
         match self.peek() {
             Some(Token::LParen) => {
                 self.pos += 1;
+                self.enter()?;
                 let inner = self.parse_or()?;
+                self.depth -= 1;
                 match self.bump() {
                     Some(Token::RParen) => Ok(inner),
                     _ => Err(PubSubError::invalid_argument("expected ')' in filter")),
@@ -423,6 +456,32 @@ mod tests {
     fn quoted_key_with_dot() {
         let f = Filter::parse("attributes.\"iana.org/lang\" = \"en\"").unwrap();
         assert!(f.matches(&attrs(&[("iana.org/lang", "en")])));
+    }
+
+    #[test]
+    fn a_deeply_nested_filter_is_refused_without_overflowing_the_stack() {
+        // A hostile filter cannot crash the process: the length cap refuses it first, and even a
+        // within-cap deeply-nested filter is refused by the depth guard rather than recursed.
+        let huge = "(".repeat(1_000_000);
+        assert_eq!(
+            Filter::parse(&huge).unwrap_err().code(),
+            crate::error::Code::InvalidArgument
+        );
+        let many_not = "NOT ".repeat(1_000_000);
+        assert!(Filter::parse(&many_not).is_err());
+        // Right at the byte cap, deep nesting still returns an error, never a panic.
+        let nested = format!("{}attributes:a{}", "(".repeat(120), ")".repeat(120));
+        assert!(nested.len() <= MAX_FILTER_BYTES + 240);
+        let _ = Filter::parse(&nested);
+    }
+
+    #[test]
+    fn a_filter_over_the_byte_cap_is_refused() {
+        let long = format!("attributes.type = \"{}\"", "x".repeat(MAX_FILTER_BYTES));
+        assert_eq!(
+            Filter::parse(&long).unwrap_err().code(),
+            crate::error::Code::InvalidArgument
+        );
     }
 
     #[test]

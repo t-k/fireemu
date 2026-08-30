@@ -1,0 +1,15 @@
+{
+  "name": "binary/blob.bin",
+  "bucket": "demo-export.appspot.com",
+  "metageneration": 1,
+  "generation": 1788105513197,
+  "contentType": "application/octet-stream",
+  "storageClass": "STANDARD",
+  "downloadTokens": [],
+  "etag": "NMH1LAIyWmKooJGwOMmubXujsBM",
+  "timeCreated": "2026-08-30T15:58:33.197Z",
+  "updated": "2026-08-30T15:58:33.197Z",
+  "size": 8,
+  "md5Hash": "cFFUSich7Yj2pDGD1qVlsA==",
+  "crc32c": "761912690"
+}

@@ -355,6 +355,7 @@ dependencies = [
  "fireemu-adapter-ui",
  "fireemu-core-app-check",
  "fireemu-core-auth",
+ "fireemu-core-export",
  "fireemu-core-firestore",
  "fireemu-core-functions",
  "fireemu-core-limits",
@@ -489,6 +490,15 @@ dependencies = [
 name = "fireemu-core-events"
 version = "0.1.0"
 dependencies = [
+ "fireemu-core-types",
+ "proptest",
+]
+
+[[package]]
+name = "fireemu-core-export"
+version = "0.1.0"
+dependencies = [
+ "fireemu-core-firestore",
  "fireemu-core-types",
  "proptest",
 ]

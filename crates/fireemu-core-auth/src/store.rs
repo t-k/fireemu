@@ -285,10 +285,20 @@ pub struct UserRecord {
 }
 
 /// Salted SHA-1 digest of a password. Test-only hashing: never claims scrypt compatibility.
+///
+/// A credential also remembers the emulator salt and plaintext it was imported from, when
+/// it was imported from one. The Local Emulator Suite stores passwords in the clear
+/// (`passwordHash: "fakeHash:salt=<salt>:password=<plaintext>"`), so an export directory
+/// already holds them; keeping them lets fireemu write an export the official suite can sign
+/// in against, rather than one that silently drops every password. A credential created
+/// through fireemu's own API has no such form and is never given one -- exporting it writes
+/// no `passwordHash` at all instead of inventing a reversible one.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PasswordDigest {
     salt: [u8; 16],
     digest: [u8; 20],
+    /// The emulator salt and plaintext this credential was imported with.
+    emulator: Option<(String, String)>,
 }
 
 impl fmt::Debug for PasswordDigest {
@@ -305,12 +315,95 @@ impl PasswordDigest {
         Self {
             salt,
             digest: crate::sha1::sha1(&input),
+            emulator: None,
         }
     }
 
     fn verify(&self, password: &str) -> bool {
         Self::new(self.salt, password).digest == self.digest
     }
+
+    /// The emulator salt and plaintext an export has to write back, when the credential
+    /// came from one.
+    #[must_use]
+    pub fn emulator_form(&self) -> Option<(&str, &str)> {
+        self.emulator
+            .as_ref()
+            .map(|(salt, password)| (salt.as_str(), password.as_str()))
+    }
+}
+
+/// The project-level Auth configuration `auth_export/config.json` carries.
+///
+/// fireemu records it so that an import followed by an export does not lose it. Neither
+/// switch changes fireemu's behaviour yet: `allowDuplicateEmails` and the improved email
+/// privacy mode are Identity Platform settings the emulated surface does not implement, and
+/// silently rewriting them to the defaults would be exactly the loss the export format
+/// exists to prevent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectAuthConfig {
+    /// `signIn.allowDuplicateEmails`.
+    pub allow_duplicate_emails: bool,
+    /// `emailPrivacyConfig.enableImprovedEmailPrivacy`.
+    pub enable_improved_email_privacy: bool,
+}
+
+/// Why an account an import artifact recorded was refused.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportUserError {
+    /// The account itself is not acceptable.
+    Account(AuthError),
+    /// One of its second factors is not acceptable.
+    SecondFactor(crate::mfa::ImportedFactorError),
+}
+
+impl fmt::Display for ImportUserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Account(e) => write!(f, "{e}"),
+            Self::SecondFactor(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ImportUserError {}
+
+/// A user an import artifact recorded, with the identity and times it has to keep.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedUser {
+    /// The account identifier, exactly as recorded.
+    pub local_id: String,
+    /// Email address.
+    pub email: Option<String>,
+    /// Whether the email address is verified.
+    pub email_verified: bool,
+    /// Display name.
+    pub display_name: Option<String>,
+    /// Photo URL.
+    pub photo_url: Option<String>,
+    /// Phone number.
+    pub phone_number: Option<String>,
+    /// Whether the account is disabled.
+    pub disabled: bool,
+    /// The sign-in provider the account is attributed to.
+    pub provider: Provider,
+    /// Custom claims.
+    pub custom_claims: CustomClaims,
+    /// When the account was created.
+    pub created_at: LogicalInstant,
+    /// When the account last signed in.
+    pub last_sign_in_at: Option<LogicalInstant>,
+    /// Tokens minted before this instant are refused.
+    pub tokens_valid_after: LogicalInstant,
+    /// Linked federated identities.
+    pub federated: Vec<FederatedIdentity>,
+    /// The emulator salt and plaintext password, when the account has a password
+    /// credential.
+    pub password: Option<(String, String)>,
+    /// Enrolled TOTP second factors.
+    pub totp_factors: Vec<crate::mfa::TotpFactor>,
+    /// Enrolled phone second factors.
+    pub phone_factors: Vec<crate::mfa::PhoneFactor>,
 }
 
 /// Auth errors.
@@ -425,6 +518,9 @@ pub struct AuthStore {
     verification_codes: BTreeMap<String, VerificationCode>,
     created_users: Vec<LocalId>,
     deleted_users: Vec<UserRecord>,
+    /// The project-level Auth configuration an import carried, kept so an export can write
+    /// it back.
+    config: ProjectAuthConfig,
 }
 
 /// Email action codes expire after an hour of virtual time.
@@ -468,6 +564,7 @@ impl AuthStore {
             verification_codes: BTreeMap::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
+            config: ProjectAuthConfig::default(),
         }
     }
 
@@ -584,6 +681,96 @@ impl AuthStore {
         if let Some(u) = self.users.get_mut(uid) {
             u.last_sign_in_at = Some(now);
         }
+    }
+
+    /// The project-level Auth configuration an export carries.
+    #[must_use]
+    pub const fn config(&self) -> ProjectAuthConfig {
+        self.config
+    }
+
+    /// Records the project-level Auth configuration an import carried.
+    pub fn set_config(&mut self, config: ProjectAuthConfig) {
+        self.config = config;
+    }
+
+    /// The password credential of a user, when it has one. An export reads it to write the
+    /// emulator's `passwordHash` and `salt` back out.
+    #[must_use]
+    pub fn password_digest(&self, uid: &LocalId) -> Option<&PasswordDigest> {
+        self.users.get(uid).and_then(|u| u.password.as_ref())
+    }
+
+    /// Installs a user from an import artifact, exactly as it was recorded.
+    ///
+    /// This is not [`Self::create_user`]: an import restores accounts that already existed,
+    /// so the local id, the creation time, the last sign-in, the token revocation instant,
+    /// the custom claims, the linked providers and the enrolled second factors all come from
+    /// the artifact rather than being generated. No user event is recorded, because no
+    /// account was created while the suite was running -- an Auth trigger firing for every
+    /// account of an import would be an invented event.
+    ///
+    /// The listing order stays the artifact's: users keep the sequence they are imported in,
+    /// and `next_sequence` moves past them so a later sign-up sorts after the import.
+    pub fn import_user(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
+        if user.local_id.is_empty()
+            || user.local_id.chars().count() > 128
+            || user.local_id.chars().any(char::is_control)
+        {
+            return Err(ImportUserError::Account(AuthError::InvalidLocalId));
+        }
+        let local_id = LocalId(user.local_id);
+        if self.users.contains_key(&local_id) {
+            return Err(ImportUserError::Account(AuthError::LocalIdExists));
+        }
+        if let Some(phone) = &user.phone_number {
+            Self::validate_phone_number(phone).map_err(ImportUserError::Account)?;
+        }
+        let password = match user.password {
+            Some((salt, plaintext)) => {
+                Self::validate_password(&plaintext).map_err(ImportUserError::Account)?;
+                // The digest is fireemu's own; the emulator form is kept beside it so an
+                // export can write back exactly what it read.
+                let mut bytes = [0u8; 16];
+                for (slot, byte) in bytes.iter_mut().zip(salt.bytes()) {
+                    *slot = byte;
+                }
+                let mut digest = PasswordDigest::new(bytes, &plaintext);
+                digest.emulator = Some((salt, plaintext));
+                Some(digest)
+            }
+            None => None,
+        };
+        // Sequences start at one, exactly as `create_user` assigns them: the listing cursor
+        // is "everything after this sequence", so a zero would make the first account
+        // unlistable.
+        self.next_sequence += 1;
+        let sequence = self.next_sequence;
+        let mut mfa = MfaState::default();
+        mfa.import_factors(user.totp_factors, user.phone_factors)
+            .map_err(ImportUserError::SecondFactor)?;
+        self.users.insert(
+            local_id.clone(),
+            UserRecord {
+                local_id: local_id.clone(),
+                email: user.email,
+                email_verified: user.email_verified,
+                display_name: user.display_name,
+                photo_url: user.photo_url,
+                phone_number: user.phone_number,
+                sequence,
+                disabled: user.disabled,
+                provider: user.provider,
+                custom_claims: user.custom_claims,
+                mfa,
+                created_at: user.created_at,
+                last_sign_in_at: user.last_sign_in_at,
+                tokens_valid_after: user.tokens_valid_after,
+                federated: user.federated,
+                password,
+            },
+        );
+        Ok(local_id)
     }
 
     /// Users in creation order (stable `listUsers` paging).

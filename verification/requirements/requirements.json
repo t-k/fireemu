@@ -977,6 +977,76 @@
           "crates/fireemu/tests/exec.rs"
         ]
       }
+    },
+    {
+      "id": "DATA-01",
+      "statement": "An export directory the official Local Emulator Suite wrote imports into fireemu with every document, account and object it records, or the run is refused; nothing is dropped in silence.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "The format is pinned by directories recorded from real runs of firebase-tools 15.28.2 and the Firestore emulator jar (crates/fireemu/tests/fixtures/export/, recorded by conformance/src/record-export.mjs). A member the model does not know is carried through rather than dropped, a malformed section is refused with the offset or member that caused it, and a section of a product fireemu does not serve is refused with its deferred status.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-core-export/tests/official_fixtures.rs",
+          "crates/fireemu/tests/import_export.rs"
+        ]
+      }
+    },
+    {
+      "id": "DATA-02",
+      "statement": "An export fireemu writes imports back into fireemu and into the official Local Emulator Suite with the same state.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "Verified end to end in the work log of 2026-08-31: the official suite seeds a corpus, exports it, fireemu imports and re-exports it, and both suites read every seeded value back through the SDKs. A password that came from an official import is written back in the emulator's own reversible form; one only ever set through fireemu's API has no such form and is exported without a passwordHash rather than with an invented one.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/import_export.rs",
+          "crates/fireemu-core-export/tests/official_fixtures.rs"
+        ]
+      }
+    },
+    {
+      "id": "DATA-03",
+      "statement": "A cross-product import is all or nothing: every section is parsed before anything is installed, and a failure leaves the empty start state and exits 1 naming the product and the path.",
+      "criticality": "critical",
+      "owner": "fireemu",
+      "status": "partial",
+      "note": "The sections are read into memory first and installed together under the exclusive AdmissionBarrier, so no request observes a suite that holds one product's import and not another's. A corrupt Firestore output file, a malformed accounts document, a blob that does not match its recorded digest and a missing blob each refuse the run before anything binds and before the command starts. Bounded model checking of the multi-product apply and rollback ordering is not written yet.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/import_export.rs",
+          "crates/fireemu-core-firestore/tests/import.rs",
+          "crates/fireemu-core-storage/tests/import.rs",
+          "crates/fireemu-core-auth/tests/import.rs"
+        ]
+      }
+    },
+    {
+      "id": "DATA-04",
+      "statement": "The shutdown export runs on a clean exit, on the command's failure and on SIGINT and SIGTERM, and a run that never started writes none.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "The export runs while every store is still in memory and before the functions runner is shut down; a failure to write it is reported without changing the exit code the run already earned.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/import_export.rs"
+        ]
+      }
+    },
+    {
+      "id": "DATA-05",
+      "statement": "An export directory that can hold credentials is written owner-only, and fireemu's own session secrets never reach one.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "An Auth export carries the emulator's reversible password hashes, salts, phone numbers and, for a fireemu TOTP factor, a shared secret, so every directory is created 0700 and every file 0600. App Check debug tokens, project epochs and the instance signing key, session snapshots, fault plans and text index definitions are not part of the format and are never written. The policy is documented in README.md, \"Import and export\".",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/import_export.rs"
+        ]
+      }
     }
   ]
 }

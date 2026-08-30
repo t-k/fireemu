@@ -1,0 +1,20 @@
+{
+  "name": "images/hello.txt",
+  "bucket": "demo-export.appspot.com",
+  "metageneration": 1,
+  "generation": 1788105513194,
+  "contentType": "text/plain",
+  "storageClass": "STANDARD",
+  "cacheControl": "public, max-age=60",
+  "downloadTokens": [],
+  "etag": "a7sO1JJ2Vz9lWyOmcW8s0Q5L244",
+  "customMetadata": {
+    "custom": "value",
+    "n": "1"
+  },
+  "timeCreated": "2026-08-30T15:58:33.194Z",
+  "updated": "2026-08-30T15:58:33.194Z",
+  "size": 14,
+  "md5Hash": "DFKqKz9JSntkXcjLkQABSQ==",
+  "crc32c": "3688631254"
+}

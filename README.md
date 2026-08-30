@@ -161,10 +161,10 @@ SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signa
 | --- | --- |
 | `up`, `emulators:start` | serve until Ctrl-C |
 | `exec`, `emulators:exec` | serve, run `-- <command...>`, exit with its status |
-| `emulators:export <dir>` | refused: there is no on-disk export artifact yet (capture state with `POST /v1/sessions/{s}/snapshots`) |
+| `emulators:export <dir>` | write an export directory from a running suite (see [Import and export](#import-and-export)) |
 | `doctor`, `capabilities` | versions and catalogs; the Capability Manifest |
 
-Flags, in the official spellings: `--only`, `--project` / `-P`, `--config`, `--import`, `--export-on-exit`, `--inspect-functions [port]` and `--log-verbosity quiet|info|debug`, next to fireemu's `--firebase-json`, `--firestore-port`, `--http-port`, `--storage-port`, `--functions-port`, `--functions`, `--ui-port` and `--hub-port`. `--import` and `--export-on-exit` parse and then fail with a precise "not supported yet" message, so a run never half-starts without the data it was told to load. `--inspect-functions` inserts Node's `--inspect=<port>` (default 9229) before the runner script; a configured `functions.runner` that is not Node is refused rather than started without the inspector.
+Flags, in the official spellings: `--only`, `--project` / `-P`, `--config`, `--import`, `--export-on-exit`, `--inspect-functions [port]` and `--log-verbosity quiet|info|debug`, next to fireemu's `--firebase-json`, `--firestore-port`, `--http-port`, `--storage-port`, `--functions-port`, `--functions`, `--ui-port` and `--hub-port`. `--inspect-functions` inserts Node's `--inspect=<port>` (default 9229) before the runner script; a configured `functions.runner` that is not Node is refused rather than started without the inspector.
 
 Exit codes: the command's own status from `exec`, `128 + signal` when a signal ended it, `1` for a startup failure or a refused configuration, `2` for a usage error. A refusal never binds a listener and never runs the command.
 
@@ -440,6 +440,98 @@ An object is at most 256 MiB; a request body is at most 260 MiB (the object boun
 
 The request bodies buffered at the same time are admitted against a process-wide budget of 1 GiB (`fireemu_adapter_http::storage_server::DEFAULT_BODY_BUDGET_BYTES`, about four near-limit uploads). An upload that does not fit is refused with `503` and `Retry-After: 1` before its buffer is allocated; a body without a `Content-Length` is charged as it grows. Every charge is released as soon as the request ends, including when the upload fails on rules, a checksum or a precondition. A failed upload publishes no object.
 
+### Import and export
+
+fireemu reads and writes the directory `firebase emulators:export` produces with
+`firebase-tools@15.28.2`, so a fixture can travel between the two suites in both directions.
+
+```sh
+# start from a directory the official suite (or fireemu) exported
+fireemu exec --import ./seed -- pnpm test
+
+# keep what the run produced, in place
+fireemu exec --import ./seed --export-on-exit -- pnpm test
+
+# write the state of a suite that is already running
+fireemu emulators:export ./seed
+```
+
+`--export-on-exit [dir]` writes the export on a clean exit, when the command fails, and on
+SIGINT or SIGTERM. Without a directory it uses the `--import` one, as the official CLI does;
+the working directory and its parents are refused, because an export replaces what the
+directory holds.
+
+**What the directory holds.** `firebase-export-metadata.json` names one section per product:
+
+| section | files | what travels |
+| --- | --- | --- |
+| `firestore_export/` | `firestore_export.overall_export_metadata`, `all_namespaces/all_kinds/{all_namespaces_all_kinds.export_metadata,output-0}` | every document of the `(default)` database, in the Firestore managed-export format (LevelDB log framing, `apphosting.datastore.v3` entities) |
+| `auth_export/` | `accounts.json`, `config.json` | every account with its providers, custom claims, phone and TOTP second factors, and the project's Auth configuration |
+| `storage_export/` | `buckets.json`, `blobs/<id>`, `metadata/<id>.json` | every object's bytes byte for byte, with its generation, times, hashes, download tokens and custom metadata |
+
+Everything is preserved verbatim: project ids, database ids, bucket names, object names and
+account identifiers. Two consequences are worth knowing:
+
+- the official managed export records **no document creation or update time**, so both suites
+  stamp an imported document with the commit that installs it;
+- a Firestore database other than `(default)` has no place in the official format, whose
+  export request is hard-coded to `databases/(default)`. fireemu writes those under a
+  `fireemu` member of the manifest that the official CLI ignores, so the official suite reads
+  the default database and fireemu reads all of them. A TOTP second factor, which the
+  official Auth emulator has no equivalent for, travels the same way under
+  `mfaInfo[].totpInfo.sharedSecretKey`.
+
+**An import is all or nothing.** Every section of the products `--only` selected is parsed
+into memory first and installed together under the exclusive admission barrier, so a
+malformed Storage section cannot leave a suite holding half an Auth import. Any failure
+leaves the empty start state and exits `1` naming the product and the file:
+
+```text
+error: --import ./seed: storage: ./seed/storage_export/blobs: object images/hello.txt: checksum mismatch: ...
+```
+
+A section of a product `--only` did not select is skipped with a notice. A `database_export`
+(Realtime Database, deferred) or `dataconnect_export` (SQL Connect, deferred) section is
+**refused**: fireemu serves neither product, and importing the rest would start a suite
+holding less state than the artifact records. An `accounts-<tenant>.json` is refused for the
+same reason -- fireemu serves no Identity Platform tenants.
+
+**Overwrite protection.** A directory is overwritten only when it is empty or already holds a
+`firebase-export-metadata.json`. The official CLI overwrites any directory once `--force` or
+`--export-on-exit` is given; fireemu applies the stricter rule always, so
+`fireemu emulators:export ~/Documents` cannot replace a directory that was never an export.
+
+#### Security policy for export artifacts
+
+**An export directory is secret material. Treat it like a password file.**
+
+The Local Emulator Suite stores passwords in the clear: `accounts.json` carries
+`passwordHash: "fakeHash:salt=<salt>:password=<plaintext>"`, so anyone who reads an export
+directory reads every test account's password. It also carries phone numbers, custom claims,
+and -- for a fireemu TOTP factor -- the shared secret. Because of that:
+
+- every directory fireemu creates for an export is `0700` and every file is `0600`;
+- an export is never written to a directory that is not empty and not already an export;
+- do not commit an export directory to a repository, attach it to an issue, or copy it to
+  shared storage. Use `demo-` projects and throwaway passwords in any fixture you do share.
+
+fireemu's own state stays out of the format entirely: **no App Check debug token, project
+epoch or instance signing key, and no session snapshot, fault plan or text index definition
+ever reaches an export directory.** Those are process secrets and session bookkeeping, not
+product state, and a test asserts that an export holds only the three official sections.
+
+Two credential rules follow from the one-way hashing fireemu uses internally:
+
+- a password that arrived from an official import is written back exactly as it was read, so
+  the export still signs in against the official suite;
+- a password set through fireemu's own API has no reversible form, and its account is
+  exported **without** a `passwordHash` rather than with an invented one. Re-import that
+  export and the account exists with everything else intact, but its password sign-in has to
+  be set up again.
+
+Named snapshots (`POST /v1/sessions/{s}/snapshots`) remain a separate, in-memory mechanism:
+they capture more than the official format can express and are never written to disk.
+
 ### Functions
 
 `--functions <dir>` (or `functions.source` in the config) starts `tools/runner-node/index.mjs` (Node, needs the codebase's own `node_modules` with `firebase-functions` and `firebase-admin`; `express` comes with `firebase-functions`). The runner discovers the exported v2 functions and reports them; the daemon then delivers Firestore document events (`onDocumentCreated` / `Updated` / `Deleted` / `Written` with path parameters), Storage object events (`onObjectFinalized` / `Deleted` / `MetadataUpdated`) and `onSchedule` runs as JSON CloudEvents, and serves `onRequest` / `onCall` at `http://127.0.0.1:5001/{project}/{region}/{function}`. Functions declared with `retry: true` are retried with exponential backoff in virtual time; other failures are dead-lettered.
@@ -613,7 +705,7 @@ at all, so every row that would need a real project is recorded `pending` with t
 than invented, and no `boundary-conformance` precision is raised on this evidence.
 
 Not covered in the current slice: browser / WebChannel, the Android, Apple, Unity, Java, Python
-and Go SDKs, import / export, and the official products fireemu does not implement.
+and Go SDKs, and the official products fireemu does not implement.
 
 ## License
 

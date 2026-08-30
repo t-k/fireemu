@@ -189,10 +189,12 @@ fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
     // An unknown route is a 404, not a hang or a 200 with an empty body.
     let (status, _) = request(port, "GET", "/nope", "127.0.0.1");
     assert_eq!(status, 404);
-    // Export is refused precisely rather than pretending to have written one.
+    // The export route exists; a request without the official body is refused precisely
+    // rather than writing a directory the caller never named. `tests/import_export.rs`
+    // drives the successful path end to end.
     let (status, body) = request(port, "POST", "/_admin/export", "127.0.0.1");
-    assert_eq!(status, 501, "{body}");
-    assert!(body.contains("snapshots"), "{body}");
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("export request body"), "{body}");
 
     // A non-loopback Host is refused: the Hub can disable background triggers, so a page on
     // a routable name must not reach it by DNS rebinding.

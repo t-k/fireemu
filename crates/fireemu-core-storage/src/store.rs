@@ -139,6 +139,44 @@ impl ObjectMetadata {
     }
 }
 
+/// An object an import artifact recorded, with everything it has to keep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedObject {
+    /// The bucket the object goes into.
+    pub bucket: BucketName,
+    /// The object name.
+    pub name: ObjectName,
+    /// The data generation the artifact recorded.
+    pub generation: u64,
+    /// The metadata generation the artifact recorded.
+    pub metageneration: u64,
+    /// The content type.
+    pub content_type: String,
+    /// `Content-Disposition`.
+    pub content_disposition: Option<String>,
+    /// `Content-Encoding`.
+    pub content_encoding: Option<String>,
+    /// `Content-Language`.
+    pub content_language: Option<String>,
+    /// `Cache-Control`.
+    pub cache_control: Option<String>,
+    /// Custom metadata.
+    pub custom: BTreeMap<String, String>,
+    /// The creation time the artifact recorded.
+    pub time_created: LogicalInstant,
+    /// The update time the artifact recorded.
+    pub updated: LogicalInstant,
+    /// The Firebase download tokens the artifact recorded; an existing download URL keeps
+    /// working only when they come back unchanged.
+    pub download_tokens: Vec<String>,
+    /// The MD5 the artifact recorded, checked against the bytes when present.
+    pub md5: Option<[u8; 16]>,
+    /// The CRC-32C the artifact recorded, checked against the bytes when present.
+    pub crc32c: Option<u32>,
+    /// The size the artifact recorded, checked against the bytes when present.
+    pub size: Option<u64>,
+}
+
 /// Write precondition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Precondition {
@@ -774,6 +812,110 @@ impl StorageState {
             prefixes,
             next_page_token,
         }
+    }
+
+    /// Every bucket that holds an object, in name order.
+    ///
+    /// The store has no bucket registry: a bucket exists because an object names it. An
+    /// export therefore lists exactly the buckets with content, and importing a bucket with
+    /// no objects is a no-op.
+    #[must_use]
+    pub fn buckets(&self) -> Vec<BucketName> {
+        let mut out: Vec<BucketName> = Vec::new();
+        for (bucket, _) in self.objects.keys() {
+            if out.last() != Some(bucket) {
+                out.push(bucket.clone());
+            }
+        }
+        out
+    }
+
+    /// Every object of every bucket, in (bucket, name) order: what an export walks.
+    #[must_use]
+    pub fn all_objects(&self) -> Vec<&ObjectMetadata> {
+        self.objects.values().collect()
+    }
+
+    /// Installs an object from an import artifact, with the generation, metageneration,
+    /// times and download tokens the artifact recorded.
+    ///
+    /// This is deliberately not [`Self::put`]: an import is restoring state that already
+    /// existed, so it must not draw a fresh generation, must not stamp the current time on
+    /// an object that was written long ago, must not mint a new download token (an existing
+    /// URL has to keep working) and must not append a [`StorageEvent`] -- a Functions
+    /// trigger firing for every object of an import would be an invented event.
+    ///
+    /// The digests the artifact recorded are checked against the bytes when it has them, so
+    /// a truncated or swapped blob is refused instead of being served with the wrong hash.
+    /// `next_generation` moves past the imported one so that a later write cannot reuse it.
+    pub fn insert_imported(
+        &mut self,
+        object: ImportedObject,
+        bytes: Vec<u8>,
+    ) -> Result<ObjectMetadata, StorageError> {
+        if bytes.len() as u64 > MAX_OBJECT_BYTES {
+            return Err(StorageError::TooLarge);
+        }
+        if custom_metadata_size(&object.custom) > MAX_CUSTOM_METADATA_BYTES {
+            return Err(StorageError::MetadataTooLarge);
+        }
+        let md5 = md5(&bytes);
+        if let Some(recorded) = object.md5 {
+            if recorded != md5 {
+                return Err(StorageError::ChecksumMismatch(format!(
+                    "the imported object {} does not match the md5Hash its metadata records",
+                    object.name.as_str()
+                )));
+            }
+        }
+        let crc = crc32c(&bytes);
+        if let Some(recorded) = object.crc32c {
+            if recorded != crc {
+                return Err(StorageError::ChecksumMismatch(format!(
+                    "the imported object {} does not match the crc32c its metadata records",
+                    object.name.as_str()
+                )));
+            }
+        }
+        if let Some(recorded) = object.size {
+            if recorded != bytes.len() as u64 {
+                return Err(StorageError::ChecksumMismatch(format!(
+                    "the imported object {} is {} bytes, not the {recorded} its metadata records",
+                    object.name.as_str(),
+                    bytes.len()
+                )));
+            }
+        }
+        self.next_blob += 1;
+        let blob = BlobId(self.next_blob);
+        self.next_generation = self.next_generation.max(object.generation);
+        let meta = ObjectMetadata {
+            bucket: object.bucket.clone(),
+            name: object.name.clone(),
+            generation: object.generation,
+            metageneration: object.metageneration,
+            size: bytes.len() as u64,
+            content_type: object.content_type,
+            content_disposition: object.content_disposition,
+            content_encoding: object.content_encoding,
+            content_language: object.content_language,
+            cache_control: object.cache_control,
+            custom: object.custom,
+            md5,
+            crc32c: crc,
+            time_created: object.time_created,
+            updated: object.updated,
+            download_tokens: object.download_tokens,
+            blob,
+        };
+        if let Some(old) = self
+            .objects
+            .insert((object.bucket, object.name), meta.clone())
+        {
+            self.blobs.remove(&old.blob);
+        }
+        self.blobs.insert(blob, bytes);
+        Ok(meta)
     }
 
     /// Objects of a bucket (name order).

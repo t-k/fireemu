@@ -1193,20 +1193,20 @@
       "officialDefaultPort": null,
       "officialTraits": [],
       "state": "claimed",
-      "decision": "Active supported surface: the orchestration behaviour of firebase-tools 15.28.2 (configuration schema, service selection, environment export, command names, exit codes) is reproduced for the served products; import/export and the --ui flag remain open.",
+      "decision": "Active supported surface: the orchestration behaviour of firebase-tools 15.28.2 (configuration schema, service selection, environment export, command names, exit codes, and the import / export artifacts) is reproduced for the served products; the --ui flag remains open.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/schema/firebase-config.json"
       ],
       "issues": [
         "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md",
-        "docs.local/issues/open/support-official-import-and-export-artifacts.md"
+        "docs.local/issues/closed/support-official-import-and-export-artifacts.md"
       ],
       "notes": [],
       "gaps": [
-        "--import / --export-on-exit / emulators:export (refused precisely until the artifact format exists)",
         "--ui",
-        "a second Functions codebase, per-database Firestore rules and per-target Storage rules are reported, not loaded"
+        "a second Functions codebase, per-database Firestore rules and per-target Storage rules are reported, not loaded",
+        "an export carries the Firestore, Auth and Storage sections only: Realtime Database and SQL Connect are deferred products and their sections are refused rather than written"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -1242,6 +1242,76 @@
           "fireemuOnly": [
             {
               "behaviour": "variables of unselected services are cleared in the child environment, and GOOGLE_CLOUD_PROJECT is set next to GCLOUD_PROJECT",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        },
+        {
+          "id": "CLI-CLAIM-IMPORT-EXPORT",
+          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, the Firestore managed export, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and a section of a deferred product is refused rather than silently dropped.",
+          "capabilities": [
+            {
+              "id": "DATA-1",
+              "status": "implemented"
+            },
+            {
+              "id": "DATA-2",
+              "status": "implemented"
+            },
+            {
+              "id": "CLI-04",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "the_recorded_multi_product_export_is_read_section_by_section",
+              "the_recorded_firestore_section_decodes_into_the_documents_that_were_seeded",
+              "the_recorded_value_corpus_decodes_every_edge_case_the_official_emulator_writes",
+              "every_document_the_official_emulator_wrote_survives_a_fireemu_re_encode",
+              "an_official_multi_product_export_is_imported_whole",
+              "an_export_on_exit_reimports_into_the_same_state",
+              "a_corrupt_firestore_section_refuses_the_whole_import",
+              "a_realtime_database_section_is_refused_with_the_deferred_status",
+              "the_export_runs_when_the_daemon_is_interrupted",
+              "every_exported_directory_and_file_is_owner_only"
+            ],
+            "integration": [
+              "crates/fireemu-core-export/tests/official_fixtures.rs",
+              "crates/fireemu/tests/import_export.rs",
+              "crates/fireemu-core-firestore/tests/import.rs",
+              "crates/fireemu-core-storage/tests/import.rs",
+              "crates/fireemu-core-auth/tests/import.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the Firestore managed export records no document creation or update time, so both suites stamp an imported document with the commit that installs it",
+            "the Auth emulator stores passwords in the clear (fakeHash:salt=<salt>:password=<plaintext>), so an export directory is equivalent to a password list",
+            "the official export request is hard-coded to databases/(default), so the format has no place for a named Firestore database",
+            "the official CLI overwrites a non-empty target directory once --force or --export-on-exit is given, whatever it holds"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "an export directory and every file in it are created owner-only (0700 / 0600), because the Auth section carries password material",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a directory is overwritten only when it is empty or already holds a firebase-export-metadata.json, whatever flags were given",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "Firestore databases other than (default) are written under a fireemu member of the manifest, which the official CLI ignores",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a TOTP second factor, which the official Auth emulator has no equivalent for, is written under mfaInfo[].totpInfo.sharedSecretKey",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a Storage blob id is derived from the bucket, object and generation instead of being a random UUID, so exporting the same state twice writes the same directory",
               "precision": "exact-for-local-semantics"
             }
           ],

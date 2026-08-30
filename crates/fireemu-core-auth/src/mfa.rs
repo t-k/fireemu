@@ -192,6 +192,35 @@ impl fmt::Debug for TotpEnrollmentMaterial {
     }
 }
 
+/// Why a second factor an import artifact recorded was refused.
+///
+/// This is deliberately separate from [`MfaError`]: nothing on the enrollment or sign-in
+/// paths can produce it, and the adapters that map `MfaError` to Identity Toolkit error
+/// codes have no code to map it to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedFactorError {
+    /// More than [`MAX_FACTORS_PER_USER`] factors on one account.
+    TooMany,
+    /// A factor has an empty enrollment id, or two share one.
+    InvalidEnrollmentId,
+}
+
+impl fmt::Display for ImportedFactorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooMany => write!(
+                f,
+                "an imported account has more than {MAX_FACTORS_PER_USER} second factors"
+            ),
+            Self::InvalidEnrollmentId => f.write_str(
+                "an imported second factor has an empty enrollment id, or two share one",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ImportedFactorError {}
+
 /// MFA errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MfaError {
@@ -308,6 +337,35 @@ impl MfaState {
 
     pub(crate) fn phone_factors_mut(&mut self) -> &mut Vec<PhoneFactor> {
         &mut self.phone
+    }
+
+    /// Installs the second factors an import artifact recorded, with their enrollment ids,
+    /// display names, secrets and enrollment times.
+    ///
+    /// The per-user factor limit still applies, and every enrollment id must be unique and
+    /// non-empty: an artifact that gave two factors the same id would make the second
+    /// unreachable through the enrollment routes.
+    pub fn import_factors(
+        &mut self,
+        totp: Vec<TotpFactor>,
+        phone: Vec<PhoneFactor>,
+    ) -> Result<(), ImportedFactorError> {
+        if totp.len() + phone.len() > MAX_FACTORS_PER_USER {
+            return Err(ImportedFactorError::TooMany);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for id in totp
+            .iter()
+            .map(|f| &f.mfa_enrollment_id)
+            .chain(phone.iter().map(|f| &f.mfa_enrollment_id))
+        {
+            if id.is_empty() || !seen.insert(id.clone()) {
+                return Err(ImportedFactorError::InvalidEnrollmentId);
+            }
+        }
+        self.totp = totp;
+        self.phone = phone;
+        Ok(())
     }
 
     /// Whether no second factor of any kind is enrolled.

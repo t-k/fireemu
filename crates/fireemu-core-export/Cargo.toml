@@ -1,0 +1,19 @@
+[package]
+name = "fireemu-core-export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "std-only Local Emulator Suite import / export artifacts: the export manifest, the Auth accounts and config documents, the Storage bucket and object documents, and the Firestore managed-export codec"
+
+[dependencies]
+fireemu-core-types = { path = "../fireemu-core-types" }
+fireemu-core-firestore = { path = "../fireemu-core-firestore" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

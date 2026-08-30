@@ -226,6 +226,8 @@ pub struct IdTokenClaims {
     pub email: Option<String>,
     /// Email verified flag.
     pub email_verified: bool,
+    /// Phone number, if any.
+    pub phone_number: Option<String>,
     /// Firebase block.
     pub firebase: FirebaseClaims,
     /// Custom claims (merged at the top level when serialized).
@@ -250,6 +252,9 @@ impl IdTokenClaims {
                 "email_verified".into(),
                 ClaimValue::Bool(self.email_verified),
             );
+        }
+        if let Some(phone) = &self.phone_number {
+            entries.insert("phone_number".into(), ClaimValue::String(phone.clone()));
         }
         let mut firebase = BTreeMap::new();
         let identities: BTreeMap<String, ClaimValue> = self

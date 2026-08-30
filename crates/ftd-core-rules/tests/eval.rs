@@ -323,6 +323,7 @@ fn auth_context_is_built_from_id_token_claims() {
         .insert("role", ClaimValue::String("admin".into()))
         .unwrap();
     let claims = IdTokenClaims {
+        phone_number: None,
         iss: "https://securetoken.google.com/demo-app".into(),
         aud: "demo-app".into(),
         auth_time: 1,

@@ -20,6 +20,7 @@ Exercise a running `firebase-testd` with the real Firebase SDKs.
   its checks as JSON. `FTD_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.
 
 ```sh
+# one-shot: firebase-testd exec --firestore-port 8080 --http-port 9099 --storage-port 9199 -- npm run smoke
 cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 &
 cd tools/sdk-smoke && npm install
 export FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GOOGLE_CLOUD_PROJECT=demo-app

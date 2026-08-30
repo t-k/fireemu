@@ -28,7 +28,16 @@ The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChann
 cargo run -p firebase-testd -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
 #   optional: --config firebase-testd.json  (see spec/config/firebase-testd.schema.json)
 #   optional: --functions ./functions --functions-port 5001   (a firebase-functions v2 codebase)
+#   optional: --firebase-json firebase.json --project my-app   (rules, indexes, ports from a Firebase project)
 ```
+
+`firebase-testd exec` is the `firebase emulators:exec` equivalent: it serves the same, runs a command once every listener is bound, stops everything when the command exits and exits with its status.
+
+```sh
+firebase-testd exec --firebase-json firebase.json --project my-app --only auth,firestore,storage -- vitest run
+```
+
+The command receives `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST` (those named by `--only`; every service listens regardless), `FTD_FUNCTIONS_HOST` when a functions codebase is loaded, `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`, and `FTD_CONTROL_TOKEN` / `FTD_CONTROL_URL` for the control API. SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signal`) and nothing is left listening or running. `--firebase-json` maps `firestore.rules`, `firestore.indexes`, `storage.rules`, `emulators.*.port` and, when `functions` is selected, `functions.source`; entries without an equivalent (`emulators.pubsub`, `database`, ...) are named in a notice and ignored. Ports given on the command line override it.
 
 The daemon prints the environment variables SDKs need (`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` / `STORAGE_EMULATOR_HOST`). Storage rules load from `storage.rules` in the config or `PUT /v1/storage/rules`. Security Rules come from `rules.source` in the config file or at runtime:
 

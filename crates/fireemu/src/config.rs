@@ -169,6 +169,10 @@ pub struct RuntimeConfig {
     /// What to do with an exported trigger that belongs to a product fireemu does not serve
     /// (`functions.unservedTriggers`): `refuse` (default) or `report`.
     pub functions_unserved_triggers: String,
+    /// The `.firebaserc` alias `--project` resolved through, when the project was named by an
+    /// alias. It is the only reason a codebase may carry a `.env.<alias>` file, and having
+    /// both that and `.env.<projectId>` is refused, as `loadUserEnvs` refuses it.
+    pub functions_project_alias: Option<String>,
     /// Attempts per event for functions declared with `retry` (`events.maxAttempts`).
     pub events_max_attempts: u32,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
@@ -344,6 +348,7 @@ impl Default for RuntimeConfig {
             functions_manifest: None,
             functions_max_running: 8,
             functions_unserved_triggers: "refuse".to_owned(),
+            functions_project_alias: None,
             events_max_attempts: 4,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,

@@ -439,6 +439,14 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         }
     }
     if let Some(project) = resolve_project(&project_root, raw.project.as_deref())? {
+        // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
+        // keyed by (`findEnvfiles`). A `--project` value that is already a project ID is not
+        // an alias, and neither is one that resolves to itself.
+        cfg.functions_project_alias = raw
+            .project
+            .as_deref()
+            .filter(|requested| *requested != project)
+            .map(str::to_owned);
         cfg.auth_project = project;
     }
     if !only.functions {

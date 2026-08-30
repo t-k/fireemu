@@ -45,6 +45,114 @@ pub fn firebase_config(project: &str) -> String {
     .to_string()
 }
 
+/// The user environment of one codebase: the dotenv chain, the local secret overrides and
+/// the legacy runtime configuration, with the files each came from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserEnvironment {
+    /// `.env` chain values, later files having overridden earlier ones.
+    pub values: Vec<(String, String)>,
+    /// `.secret.local` values. They override the chain, as `startRuntime` merges them
+    /// (`functionsEmulator.js:1195`).
+    pub secrets: Vec<(String, String)>,
+    /// `CLOUD_RUNTIME_CONFIG`, when the codebase carries a `.runtimeconfig.json`.
+    pub runtime_config: Option<String>,
+    /// The files that were read, in the order they were applied, for the startup line.
+    pub files: Vec<String>,
+}
+
+impl UserEnvironment {
+    /// Every value, in the order the runner must apply them: the chain, then the secrets.
+    #[must_use]
+    pub fn applied(&self) -> Vec<(String, String)> {
+        let mut out = self.values.clone();
+        out.extend(self.secrets.iter().cloned());
+        if let Some(config) = &self.runtime_config {
+            out.push(("CLOUD_RUNTIME_CONFIG".to_owned(), config.clone()));
+        }
+        out
+    }
+}
+
+/// Reads a codebase's `.env` chain, `.secret.local` and `.runtimeconfig.json`.
+///
+/// The chain and its refusals are the official ones (`fireemu_core_functions::env`); the two
+/// files that are not dotenv chains follow `functionsEmulator.js`:
+///
+/// - `.secret.local` is parsed strictly and merged over the chain, and is the *only* source of
+///   `defineSecret` values here. The official emulator falls back to Google Cloud Secret
+///   Manager for a secret the file does not carry; fireemu has no credentials and never
+///   reaches the network, so a missing secret stays missing and the parameter resolves the way
+///   an unset environment variable resolves.
+/// - `.runtimeconfig.json` becomes `CLOUD_RUNTIME_CONFIG`, as `getRuntimeConfig` makes it. An
+///   unreadable or malformed file is reported and treated as absent, which is what that
+///   function's empty `catch` does. Note that the pinned `firebase-functions@7.3.2` has
+///   *removed* `functions.config()` -- calling it throws `functions.config() has been removed
+///   in firebase-functions v7` -- so the variable is passed through for a codebase pinned to
+///   v6 or reading it itself, and no supported SDK surface consumes it.
+pub fn load_user_environment(
+    dir: &Path,
+    project_id: &str,
+    alias: Option<&str>,
+) -> Result<UserEnvironment, String> {
+    use fireemu_core_functions::env;
+    let mut out = UserEnvironment::default();
+    let present = |name: &str| dir.join(name).is_file();
+    if let Some(alias) = alias {
+        if present(&format!(".env.{project_id}")) && present(&format!(".env.{alias}")) {
+            return Err(env::both_project_files_error(project_id, alias));
+        }
+    }
+    for name in env::env_file_order(project_id, alias) {
+        let path = dir.join(&name);
+        if !path.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to load environment variables from {name}. ({e})"))?;
+        let values = env::parse_strict(&text)
+            .map_err(|e| format!("Failed to load environment variables from {name}. {e}"))?;
+        for (k, v) in values {
+            out.values.retain(|(existing, _)| existing != &k);
+            out.values.push((k, v));
+        }
+        out.files.push(name);
+    }
+    let secrets = dir.join(env::LOCAL_SECRETS_FILE);
+    if secrets.is_file() {
+        let text = std::fs::read_to_string(&secrets).map_err(|e| {
+            format!(
+                "Failed to read local secrets file {}: {e}",
+                secrets.display()
+            )
+        })?;
+        out.secrets = env::parse_strict(&text)
+            .map_err(|e| {
+                format!(
+                    "Failed to read local secrets file {}: {e}",
+                    secrets.display()
+                )
+            })?
+            .into_iter()
+            .collect();
+    }
+    let runtime_config = dir.join(env::RUNTIME_CONFIG_FILE);
+    if runtime_config.is_file() {
+        match std::fs::read_to_string(&runtime_config)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        {
+            Some(value) => out.runtime_config = Some(value.to_string()),
+            // `Found .runtimeconfig.json but the JSON format is invalid.`
+            // (`emulatorLogger.js:199`), and the runtime is started without it.
+            None => eprintln!(
+                "note: found {} but the JSON format is invalid; functions.config() will be empty",
+                runtime_config.display()
+            ),
+        }
+    }
+    Ok(out)
+}
+
 /// What to do with an export whose trigger family belongs to a product fireemu does not
 /// serve (`functions.unservedTriggers`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -262,7 +370,26 @@ pub async fn start(
     command.push("--source".to_owned());
     command.push(source.clone());
     let default_bucket = format!("{}.appspot.com", cfg.auth_project);
-    let mut env = vec![
+    // The user environment goes in first: the emulator's own variables override it, exactly as
+    // `getRuntimeEnvs` spreads `{...userEnvs, ...systemEnvs, ...emulatorEnvs, FIREBASE_CONFIG}`
+    // (`functionsEmulator.js:1027`). The dotenv dialect refuses every reserved key outright, so
+    // this ordering is a second line rather than the only one.
+    let user_env = load_user_environment(
+        Path::new(&source),
+        &cfg.auth_project,
+        cfg.functions_project_alias.as_deref(),
+    )?;
+    if !user_env.files.is_empty() {
+        eprintln!(
+            "note: functions: loaded environment variables from {}",
+            user_env.files.join(", ")
+        );
+    }
+    let mut env = user_env.applied();
+    env.extend([
+        // A runner must never reach a metadata server: the official emulator sets this on the
+        // child too (`functionsEmulator.js:1117`).
+        ("METADATA_SERVER_DETECTION".to_owned(), "none".to_owned()),
         ("GCLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
         ("GOOGLE_CLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
         (
@@ -284,7 +411,7 @@ pub async fn start(
         ("TZ".to_owned(), "UTC".to_owned()),
         ("FIREEMU_RUNNER".to_owned(), "1".to_owned()),
         ("FIREEMU_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
-    ];
+    ]);
     if let Some(host) = &hosts.firestore {
         env.push(("FIRESTORE_EMULATOR_HOST".to_owned(), host.clone()));
         env.push((

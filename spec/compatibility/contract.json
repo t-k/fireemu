@@ -169,6 +169,18 @@
           "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the project and a signed token still verified",
           "emulatorValue": "no verification at all: the token is decoded and request.auth is built from whatever it carries",
           "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The firebase profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. Both are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
+        },
+        {
+          "key": "auth.transientCredentialLifecycle",
+          "profileValue": "email action codes expire after 3600 s and phone verification codes after 600 s of virtual time, pending second-factor sign-ins after 3600 s, a TOTP enrollment session answers SESSION_EXPIRED for one further session lifetime and is then reaped, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; expired entries are swept before every request and never observable",
+          "emulatorValue": "no expiry and no budget: every code stays until it is consumed and the pending credential is a stateless base64 document (firebase-tools/lib/emulator/auth/state.js createOob, createVerificationCode; operations.js mfaPending)",
+          "note": "Read from the pinned source rather than measured with a clock: the official emulator has no virtual clock to advance past a lifetime. fireemu bounds the retained state so abandoned flows cannot grow a session without limit (INV-AUTH-004); every in-window credential keeps its one-time consumption semantics, and refresh tokens are not part of the policy. Documented in README.md, \"Authentication\"."
+        },
+        {
+          "key": "auth.refreshTokenRevocation",
+          "profileValue": "a privileged revocation (accounts:update with validSince through the Admin routes), a disablement and a privileged password or email change invalidate the user's refresh tokens; a self-service password or email change through the session's own ID token moves validSince and keeps that session's refresh tokens",
+          "emulatorValue": "refresh tokens are stateless and never invalidated: validateRefreshToken checks only the project and the user's existence, so an old refresh token keeps minting ID tokens after revokeRefreshTokens, after a password change and after a disable-then-enable (firebase-tools/lib/emulator/auth/state.js validateRefreshToken; operations.js grantToken)",
+          "note": "Read from the pinned source. fireemu keeps production's refresh-token revocation for the privileged operations, so a test that revokes or disables an account can observe the session end at its next refresh, and reproduces the official emulator for the self-service change, where the client SDK continues on whichever refresh token it holds. Both sides refuse an ID token whose auth_time precedes validSince, floored to the second. Documented in README.md, \"Authentication\"."
         }
       ]
     },

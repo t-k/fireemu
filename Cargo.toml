@@ -21,6 +21,7 @@ members = [
     "tools/proto-gen",
     "verification/loom",
     "verification/kani",
+    "verification/property",
 ]
 
 [workspace.package]

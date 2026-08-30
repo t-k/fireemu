@@ -145,9 +145,9 @@
       "criticality": "critical",
       "owner": "core-limits",
       "status": "partial",
-      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E).",
+      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E), and LimitRejection.tla is pending with it.",
       "artifacts": {
-        "tla": "LimitRejection.tla::LimitRejectionAtomicity",
+        "tla": "pending:LimitRejection.tla::LimitRejectionAtomicity",
         "kani": "limit_boundary_classification",
         "property": "prop_boundary_reject_precedes_warning",
         "mutation": [
@@ -223,7 +223,7 @@
       "owner": "core-firestore",
       "status": "partial",
       "artifacts": {
-        "kani": "conservative_index_never_false_accepts",
+        "kani": "pending:conservative_index_never_false_accepts",
         "mutation": [
           "M-INDEX-001",
           "M-INDEX-002",

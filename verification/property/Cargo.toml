@@ -1,19 +1,20 @@
 [package]
-name = "ftd-verification-kani"
+name = "ftd-verification-property"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Kani bounded model checking harnesses; run with `cargo kani`"
+description = "Property tests named by verification/requirements/requirements.json; run with cargo test"
 
-[dependencies]
+[dev-dependencies]
 ftd-core-auth = { path = "../../crates/ftd-core-auth" }
-ftd-core-types = { path = "../../crates/ftd-core-types" }
+ftd-core-events = { path = "../../crates/ftd-core-events" }
 ftd-core-limits = { path = "../../crates/ftd-core-limits" }
 ftd-core-session = { path = "../../crates/ftd-core-session" }
-ftd-core-events = { path = "../../crates/ftd-core-events" }
+ftd-core-types = { path = "../../crates/ftd-core-types" }
+proptest.workspace = true
 
 [lints]
 workspace = true

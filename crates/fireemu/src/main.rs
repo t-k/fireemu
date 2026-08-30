@@ -612,12 +612,7 @@ fn child_environment(
     if std::env::var_os("FIREBASE_CONFIG").is_none() {
         env.push((
             "FIREBASE_CONFIG".to_owned(),
-            serde_json::json!({
-                "projectId": cfg.auth_project,
-                "storageBucket": format!("{}.appspot.com", cfg.auth_project),
-                "databaseURL": format!("https://{}.firebaseio.com", cfg.auth_project),
-            })
-            .to_string(),
+            functions::firebase_config(&cfg.auth_project),
         ));
     }
     env

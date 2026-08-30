@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-unserved",
+  "private": true,
+  "main": "index.js",
+  "description": "A codebase whose only exports belong to products fireemu does not serve (discovery refusal fixture)."
+}

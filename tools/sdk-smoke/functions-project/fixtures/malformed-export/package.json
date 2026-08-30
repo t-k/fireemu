@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-malformed",
+  "private": true,
+  "main": "index.js",
+  "description": "A codebase with one export that cannot describe itself (discovery inventory fixture)."
+}

@@ -266,11 +266,84 @@ pub struct FunctionSpec {
     pub concurrency: u32,
 }
 
+/// Why an exported function is not served, in the daemon's product-scope vocabulary.
+///
+/// The official emulator never fails on one: it logs `Unsupported trigger` (DEBUG) or
+/// `Unsupported function type on <name>` (WARN) and records the definition with
+/// `ignored: true` (`functionsEmulator.js:488`, `:497`, `:501`). fireemu keeps the inventory
+/// for the same reason -- an export must never disappear -- but distinguishes a product it
+/// does not serve, where continuing would let a project believe a trigger runs, from a shape
+/// nobody recognises, where the official emulator's carry-on is the compatible answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IgnoredScope {
+    /// The product has an open compatibility issue and no implementation.
+    Deferred,
+    /// The product is on the active list and not implemented yet.
+    Planned,
+    /// A closed product decision: it will not be served.
+    NotPlanned,
+    /// Neither the official emulator nor this runner recognises the shape.
+    Unsupported,
+}
+
+impl IgnoredScope {
+    /// The manifest spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deferred => "deferred",
+            Self::Planned => "planned",
+            Self::NotPlanned => "notPlanned",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    /// Parses the manifest spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "deferred" => Some(Self::Deferred),
+            "planned" => Some(Self::Planned),
+            "notPlanned" => Some(Self::NotPlanned),
+            "unsupported" => Some(Self::Unsupported),
+            _ => None,
+        }
+    }
+
+    /// Whether an export of this scope is fatal to discovery.
+    ///
+    /// A product decision is: the daemon serves no such product, so the function would never
+    /// run and saying nothing would be a silently wrong answer. An unrecognised shape is not:
+    /// that is what the official emulator carries on from.
+    #[must_use]
+    pub const fn is_product_decision(self) -> bool {
+        matches!(self, Self::Deferred | Self::Planned | Self::NotPlanned)
+    }
+}
+
+/// One exported function the runner discovered and cannot serve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredFunction {
+    /// Name, as exported.
+    pub name: String,
+    /// Region.
+    pub region: String,
+    /// The trigger family, in the daemon's spelling (`database`, `eventarc`, `unknown`, ...).
+    pub trigger_type: String,
+    /// Why it is not served.
+    pub scope: IgnoredScope,
+    /// The sentence the daemon prints or refuses with.
+    pub reason: String,
+}
+
 /// The function manifest.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FunctionManifest {
     /// Functions.
     pub functions: Vec<FunctionSpec>,
+    /// Exports the runner discovered and cannot serve. Never empty by omission: an export
+    /// that is not in `functions` is in here with the reason.
+    pub ignored: Vec<IgnoredFunction>,
 }
 
 /// Manifest validation errors.

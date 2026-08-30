@@ -166,6 +166,9 @@ pub struct RuntimeConfig {
     pub functions_manifest: Option<String>,
     /// Maximum invocations running at once (`functions.maxGlobalConcurrency`).
     pub functions_max_running: usize,
+    /// What to do with an exported trigger that belongs to a product fireemu does not serve
+    /// (`functions.unservedTriggers`): `refuse` (default) or `report`.
+    pub functions_unserved_triggers: String,
     /// Attempts per event for functions declared with `retry` (`events.maxAttempts`).
     pub events_max_attempts: u32,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
@@ -340,6 +343,7 @@ impl Default for RuntimeConfig {
             functions_runner: None,
             functions_manifest: None,
             functions_max_running: 8,
+            functions_unserved_triggers: "refuse".to_owned(),
             events_max_attempts: 4,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
@@ -1241,7 +1245,15 @@ impl RuntimeConfig {
         cfg: &mut Self,
     ) -> Result<(), ConfigError> {
         for key in f.keys() {
-            if !["manifest", "source", "runner", "maxGlobalConcurrency"].contains(&key.as_str()) {
+            if ![
+                "manifest",
+                "source",
+                "runner",
+                "maxGlobalConcurrency",
+                "unservedTriggers",
+            ]
+            .contains(&key.as_str())
+            {
                 return Err(ConfigError(format!("unknown config key functions.{key}")));
             }
         }
@@ -1268,6 +1280,15 @@ impl RuntimeConfig {
         }
         if let Some(n) = f.get("maxGlobalConcurrency").and_then(Value::as_u64) {
             cfg.functions_max_running = usize::try_from(n).unwrap_or(8).max(1);
+        }
+        if let Some(v) = f.get("unservedTriggers") {
+            let text = v.as_str().unwrap_or_default();
+            if !["refuse", "report"].contains(&text) {
+                return Err(ConfigError(
+                    "functions.unservedTriggers must be \"refuse\" or \"report\"".into(),
+                ));
+            }
+            text.clone_into(&mut cfg.functions_unserved_triggers);
         }
         Ok(())
     }

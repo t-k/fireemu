@@ -93,6 +93,7 @@ fn manifests_match_firestore_and_storage_triggers() {
                 },
             ),
         ],
+        ignored: Vec::new(),
     };
     m.validate().unwrap();
     let created = m.firestore_matches("(default)", "todos/t1", DocumentEvent::Created);
@@ -142,6 +143,7 @@ fn manifests_match_firestore_and_storage_triggers() {
             function("a", Trigger::http(false)),
             function("a", Trigger::http(true)),
         ],
+        ignored: Vec::new(),
     };
     assert!(dup.validate().is_err());
 }

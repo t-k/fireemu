@@ -24,6 +24,93 @@ use crate::config::RuntimeConfig;
 /// would change what the functions themselves answer.
 const DEBUG_FEATURES: &str = r#"{"skipTokenVerification":true}"#;
 
+/// `FIREBASE_CONFIG`, with the three members the official emulator puts in it
+/// (`functionsEmulator.js:1010-1026` with `constructDefaultAdminSdkConfig`,
+/// `adminSdkConfig.js:13`).
+///
+/// `databaseURL` is present even though fireemu serves no Realtime Database, and points where
+/// the official emulator points it when no Database emulator is running:
+/// `https://<project>.firebaseio.com`. It is not decoration. `firebase-functions/v1`
+/// `database.ref(...)` reads it while the endpoint is being described and throws
+/// `Missing expected firebase config value databaseURL` when it is absent, so omitting the
+/// key turns a codebase with one v1 Realtime Database trigger into a runner that dies with a
+/// stack trace instead of a codebase whose unserved trigger is named.
+#[must_use]
+pub fn firebase_config(project: &str) -> String {
+    serde_json::json!({
+        "storageBucket": format!("{project}.appspot.com"),
+        "databaseURL": format!("https://{project}.firebaseio.com"),
+        "projectId": project,
+    })
+    .to_string()
+}
+
+/// What to do with an export whose trigger family belongs to a product fireemu does not
+/// serve (`functions.unservedTriggers`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnservedTriggers {
+    /// Fail discovery, naming every such function. The default: a project whose Realtime
+    /// Database trigger will never run must not be told the emulator started.
+    #[default]
+    Refuse,
+    /// Print one line per function and carry on, which is what the official emulator does
+    /// with a trigger service it has no emulator for.
+    Report,
+}
+
+impl UnservedTriggers {
+    /// Parses the configuration spelling.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "refuse" => Some(Self::Refuse),
+            "report" => Some(Self::Report),
+            _ => None,
+        }
+    }
+}
+
+/// The line the daemon prints for one ignored export, in the official emulator's shape
+/// (`functions[<region>-<name>]: function ignored because ...`, `functionsEmulator.js:501`).
+#[must_use]
+pub fn ignored_line(f: &fireemu_core_functions::manifest::IgnoredFunction) -> String {
+    format!(
+        "functions[{}-{}]: function ignored ({}): {}",
+        f.region, f.name, f.trigger_type, f.reason
+    )
+}
+
+/// Applies `policy` to everything the runner discovered and could not serve.
+///
+/// Nothing is dropped in silence, in either outcome: an unrecognised shape is reported on
+/// stderr the way the official emulator reports it and stays in the manifest inventory, while
+/// a trigger family that belongs to a product fireemu does not serve fails discovery with
+/// every such function named -- unless the configuration asked for it to be reported instead.
+pub fn check_ignored(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    policy: UnservedTriggers,
+) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+    let mut fatal = Vec::new();
+    for f in &manifest.ignored {
+        if f.scope.is_product_decision() && policy == UnservedTriggers::Refuse {
+            fatal.push(format!("{} ({}): {}", f.name, f.trigger_type, f.reason));
+        } else {
+            lines.push(ignored_line(f));
+        }
+    }
+    if fatal.is_empty() {
+        return Ok(lines);
+    }
+    Err(format!(
+        "the functions codebase exports {} trigger(s) that belong to a product fireemu does \
+         not serve, so they would never run: {}. Remove them, or set \
+         functions.unservedTriggers = \"report\" to start anyway with each one named",
+        fatal.len(),
+        fatal.join("; ")
+    ))
+}
+
 /// Addresses the runner's functions need to reach the daemon. `None` means the service was
 /// not selected by `--only`: its variable is then left unset in the runner, so a handler
 /// cannot reach a product this run is not serving.
@@ -178,12 +265,23 @@ pub async fn start(
     let mut env = vec![
         ("GCLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
         ("GOOGLE_CLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
+        (
+            "GOOGLE_CLOUD_QUOTA_PROJECT".to_owned(),
+            cfg.auth_project.clone(),
+        ),
         ("FUNCTIONS_EMULATOR".to_owned(), "true".to_owned()),
         (
             "FIREBASE_CONFIG".to_owned(),
-            serde_json::json!({"projectId": cfg.auth_project, "storageBucket": default_bucket})
-                .to_string(),
+            firebase_config(&cfg.auth_project),
         ),
+        // The official emulator's process-wide Cloud Run identity fields
+        // (`functionsEmulator.js:980-987`). `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and
+        // `K_SERVICE` name one function, and the official emulator can set them at spawn
+        // because it starts one runtime process per trigger; fireemu serves a whole codebase
+        // from one runner, so the runner sets those three per invocation instead.
+        ("K_REVISION".to_owned(), "1".to_owned()),
+        ("PORT".to_owned(), "80".to_owned()),
+        ("TZ".to_owned(), "UTC".to_owned()),
         ("FIREEMU_RUNNER".to_owned(), "1".to_owned()),
         ("FIREEMU_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
     ];
@@ -251,6 +349,16 @@ pub async fn start(
         }
     }
     let manifest = parse_manifest(&manifest_json)?;
+    // Before anything is served: every export the runner could not serve is either named in a
+    // refusal or printed, one line each.
+    let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
+    for line in check_ignored(&manifest, policy).inspect_err(|_| {
+        // A refusal kills the runner it just started rather than leaving it parented to a
+        // daemon that is about to exit.
+        runner.kill_now();
+    })? {
+        eprintln!("note: {line}");
+    }
     if callable_trusted_protocol && cfg.functions_manifest.is_some() {
         // A configured manifest replaces discovery outright, and the callable flag is what
         // decides whether a request goes through the trust boundary at all: a file that calls
@@ -743,6 +851,63 @@ mod tests {
 
         super::check_manifest_agrees_on_callables(&discovered, &discovered)
             .expect("an agreeing manifest starts");
+    }
+
+    /// A manifest whose only ignored export is an unrecognised shape starts, with a line
+    /// naming it -- the official emulator's carry-on. A product decision does not.
+    #[test]
+    fn a_product_decision_is_fatal_and_an_unrecognised_shape_is_a_line() {
+        let manifest = parse_manifest(&json!({
+            "functions": [{"name": "api", "trigger": {"type": "http", "callable": false}}],
+            "ignored": [
+                {"name": "onRef", "region": "europe-west1", "triggerType": "database",
+                 "scope": "deferred", "reason": "deferred: no Realtime Database"},
+                {"name": "weird", "region": "us-central1", "triggerType": "unknown",
+                 "scope": "unsupported", "reason": "the endpoint declares no trigger"}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+
+        let e = super::check_ignored(&manifest, super::UnservedTriggers::Refuse)
+            .expect_err("a deferred product is fatal");
+        assert!(e.contains("onRef (database)"), "{e}");
+        assert!(!e.contains("weird"), "{e}");
+
+        let lines = super::check_ignored(&manifest, super::UnservedTriggers::Report)
+            .expect("reporting starts");
+        assert_eq!(
+            lines,
+            vec![
+                "functions[europe-west1-onRef]: function ignored (database): deferred: no \
+                 Realtime Database"
+                    .to_owned(),
+                "functions[us-central1-weird]: function ignored (unknown): the endpoint \
+                 declares no trigger"
+                    .to_owned(),
+            ]
+        );
+    }
+
+    /// Nothing is dropped in either direction: an ignored export survives the manifest's
+    /// round trip through JSON with its scope and its reason.
+    #[test]
+    fn the_ignored_inventory_round_trips_through_the_manifest_json() {
+        let json = json!({
+            "functions": [],
+            "ignored": [{"name": "onRef", "region": "us-central1", "triggerType": "database",
+                         "scope": "notPlanned", "reason": "not planned"}]
+        });
+        let manifest = parse_manifest(&json).expect("parses");
+        assert_eq!(
+            fireemu_adapter_functions::manifest_json::manifest_to_json(&manifest)["ignored"],
+            json["ignored"]
+        );
+        let bad = parse_manifest(&json!({
+            "functions": [],
+            "ignored": [{"name": "onRef", "scope": "invented", "reason": "x"}]
+        }))
+        .expect_err("an unknown scope is refused rather than guessed");
+        assert!(bad.contains("unknown scope"), "{bad}");
     }
 
     #[test]

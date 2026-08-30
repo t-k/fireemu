@@ -18,8 +18,9 @@
 
 use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
-    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent,
-    Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec,
+    IgnoredFunction, IgnoredScope, ObjectEvent, Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION,
+    DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::PathPattern;
 use serde_json::{json, Value};
@@ -34,9 +35,38 @@ pub fn parse_manifest(v: &Value) -> Result<FunctionManifest, String> {
     for f in functions {
         out.push(parse_function(f)?);
     }
-    let manifest = FunctionManifest { functions: out };
+    let mut ignored = Vec::new();
+    for entry in v
+        .get("ignored")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+    {
+        ignored.push(parse_ignored(entry)?);
+    }
+    let manifest = FunctionManifest {
+        functions: out,
+        ignored,
+    };
     manifest.validate().map_err(|e| format!("manifest: {e}"))?;
     Ok(manifest)
+}
+
+fn parse_ignored(v: &Value) -> Result<IgnoredFunction, String> {
+    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let name = text("name").ok_or_else(|| "manifest: ignored entry without a name".to_owned())?;
+    let scope_text = text("scope")
+        .ok_or_else(|| format!("manifest: ignored function {name:?}: scope is required"))?;
+    let scope = IgnoredScope::parse(&scope_text).ok_or_else(|| {
+        format!("manifest: ignored function {name:?}: unknown scope {scope_text:?}")
+    })?;
+    Ok(IgnoredFunction {
+        region: text("region").unwrap_or_else(|| DEFAULT_REGION.to_owned()),
+        trigger_type: text("triggerType").unwrap_or_else(|| "unknown".to_owned()),
+        reason: text("reason")
+            .ok_or_else(|| format!("manifest: ignored function {name:?}: reason is required"))?,
+        scope,
+        name,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -224,5 +254,18 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
             })
         })
         .collect();
-    json!({"functions": functions})
+    let ignored: Vec<Value> = m
+        .ignored
+        .iter()
+        .map(|i| {
+            json!({
+                "name": i.name,
+                "region": i.region,
+                "triggerType": i.trigger_type,
+                "scope": i.scope.as_str(),
+                "reason": i.reason,
+            })
+        })
+        .collect();
+    json!({"functions": functions, "ignored": ignored})
 }

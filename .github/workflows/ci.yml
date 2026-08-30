@@ -50,6 +50,41 @@ jobs:
         env:
           RUSTFLAGS: --cfg loom -D warnings
 
+  # The platforms fireemu publishes binaries for, so a change that only breaks one of them is
+  # caught before a tag is cut rather than during a release. The Ubuntu `pr` job above stays
+  # the full gate -- formatting, lints, docs, licences, traceability, generated code, loom --
+  # and these two run the tests only, which keeps the matrix cheap.
+  #
+  # Linux arm64 is not here: it shares this source with linux x64 and is exercised in the
+  # release workflow, which builds and tests it on a native arm64 runner.
+  platforms:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+      # The process-census integration suites shell out to `ps` and `kill` to prove that a
+      # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
+      # in-crate unit tests. Making them portable is tracked in the distribution issue.
+      - name: tests
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cargo nextest run --workspace --lib --profile pr
+          else
+            cargo nextest run --workspace --profile pr
+          fi
+
   tla:
     runs-on: ubuntu-latest
     steps:

@@ -97,5 +97,10 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main();
+  try {
+    main();
+  } catch (e) {
+    process.stderr.write(`stamp-version: ${e.message}\n`);
+    process.exit(1);
+  }
 }

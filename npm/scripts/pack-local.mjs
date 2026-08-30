@@ -86,4 +86,9 @@ function main() {
   );
 }
 
-main();
+try {
+  main();
+} catch (e) {
+  process.stderr.write(`pack-local: ${e.message}\n`);
+  process.exit(1);
+}

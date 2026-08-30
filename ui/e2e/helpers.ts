@@ -7,11 +7,11 @@ import { STATE_FILE } from "./global-setup";
 /** The control token the daemon printed at start (every UI API request presents it). */
 export const controlToken = (): string => {
   const state = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { banner?: string };
-  const match = /FTD_CONTROL_TOKEN=([0-9a-f]+)/.exec(state.banner ?? "");
-  if (!match) {
+  const token = /FTD_CONTROL_TOKEN=([0-9a-f]+)/.exec(state.banner ?? "")?.[1];
+  if (!token) {
     throw new Error("the daemon banner carries no FTD_CONTROL_TOKEN");
   }
-  return match[1];
+  return token;
 };
 
 /** The API of the daemon under test, as the app calls it (token in the header). */

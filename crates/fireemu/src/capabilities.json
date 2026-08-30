@@ -509,40 +509,44 @@
   },
   "ST-OBJ-1": {
     "implemented": [
-      "Firebase Storage protocol (/v0/b, X-Goog-Upload resumable, download tokens)",
-      "JSON API (/storage/v1, /upload/storage/v1, /download/storage/v1, emulator-style /b paths, Content-Range resumable, rewriteTo)",
-      "generation / metageneration preconditions (match / not-match / source)",
-      "generation selectors (current generation only)",
-      "prefix / delimiter listing",
+      "Firebase Storage protocol (/v0/b, the X-Goog-Upload resumable command grammar with terminal denied sessions, download tokens incl. the ?create_token / ?delete_token routes and the official first-read minting, the official plain-status and rules-denial bodies)",
+      "JSON API with the official route table (/b short spelling for every object method; /storage/v1 and /download/storage/v1 for reads and deletes; /upload/storage/v1 uploads; object update and copy registered on the short spelling only, exactly as the official emulator registers them, with 501 Not Implemented on the rest; the XML-style GET /{bucket}/{object} fallback, GET /b bucket listing, the multipart/form-data POST /{bucket} upload and the ACL stub)",
+      "generation / metageneration preconditions (match / not-match / source) and declared-checksum verification, honoured as production honours them; the official emulator ignores both, and every such step is pinned as a documented divergence in conformance/storage-matrix.json",
+      "generation selectors (current generation only, JSON API dialect)",
+      "prefix / delimiter listing with the official pagination (all folded prefixes on every page, items paged, the token names the first item of the next page)",
       "MD5 / CRC32C (X-Goog-Hash verified before commit)",
-      "Range: bytes=a-b / a- / -n"
+      "Range: bytes=a-b / a- / -n; an unsatisfiable range serves the whole object, as the official emulator serves it",
+      "custom metadata keeps the official defined-versus-absent distinction (an empty-but-defined map serializes as metadata: {} on the Firebase dialect)"
     ],
     "notes": [
       "Storage object triggers are not part of this entry: FN-EVT-1 delivers object finalized / deleted / metadataUpdated events, and this entry owns the object surface only",
       "objects are at most 256 MiB and request bodies at most 260 MiB (413 beyond that)",
       "upload bytes are moved into the object store, never copied: one payload-sized buffer per upload",
       "request bodies buffered at the same time are admitted against a process-wide 1 GiB budget; an upload that does not fit is refused with 503 and Retry-After: 1",
-      "conformance: storage/admin-upload-download-metadata, storage/client-protocol-and-rules (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
+      "download tokens are UUID-shaped, ride in the firebaseStorageDownloadTokens custom-metadata key, die with their generation, and every token change is a metadata update with its event, as measured against the pinned suite",
+      "conformance: storage/admin-upload-download-metadata, storage/client-protocol-and-rules (conformance/README.md) and the 218-step raw-HTTP storage probe (conformance/storage-matrix.json, pnpm -C conformance run storage-probe); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "status": "implemented",
     "unimplemented": [
       "object versioning / archived generations",
-      "ACLs and signed URLs",
+      "ACLs (the official emulator's no-effect POST acl stub is served) and signed URLs",
       "compose",
       "notifications"
     ]
   },
   "STORAGE-RULES-1": {
     "implemented": [
-      "service firebase.storage: get / list / create / update / delete with request.resource and resource",
-      "resumable uploads are authorized at finalization with the received bytes",
+      "service firebase.storage: get / list / create / update / delete with request.resource and resource, measured against the official runtime: request.resource is the whole prospective object (generation, metageneration, timestamps and hashes included), request.resource is null on get / list / delete, crc32c is the decimal spelling the official runtime passes, and the denial bodies are the official Permission denied. No READ|WRITE|LIST permission. envelopes",
+      "resumable uploads are authorized at finalization with the received bytes; a refusal is terminal for the session and no object is published",
       "list requires rules_version 2",
-      "Firebase protocol goes through the rules; the JSON API is a privileged surface unless an end-user token is presented",
+      "the Firebase protocol goes through the rules; the JSON API is a fully privileged surface on which rules never run, whatever credential is presented, exactly as the official emulator serves it",
       "firestore.get() / firestore.exists() over the latest Firestore state of the project (STORAGE-RULES-FIRESTORE-ACCESS: two per request)"
     ],
     "notes": [
-      "a JSON API rewrite with an end-user token evaluates the source read and the destination write as two requests, each with its own two-call budget",
-      "conformance: storage/client-protocol-and-rules (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
+      "an upload over an existing object evaluates the update method, as production evaluates it; the official emulator evaluates every upload as create, and the difference is pinned in conformance/storage-matrix.json",
+      "resource.cacheControl and resource.contentLanguage are production rules fields fireemu keeps; the official emulator's rules resource omits them, so a rule reading them raises there (pinned in conformance/storage-matrix.json)",
+      "under the firebase profile a bearer value that does not decode as a JWT is an anonymous caller, as the official emulator's jwt.decode treats it; a decoded token still has to name the project's audience and verify its signature (the rules.idTokenVerification divergence of the compatibility contract)",
+      "conformance: storage/client-protocol-and-rules (conformance/README.md) and the rules-request-model program of the storage probe (conformance/storage-matrix.json); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "status": "implemented"
   },

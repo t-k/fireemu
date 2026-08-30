@@ -12,7 +12,7 @@ nothing until they are ruled on (they fail no claim while excluded by name).
 
 ## firebase-protocol
 
-parity: 97 &middot; debt: 5
+parity: 100 &middot; documented-divergence: 2
 
 | program | step | status |
 | --- | --- | --- |
@@ -54,8 +54,8 @@ parity: 97 &middot; debt: 5
 | `fb-resumable-upload` | `finalize-after-cancel` | parity |
 | `fb-resumable-upload` | `cancelled-object-absent` | parity |
 | `fb-resumable-upload` | `start-third` | parity |
-| `fb-resumable-upload` | `upload-with-wrong-offset` | debt |
-| `fb-resumable-upload` | `wrong-offset-object` | debt |
+| `fb-resumable-upload` | `upload-with-wrong-offset` | documented-divergence |
+| `fb-resumable-upload` | `wrong-offset-object` | documented-divergence |
 | `fb-download-tokens` | `upload` | parity |
 | `fb-download-tokens` | `download-with-token-no-credentials` | parity |
 | `fb-download-tokens` | `metadata-with-token-no-credentials` | parity |
@@ -68,7 +68,7 @@ parity: 97 &middot; debt: 5
 | `fb-download-tokens` | `create-token-missing-object` | parity |
 | `fb-download-tokens` | `delete-token` | parity |
 | `fb-download-tokens` | `deleted-token-no-longer-grants` | parity |
-| `fb-download-tokens` | `delete-last-token-mints-a-new-one` | debt |
+| `fb-download-tokens` | `delete-last-token-mints-a-new-one` | parity |
 | `fb-download-tokens` | `json-api-upload-has-no-token` | parity |
 | `fb-download-tokens` | `firebase-get-mints-a-token` | parity |
 | `fb-download-tokens` | `firebase-get-again-keeps-it` | parity |
@@ -102,8 +102,8 @@ parity: 97 &middot; debt: 5
 | `fb-errors` | `list-prefix-without-trailing-slash` | parity |
 | `fb-errors` | `unknown-method` | parity |
 | `fb-errors` | `extra-path-segment` | parity |
-| `fb-errors` | `cors-preflight` | debt |
-| `fb-errors` | `cors-actual-request` | debt |
+| `fb-errors` | `cors-preflight` | parity |
+| `fb-errors` | `cors-actual-request` | parity |
 | `fb-list` | `delimited` | parity |
 | `fb-list` | `flat` | parity |
 | `fb-list` | `subdirectory` | parity |
@@ -121,7 +121,7 @@ parity: 97 &middot; debt: 5
 
 ## rules
 
-parity: 30 &middot; debt: 3
+parity: 30 &middot; documented-divergence: 3
 
 | program | step | status |
 | --- | --- | --- |
@@ -138,14 +138,14 @@ parity: 30 &middot; debt: 3
 | `rules-request-model` | `hashes-present-in-request-resource` | parity |
 | `rules-request-model` | `update-unlocked` | parity |
 | `rules-request-model` | `update-locked` | parity |
-| `rules-request-model` | `overwrite-locked-is-an-update` | debt |
+| `rules-request-model` | `overwrite-locked-is-an-update` | documented-divergence |
 | `rules-request-model` | `delete-locked` | parity |
 | `rules-request-model` | `delete-unlocked` | parity |
 | `rules-request-model` | `delete-missing-under-resource-rule` | parity |
 | `rules-request-model` | `fields-create` | parity |
 | `rules-request-model` | `fields-read` | parity |
-| `rules-request-model` | `cache-control-visible-to-rules` | debt |
-| `rules-request-model` | `content-language-visible-to-rules` | debt |
+| `rules-request-model` | `cache-control-visible-to-rules` | documented-divergence |
+| `rules-request-model` | `content-language-visible-to-rules` | documented-divergence |
 | `rules-request-model` | `own-prefix` | parity |
 | `rules-request-model` | `other-prefix` | parity |
 | `rules-request-model` | `anonymous-prefix` | parity |
@@ -161,7 +161,7 @@ parity: 30 &middot; debt: 3
 
 ## json-api
 
-parity: 64 &middot; debt: 11
+parity: 64 &middot; documented-divergence: 11
 
 | program | step | status |
 | --- | --- | --- |
@@ -187,9 +187,9 @@ parity: 64 &middot; debt: 11
 | `gcs-resumable-upload` | `start-without-name` | parity |
 | `gcs-resumable-upload` | `start-name-in-query` | parity |
 | `gcs-resumable-upload` | `start-chunked` | parity |
-| `gcs-resumable-upload` | `chunk-one` | debt |
-| `gcs-resumable-upload` | `chunk-two` | debt |
-| `gcs-resumable-upload` | `chunked-object` | debt |
+| `gcs-resumable-upload` | `chunk-one` | documented-divergence |
+| `gcs-resumable-upload` | `chunk-two` | documented-divergence |
+| `gcs-resumable-upload` | `chunked-object` | documented-divergence |
 | `gcs-update-list-delete` | `patch` | parity |
 | `gcs-update-list-delete` | `patch-remove-custom-key` | parity |
 | `gcs-update-list-delete` | `patch-missing` | parity |
@@ -216,18 +216,18 @@ parity: 64 &middot; debt: 11
 | `gcs-copy-rewrite` | `copy-storage-v1-spelling` | parity |
 | `gcs-copy-rewrite` | `copy-onto-itself` | parity |
 | `gcs-copy-rewrite` | `copied-bytes` | parity |
-| `gcs-preconditions` | `insert-if-generation-match-zero-on-existing` | debt |
+| `gcs-preconditions` | `insert-if-generation-match-zero-on-existing` | documented-divergence |
 | `gcs-preconditions` | `insert-if-generation-match-current` | parity |
 | `gcs-preconditions` | `patch-if-metageneration-mismatch` | parity |
-| `gcs-preconditions` | `get-if-generation-not-match-current` | debt |
-| `gcs-preconditions` | `delete-if-generation-mismatch` | debt |
-| `gcs-preconditions` | `malformed-precondition` | debt |
+| `gcs-preconditions` | `get-if-generation-not-match-current` | documented-divergence |
+| `gcs-preconditions` | `delete-if-generation-mismatch` | documented-divergence |
+| `gcs-preconditions` | `malformed-precondition` | documented-divergence |
 | `gcs-preconditions` | `get-selected-generation-missing` | parity |
-| `gcs-preconditions` | `object-still-present` | debt |
+| `gcs-preconditions` | `object-still-present` | documented-divergence |
 | `gcs-checksums` | `matching-md5` | parity |
-| `gcs-checksums` | `mismatching-md5` | debt |
-| `gcs-checksums` | `mismatching-md5-not-published` | debt |
-| `gcs-checksums` | `mismatching-crc32c-in-metadata` | debt |
+| `gcs-checksums` | `mismatching-md5` | documented-divergence |
+| `gcs-checksums` | `mismatching-md5-not-published` | documented-divergence |
+| `gcs-checksums` | `mismatching-crc32c-in-metadata` | documented-divergence |
 | `gcs-checksums` | `reported-hashes` | parity |
 | `gcs-unsupported-surface` | `compose` | parity |
 | `gcs-unsupported-surface` | `acl-list` | parity |
@@ -243,17 +243,17 @@ parity: 64 &middot; debt: 11
 
 ## triggers
 
-parity: 2 &middot; debt: 7
+parity: 2 &middot; documented-divergence: 7
 
 | program | step | status |
 | --- | --- | --- |
-| `triggers` | `finalize-on-firebase-media-upload` | debt |
-| `triggers` | `metadata-update-on-patch` | debt |
-| `triggers` | `finalize-on-overwrite` | debt |
-| `triggers` | `finalize-on-json-api-copy` | debt |
-| `triggers` | `delete` | debt |
+| `triggers` | `finalize-on-firebase-media-upload` | documented-divergence |
+| `triggers` | `metadata-update-on-patch` | documented-divergence |
+| `triggers` | `finalize-on-overwrite` | documented-divergence |
+| `triggers` | `finalize-on-json-api-copy` | documented-divergence |
+| `triggers` | `delete` | documented-divergence |
 | `triggers` | `no-event-on-denied-upload` | parity |
 | `triggers` | `no-event-on-missing-delete` | parity |
-| `triggers` | `metadata-update-on-token-creation` | debt |
-| `triggers` | `json-api-resumable-finalize` | debt |
+| `triggers` | `metadata-update-on-token-creation` | documented-divergence |
+| `triggers` | `json-api-resumable-finalize` | documented-divergence |
 

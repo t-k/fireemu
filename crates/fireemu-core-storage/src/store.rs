@@ -803,6 +803,9 @@ impl StorageState {
         meta.download_tokens.retain(|t| t != token);
         if meta.download_tokens.is_empty() {
             meta.download_tokens.push(replacement);
+            // Upstream's replacement mint is its own (silent) metadata update, so removing
+            // the last token moves the metageneration by two while emitting one event.
+            meta.metageneration += 1;
         }
         meta.metageneration += 1;
         meta.updated = now;

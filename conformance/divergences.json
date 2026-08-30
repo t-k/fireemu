@@ -153,6 +153,98 @@
     "functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable": {
       "documents": "README.md, \"Functions\"",
       "reason": "The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected."
+    },
+    "storage-probe/fb-resumable-upload#upload-with-wrong-offset": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "fireemu checks X-Goog-Upload-Offset against the bytes already received and refuses a mismatch with 400, as production does. The official emulator never reads the offset: it appends whatever arrives, so a chunk sent with a wrong offset was measured to commit a corrupt object."
+    },
+    "storage-probe/fb-resumable-upload#wrong-offset-object": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The consequence of the offset check: fireemu never published the mis-offset upload (404), the official emulator committed it."
+    },
+    "storage-probe/rules-request-model#overwrite-locked-is-an-update": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "An upload over an existing object evaluates the rules `update` method in fireemu, as production evaluates it. The official emulator evaluates every upload as `create` (its uploadObject hard-codes the CREATE method), so a rule that guards update was measured to admit an anonymous overwrite."
+    },
+    "storage-probe/rules-request-model#cache-control-visible-to-rules": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "resource.cacheControl is a production rules field. fireemu passes it; the official emulator's rules resource omits it, so reading it raises and the read was measured to deny."
+    },
+    "storage-probe/rules-request-model#content-language-visible-to-rules": {
+      "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same for resource.contentLanguage: a production rules field the official emulator's rules resource omits."
+    },
+    "storage-probe/gcs-resumable-upload#chunk-one": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "fireemu serves the production Content-Range resumable protocol on the JSON API: an intermediate chunk is answered 308 Resume Incomplete with the persisted range. The official emulator ignores Content-Range entirely and finalizes on every PUT, so it was measured to commit the first 5-byte chunk as the whole object."
+    },
+    "storage-probe/gcs-resumable-upload#chunk-two": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The second chunk of the same upload: fireemu completes the 10-byte object; the official emulator, having already finalized, answers 400."
+    },
+    "storage-probe/gcs-resumable-upload#chunked-object": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The committed sizes the two protocols leave behind: 10 bytes under fireemu's chunk protocol, the truncated 5 under the official emulator."
+    },
+    "storage-probe/gcs-preconditions#insert-if-generation-match-zero-on-existing": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "fireemu honours generation and metageneration preconditions as production honours them: ifGenerationMatch=0 on an existing object is 412. The official emulator parses no precondition parameter at all and was measured to overwrite."
+    },
+    "storage-probe/gcs-preconditions#get-if-generation-not-match-current": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "A read whose ifGenerationNotMatch names the current generation is 304 Not Modified under fireemu, as in production; the official emulator ignores the parameter and serves the object."
+    },
+    "storage-probe/gcs-preconditions#delete-if-generation-mismatch": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "A delete guarded by a stale ifGenerationMatch is 412 under fireemu; the official emulator ignores the guard and was measured to delete the object."
+    },
+    "storage-probe/gcs-preconditions#malformed-precondition": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "A malformed precondition value is 400 under fireemu; the official emulator does not read the parameter (and, this late in the program, had already deleted the object the guarded delete should have kept)."
+    },
+    "storage-probe/gcs-preconditions#object-still-present": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The consequence of the guard: the object survives under fireemu and is gone under the official emulator."
+    },
+    "storage-probe/gcs-checksums#mismatching-md5": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "A declared md5Hash / X-Goog-Hash is verified against the received bytes before the commit, as production verifies it; a mismatch is 400 and nothing is published. The official emulator ignores declared checksums and was measured to store the corrupt payload."
+    },
+    "storage-probe/gcs-checksums#mismatching-md5-not-published": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The consequence: the refused upload does not exist under fireemu (404); the official emulator serves the object it should have refused."
+    },
+    "storage-probe/gcs-checksums#mismatching-crc32c-in-metadata": {
+      "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same verification for a crc32c declared in the metadata document of a multipart upload."
+    },
+    "storage-probe/triggers#finalize-on-firebase-media-upload": {
+      "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute and datacontenttype are set) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field."
+    },
+    "storage-probe/triggers#metadata-update-on-patch": {
+      "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same envelope and link-host divergence on the metadataUpdated event."
+    },
+    "storage-probe/triggers#finalize-on-overwrite": {
+      "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same envelope and link-host divergence on the finalize event of an overwrite."
+    },
+    "storage-probe/triggers#finalize-on-json-api-copy": {
+      "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same envelope and link-host divergence on the finalize event a JSON API copy publishes for its destination."
+    },
+    "storage-probe/triggers#delete": {
+      "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same envelope and link-host divergence on the delete event."
+    },
+    "storage-probe/triggers#metadata-update-on-token-creation": {
+      "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same envelope and link-host divergence on the metadataUpdated event that creating a download token publishes."
+    },
+    "storage-probe/triggers#json-api-resumable-finalize": {
+      "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The same envelope and link-host divergence on the finalize event of a JSON API resumable upload."
     }
   }
 }

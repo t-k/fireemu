@@ -6,9 +6,9 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 193,
-    "documented-divergence": 0,
-    "debt": 26
+    "parity": 196,
+    "documented-divergence": 23,
+    "debt": 0
   },
   "programs": [
     {
@@ -701,7 +701,7 @@
         },
         {
           "id": "upload-with-wrong-offset",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -738,11 +738,13 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 400
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "fireemu checks X-Goog-Upload-Offset against the bytes already received and refuses a mismatch with 400, as production does. The official emulator never reads the offset: it appends whatever arrives, so a chunk sent with a wrong offset was measured to commit a corrupt object."
         },
         {
           "id": "wrong-offset-object",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -773,7 +775,9 @@
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 404
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The consequence of the offset check: fireemu never published the mis-offset upload (404), the official emulator committed it."
         }
       ]
     },
@@ -1049,16 +1053,10 @@
         },
         {
           "id": "delete-last-token-mints-a-new-one",
-          "status": "debt",
-          "oracle": {
+          "status": "parity",
+          "value": {
             "deletedCount": 1,
             "metageneration": "5",
-            "status": 200,
-            "tokens": 1
-          },
-          "fireemu": {
-            "deletedCount": 1,
-            "metageneration": "4",
             "status": 200,
             "tokens": 1
           }
@@ -1667,8 +1665,8 @@
         },
         {
           "id": "cors-preflight",
-          "status": "debt",
-          "oracle": {
+          "status": "parity",
+          "value": {
             "body": "",
             "headers": {
               "access-control-allow-headers": "authorization,content-type,x-goog-upload-command",
@@ -1678,42 +1676,18 @@
               "vary": "Origin, Access-Control-Request-Headers"
             },
             "status": 204
-          },
-          "fireemu": {
-            "body": "",
-            "headers": {
-              "access-control-allow-credentials": "true",
-              "access-control-allow-headers": "authorization,content-type,x-goog-upload-command",
-              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-              "access-control-allow-origin": "http://<host>",
-              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
-              "vary": "origin"
-            },
-            "status": 204
           }
         },
         {
           "id": "cors-actual-request",
-          "status": "debt",
-          "oracle": {
+          "status": "parity",
+          "value": {
             "body": "Not Found",
             "headers": {
               "access-control-allow-origin": "http://<host>",
               "access-control-expose-headers": "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url",
               "content-type": "text/plain; charset=utf-8",
               "vary": "Origin"
-            },
-            "status": 404
-          },
-          "fireemu": {
-            "body": "Not Found",
-            "headers": {
-              "access-control-allow-credentials": "true",
-              "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-              "access-control-allow-origin": "http://<host>",
-              "access-control-expose-headers": "x-goog-upload-url, x-goog-upload-status, x-goog-upload-size-received, x-goog-upload-chunk-granularity, x-goog-upload-control-url, location, range, x-goog-hash, x-goog-generation, x-goog-metageneration, content-range, etag",
-              "content-type": "text/plain; charset=utf-8",
-              "vary": "origin"
             },
             "status": 404
           }
@@ -2317,7 +2291,7 @@
         },
         {
           "id": "overwrite-locked-is-an-update",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -2354,7 +2328,9 @@
               "x-goog-upload-status": "final"
             },
             "status": 403
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "An upload over an existing object evaluates the rules `update` method in fireemu, as production evaluates it. The official emulator evaluates every upload as `create` (its uploadObject hard-codes the CREATE method), so a rule that guards update was measured to admit an anonymous overwrite."
         },
         {
           "id": "delete-locked",
@@ -2455,7 +2431,7 @@
         },
         {
           "id": "cache-control-visible-to-rules",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "error": {
@@ -2492,11 +2468,13 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "resource.cacheControl is a production rules field. fireemu passes it; the official emulator's rules resource omits it, so reading it raises and the read was measured to deny."
         },
         {
           "id": "content-language-visible-to-rules",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "error": {
@@ -2533,7 +2511,9 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest STORAGE-RULES-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same for resource.contentLanguage: a production rules field the official emulator's rules resource omits."
         },
         {
           "id": "own-prefix",
@@ -3300,7 +3280,7 @@
         },
         {
           "id": "chunk-one",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -3332,11 +3312,13 @@
               "range": "bytes=0-4"
             },
             "status": 308
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "fireemu serves the production Content-Range resumable protocol on the JSON API: an intermediate chunk is answered 308 Resume Incomplete with the persisted range. The official emulator ignores Content-Range entirely and finalizes on every PUT, so it was measured to commit the first 5-byte chunk as the whole object."
         },
         {
           "id": "chunk-two",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": "Bad Request",
             "headers": {
@@ -3368,11 +3350,13 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The second chunk of the same upload: fireemu completes the 10-byte object; the official emulator, having already finalized, answers 400."
         },
         {
           "id": "chunked-object",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "size": "5",
             "status": 200
@@ -3380,7 +3364,9 @@
           "fireemu": {
             "size": "10",
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The committed sizes the two protocols leave behind: 10 bytes under fireemu's chunk protocol, the truncated 5 under the official emulator."
         }
       ]
     },
@@ -4210,7 +4196,7 @@
       "steps": [
         {
           "id": "insert-if-generation-match-zero-on-existing",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -4254,7 +4240,9 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 412
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "fireemu honours generation and metageneration preconditions as production honours them: ifGenerationMatch=0 on an existing object is 412. The official emulator parses no precondition parameter at all and was measured to overwrite."
         },
         {
           "id": "insert-if-generation-match-current",
@@ -4298,7 +4286,7 @@
         },
         {
           "id": "get-if-generation-not-match-current",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -4328,11 +4316,13 @@
             "body": "",
             "headers": {},
             "status": 304
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "A read whose ifGenerationNotMatch names the current generation is 304 Not Modified under fireemu, as in production; the official emulator ignores the parameter and serves the object."
         },
         {
           "id": "delete-if-generation-mismatch",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": "",
             "headers": {},
@@ -4356,11 +4346,13 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 412
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "A delete guarded by a stale ifGenerationMatch is 412 under fireemu; the official emulator ignores the guard and was measured to delete the object."
         },
         {
           "id": "malformed-precondition",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "error": {
@@ -4398,7 +4390,9 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 400
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "A malformed precondition value is 400 under fireemu; the official emulator does not read the parameter (and, this late in the program, had already deleted the object the guarded delete should have kept)."
         },
         {
           "id": "get-selected-generation-missing",
@@ -4425,7 +4419,7 @@
         },
         {
           "id": "object-still-present",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": "No such object: demo-storage-probe.appspot.com/open/pre/doc.txt",
             "status": 404
@@ -4433,7 +4427,9 @@
           "fireemu": {
             "body": "v3",
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The consequence of the guard: the object survives under fireemu and is gone under the official emulator."
         }
       ]
     },
@@ -4473,7 +4469,7 @@
         },
         {
           "id": "mismatching-md5",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -4517,11 +4513,13 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 400
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "A declared md5Hash / X-Goog-Hash is verified against the received bytes before the commit, as production verifies it; a mismatch is 400 and nothing is published. The official emulator ignores declared checksums and was measured to store the corrupt payload."
         },
         {
           "id": "mismatching-md5-not-published",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -4565,11 +4563,13 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 404
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The consequence: the refused upload does not exist under fireemu (404); the official emulator serves the object it should have refused."
         },
         {
           "id": "mismatching-crc32c-in-metadata",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
@@ -4613,7 +4613,9 @@
               "content-type": "application/json; charset=utf-8"
             },
             "status": 400
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same verification for a crc32c declared in the metadata document of a multipart upload."
         },
         {
           "id": "reported-hashes",
@@ -4829,7 +4831,7 @@
       "steps": [
         {
           "id": "finalize-on-firebase-media-upload",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "events": [
               {
@@ -4973,11 +4975,13 @@
               }
             ],
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute and datacontenttype are set) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field."
         },
         {
           "id": "metadata-update-on-patch",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "events": [
               {
@@ -5133,11 +5137,13 @@
               }
             ],
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same envelope and link-host divergence on the metadataUpdated event."
         },
         {
           "id": "finalize-on-overwrite",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "events": [
               {
@@ -5281,11 +5287,13 @@
               }
             ],
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same envelope and link-host divergence on the finalize event of an overwrite."
         },
         {
           "id": "finalize-on-json-api-copy",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "events": [
               {
@@ -5433,11 +5441,13 @@
               }
             ],
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same envelope and link-host divergence on the finalize event a JSON API copy publishes for its destination."
         },
         {
           "id": "delete",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "events": [
               {
@@ -5585,7 +5595,9 @@
               }
             ],
             "status": 204
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same envelope and link-host divergence on the delete event."
         },
         {
           "id": "no-event-on-denied-upload",
@@ -5605,7 +5617,7 @@
         },
         {
           "id": "metadata-update-on-token-creation",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "events": [
               {
@@ -5753,11 +5765,13 @@
               }
             ],
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same envelope and link-host divergence on the metadataUpdated event that creating a download token publishes."
         },
         {
           "id": "json-api-resumable-finalize",
-          "status": "debt",
+          "status": "documented-divergence",
           "oracle": {
             "events": [
               {
@@ -5889,7 +5903,9 @@
               }
             ],
             "status": 200
-          }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
+          "reason": "The same envelope and link-host divergence on the finalize event of a JSON API resumable upload."
         }
       ]
     }

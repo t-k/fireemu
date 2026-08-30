@@ -974,7 +974,7 @@ const fbList = {
         const r = await ctx.http({ method: "GET", path: fbBucket(ctx), query, headers: OWNER });
         pages.push({
           status: r.status,
-          items: (r.body?.items ?? []).map((i) => i.name),
+          items: (r.body?.items ?? []).map((item) => item.name),
           prefixes: r.body?.prefixes ?? null,
           hasNext: typeof r.body?.nextPageToken === "string",
         });
@@ -1737,7 +1737,7 @@ const gcsUpdateAndList = {
         const r = await ctx.http({ method: "GET", path: gcsBucket(ctx), query, headers: OWNER });
         pages.push({
           status: r.status,
-          names: (r.body?.items ?? []).map((i) => i.name),
+          names: (r.body?.items ?? []).map((item) => item.name),
           prefixes: r.body?.prefixes ?? null,
           hasNext: typeof r.body?.nextPageToken === "string",
         });

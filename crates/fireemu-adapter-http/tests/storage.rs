@@ -582,7 +582,10 @@ service firebase.storage {
         req(
             "POST",
             &own,
-            &[("content-type", &ct), ("x-goog-upload-protocol", "multipart")],
+            &[
+                ("content-type", &ct),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
             &body,
         ),
     );
@@ -1250,7 +1253,9 @@ service firebase.storage {
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
     // The JSON API is the privileged dialect: rules never run on it, and the copy routes
     // exist only on the short /b/... spelling (the long one is the official 501 catch-all).
-    let r = handle(&s, req(
+    let r = handle(
+        &s,
+        req(
             "POST",
             &format!("/storage/v1/b/{BUCKET}/o/open%2Fsrc/rewriteTo/b/{BUCKET}/o/open%2Fdst"),
             &[],

@@ -554,17 +554,28 @@ fn hashes_etag_tokens_and_bucket_scans() {
     let removed = s
         .remove_download_token(&b, &name("h"), &token, t(4))
         .unwrap();
-    assert_eq!(removed.download_tokens, vec![second.download_tokens[1].clone()]);
+    assert_eq!(
+        removed.download_tokens,
+        vec![second.download_tokens[1].clone()]
+    );
     let replaced = s
         .remove_download_token(&b, &name("h"), &removed.download_tokens[0], t(5))
         .unwrap();
-    assert_eq!(replaced.download_tokens.len(), 1, "the last removal mints a new one");
+    assert_eq!(
+        replaced.download_tokens.len(),
+        1,
+        "the last removal mints a new one"
+    );
     assert_ne!(replaced.download_tokens[0], removed.download_tokens[0]);
     // The replacement mint is upstream's own silent update, so removing the last token
     // moves the metageneration by two (measured against the pinned suite).
     assert_eq!(replaced.metageneration, 6);
     let events = s.drain_events();
-    assert_eq!(events.len(), 4, "each token change is one MetadataUpdated event");
+    assert_eq!(
+        events.len(),
+        4,
+        "each token change is one MetadataUpdated event"
+    );
     assert!(events
         .iter()
         .all(|e| matches!(e, StorageEvent::MetadataUpdated(_))));
@@ -586,7 +597,10 @@ fn hashes_etag_tokens_and_bucket_scans() {
         )
         .unwrap();
     assert_eq!(seeded.download_tokens, vec!["tok-a", "tok-b"]);
-    assert!(seeded.custom.is_empty(), "the key never stays custom metadata");
+    assert!(
+        seeded.custom.is_empty(),
+        "the key never stays custom metadata"
+    );
     assert_eq!(
         s.add_download_token(&b, &name("missing"), t(7)),
         Err(StorageError::NotFound)

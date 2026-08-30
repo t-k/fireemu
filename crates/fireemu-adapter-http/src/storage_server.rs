@@ -276,7 +276,10 @@ async fn respond(
         // headers reflected, the express method list, and both Vary members.
         let mut builder = Response::builder()
             .status(204)
-            .header("access-control-allow-methods", "GET,HEAD,PUT,PATCH,POST,DELETE")
+            .header(
+                "access-control-allow-methods",
+                "GET,HEAD,PUT,PATCH,POST,DELETE",
+            )
             .header("access-control-expose-headers", EXPOSED_HEADERS)
             .header("vary", "Origin, Access-Control-Request-Headers");
         if let Some(origin) = origin.as_deref() {

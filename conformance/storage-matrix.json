@@ -408,16 +408,7 @@
           "id": "multipart-data-ending-in-line-breaks",
           "status": "parity",
           "value": {
-            "bytes": [
-              108,
-              105,
-              110,
-              101,
-              13,
-              10,
-              13,
-              10
-            ],
+            "bytes": [108, 105, 110, 101, 13, 10, 13, 10],
             "status": 200
           }
         }
@@ -1718,10 +1709,7 @@
                   "name": "open/lst/zz.txt"
                 }
               ],
-              "prefixes": [
-                "open/lst/dir/",
-                "open/lst/dir2/"
-              ]
+              "prefixes": ["open/lst/dir/", "open/lst/dir2/"]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -1811,25 +1799,14 @@
           "value": {
             "0": {
               "hasNext": true,
-              "items": [
-                "open/lst/a.txt",
-                "open/lst/b.txt"
-              ],
-              "prefixes": [
-                "open/lst/dir/",
-                "open/lst/dir2/"
-              ],
+              "items": ["open/lst/a.txt", "open/lst/b.txt"],
+              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "items": [
-                "open/lst/zz.txt"
-              ],
-              "prefixes": [
-                "open/lst/dir/",
-                "open/lst/dir2/"
-              ],
+              "items": ["open/lst/zz.txt"],
+              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
               "status": 200
             }
           }
@@ -1838,10 +1815,7 @@
           "id": "page-token-shape",
           "status": "parity",
           "value": {
-            "items": [
-              "open/lst/a.txt",
-              "open/lst/b.txt"
-            ],
+            "items": ["open/lst/a.txt", "open/lst/b.txt"],
             "nextPageToken": "open/lst/dir/c.txt"
           }
         },
@@ -3538,9 +3512,7 @@
                 }
               ],
               "kind": "storage#objects",
-              "prefixes": [
-                "open/gcsu/list/dir/"
-              ]
+              "prefixes": ["open/gcsu/list/dir/"]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -3582,22 +3554,14 @@
           "value": {
             "0": {
               "hasNext": true,
-              "names": [
-                "open/gcsu/list/a.txt"
-              ],
-              "prefixes": [
-                "open/gcsu/list/dir/"
-              ],
+              "names": ["open/gcsu/list/a.txt"],
+              "prefixes": ["open/gcsu/list/dir/"],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "names": [
-                "open/gcsu/list/b.txt"
-              ],
-              "prefixes": [
-                "open/gcsu/list/dir/"
-              ],
+              "names": ["open/gcsu/list/b.txt"],
+              "prefixes": ["open/gcsu/list/dir/"],
               "status": 200
             }
           }
@@ -3606,10 +3570,7 @@
           "id": "list-short-route",
           "status": "parity",
           "value": {
-            "names": [
-              "open/gcsu/list/dir/c.txt",
-              "open/gcsu/list/dir/d.txt"
-            ],
+            "names": ["open/gcsu/list/dir/c.txt", "open/gcsu/list/dir/d.txt"],
             "status": 200
           }
         },
@@ -4728,9 +4689,7 @@
           "status": "parity",
           "value": {
             "kind": "storage#buckets",
-            "names": [
-              "demo-storage-probe.appspot.com"
-            ],
+            "names": ["demo-storage-probe.appspot.com"],
             "status": 200
           }
         },

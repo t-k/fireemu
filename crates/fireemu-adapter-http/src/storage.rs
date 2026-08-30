@@ -382,7 +382,10 @@ fn html_text(status: u16, text: &str) -> StorageResponse {
 
 /// The Firebase dialect's error envelope: `{"error": {"code", "message"}}`, no more.
 fn fb_json_error(status: u16, message: &str) -> StorageResponse {
-    StorageResponse::json(status, &json!({"error": {"code": status, "message": message}}))
+    StorageResponse::json(
+        status,
+        &json!({"error": {"code": status, "message": message}}),
+    )
 }
 
 /// The Firebase dialect's rules denial, worded per operation as the official emulator words
@@ -418,7 +421,11 @@ fn gcs_no_such_object(bucket: &str, name: &str, media: bool) -> StorageResponse 
 /// HTTP status and plain message of a core error, for the JSON API's envelope paths.
 fn core_err(e: StorageError) -> (u16, String, &'static str) {
     match e {
-        StorageError::NotFound => (404, "Not Found. Could not get object".to_owned(), "notFound"),
+        StorageError::NotFound => (
+            404,
+            "Not Found. Could not get object".to_owned(),
+            "notFound",
+        ),
         StorageError::PreconditionFailed(m) | StorageError::NotModified(m) => {
             (412, m, "conditionNotMet")
         }
@@ -432,9 +439,11 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
         ),
         StorageError::UploadFinalized => (400, "upload already finalized".to_owned(), "invalid"),
         StorageError::UploadSizeMismatch => (400, "upload size mismatch".to_owned(), "invalid"),
-        StorageError::TooManyUploads => {
-            (429, "too many open upload sessions".to_owned(), "rateLimitExceeded")
-        }
+        StorageError::TooManyUploads => (
+            429,
+            "too many open upload sessions".to_owned(),
+            "rateLimitExceeded",
+        ),
         StorageError::ChecksumMismatch(m) => (400, format!("checksum mismatch: {m}"), "invalid"),
     }
 }
@@ -669,8 +678,14 @@ fn split_headers(part: &[u8]) -> (BTreeMap<String, String>, usize) {
 
 /// One parsed part of a `multipart/form-data` body (the XML-ish POST upload).
 enum FormPart {
-    Field { name: String, value: String },
-    File { content_type: Option<String>, data: std::ops::Range<usize> },
+    Field {
+        name: String,
+        value: String,
+    },
+    File {
+        content_type: Option<String>,
+        data: std::ops::Range<usize>,
+    },
 }
 
 fn parse_form_data(content_type: &str, body: &[u8]) -> Result<Vec<FormPart>, String> {
@@ -683,11 +698,15 @@ fn parse_form_data(content_type: &str, body: &[u8]) -> Result<Vec<FormPart>, Str
         return Err(format!("Bad content type. {content_type}"));
     };
     let delimiter = format!("--{boundary}").into_bytes();
-    let parts = split_multipart_parts(body, &delimiter)
-        .map_err(|()| "Failed to parse multipart part: Missing header-body separator.".to_owned())?;
+    let parts = split_multipart_parts(body, &delimiter).map_err(|()| {
+        "Failed to parse multipart part: Missing header-body separator.".to_owned()
+    })?;
     let mut out = Vec::new();
     for (headers, range) in parts {
-        let disposition = headers.get("content-disposition").cloned().unwrap_or_default();
+        let disposition = headers
+            .get("content-disposition")
+            .cloned()
+            .unwrap_or_default();
         let param = |name: &str| {
             disposition.split(';').map(str::trim).find_map(|p| {
                 p.strip_prefix(&format!("{name}="))
@@ -1303,10 +1322,7 @@ fn precondition_named(
     Ok(pre)
 }
 
-fn u64_param(
-    params: &BTreeMap<String, String>,
-    key: &str,
-) -> Result<Option<u64>, StorageResponse> {
+fn u64_param(params: &BTreeMap<String, String>, key: &str) -> Result<Option<u64>, StorageResponse> {
     match params.get(key) {
         None => Ok(None),
         Some(v) => v
@@ -1682,8 +1698,8 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     // dialect" and says a dialect-like path is never sufficient on its own, so the App Check
     // bypass requires the emulator's exact owner credential, exactly as Firestore and
     // Identity Toolkit do.
-    let json_api_authenticated = dialect == Dialect::Gcs
-        && authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL);
+    let json_api_authenticated =
+        dialect == Dialect::Gcs && authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL);
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
     let admitted = if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it
@@ -1736,14 +1752,25 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         Route::FbRoot => Ok(StorageResponse::json(200, &json!({"emulator": "storage"}))),
         Route::FbBucket { bucket } => match method.as_str() {
             "GET" => fb_list(state, &principal, &bucket, &params),
-            "POST" | "PUT" => fb_object_post(state, &principal, &bucket, None, req, &params, &host, &admitted),
+            "POST" | "PUT" => fb_object_post(
+                state, &principal, &bucket, None, req, &params, &host, &admitted,
+            ),
             _ => Ok(plain_status(501)),
         },
         Route::FbObject { bucket, name } => match method.as_str() {
             "GET" => fb_get(state, &principal, &bucket, &name, &req, &params),
             "PATCH" => fb_patch(state, &principal, &bucket, &name, &req),
             "DELETE" => fb_delete(state, &principal, &bucket, &name),
-            "POST" => fb_object_post(state, &principal, &bucket, Some(name), req, &params, &host, &admitted),
+            "POST" => fb_object_post(
+                state,
+                &principal,
+                &bucket,
+                Some(name),
+                req,
+                &params,
+                &host,
+                &admitted,
+            ),
             "PUT" => {
                 if req
                     .header("x-http-method-override")
@@ -1751,23 +1778,48 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
                 {
                     fb_patch(state, &principal, &bucket, &name, &req)
                 } else {
-                    fb_object_post(state, &principal, &bucket, Some(name), req, &params, &host, &admitted)
+                    fb_object_post(
+                        state,
+                        &principal,
+                        &bucket,
+                        Some(name),
+                        req,
+                        &params,
+                        &host,
+                        &admitted,
+                    )
                 }
             }
             _ => Ok(plain_status(501)),
         },
         Route::GcsListBuckets => gcs_list_buckets(state, &host),
         Route::GcsList { bucket } => gcs_list(state, &bucket, &params, &host),
-        Route::GcsObject { bucket, name, spelling } => {
-            gcs_object(state, &bucket, &name, spelling, &method, &req, &params, &host)
-        }
-        Route::GcsCopy { bucket, name, rewrite, dst_bucket, dst_name } => gcs_copy(
-            state, &bucket, &name, rewrite, &dst_bucket, &dst_name, &req, &params, &host,
+        Route::GcsObject {
+            bucket,
+            name,
+            spelling,
+        } => gcs_object(
+            state, &bucket, &name, spelling, &method, &req, &params, &host,
+        ),
+        Route::GcsCopy {
+            bucket,
+            name,
+            rewrite,
+            dst_bucket,
+            dst_name,
+        } => gcs_copy(
+            state,
+            &bucket,
+            &name,
+            rewrite,
+            &dst_bucket,
+            &dst_name,
+            &req,
+            &params,
+            &host,
         ),
         Route::GcsAcl { bucket, name } => gcs_acl(state, &bucket, &name, &req, &host),
-        Route::GcsUpload { bucket } => {
-            gcs_upload(state, &bucket, req, &params, &host, &admitted)
-        }
+        Route::GcsUpload { bucket } => gcs_upload(state, &bucket, req, &params, &host, &admitted),
         Route::FormUpload { bucket } => form_upload(state, &bucket, &req),
         Route::XmlStyle { bucket, name } => xml_style_get(state, &bucket, &name, &req, &params),
         Route::NotImplemented => Ok(plain_status(501)),
@@ -1878,7 +1930,11 @@ fn fb_get(
 }
 
 /// The official `sendFileBytes`: object bytes with the header set both dialects share.
-fn send_file_bytes(store: &ObjectStore, meta: &ObjectMetadata, req: &StorageRequest) -> StorageResponse {
+fn send_file_bytes(
+    store: &ObjectStore,
+    meta: &ObjectMetadata,
+    req: &StorageRequest,
+) -> StorageResponse {
     let bytes = store.bytes(meta);
     let filename = meta
         .name
@@ -2185,7 +2241,10 @@ fn fb_object_post(
 /// The Firebase dialect always defines custom metadata on an upload, injecting a fresh
 /// download token unless the client supplied `firebaseStorageDownloadTokens` itself,
 /// exactly as the official `finalizeOneShotUpload` does before the object is stored.
-fn inject_download_token(state: &StorageState, meta: &mut NewMetadata) -> Result<(), StorageResponse> {
+fn inject_download_token(
+    state: &StorageState,
+    meta: &mut NewMetadata,
+) -> Result<(), StorageResponse> {
     let custom = meta.custom.get_or_insert_with(BTreeMap::new);
     if !custom.contains_key(TOKENS_KEY) {
         let token = state.store()?.mint_download_token();
@@ -2368,7 +2427,9 @@ fn finalize_resumable(
         .set_upload_hashes(id, md5_declared, crc_declared, now)
         .map_err(FinalizeError::Store)?;
     let (b, n, meta, size, hashes, authorization) = {
-        let pending = store.pending_upload(id, now).map_err(FinalizeError::Store)?;
+        let pending = store
+            .pending_upload(id, now)
+            .map_err(FinalizeError::Store)?;
         (
             pending.bucket.clone(),
             pending.name.clone(),
@@ -2600,20 +2661,39 @@ fn gcs_copy(
         custom: src.custom_defined.then(|| src.custom.clone()),
     };
     if let Some(over) = incoming_meta {
-        if over.content_type.is_some() || incoming.as_ref().is_some_and(|v| v.get("contentType").is_some()) {
+        if over.content_type.is_some()
+            || incoming
+                .as_ref()
+                .is_some_and(|v| v.get("contentType").is_some())
+        {
             meta.content_type = over.content_type;
         }
         for (target, value, key) in [
-            (&mut meta.content_disposition, over.content_disposition, "contentDisposition"),
-            (&mut meta.content_encoding, over.content_encoding, "contentEncoding"),
-            (&mut meta.content_language, over.content_language, "contentLanguage"),
+            (
+                &mut meta.content_disposition,
+                over.content_disposition,
+                "contentDisposition",
+            ),
+            (
+                &mut meta.content_encoding,
+                over.content_encoding,
+                "contentEncoding",
+            ),
+            (
+                &mut meta.content_language,
+                over.content_language,
+                "contentLanguage",
+            ),
             (&mut meta.cache_control, over.cache_control, "cacheControl"),
         ] {
             if incoming.as_ref().is_some_and(|v| v.get(key).is_some()) {
                 *target = value;
             }
         }
-        if incoming.as_ref().is_some_and(|v| v.get("metadata").is_some()) {
+        if incoming
+            .as_ref()
+            .is_some_and(|v| v.get("metadata").is_some())
+        {
             meta.custom = over.custom;
         }
     }
@@ -2668,7 +2748,13 @@ fn gcs_acl(
         return Ok(gcs_no_such_object(bucket, name, false));
     }
     let m = store
-        .update_metadata(&b, &n, &MetadataPatch::default(), Precondition::default(), now)
+        .update_metadata(
+            &b,
+            &n,
+            &MetadataPatch::default(),
+            Precondition::default(),
+            now,
+        )
         .map_err(gcs_core_err)?;
     Ok(StorageResponse::json(
         200,
@@ -2769,8 +2855,9 @@ fn gcs_upload(
                 .unwrap_or("")
                 .to_owned();
             let body = std::mem::take(&mut req.body);
-            let (meta_json, data) = parse_multipart(&content_type, body)
-                .map_err(|e| StorageResponse::json(400, &json!({"error": {"code": 400, "message": e}})))?;
+            let (meta_json, data) = parse_multipart(&content_type, body).map_err(|e| {
+                StorageResponse::json(400, &json!({"error": {"code": 400, "message": e}}))
+            })?;
             let name = params
                 .get("name")
                 .cloned()
@@ -2792,7 +2879,9 @@ fn gcs_upload(
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
             let _ = hashes;
             let mut store = state.store()?;
-            let m = store.put(&b, &n, data, meta, pre, now).map_err(gcs_core_err)?;
+            let m = store
+                .put(&b, &n, data, meta, pre, now)
+                .map_err(gcs_core_err)?;
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
         _ => {
@@ -2813,7 +2902,9 @@ fn gcs_upload(
                 ..NewMetadata::default()
             };
             let mut store = state.store()?;
-            let m = store.put(&b, &n, body, meta, pre, now).map_err(gcs_core_err)?;
+            let m = store
+                .put(&b, &n, body, meta, pre, now)
+                .map_err(gcs_core_err)?;
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
     }
@@ -2854,8 +2945,9 @@ fn gcs_resumable_put(
         return Ok(plain_status(404));
     }
     let range = match req.header("content-range") {
-        Some(cr) => parse_content_range(cr)
-            .ok_or_else(|| gcs_json_error(400, &format!("invalid Content-Range {cr:?}"), "invalid"))?,
+        Some(cr) => parse_content_range(cr).ok_or_else(|| {
+            gcs_json_error(400, &format!("invalid Content-Range {cr:?}"), "invalid")
+        })?,
         None => ContentRange::Span {
             start: 0,
             end: Some(chunk.len() as u64),

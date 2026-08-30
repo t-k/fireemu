@@ -86,12 +86,58 @@ pub fn base64_decode(text: &str) -> Result<Vec<u8>, JsonError> {
 // timestamps
 // ------------------------------------------------------------------------------------------
 
+/// RFC 3339 with the protobuf JSON fraction: none, three, six or nine digits, whichever
+/// is the shortest exact rendering.
 fn timestamp_to_json(t: &prost_types::Timestamp) -> Value {
-    Value::String(
-        decode_instant(t)
-            .to_rfc3339()
-            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned()),
-    )
+    let full = decode_instant(t)
+        .to_rfc3339()
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());
+    Value::String(shorten_fraction(&full))
+}
+
+fn shorten_fraction(rfc3339: &str) -> String {
+    let Some((head, fraction)) = rfc3339.strip_suffix('Z').and_then(|s| s.split_once('.')) else {
+        return rfc3339.to_owned();
+    };
+    let trimmed = fraction.trim_end_matches('0');
+    let digits = match trimmed.len() {
+        0 => 0,
+        1..=3 => 3,
+        4..=6 => 6,
+        _ => 9,
+    };
+    if digits == 0 {
+        format!("{head}Z")
+    } else {
+        format!("{head}.{}Z", &fraction[..digits])
+    }
+}
+
+/// Proto3 JSON leaves an unset or empty field out; this is the one place the rule is
+/// applied to the request-level objects fireemu builds by hand.
+pub fn without_empty(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|_, v| match v {
+            Value::Array(items) => !items.is_empty(),
+            Value::Object(fields) => !fields.is_empty(),
+            Value::Null => false,
+            _ => true,
+        });
+    }
+    value
+}
+
+/// The keys a request object may carry; anything else is `Payload isn't valid for
+/// request.`, which is what the official emulator answers for an unknown field or a second
+/// member of a oneof.
+pub fn strict_keys(v: &Value, allowed: &[&str]) -> Result<(), JsonError> {
+    let Some(obj) = v.as_object() else {
+        return err("Payload isn't valid for request.");
+    };
+    if obj.keys().any(|k| !allowed.contains(&k.as_str())) {
+        return err("Payload isn't valid for request.");
+    }
+    Ok(())
 }
 
 fn timestamp_from_json(v: &Value) -> Result<prost_types::Timestamp, JsonError> {
@@ -140,15 +186,23 @@ pub fn value_to_json(v: &pb::Value) -> Value {
             json!({"geoPointValue": {"latitude": g.latitude, "longitude": g.longitude}})
         }
         Some(V::ArrayValue(a)) => {
-            json!({"arrayValue": {"values": a.values.iter().map(value_to_json).collect::<Vec<_>>()}})
+            if a.values.is_empty() {
+                json!({"arrayValue": {}})
+            } else {
+                json!({"arrayValue": {"values": a.values.iter().map(value_to_json).collect::<Vec<_>>()}})
+            }
         }
         Some(V::MapValue(m)) => {
-            let fields: Map<String, Value> = m
-                .fields
-                .iter()
-                .map(|(k, v)| (k.clone(), value_to_json(v)))
-                .collect();
-            json!({"mapValue": {"fields": fields}})
+            if m.fields.is_empty() {
+                json!({"mapValue": {}})
+            } else {
+                let fields: Map<String, Value> = m
+                    .fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), value_to_json(v)))
+                    .collect();
+                json!({"mapValue": {"fields": fields}})
+            }
         }
     }
 }
@@ -269,7 +323,10 @@ pub fn document_to_json(d: &pb::Document) -> Value {
         .iter()
         .map(|(k, v)| (k.clone(), value_to_json(v)))
         .collect();
-    let mut out = json!({"name": d.name, "fields": fields});
+    let mut out = json!({"name": d.name});
+    if !fields.is_empty() {
+        out["fields"] = Value::Object(fields);
+    }
     if let Some(t) = &d.create_time {
         out["createTime"] = timestamp_to_json(t);
     }
@@ -330,6 +387,11 @@ pub fn mask_from_paths(paths: &[String]) -> Option<pb::DocumentMask> {
 /// `{"exists": bool}` / `{"updateTime": ts}` → precondition.
 pub fn precondition_from_json(v: Option<&Value>) -> Result<Option<pb::Precondition>, JsonError> {
     let Some(v) = v else { return Ok(None) };
+    strict_keys(v, &["exists", "updateTime"])?;
+    if v.get("exists").is_some() && v.get("updateTime").is_some() {
+        // A oneof carries one member.
+        return err("Payload isn't valid for request.");
+    }
     let condition_type = if let Some(e) = v.get("exists") {
         Some(pb::precondition::ConditionType::Exists(
             e.as_bool()
@@ -391,6 +453,27 @@ fn transform_from_json(v: &Value) -> Result<pb::document_transform::FieldTransfo
 
 /// JSON → write.
 pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
+    strict_keys(
+        v,
+        &[
+            "update",
+            "delete",
+            "verify",
+            "transform",
+            "updateMask",
+            "updateTransforms",
+            "currentDocument",
+        ],
+    )?;
+    if ["update", "delete", "verify", "transform"]
+        .iter()
+        .filter(|k| v.get(**k).is_some())
+        .count()
+        > 1
+    {
+        // A oneof carries one member.
+        return err("Payload isn't valid for request.");
+    }
     let operation = if let Some(d) = v.get("update") {
         Some(pb::write::Operation::Update(document_from_json(d)?))
     } else if let Some(n) = v.get("delete") {
@@ -454,19 +537,20 @@ pub fn write_result_to_json(w: &pb::WriteResult) -> Value {
     if let Some(t) = &w.update_time {
         out["updateTime"] = timestamp_to_json(t);
     }
-    out
+    without_empty(out)
 }
 
-/// Commit response → JSON.
+/// Commit response → JSON. A commit without writes answers `{}`: no write results, and no
+/// commit time either, which is what the official emulator answers for it.
 #[must_use]
 pub fn commit_to_json(c: &pb::CommitResponse) -> Value {
     let mut out = json!({
         "writeResults": c.write_results.iter().map(write_result_to_json).collect::<Vec<_>>(),
     });
-    if let Some(t) = &c.commit_time {
+    if let (Some(t), false) = (&c.commit_time, c.write_results.is_empty()) {
         out["commitTime"] = timestamp_to_json(t);
     }
-    out
+    without_empty(out)
 }
 
 // ------------------------------------------------------------------------------------------

@@ -10,6 +10,8 @@
     "matrix:check": "node src/rules-probe/run.mjs check",
     "programs": "node src/rules-probe/run.mjs record-programs",
     "programs:check": "node src/rules-probe/run.mjs check-programs",
+    "firestore": "node src/firestore-probe/run.mjs record",
+    "firestore:check": "node src/firestore-probe/run.mjs check",
     "corpus": "node src/list.mjs",
     "selftest": "node --test src/diff.test.mjs",
     "lint": "oxlint src functions",

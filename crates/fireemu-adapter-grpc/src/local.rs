@@ -947,8 +947,22 @@ impl LocalBackend {
     /// should use [`LocalBackend`]'s operations, which admit first.
     pub fn database_handle(&self, parent: &Parent) -> Result<DatabaseHandle, Status> {
         let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
+        // A new database refuses production's limits only when the gateway enforces limits
+        // (the `strict` profile); under `firebase` it admits what the official emulator
+        // admits.
+        let scope = if self.gateway.enforce_limits {
+            fireemu_core_firestore::store::LimitScope::Production
+        } else {
+            fireemu_core_firestore::store::LimitScope::OfficialEmulator
+        };
         Ok(DatabaseHandle(
-            dbs.entry(database_key(parent)).or_default().clone(),
+            dbs.entry(database_key(parent))
+                .or_insert_with(|| {
+                    Arc::new(DatabaseEntry::restored(FirestoreState::with_limit_scope(
+                        scope,
+                    )))
+                })
+                .clone(),
         ))
     }
 
@@ -1045,8 +1059,9 @@ impl LocalBackend {
         }
         let oldest = now.as_nanos() - i128::from(READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
         if at.as_nanos() < oldest {
-            return Err(Status::invalid_argument(format!(
-                "read_time must be within the past {READ_TIME_RETENTION_SECONDS} seconds"
+            // FAILED_PRECONDITION, as the backend and the official emulator answer it.
+            return Err(Status::failed_precondition(format!(
+                "The requested 'read_time' is too old (it must be within the past {READ_TIME_RETENTION_SECONDS} seconds)."
             )));
         }
         Ok(at)
@@ -1560,12 +1575,12 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
-            let docs = match &txn {
+            let (docs, stats) = match &txn {
                 Some(t) => db
-                    .run_query_in_transaction(t, &accepted.query)
+                    .run_query_in_transaction_with_stats(t, &accepted.query)
                     .map_err(|e| status_from_error(&e))?,
                 None => db
-                    .run_query(&accepted.query, version)
+                    .run_query_with_stats(&accepted.query, version)
                     .map_err(|e| status_from_error(&e))?,
             };
             let read_time = Some(encode_instant(match (&txn, read_at) {
@@ -1575,8 +1590,11 @@ impl LocalBackend {
                 (None, Some(at)) => at,
                 (None, None) => db.read_time(now),
             }));
+            // The rows the offset skipped, reported on the first result as the backend does.
+            let skipped = i32::try_from(u64::from(accepted.query.offset).min(stats.matched))
+                .unwrap_or(i32::MAX);
             Ok((
-                query_responses(&docs, read_time, &report),
+                query_responses(&docs, read_time, &report, skipped),
                 accepted.warnings.clone(),
             ))
             };
@@ -1741,7 +1759,8 @@ impl LocalBackend {
         if req.page_size < 0 {
             return Err(Status::invalid_argument("page_size must not be negative"));
         }
-        let accepted = self.accepted_query(&parent, &list_query(req))?;
+        let accepted = self.accepted_query(&parent, &list_query(req)?)?;
+        let ordered = !accepted.query.order_by.is_empty();
         // The rules see the page size as `request.query.limit` (the number of documents the
         // request can return); the scan itself stays unlimited so the page cursor applies
         // before truncation.
@@ -1775,36 +1794,65 @@ impl LocalBackend {
             )?;
             // Inside a transaction the scan is recorded like a query, so a concurrent
             // change to the collection aborts the commit.
-            let mut docs = match &txn {
-                Some(t) => db
+            let mut docs = match (&txn, ordered) {
+                (Some(t), _) => db
                     .run_query_in_transaction(t, &accepted.query)
                     .map_err(|e| status_from_error(&e))?,
-                None => db.list_documents_at(parent.document.as_ref(), &req.collection_id, version),
+                (None, true) => db
+                    .run_query(&accepted.query, version)
+                    .map_err(|e| status_from_error(&e))?,
+                (None, false) => {
+                    db.list_documents_at(parent.document.as_ref(), &req.collection_id, version)
+                }
             };
-            if let Some(after) = &after {
-                docs.retain(|d| d.path.resource_name() > *after);
+            let mut documents: Vec<pb::Document> = docs
+                .iter_mut()
+                .map(|d| {
+                    if let Some(mask) = &mask {
+                        d.fields = project_fields(&d.fields, mask);
+                    }
+                    encode_document(d)
+                })
+                .collect();
+            if req.show_missing {
+                // A path that holds no document but has descendants is listed by name
+                // alone, as the backend lists it. Under an explicit order the missing
+                // parents (which have no fields to order on) follow the ordered documents.
+                let missing = db.list_missing_parents_at(
+                    parent.document.as_ref(),
+                    &req.collection_id,
+                    version,
+                );
+                documents.extend(missing.iter().map(|path| pb::Document {
+                    name: path.resource_name(),
+                    ..Default::default()
+                }));
+                if !ordered {
+                    documents.sort_by(|a, b| a.name.cmp(&b.name));
+                }
             }
-            let has_more = docs.len() > page_size;
-            docs.truncate(page_size);
-            let next_page_token = if has_more {
-                docs.last().map_or(String::new(), |d| {
-                    crate::rest::json::base64_encode(
-                        format!("{}\n{identity}", d.path.resource_name()).as_bytes(),
-                    )
+            if let Some(after) = &after {
+                if ordered {
+                    // The page continues after the named document at its position in the
+                    // ordered result; a document that left the result restarts the page.
+                    if let Some(position) = documents.iter().position(|d| d.name == *after) {
+                        documents.drain(..=position);
+                    }
+                } else {
+                    documents.retain(|d| d.name > *after);
+                }
+            }
+            // A full page carries a token whether or not anything follows, as the backend
+            // and the official emulator issue it; the next page is then simply empty.
+            let full = documents.len() >= page_size;
+            documents.truncate(page_size);
+            let next_page_token = if full {
+                documents.last().map_or(String::new(), |d| {
+                    crate::rest::json::base64_encode(format!("{}\n{identity}", d.name).as_bytes())
                 })
             } else {
                 String::new()
             };
-            let documents = docs
-                .iter()
-                .map(|d| {
-                    let mut d = d.clone();
-                    if let Some(mask) = &mask {
-                        d.fields = project_fields(&d.fields, mask);
-                    }
-                    encode_document(&d)
-                })
-                .collect();
             Ok(pb::ListDocumentsResponse {
                 documents,
                 next_page_token,
@@ -1839,9 +1887,9 @@ impl LocalBackend {
             if let Some(after) = &after {
                 ids.retain(|id| id > after);
             }
-            let has_more = ids.len() > page_size;
+            let full = ids.len() >= page_size;
             ids.truncate(page_size);
-            let next_page_token = if has_more {
+            let next_page_token = if full {
                 ids.last().map_or(String::new(), |id| {
                     crate::rest::json::base64_encode(id.as_bytes())
                 })
@@ -2059,14 +2107,44 @@ pub fn document_summary(
 
 /// Structured query of a `ListDocuments` request (unfiltered collection scan).
 #[must_use]
-pub fn list_query(req: &pb::ListDocumentsRequest) -> pb::StructuredQuery {
-    pb::StructuredQuery {
+pub fn list_query(req: &pb::ListDocumentsRequest) -> Result<pb::StructuredQuery, Status> {
+    Ok(pb::StructuredQuery {
         from: vec![pb::structured_query::CollectionSelector {
             collection_id: req.collection_id.clone(),
             all_descendants: false,
         }],
+        order_by: list_order_by(&req.order_by)?,
         ..Default::default()
+    })
+}
+
+/// `ListDocuments.order_by`: a comma-separated list of `field [asc|desc]` clauses.
+fn list_order_by(order_by: &str) -> Result<Vec<pb::structured_query::Order>, Status> {
+    let invalid = || Status::invalid_argument(format!("Invalid order by clause \"{order_by}\"."));
+    if order_by.trim().is_empty() {
+        return Ok(Vec::new());
     }
+    order_by
+        .split(',')
+        .map(|clause| {
+            let mut words = clause.split_whitespace();
+            let field = words.next().ok_or_else(invalid)?;
+            let direction = match words.next().map(str::to_ascii_lowercase).as_deref() {
+                None | Some("asc") => pb::structured_query::Direction::Ascending,
+                Some("desc") => pb::structured_query::Direction::Descending,
+                Some(_) => return Err(invalid()),
+            };
+            if words.next().is_some() {
+                return Err(invalid());
+            }
+            Ok(pb::structured_query::Order {
+                field: Some(pb::structured_query::FieldReference {
+                    field_path: field.to_owned(),
+                }),
+                direction: direction as i32,
+            })
+        })
+        .collect()
 }
 
 /// The document name a `ListDocuments` page token continues after; the token must have been
@@ -2095,6 +2173,7 @@ fn query_responses(
     docs: &[Document],
     read_time: Option<prost_types::Timestamp>,
     new_transaction: &[u8],
+    skipped_results: i32,
 ) -> Vec<pb::RunQueryResponse> {
     let mut responses: Vec<pb::RunQueryResponse> = docs
         .iter()
@@ -2115,6 +2194,16 @@ fn query_responses(
             skipped_results: 0,
             ..Default::default()
         });
+    }
+    // Reported on the first result; an offset past the end reports nothing, as the
+    // official emulator answers it.
+    if let Some(first) = responses.first_mut().filter(|r| r.document.is_some()) {
+        first.skipped_results = skipped_results;
+    }
+    if let Some(last) = responses.last_mut() {
+        // The last response says so, so a client can tell the end of the results from a
+        // stream that stalled.
+        last.continuation_selector = Some(pb::run_query_response::ContinuationSelector::Done(true));
     }
     if !new_transaction.is_empty() {
         // A new transaction is announced in a dedicated first response that carries nothing

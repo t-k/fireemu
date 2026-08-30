@@ -396,10 +396,12 @@ fn transactions_validate_their_read_set_on_commit() {
         Some(&Value::Integer(90)),
         "aborted transaction wrote nothing"
     );
+    // A finished transaction is ABORTED on reuse, the code the SDKs retry on and the one the
+    // official emulator answers (conformance/src/firestore-probe, transactions/lifecycle).
     assert!(
         matches!(
             s.commit(std::slice::from_ref(&write), Some(&txn), t(4)),
-            Err(FirestoreError::InvalidArgument(_))
+            Err(FirestoreError::Aborted(_))
         ),
         "a finished transaction cannot be reused"
     );

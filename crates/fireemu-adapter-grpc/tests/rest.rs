@@ -156,14 +156,18 @@ fn document_crud_over_rest() {
         json!({}),
     );
     assert_eq!(status, 200, "{listed}");
-    assert_eq!(listed["documents"].as_array().map(Vec::len), Some(0));
+    // Proto3 JSON leaves an empty list out: the body is `{}`.
+    assert_eq!(listed, json!({}), "an empty listing has no documents key");
+    // A method the surface has no route for is a plain-text 404, as the official
+    // emulator's HTTP adapter answers it (conformance/src/firestore-probe, errors/rest-shapes).
     let (status, err) = call(
         &s,
         "PUT",
         "/v1/projects/demo-app/databases/(default)/documents/users/x",
         json!({}),
     );
-    assert_eq!(status, 400, "{err}");
+    assert_eq!(status, 404, "{err}");
+    assert_eq!(err[fireemu_adapter_grpc::rest::TEXT_KEY], "Not Found\n");
 }
 
 #[test]
@@ -420,7 +424,11 @@ fn the_emulator_security_rules_route_replaces_the_ruleset_and_reports_the_compil
         "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} { allow read: if id != 'secret'; }\n  }\n}\n",
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body, json!({"issues": []}), "the official success shape");
+    assert_eq!(
+        body,
+        json!({}),
+        "the official success shape (an empty issue list is left out)"
+    );
 
     let (status, _) = call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
     assert_eq!(status, 404, "allowed, and the document does not exist");

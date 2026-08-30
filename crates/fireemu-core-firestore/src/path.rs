@@ -168,6 +168,17 @@ impl DocumentPath {
         })
     }
 
+    /// The ancestor made of the first `pairs` (collection, document) pairs; the path itself
+    /// when `pairs` is not smaller than its depth.
+    #[must_use]
+    pub fn ancestor(&self, pairs: usize) -> Self {
+        Self {
+            project: self.project.clone(),
+            database: self.database.clone(),
+            pairs: self.pairs[..pairs.min(self.pairs.len())].to_vec(),
+        }
+    }
+
     /// Relative path `users/jeff/tasks/my_task_id`.
     #[must_use]
     pub fn relative(&self) -> String {

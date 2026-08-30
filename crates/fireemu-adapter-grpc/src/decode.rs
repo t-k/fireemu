@@ -274,6 +274,39 @@ fn decode_filter(filter: &sq::Filter) -> Result<FilterExpr, DecodeError> {
     }
 }
 
+/// A `__name__` filter may only name documents of the database the query runs in.
+fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), DecodeError> {
+    let database = format!(
+        "projects/{}/databases/{}",
+        parent.project.as_str(),
+        parent.database.as_str()
+    );
+    let check = |name: &str| -> Result<(), DecodeError> {
+        let prefix = format!("{database}/documents/");
+        if name.starts_with(&prefix) {
+            return Ok(());
+        }
+        let other = name.splitn(5, '/').take(4).collect::<Vec<_>>().join("/");
+        Err(DecodeError::InvalidQuery(format!(
+            "The request was for database '{database}' but was attempting to access database '{other}'"
+        )))
+    };
+    match filter {
+        FilterExpr::Field { field, value, .. } if field.is_document_name() => match value {
+            Value::Reference(name) => check(name),
+            Value::Array(items) => items.iter().try_for_each(|v| match v {
+                Value::Reference(name) => check(name),
+                _ => Ok(()),
+            }),
+            _ => Ok(()),
+        },
+        FilterExpr::Field { .. } | FilterExpr::Unary { .. } => Ok(()),
+        FilterExpr::And(children) | FilterExpr::Or(children) => children
+            .iter()
+            .try_for_each(|c| check_name_references(c, parent)),
+    }
+}
+
 fn decode_cursor(cursor: &pb::Cursor) -> Result<Cursor, DecodeError> {
     Ok(Cursor {
         values: cursor
@@ -295,36 +328,49 @@ pub fn decode_structured_query(
             "find_nearest (vector search) is not modelled by the strict gateway".into(),
         ));
     }
-    let [from] = query.from.as_slice() else {
-        return Err(DecodeError::Unsupported(format!(
-            "exactly one collection selector is supported, got {}",
-            query.from.len()
-        )));
+    let from = match query.from.as_slice() {
+        [from] => from,
+        [] => {
+            // The official emulator scans every collection under the parent for a query
+            // without a selector; fireemu asks for the selector (a documented divergence).
+            return Err(DecodeError::InvalidQuery(
+                "StructuredQuery.from requires exactly one collection selector.".into(),
+            ));
+        }
+        _ => {
+            return Err(DecodeError::InvalidQuery(
+                "StructuredQuery.from cannot have more than one collection selector.".into(),
+            ))
+        }
     };
     let collection_id = CollectionId::try_new(from.collection_id.as_str())
         .map_err(|e| DecodeError::InvalidQuery(format!("collection id: {e}")))?;
     let scope = if from.all_descendants {
-        if parent.document.is_some() {
-            return Err(DecodeError::Unsupported(
-                "collection group queries scoped under a parent document".into(),
-            ));
+        // Under a parent document the group is every collection with that id below it.
+        QueryScope {
+            parent: parent.document.clone(),
+            collection_id,
+            all_descendants: true,
         }
-        QueryScope::collection_group(collection_id)
     } else {
         QueryScope::collection(parent.document.clone(), collection_id)
     };
     let mut q = Query::new(scope);
     if let Some(w) = &query.r#where {
-        q.filter = Some(decode_filter(w)?);
+        let filter = decode_filter(w)?;
+        check_name_references(&filter, parent)?;
+        q.filter = Some(filter);
     }
     for o in &query.order_by {
         let direction = match sq::Direction::try_from(o.direction) {
-            Ok(sq::Direction::Ascending) => Direction::Ascending,
+            // An unspecified direction is ascending, as the backend reads it.
+            Ok(sq::Direction::Ascending | sq::Direction::Unspecified) => Direction::Ascending,
             Ok(sq::Direction::Descending) => Direction::Descending,
-            _ => {
-                return Err(DecodeError::InvalidQuery(
-                    "unspecified order direction".into(),
-                ))
+            Err(_) => {
+                return Err(DecodeError::InvalidQuery(format!(
+                    "unknown order direction {}",
+                    o.direction
+                )))
             }
         };
         q.order_by.push(OrderClause {

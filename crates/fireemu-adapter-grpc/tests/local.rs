@@ -850,7 +850,13 @@ async fn verify_writes_check_preconditions_without_changing_anything() {
         .unwrap()
         .into_inner();
     assert_eq!(response.write_results.len(), 2);
-    assert!(response.write_results[0].update_time.is_none());
+    // A verify reports the update time of the document it verified (the official emulator
+    // reports one too; conformance/src/firestore-probe, writes/preconditions-and-masks).
+    assert!(response.write_results[0].update_time.is_some());
+    assert_ne!(
+        response.write_results[0].update_time, response.write_results[1].update_time,
+        "the verified document keeps its own update time, not the commit's"
+    );
     let err = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -1051,7 +1057,14 @@ async fn read_time_selectors_are_validated_and_read_only_transactions_can_start_
         ),
     ] {
         let err = client.get_document(get_at(ts)).await.unwrap_err();
-        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{what}");
+        // A read_time below the retained history is FAILED_PRECONDITION (the backend's and
+        // the official emulator's code for "too old"); a malformed one is INVALID_ARGUMENT.
+        let expected = if what == "older than the retention window" {
+            tonic::Code::FailedPrecondition
+        } else {
+            tonic::Code::InvalidArgument
+        };
+        assert_eq!(err.code(), expected, "{what}");
     }
     // An empty transaction token is not "no transaction".
     let err = client

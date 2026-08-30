@@ -112,6 +112,39 @@ Divergences work as they do in `divergences.json`: a row named in `DIVERGENCES` 
 `run.mjs` is gated against fireemu's own recorded answer, with the reason beside it, so a
 deliberate difference is pinned rather than tolerated and an unlisted one still fails.
 
+## The Firestore semantics matrix
+
+The scenario corpus compares what the SDKs surface. `src/firestore-probe/` compares the
+Firestore *runtime* over the REST API both emulators serve: fourteen hand-written programs
+(324 steps) covering the value type order, numeric ties, every filter operator with null and
+NaN edges, cursors, offsets and limits, collection-group scopes, aggregations, projections
+and listings, preconditions, update masks, field transforms, batched writes, the transaction
+lifecycle, the REST error shapes and the emulator-only routes.
+
+```sh
+pnpm -C conformance run firestore          # record the oracle -> firestore-matrix.json, FIRESTORE-MATRIX.md
+pnpm -C conformance run firestore:check    # replay fireemu and diff
+```
+
+A success gates its status, canonical code and normalized body (documents, fields, result
+order, write results); an error gates its status and code, while its message is reported and
+never gated, for the reason the Rules programs give. Server-generated instants, transaction
+ids, page tokens and auto ids are normalized; everything else is compared exactly, with JSON
+object keys sorted.
+
+Divergences live in `src/firestore-probe/divergences.mjs`, keyed `<program>#<step>`: each
+pins the answer fireemu gives (down to the body, or its result-set digest) with the reason,
+so `firestore:check` fails on any unlisted difference *and* on drift from a pinned one. The
+register currently holds 20 rows in five families: the optimistic transaction model (fireemu
+aborts the transaction, the official emulator locks and aborts the out-of-band writer),
+official REST-adapter defects fireemu does not reproduce (a bytes query parameter hangs the
+connection, `?readTime=` misparses, two HTTP 500s), official leniencies fireemu refuses (a
+selector-less query, a write addressed to another database, an uppercase database id), a
+multi-aggregation counting defect of the official emulator, and capabilities fireemu serves
+that the official emulator refuses (`orderBy(__name__, desc)`, `PartitionQuery`). Every row
+is also published in `spec/compatibility/contract.json` under
+`officialEmulatorDivergences`.
+
 ## Layout
 
 ```

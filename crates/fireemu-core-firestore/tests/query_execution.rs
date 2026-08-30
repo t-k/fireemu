@@ -32,9 +32,12 @@ fn reference_field(doc: &Document, path: &FieldPath) -> Option<Value> {
     get_field(&doc.fields, path).cloned()
 }
 
+/// Equality of a stored value with a filter operand: NaN equals nothing, and neither does a
+/// null operand (null is matched through the unary filters; the official emulator answers
+/// the raw field filter the same way, see conformance/src/firestore-probe queries/filters).
 fn reference_equal(a: &Value, b: &Value) -> bool {
     let nan = |v: &Value| matches!(v, Value::Double(d) if d.is_nan());
-    !nan(a) && !nan(b) && a.canonical_cmp(b) == Ordering::Equal
+    !nan(a) && !nan(b) && *b != Value::Null && a.canonical_cmp(b) == Ordering::Equal
 }
 
 fn reference_comparable(a: &Value, b: &Value) -> bool {
@@ -62,6 +65,9 @@ fn reference_filter(filter: &FilterExpr, doc: &Document) -> bool {
             let Some(v) = reference_field(doc, field) else {
                 return false;
             };
+            if *value == Value::Null {
+                return false;
+            }
             let is_nan = matches!(v, Value::Double(d) if d.is_nan());
             match op {
                 FieldOp::Equal => reference_equal(&v, value),

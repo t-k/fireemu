@@ -323,33 +323,27 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
         api_mode: FirestoreApiMode::Native,
         policy: IndexValidationPolicy::Emulator,
     };
-    // Two `array-contains` in the same disjunction: one Standard query limit, no index
-    // question, so the two profiles differ in exactly one thing.
-    let contains = |path: &str, v: &str| FilterExpr::Field {
-        field: FieldPath::parse(path).unwrap(),
-        op: FieldOp::ArrayContains,
-        value: Value::String(v.to_owned()),
-    };
+    // Eleven `not-in` values: one Standard query limit that only production enforces (the
+    // official emulator serves the query), no index question, so the two profiles differ in
+    // exactly one thing.
     let query = Query::new(QueryScope::collection(
         None,
         CollectionId::try_new("tasks").unwrap(),
     ))
-    .with_filter(FilterExpr::And(vec![
-        contains("tags", "a"),
-        contains("labels", "b"),
-    ]));
+    .with_filter(FilterExpr::Field {
+        field: FieldPath::parse("tag").unwrap(),
+        op: FieldOp::NotIn,
+        value: Value::Array((0..11).map(Value::Integer).collect()),
+    });
 
     let strict = Gateway {
         enforce_limits: true,
-        ctx,
+        ctx: ctx.clone(),
         indexes: IndexSet::default(),
     };
     let rejection = strict.validate_query(&query).unwrap_err();
     assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
-    assert!(
-        rejection.to_string().contains("ARRAY-CONTAINS"),
-        "{rejection}"
-    );
+    assert!(rejection.to_string().contains("NOT-IN"), "{rejection}");
 
     let firebase = Gateway {
         enforce_limits: false,
@@ -366,5 +360,31 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
             .any(|w| w.starts_with("FS_LIMIT_OBSERVED:")),
         "the violation is still reported, as a warning: {:?}",
         accepted.warnings
+    );
+
+    // Two `array-contains` in one disjunction is a limit the official emulator refuses too
+    // (conformance/src/firestore-probe, errors/rest-shapes#two-array-contains), so the
+    // switch leaves it refused, with the FAILED_PRECONDITION the official emulator answers.
+    let contains = |path: &str, v: &str| FilterExpr::Field {
+        field: FieldPath::parse(path).unwrap(),
+        op: FieldOp::ArrayContains,
+        value: Value::String(v.to_owned()),
+    };
+    let two_contains = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("tasks").unwrap(),
+    ))
+    .with_filter(FilterExpr::And(vec![
+        contains("tags", "a"),
+        contains("labels", "b"),
+    ]));
+    let rejection = firebase.validate_query(&two_contains).unwrap_err();
+    assert_eq!(
+        rejection.to_status().code(),
+        tonic::Code::FailedPrecondition
+    );
+    assert!(
+        rejection.to_string().contains("ARRAY-CONTAINS"),
+        "{rejection}"
     );
 }

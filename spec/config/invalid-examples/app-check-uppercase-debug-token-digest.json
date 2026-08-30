@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  },
+  "appCheck": {
+    "enabled": true,
+    "apps": [
+      {
+        "projectId": "demo-app",
+        "projectNumber": "1234567890",
+        "appId": "1:1234567890:web:one",
+        "debugTokenSha256": [
+          "DB8055E0E0307D5A016BEC4DC338D69875EB0FB7E614A8B125B08FB082095D98"
+        ]
+      }
+    ]
+  }
+}

@@ -55,6 +55,9 @@ pub struct AuthState {
     /// Stores of the other session projects: project-scoped routes (`projects/{p}/...`,
     /// `/emulator/v1/projects/{p}/...`) of a registered project use its own store.
     pub registry: Option<Arc<ftd_core_auth::store::AuthRegistry>>,
+    /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
+    /// them. `None` makes every App Check route a 404 (the activation table of section 8).
+    pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
 }
 
 /// Hands the user events a request produced to the sink once the handler released the

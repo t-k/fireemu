@@ -71,6 +71,129 @@ pub struct RuntimeConfig {
     pub scheduler_overlap: String,
     /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
     pub id_token_signing: ftd_core_auth::jwt::SigningMode,
+    /// App Check (`appCheck`); disabled by default.
+    pub app_check: AppCheckConfig,
+}
+
+/// `appCheck.tokenSigning`. Only `instance-rsa` exists: the App Check key belongs to the
+/// daemon instance, not to the reproducible session seed, and unsigned modes are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppCheckSigning {
+    /// A dedicated RSA key per daemon instance, drawn from the operating system CSPRNG.
+    #[default]
+    InstanceRsa,
+}
+
+impl AppCheckSigning {
+    /// Parses the canonical configuration value.
+    #[must_use]
+    pub fn parse_config(text: &str) -> Option<Self> {
+        match text {
+            "instance-rsa" => Some(Self::InstanceRsa),
+            _ => None,
+        }
+    }
+}
+
+/// One `appCheck.apps[]` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppCheckApp {
+    /// `projectId`.
+    pub project_id: String,
+    /// `projectNumber`.
+    pub project_number: String,
+    /// `appId`.
+    pub app_id: String,
+    /// `enabled`, defaulting to true.
+    pub enabled: bool,
+    /// `debugTokenSha256`: lowercase 64-character SHA-256 digests. Raw secrets are forbidden.
+    pub debug_token_sha256: Vec<String>,
+}
+
+/// The products whose baseline mode `appCheck.services` configures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppCheckService {
+    /// End-user Identity Toolkit and Secure Token operations.
+    Auth,
+    /// Cloud Firestore.
+    Firestore,
+    /// Cloud Storage for Firebase.
+    Storage,
+}
+
+/// The `appCheck` section.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppCheckConfig {
+    /// `enabled`; false keeps every existing configuration behaving as it does today.
+    pub enabled: bool,
+    /// `tokenSigning`.
+    pub token_signing: AppCheckSigning,
+    /// `tokenTtlSeconds`.
+    pub token_ttl_seconds: i64,
+    /// `apps`.
+    pub apps: Vec<AppCheckApp>,
+    /// `services.auth`.
+    pub auth: ftd_core_app_check::verify::BaselineMode,
+    /// `services.firestore`.
+    pub firestore: ftd_core_app_check::verify::BaselineMode,
+    /// `services.storage`.
+    pub storage: ftd_core_app_check::verify::BaselineMode,
+}
+
+impl AppCheckConfig {
+    /// The disabled default: no exchange, no JWKS, every product baseline `off`.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            token_signing: AppCheckSigning::InstanceRsa,
+            token_ttl_seconds: ftd_core_app_check::limits::DEFAULT_TOKEN_TTL_SECONDS,
+            apps: Vec::new(),
+            auth: ftd_core_app_check::verify::BaselineMode::Off,
+            firestore: ftd_core_app_check::verify::BaselineMode::Off,
+            storage: ftd_core_app_check::verify::BaselineMode::Off,
+        }
+    }
+
+    /// The configured mode of one product, before service selection is applied.
+    #[must_use]
+    pub const fn configured_mode(
+        &self,
+        service: AppCheckService,
+    ) -> ftd_core_app_check::verify::BaselineMode {
+        match service {
+            AppCheckService::Auth => self.auth,
+            AppCheckService::Firestore => self.firestore,
+            AppCheckService::Storage => self.storage,
+        }
+    }
+
+    /// The registrations the runtime registry is built from. Every binding rule of section 8
+    /// is checked by the core registry, so the loader and the runtime cannot disagree.
+    pub fn registrations(&self) -> Result<Vec<ftd_core_app_check::AppRegistration>, ConfigError> {
+        let mut out = Vec::with_capacity(self.apps.len());
+        for app in &self.apps {
+            let mut digests = Vec::with_capacity(app.debug_token_sha256.len());
+            for text in &app.debug_token_sha256 {
+                digests.push(
+                    ftd_core_app_check::DebugTokenDigest::parse_hex(text).map_err(|e| {
+                        ConfigError(format!(
+                            "appCheck.apps[{}].debugTokenSha256: {e}",
+                            app.app_id
+                        ))
+                    })?,
+                );
+            }
+            out.push(ftd_core_app_check::AppRegistration {
+                project_id: app.project_id.clone(),
+                project_number: app.project_number.clone(),
+                app_id: app.app_id.clone(),
+                enabled: app.enabled,
+                debug_token_digests: digests,
+            });
+        }
+        Ok(out)
+    }
 }
 
 impl Default for RuntimeConfig {
@@ -103,6 +226,7 @@ impl Default for RuntimeConfig {
             scheduler_overlap: "allow".to_owned(),
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: ftd_core_auth::jwt::SigningMode::UnsignedEmulator,
+            app_check: AppCheckConfig::disabled(),
         }
     }
 }
@@ -120,7 +244,8 @@ const AUTH_KEYS: [&str; 5] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError(pub String);
 
-/// The services `exec` exports to its child (`--only auth,firestore,storage,functions`).
+/// The services `exec` exports to its child
+/// (`--only auth,firestore,storage,functions,appcheck`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // one flag per service, read independently
 pub struct Selection {
@@ -132,6 +257,10 @@ pub struct Selection {
     pub storage: bool,
     /// The functions codebase is loaded and `FTD_FUNCTIONS_HOST` exported.
     pub functions: bool,
+    /// App Check: a logical selection, because the exchange and the JWKS share the
+    /// Auth/control listener. Exports `FTD_APP_CHECK_EMULATOR_HOST` and
+    /// `FTD_APP_CHECK_JWKS_URL`.
+    pub appcheck: bool,
 }
 
 impl Default for Selection {
@@ -141,18 +270,20 @@ impl Default for Selection {
             auth: true,
             storage: true,
             functions: true,
+            appcheck: true,
         }
     }
 }
 
 impl Selection {
-    /// Parses the `--only` list (`firebase emulators:exec --only` names).
+    /// Parses the `--only` list (`firebase emulators:exec --only` names, plus `appcheck`).
     pub fn parse(list: &str) -> Result<Self, ConfigError> {
         let mut sel = Self {
             firestore: false,
             auth: false,
             storage: false,
             functions: false,
+            appcheck: false,
         };
         for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
             match name {
@@ -160,14 +291,45 @@ impl Selection {
                 "auth" => sel.auth = true,
                 "storage" => sel.storage = true,
                 "functions" => sel.functions = true,
+                "appcheck" => sel.appcheck = true,
                 other => {
                     return Err(ConfigError(format!(
-                        "--only: unknown service {other:?} (firestore, auth, storage, functions)"
+                        "--only: unknown service {other:?} (firestore, auth, storage, functions, appcheck)"
                     )))
                 }
             }
         }
         Ok(sel)
+    }
+
+    /// Whether the App Check exchange and JWKS routes are served (the activation table of
+    /// section 8). Selecting `functions` implicitly selects its App Check dependency.
+    #[must_use]
+    pub const fn app_check_available(&self, cfg: &AppCheckConfig) -> bool {
+        cfg.enabled && (self.appcheck || self.functions)
+    }
+
+    /// The effective baseline mode of one product: a configured mode applies only while App
+    /// Check is available and the product itself is selected. Everything else is `off`.
+    #[must_use]
+    pub const fn app_check_mode(
+        &self,
+        cfg: &AppCheckConfig,
+        service: AppCheckService,
+    ) -> ftd_core_app_check::verify::BaselineMode {
+        if !self.app_check_available(cfg) {
+            return ftd_core_app_check::verify::BaselineMode::Off;
+        }
+        let selected = match service {
+            AppCheckService::Auth => self.auth,
+            AppCheckService::Firestore => self.firestore,
+            AppCheckService::Storage => self.storage,
+        };
+        if selected {
+            cfg.configured_mode(service)
+        } else {
+            ftd_core_app_check::verify::BaselineMode::Off
+        }
     }
 }
 
@@ -256,6 +418,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "firestore",
     "rules",
     "auth",
+    "appCheck",
     "storage",
     "events",
     "scheduler",
@@ -454,6 +617,184 @@ impl RuntimeConfig {
         Ok(())
     }
 
+    /// The `appCheck` section (spec `firebase-app-check.md` section 8). Unknown keys fail
+    /// closed at every level, and the binding rules are checked by building the registry the
+    /// runtime will use, so the loader and the runtime can never disagree.
+    #[allow(clippy::too_many_lines)]
+    fn parse_app_check(
+        section: &serde_json::Map<String, Value>,
+    ) -> Result<AppCheckConfig, ConfigError> {
+        const KEYS: [&str; 5] = [
+            "enabled",
+            "tokenSigning",
+            "tokenTtlSeconds",
+            "apps",
+            "services",
+        ];
+        const APP_KEYS: [&str; 5] = [
+            "projectId",
+            "projectNumber",
+            "appId",
+            "enabled",
+            "debugTokenSha256",
+        ];
+        const SERVICES: [&str; 3] = ["auth", "firestore", "storage"];
+
+        for key in section.keys() {
+            if !KEYS.contains(&key.as_str()) {
+                return Err(ConfigError(format!("unknown config key appCheck.{key}")));
+            }
+        }
+        let mut cfg = AppCheckConfig::disabled();
+        cfg.enabled = match section.get("enabled") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err(ConfigError("appCheck.enabled must be a boolean".into())),
+        };
+        if let Some(mode) = section.get("tokenSigning") {
+            let text = mode
+                .as_str()
+                .ok_or_else(|| ConfigError("appCheck.tokenSigning must be a string".to_owned()))?;
+            cfg.token_signing = AppCheckSigning::parse_config(text).ok_or_else(|| {
+                ConfigError(format!(
+                    "appCheck.tokenSigning {text:?} is not supported; only \"instance-rsa\" is"
+                ))
+            })?;
+        }
+        if let Some(ttl) = section.get("tokenTtlSeconds") {
+            let seconds = ttl.as_i64().ok_or_else(|| {
+                ConfigError("appCheck.tokenTtlSeconds must be an integer".to_owned())
+            })?;
+            if !(ftd_core_app_check::limits::MIN_TOKEN_TTL_SECONDS
+                ..=ftd_core_app_check::limits::MAX_TOKEN_TTL_SECONDS)
+                .contains(&seconds)
+            {
+                return Err(ConfigError(
+                    "appCheck.tokenTtlSeconds must be between 1800 and 604800 seconds inclusive"
+                        .into(),
+                ));
+            }
+            cfg.token_ttl_seconds = seconds;
+        }
+        if let Some(apps) = section.get("apps") {
+            let apps = apps
+                .as_array()
+                .ok_or_else(|| ConfigError("appCheck.apps must be an array".to_owned()))?;
+            if apps.len() > ftd_core_app_check::limits::MAX_APPS {
+                return Err(ConfigError(
+                    "appCheck.apps: at most 1024 apps may be configured".into(),
+                ));
+            }
+            for (i, app) in apps.iter().enumerate() {
+                let app = app
+                    .as_object()
+                    .ok_or_else(|| ConfigError(format!("appCheck.apps[{i}] must be an object")))?;
+                for key in app.keys() {
+                    if !APP_KEYS.contains(&key.as_str()) {
+                        return Err(ConfigError(format!(
+                            "unknown config key appCheck.apps[{i}].{key}"
+                        )));
+                    }
+                }
+                let text = |key: &str| -> Result<String, ConfigError> {
+                    app.get(key)
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .ok_or_else(|| {
+                            ConfigError(format!(
+                                "appCheck.apps[{i}].{key} is required and must be a string"
+                            ))
+                        })
+                };
+                let enabled = match app.get("enabled") {
+                    None => true,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => {
+                        return Err(ConfigError(format!(
+                            "appCheck.apps[{i}].enabled must be a boolean"
+                        )))
+                    }
+                };
+                let mut digests = Vec::new();
+                if let Some(list) = app.get("debugTokenSha256") {
+                    let list = list.as_array().ok_or_else(|| {
+                        ConfigError(format!(
+                            "appCheck.apps[{i}].debugTokenSha256 must be an array"
+                        ))
+                    })?;
+                    for digest in list {
+                        let digest = digest.as_str().ok_or_else(|| {
+                            ConfigError(format!(
+                                "appCheck.apps[{i}].debugTokenSha256 entries must be strings"
+                            ))
+                        })?;
+                        ftd_core_app_check::DebugTokenDigest::parse_hex(digest).map_err(|e| {
+                            ConfigError(format!("appCheck.apps[{i}].debugTokenSha256: {e}"))
+                        })?;
+                        digests.push(digest.to_owned());
+                    }
+                }
+                cfg.apps.push(AppCheckApp {
+                    project_id: text("projectId")?,
+                    project_number: text("projectNumber")?,
+                    app_id: text("appId")?,
+                    enabled,
+                    debug_token_sha256: digests,
+                });
+            }
+        }
+        if let Some(services) = section.get("services") {
+            let services = services
+                .as_object()
+                .ok_or_else(|| ConfigError("appCheck.services must be an object".to_owned()))?;
+            for (name, value) in services {
+                if !SERVICES.contains(&name.as_str()) {
+                    return Err(ConfigError(format!(
+                        "unknown config key appCheck.services.{name}"
+                    )));
+                }
+                let text = value.as_str().unwrap_or("");
+                let mode = ftd_core_app_check::verify::BaselineMode::parse_config(text)
+                    .ok_or_else(|| {
+                        ConfigError(format!(
+                            "appCheck.services.{name} must be one of off, unenforced, enforced"
+                        ))
+                    })?;
+                match name.as_str() {
+                    "auth" => cfg.auth = mode,
+                    "firestore" => cfg.firestore = mode,
+                    _ => cfg.storage = mode,
+                }
+            }
+        }
+        // A non-off service mode is meaningless, and dangerously misleading, while App Check
+        // is disabled.
+        if !cfg.enabled {
+            for (name, mode) in [
+                ("auth", cfg.auth),
+                ("firestore", cfg.firestore),
+                ("storage", cfg.storage),
+            ] {
+                if mode != ftd_core_app_check::verify::BaselineMode::Off {
+                    return Err(ConfigError(format!(
+                        "appCheck.services.{name} is {mode} while appCheck.enabled is false"
+                    )));
+                }
+            }
+        }
+        // The binding rules live in the core registry; building it here makes the loader and
+        // the runtime agree by construction.
+        let mut registry = ftd_core_app_check::AppCheckRegistry::new(cfg.token_ttl_seconds)
+            .map_err(|e| ConfigError(format!("appCheck.tokenTtlSeconds: {e}")))?;
+        for registration in cfg.registrations()? {
+            let app_id = registration.app_id.clone();
+            registry
+                .register_app(registration)
+                .map_err(|e| ConfigError(format!("appCheck.apps ({app_id}): {e}")))?;
+        }
+        Ok(cfg)
+    }
+
     /// Builds the runtime config from parsed JSON.
     #[allow(clippy::too_many_lines)]
     pub fn from_json(json: &Value) -> Result<Self, ConfigError> {
@@ -559,6 +900,12 @@ impl RuntimeConfig {
                 cfg.id_token_signing = m;
             }
         }
+        if let Some(app_check) = obj.get("appCheck") {
+            let app_check = app_check
+                .as_object()
+                .ok_or_else(|| ConfigError("appCheck must be an object".to_owned()))?;
+            cfg.app_check = Self::parse_app_check(app_check)?;
+        }
         Ok(cfg)
     }
 }
@@ -576,6 +923,307 @@ mod tests {
             "firestore": {"edition": "standard", "apiMode": "native"},
             "auth": auth,
         }))
+    }
+
+    // ----------------------------------------------------------------------------------
+    // App Check (docs/specifications/firebase-app-check.md section 8)
+    // ----------------------------------------------------------------------------------
+
+    const DIGEST: &str = "db8055e0e0307d5a016bec4dc338d69875eb0fb7e614a8b125b08fb082095d98";
+
+    fn app_check(section: &Value) -> Result<AppCheckConfig, ConfigError> {
+        RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "deterministic",
+            "firestore": {"edition": "standard", "apiMode": "native"},
+            "appCheck": section,
+        }))
+        .map(|cfg| cfg.app_check)
+    }
+
+    fn one_app() -> Value {
+        json!({
+            "projectId": "demo-app",
+            "projectNumber": "1234567890",
+            "appId": "1:1234567890:web:local-test-app",
+            "debugTokenSha256": [DIGEST],
+        })
+    }
+
+    #[test]
+    fn app_check_defaults_to_off_and_preserves_current_behaviour() {
+        let cfg = RuntimeConfig::default();
+        assert!(!cfg.app_check.enabled);
+        assert_eq!(cfg.app_check.token_ttl_seconds, 3600);
+        assert!(cfg.app_check.apps.is_empty());
+        for service in [
+            AppCheckService::Auth,
+            AppCheckService::Firestore,
+            AppCheckService::Storage,
+        ] {
+            assert_eq!(
+                cfg.app_check.configured_mode(service),
+                ftd_core_app_check::verify::BaselineMode::Off
+            );
+        }
+        // A configuration without the section is exactly the default.
+        let parsed = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "deterministic",
+            "firestore": {"edition": "standard", "apiMode": "native"},
+        }))
+        .unwrap();
+        assert_eq!(parsed.app_check, AppCheckConfig::disabled());
+    }
+
+    #[test]
+    fn the_canonical_configuration_example_passes_loader_validation() {
+        // The same file `config-schema-check` validates against the JSON Schema.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../spec/config/examples/app-check-enforced.json");
+        let cfg = RuntimeConfig::from_file(&path).expect("the canonical example loads");
+        assert!(cfg.app_check.enabled);
+        assert_eq!(cfg.app_check.token_signing, AppCheckSigning::InstanceRsa);
+        assert_eq!(cfg.app_check.token_ttl_seconds, 3600);
+        assert_eq!(cfg.app_check.apps.len(), 2);
+        assert!(cfg.app_check.apps[0].enabled);
+        assert!(!cfg.app_check.apps[1].enabled);
+        assert_eq!(
+            cfg.app_check.firestore,
+            ftd_core_app_check::verify::BaselineMode::Unenforced
+        );
+        assert_eq!(
+            cfg.app_check.storage,
+            ftd_core_app_check::verify::BaselineMode::Enforced
+        );
+        assert_eq!(cfg.app_check.registrations().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn only_instance_rsa_signing_is_accepted_and_unsigned_modes_are_refused() {
+        assert_eq!(
+            app_check(&json!({"enabled": true, "tokenSigning": "instance-rsa"}))
+                .unwrap()
+                .token_signing,
+            AppCheckSigning::InstanceRsa
+        );
+        for bad in ["unsigned", "session-rsa", "none", ""] {
+            assert!(
+                app_check(&json!({"enabled": true, "tokenSigning": bad})).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        assert!(app_check(&json!({"enabled": true, "tokenSigning": 1})).is_err());
+    }
+
+    #[test]
+    fn the_token_ttl_is_bounded_and_defaults_to_one_hour() {
+        assert_eq!(
+            app_check(&json!({"enabled": true}))
+                .unwrap()
+                .token_ttl_seconds,
+            3600
+        );
+        for good in [1800, 3600, 604_800] {
+            assert_eq!(
+                app_check(&json!({"enabled": true, "tokenTtlSeconds": good}))
+                    .unwrap()
+                    .token_ttl_seconds,
+                good
+            );
+        }
+        for bad in [0, 1799, 604_801, -1] {
+            assert!(
+                app_check(&json!({"enabled": true, "tokenTtlSeconds": bad})).is_err(),
+                "{bad} must be refused"
+            );
+        }
+        assert!(app_check(&json!({"enabled": true, "tokenTtlSeconds": "3600"})).is_err());
+    }
+
+    #[test]
+    fn a_non_off_service_mode_is_invalid_while_app_check_is_disabled() {
+        for mode in ["unenforced", "enforced"] {
+            let refusal = app_check(&json!({"enabled": false, "services": {"firestore": mode}}));
+            assert_eq!(
+                refusal,
+                Err(ConfigError(format!(
+                    "appCheck.services.firestore is {mode} while appCheck.enabled is false"
+                )))
+            );
+        }
+        assert!(app_check(&json!({"enabled": false, "services": {"firestore": "off"}})).is_ok());
+        // Every omitted service member is off.
+        let cfg = app_check(&json!({"enabled": true, "services": {"auth": "enforced"}})).unwrap();
+        assert_eq!(cfg.auth, ftd_core_app_check::verify::BaselineMode::Enforced);
+        assert_eq!(cfg.firestore, ftd_core_app_check::verify::BaselineMode::Off);
+        assert_eq!(cfg.storage, ftd_core_app_check::verify::BaselineMode::Off);
+    }
+
+    #[test]
+    fn unknown_app_check_keys_services_and_modes_fail_closed() {
+        assert_eq!(
+            app_check(&json!({"enabled": true, "tokenTtl": 3600})),
+            Err(ConfigError(
+                "unknown config key appCheck.tokenTtl".to_owned()
+            ))
+        );
+        assert_eq!(
+            app_check(&json!({"enabled": true, "services": {"database": "off"}})),
+            Err(ConfigError(
+                "unknown config key appCheck.services.database".to_owned()
+            ))
+        );
+        assert!(app_check(&json!({"enabled": true, "services": {"auth": "audit"}})).is_err());
+        let mut app = one_app();
+        app["debugToken"] = json!("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d");
+        assert_eq!(
+            app_check(&json!({"enabled": true, "apps": [app]})),
+            Err(ConfigError(
+                "unknown config key appCheck.apps[0].debugToken".to_owned()
+            ))
+        );
+        assert_eq!(
+            RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "profile": "deterministic",
+                "firestore": {"edition": "standard", "apiMode": "native"},
+                "appCheck": true,
+            })),
+            Err(ConfigError("appCheck must be an object".to_owned()))
+        );
+    }
+
+    #[test]
+    fn app_entries_bind_project_ids_numbers_and_app_ids_exactly_once() {
+        let ok = app_check(&json!({"enabled": true, "apps": [one_app()]})).unwrap();
+        assert_eq!(ok.apps[0].project_number, "1234567890");
+        assert!(ok.apps[0].enabled, "an app entry defaults to enabled");
+
+        let duplicate = json!({"enabled": true, "apps": [one_app(), one_app()]});
+        assert!(app_check(&duplicate).is_err());
+
+        let mut second = one_app();
+        second["projectNumber"] = json!("9876543210");
+        second["appId"] = json!("1:9876543210:web:other");
+        assert!(
+            app_check(&json!({"enabled": true, "apps": [one_app(), second]})).is_err(),
+            "one project ID may not take a second project number"
+        );
+
+        let mut foreign = one_app();
+        foreign["projectId"] = json!("demo-other");
+        foreign["appId"] = json!("1:1234567890:web:other");
+        assert!(
+            app_check(&json!({"enabled": true, "apps": [one_app(), foreign]})).is_err(),
+            "one project number may not belong to a second project ID"
+        );
+
+        let mut reused = one_app();
+        reused["projectId"] = json!("demo-other");
+        reused["projectNumber"] = json!("9876543210");
+        assert!(
+            app_check(&json!({"enabled": true, "apps": [one_app(), reused]})).is_err(),
+            "one app ID may not be reused across projects"
+        );
+    }
+
+    #[test]
+    fn project_numbers_digests_and_embedded_app_id_numbers_are_validated() {
+        for bad in ["", "0", "01234", "12a4", "-1"] {
+            let mut app = one_app();
+            app["projectNumber"] = json!(bad);
+            app["appId"] = json!("custom-app-id");
+            assert!(
+                app_check(&json!({"enabled": true, "apps": [app]})).is_err(),
+                "project number {bad:?} must be refused"
+            );
+        }
+        let mut mismatch = one_app();
+        mismatch["appId"] = json!("1:9876543210:web:local-test-app");
+        assert!(app_check(&json!({"enabled": true, "apps": [mismatch]})).is_err());
+
+        for bad in [
+            DIGEST.to_uppercase(),
+            "zz".to_owned(),
+            DIGEST[..63].to_owned(),
+        ] {
+            let mut app = one_app();
+            app["debugTokenSha256"] = json!([bad]);
+            assert!(
+                app_check(&json!({"enabled": true, "apps": [app]})).is_err(),
+                "digest {bad:?} must be refused"
+            );
+        }
+        // A raw debug secret is never a digest.
+        let mut raw = one_app();
+        raw["debugTokenSha256"] = json!(["a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"]);
+        assert!(app_check(&json!({"enabled": true, "apps": [raw]})).is_err());
+    }
+
+    #[test]
+    fn the_selection_table_decides_availability_and_the_product_baselines() {
+        use ftd_core_app_check::verify::BaselineMode::{Enforced, Off, Unenforced};
+        let enabled = app_check(&json!({
+            "enabled": true,
+            "services": {"firestore": "unenforced", "storage": "enforced"},
+        }))
+        .unwrap();
+        let disabled = AppCheckConfig::disabled();
+
+        // Row 1: the section is absent or disabled.
+        let all = Selection::default();
+        assert!(!all.app_check_available(&disabled));
+        assert_eq!(
+            all.app_check_mode(&disabled, AppCheckService::Firestore),
+            Off
+        );
+
+        // Row 2: enabled, but neither appcheck nor functions is selected.
+        let neither = Selection::parse("auth,firestore,storage").unwrap();
+        assert!(!neither.app_check_available(&enabled));
+        assert_eq!(
+            neither.app_check_mode(&enabled, AppCheckService::Firestore),
+            Off
+        );
+
+        // Row 3: enabled and appcheck selected, Functions not.
+        let with_appcheck = Selection::parse("appcheck,firestore,storage").unwrap();
+        assert!(with_appcheck.app_check_available(&enabled));
+        assert_eq!(
+            with_appcheck.app_check_mode(&enabled, AppCheckService::Firestore),
+            Unenforced
+        );
+        assert_eq!(
+            with_appcheck.app_check_mode(&enabled, AppCheckService::Storage),
+            Enforced
+        );
+        // A product that is not selected stays off whatever the configured mode says.
+        assert_eq!(
+            Selection::parse("appcheck")
+                .unwrap()
+                .app_check_mode(&enabled, AppCheckService::Storage),
+            Off
+        );
+
+        // Row 4: functions selects its App Check dependency implicitly.
+        let functions_only = Selection::parse("functions").unwrap();
+        assert!(functions_only.app_check_available(&enabled));
+        assert_eq!(
+            functions_only.app_check_mode(&enabled, AppCheckService::Storage),
+            Off,
+            "a non-Functions product applies its mode only when explicitly selected"
+        );
+
+        // No --only at all: everything is selected, so the configured modes apply.
+        assert!(all.app_check_available(&enabled));
+        assert_eq!(
+            all.app_check_mode(&enabled, AppCheckService::Storage),
+            Enforced
+        );
+        assert!(all.appcheck);
+        assert!(Selection::parse("appcheck").unwrap().appcheck);
+        assert!(!Selection::parse("auth").unwrap().appcheck);
     }
 
     #[test]

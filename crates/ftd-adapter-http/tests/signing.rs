@@ -108,6 +108,7 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         events: None,
         control_token: None,
         registry: None,
+        app_check: None,
         tenancy: None,
     };
     let r = handle(
@@ -162,6 +163,7 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         events: None,
         control_token: None,
         registry: None,
+        app_check: None,
         tenancy: None,
     };
     let r = handle(&plain, "GET", JWKS_PATHS[0], &json!({}));

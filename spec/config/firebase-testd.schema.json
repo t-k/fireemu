@@ -154,6 +154,46 @@
         "secretMaterialization": { "enum": ["redact", "allow"] }
       }
     },
+    "appCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Firebase App Check (docs/specifications/firebase-app-check.md section 8). Defaults to off, so an existing configuration keeps its behaviour. Cross-field rules (a non-off service mode needs enabled, one project ID per project number and back, one app ID per project, an embedded project number that matches) are enforced by tools/config-schema-check and by the Rust loader.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "tokenSigning": { "enum": ["instance-rsa"], "default": "instance-rsa" },
+        "tokenTtlSeconds": { "type": "integer", "minimum": 1800, "maximum": 604800, "default": 3600 },
+        "apps": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["projectId", "projectNumber", "appId"],
+            "properties": {
+              "projectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+              "projectNumber": { "type": "string", "pattern": "^[1-9][0-9]{0,31}$" },
+              "appId": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "enabled": { "type": "boolean", "default": true },
+              "debugTokenSha256": {
+                "type": "array",
+                "maxItems": 128,
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          }
+        },
+        "services": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "auth": { "$ref": "#/$defs/appCheckMode" },
+            "firestore": { "$ref": "#/$defs/appCheckMode" },
+            "storage": { "$ref": "#/$defs/appCheckMode" }
+          }
+        }
+      }
+    },
     "daemon": {
       "type": "object",
       "additionalProperties": false,
@@ -216,6 +256,7 @@
     }
   },
   "$defs": {
+    "appCheckMode": { "enum": ["off", "unenforced", "enforced"], "default": "off" },
     "optionalCount": { "oneOf": [ { "type": "null" }, { "type": "integer", "minimum": 0 } ] },
     "thresholds": {
       "type": "array",

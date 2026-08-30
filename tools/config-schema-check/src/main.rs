@@ -14,10 +14,14 @@
 //! 4. `pipeline.executionMode = proxy` and `textSearch.fidelity = upstream-proxy` require
 //!    `profile = conformance`;
 //! 5. `visibilityPolicy = virtual-lag` requires a non-null `visibilityLag`;
-//! 6. `fidelity = strict-validation-only` forbids `scorePrecision = exact`.
+//! 6. `fidelity = strict-validation-only` forbids `scorePrecision = exact`;
+//! 7. a non-`off` `appCheck.services.*` mode requires `appCheck.enabled`;
+//! 8. `appCheck.apps` binds one project ID to one project number and back, one app ID to one
+//!    project, and a standard app ID to the project number it embeds.
 //!
 //! Usage: `config-schema-check [--root <repo root>]`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -136,6 +140,84 @@ fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
         problems.push("strict-validation-only cannot declare scorePrecision exact".to_owned());
     }
 
+    problems.extend(app_check_problems(cfg));
+
+    problems
+}
+
+/// App Check cross-field rules (spec `firebase-app-check.md` section 8) that JSON Schema
+/// cannot express. The Rust loader enforces exactly the same set.
+fn app_check_problems(cfg: &Value) -> Vec<String> {
+    let mut problems = Vec::new();
+    let Some(app_check) = cfg.get("appCheck") else {
+        return problems;
+    };
+    let enabled = app_check
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // 7. A non-off service mode is invalid when appCheck.enabled is false.
+    if let Some(services) = app_check.get("services").and_then(Value::as_object) {
+        for (service, mode) in services {
+            let mode = mode.as_str().unwrap_or("off");
+            if !enabled && mode != "off" {
+                problems.push(format!(
+                    "appCheck.services.{service} is {mode} while appCheck.enabled is false"
+                ));
+            }
+        }
+    }
+
+    // 8. One project ID maps to one project number and back, one app ID belongs to one
+    //    project, and a standard app ID embeds its own project number.
+    let mut number_of_project: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut project_of_number: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut project_of_app: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut seen: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for app in app_check
+        .get("apps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(project), Some(number), Some(app_id)) = (
+            app.get("projectId").and_then(Value::as_str),
+            app.get("projectNumber").and_then(Value::as_str),
+            app.get("appId").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if !seen.insert((project, app_id)) {
+            problems.push(format!("appCheck.apps: duplicate ({project}, {app_id})"));
+        }
+        match number_of_project.insert(project, number) {
+            Some(existing) if existing != number => problems.push(format!(
+                "appCheck.apps: project {project} maps to both {existing} and {number}"
+            )),
+            _ => {}
+        }
+        match project_of_number.insert(number, project) {
+            Some(existing) if existing != project => problems.push(format!(
+                "appCheck.apps: project number {number} maps to both {existing} and {project}"
+            )),
+            _ => {}
+        }
+        match project_of_app.insert(app_id, project) {
+            Some(existing) if existing != project => problems.push(format!(
+                "appCheck.apps: app ID {app_id} belongs to both {existing} and {project}"
+            )),
+            _ => {}
+        }
+        let parts: Vec<&str> = app_id.split(':').collect();
+        if let ["1", embedded, _, _] = parts.as_slice() {
+            if *embedded != number {
+                problems.push(format!(
+                    "appCheck.apps: app ID {app_id} embeds project number {embedded}, not {number}"
+                ));
+            }
+        }
+    }
     problems
 }
 

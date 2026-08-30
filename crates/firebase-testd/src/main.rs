@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! firebase-testd up [options]
-//! firebase-testd exec [options] [--only auth,firestore,storage,functions] -- <command...>
+//! firebase-testd exec [options] [--only auth,firestore,storage,functions,appcheck] -- <command...>
 //! firebase-testd doctor
 //! firebase-testd capabilities
 //!
@@ -47,7 +47,7 @@ use ftd_proto_firestore::google::firestore::v1::firestore_server::FirestoreServe
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id>] [--only auth,firestore,storage,functions] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>] [--ui-port <n>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id>] [--only auth,firestore,storage,functions,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>] [--ui-port <n>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: firebase-testd up {OPTIONS_USAGE}\n       firebase-testd exec {OPTIONS_USAGE} -- <command...>\n       firebase-testd doctor\n       firebase-testd capabilities");
@@ -58,22 +58,20 @@ fn usage() -> ExitCode {
 struct ExecPlan {
     /// Program and arguments.
     command: Vec<String>,
-    /// Services whose host variables the command receives.
-    only: Selection,
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("up") => match parse_options(&args[1..]) {
-            Ok((cfg, _)) => run(cfg, None),
+            Ok((cfg, only)) => run(cfg, only, None),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)
             }
         },
         Some("exec") => match parse_exec(&args[1..]) {
-            Ok((cfg, plan)) => run(cfg, Some(plan)),
+            Ok((cfg, only, plan)) => run(cfg, only, Some(plan)),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)
@@ -107,7 +105,7 @@ fn main() -> ExitCode {
 }
 
 /// `exec [options] -- <command...>`.
-fn parse_exec(args: &[String]) -> Result<(RuntimeConfig, ExecPlan), String> {
+fn parse_exec(args: &[String]) -> Result<(RuntimeConfig, Selection, ExecPlan), String> {
     let split = args
         .iter()
         .position(|a| a == "--")
@@ -117,7 +115,7 @@ fn parse_exec(args: &[String]) -> Result<(RuntimeConfig, ExecPlan), String> {
         return Err("exec needs a command after --".to_owned());
     }
     let (cfg, only) = parse_options(&args[..split])?;
-    Ok((cfg, ExecPlan { command, only }))
+    Ok((cfg, only, ExecPlan { command }))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -301,17 +299,30 @@ fn child_environment(
     if let (true, Some(addr)) = (only.functions, functions_addr) {
         env.push(("FTD_FUNCTIONS_HOST".to_owned(), addr.to_string()));
     }
+    // App Check shares the Auth/control listener, so its variables name that address.
+    if only.app_check_available(&cfg.app_check) {
+        env.push((
+            "FTD_APP_CHECK_EMULATOR_HOST".to_owned(),
+            http_addr.to_string(),
+        ));
+        env.push((
+            "FTD_APP_CHECK_JWKS_URL".to_owned(),
+            format!("http://{http_addr}/v1/jwks"),
+        ));
+    }
     env
 }
 
 /// The emulator variables `exec` owns: those not selected by `--only` are removed from the
 /// command's environment, so a shell configured for other emulators cannot leak into it.
-const OWNED_VARIABLES: [&str; 5] = [
+const OWNED_VARIABLES: [&str; 7] = [
     "FIRESTORE_EMULATOR_HOST",
     "FIREBASE_AUTH_EMULATOR_HOST",
     "FIREBASE_STORAGE_EMULATOR_HOST",
     "STORAGE_EMULATOR_HOST",
     "FTD_FUNCTIONS_HOST",
+    "FTD_APP_CHECK_EMULATOR_HOST",
+    "FTD_APP_CHECK_JWKS_URL",
 ];
 
 /// The command runs in its own process group when the supervisor is not on a terminal
@@ -560,6 +571,51 @@ fn random_secret() -> Result<String, String> {
     }))
 }
 
+/// An unpredictable 128-bit project session epoch from the operating system CSPRNG (spec 7.2).
+fn random_epoch() -> Result<ftd_core_app_check::ProjectEpoch, String> {
+    let hex = random_secret()?;
+    let value = u128::from_str_radix(&hex, 16)
+        .map_err(|e| format!("cannot build an App Check epoch: {e}"))?;
+    Ok(ftd_core_app_check::ProjectEpoch::new(value))
+}
+
+/// Builds the App Check state from canonical configuration: the registry, a fresh epoch per
+/// registered project, and the shell implementations of the core's cryptographic traits.
+fn app_check_state(
+    cfg: &RuntimeConfig,
+    clock: &Arc<Mutex<VirtualClock>>,
+    barrier: &Arc<ftd_core_session::barrier::AdmissionBarrier>,
+    control_token: &str,
+    signer: Arc<ftd_adapter_http::signing::AppCheckRsaSigner>,
+) -> Result<Arc<ftd_adapter_http::app_check::AppCheckState>, String> {
+    let mut registry = ftd_core_app_check::AppCheckRegistry::new(cfg.app_check.token_ttl_seconds)
+        .map_err(|e| format!("appCheck.tokenTtlSeconds: {e}"))?;
+    for registration in cfg.app_check.registrations().map_err(|e| e.to_string())? {
+        registry
+            .register_app(registration)
+            .map_err(|e| format!("appCheck.apps: {e}"))?;
+    }
+    let projects: std::collections::BTreeSet<String> = cfg
+        .app_check
+        .apps
+        .iter()
+        .map(|a| a.project_id.clone())
+        .collect();
+    for project in &projects {
+        registry.set_project_epoch(project, random_epoch()?);
+    }
+    Ok(Arc::new(ftd_adapter_http::app_check::AppCheckState {
+        registry: Arc::new(RwLock::new(registry)),
+        signer,
+        clock: clock.clone(),
+        control_token: control_token.to_owned(),
+        hasher: Arc::new(ftd_adapter_http::signing::Sha256DebugTokenHasher),
+        constant_time: Arc::new(ftd_adapter_http::signing::SubtleConstantTimeEq),
+        secrets: Arc::new(ftd_adapter_http::signing::OsDebugSecrets),
+        barrier: Some(barrier.clone()),
+    }))
+}
+
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     match (cfg.rules_enforced, loaded) {
         (false, _) => println!("  rules: disabled by config (every request is allowed)"),
@@ -647,7 +703,7 @@ fn control_state(
 }
 
 #[allow(clippy::too_many_lines)]
-fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
+fn run(mut cfg: RuntimeConfig, only: Selection, exec: Option<ExecPlan>) -> ExitCode {
     if !cfg.clock_start_pinned {
         // Unpinned: start at the wall clock (whole seconds) so ID tokens verify against
         // real time; daemon.clockStart pins it for reproducible runs.
@@ -696,10 +752,28 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             SplitMix64::new(cfg.seed ^ 0xA0),
             TotpPolicy::default(),
         )));
-        if cfg.id_token_signing == ftd_core_auth::jwt::SigningMode::SessionRsa {
-            // Key generation is slow in a debug build; say so before it starts.
-            println!("  generating the session RSA key for RS256 ID tokens ...");
-            let signer = ftd_adapter_http::signing::RsaSigner::from_seed(cfg.seed ^ 0x2256)?;
+        // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
+        // wanted they are generated concurrently on blocking tasks. They are always separate
+        // keys: the Auth key is derived from the session seed, the App Check key is drawn from
+        // the operating system CSPRNG once per daemon instance (spec 7.2).
+        let want_auth_key = cfg.id_token_signing == ftd_core_auth::jwt::SigningMode::SessionRsa;
+        let want_app_check = only.app_check_available(&cfg.app_check);
+        if want_auth_key || want_app_check {
+            println!("  generating the RSA signing keys ...");
+        }
+        let auth_key = want_auth_key.then(|| {
+            let seed = cfg.seed ^ 0x2256;
+            tokio::task::spawn_blocking(move || ftd_adapter_http::signing::RsaSigner::from_seed(seed))
+        });
+        let app_check_key = want_app_check.then(|| {
+            tokio::task::spawn_blocking(|| {
+                ftd_adapter_http::signing::AppCheckRsaSigner::generate(
+                    ftd_adapter_http::signing::AppCheckKeySource::OperatingSystem,
+                )
+            })
+        });
+        if let Some(task) = auth_key {
+            let signer = task.await.map_err(|e| format!("session RSA key: {e}"))??;
             println!(
                 "  id tokens:        RS256 (kid {})   JWKS: http://{}/.well-known/jwks.json",
                 signer.kid(),
@@ -710,6 +784,10 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
                 store.set_signer(signer);
             }
         }
+        let app_check_signer = match app_check_key {
+            Some(task) => Some(task.await.map_err(|e| format!("App Check RSA key: {e}"))??),
+            None => None,
+        };
         let barrier = backend.barrier();
         // Session projects other than the default get their own Auth store (same signer).
         let registry = Arc::new(ftd_core_auth::store::AuthRegistry::new(
@@ -753,6 +831,16 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             ),
             None => None,
         };
+        let app_check = match app_check_signer {
+            Some(signer) => Some(app_check_state(
+                &cfg,
+                &clock,
+                &barrier,
+                &control_token,
+                signer,
+            )?),
+            None => None,
+        };
         // Auth user events reach the functions runtime after each Auth request.
         let auth = Arc::new(AuthState {
             store: auth_store.clone(),
@@ -762,6 +850,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             control_token: Some(control_token.clone()),
             registry: Some(registry.clone()),
             tenancy: Some(tenancy.clone()),
+            app_check: app_check.clone(),
         });
         // A fault plan that moves the clock wakes the functions runtime like the clock
         // route does.
@@ -813,6 +902,19 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             functions_addr,
         );
         println!("  control token:    FTD_CONTROL_TOKEN={control_token}   (browser requests to privileged control routes must send Authorization: Bearer <token>)");
+        if let Some(state) = &app_check {
+            println!(
+                "  app check:        {} app(s)   FTD_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",
+                cfg.app_check.apps.len(),
+                state.signer.kid()
+            );
+            println!(
+                "  app check modes:  auth={} firestore={} storage={}   (configured; no product enforces them yet, milestone AC0)",
+                only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
+                only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
+                only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
+            );
+        }
         if let Some(addr) = ui_addr {
             println!("  ui:               http://{addr}/ui");
         }
@@ -890,7 +992,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             Some(plan) => {
                 let env = child_environment(
                     &cfg,
-                    &plan.only,
+                    &only,
                     grpc_addr,
                     http_addr,
                     storage_addr,

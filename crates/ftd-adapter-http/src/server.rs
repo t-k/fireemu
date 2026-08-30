@@ -81,6 +81,32 @@ async fn respond(
         ),
         Ok(collected) => {
             let bytes = collected.to_bytes();
+            // Dispatched before the control API: the exchange and the JWKS are public on
+            // loopback, while every debug-token management route checks the control token
+            // itself, for every method and whatever the Origin.
+            if crate::app_check::is_app_check_path(&path) {
+                // App Check responses must never be cached (spec 9, 10.1 and 10.2).
+                let r = match &state.app_check {
+                    Some(app_check) => crate::app_check::handle_raw(
+                        app_check,
+                        &crate::app_check::RawRequest {
+                            method: &method,
+                            path: &path,
+                            headers: &headers,
+                            body: &bytes,
+                        },
+                    ),
+                    None => crate::identity_toolkit::JsonResponse {
+                        status: 404,
+                        body: serde_json::json!({"error": {
+                            "code": 404,
+                            "message": "App Check is not enabled in this runtime (appCheck.enabled)",
+                            "status": "NOT_FOUND"
+                        }}),
+                    },
+                };
+                return Ok(finish(r.status, &r.body, origin.as_deref(), true));
+            }
             let is_form = headers
                 .content_type
                 .as_deref()
@@ -116,15 +142,29 @@ async fn respond(
             }
         }
     };
-    let text = serde_json::to_vec(&body).unwrap_or_default();
-    Ok(with_cors(
+    Ok(finish(status, &body, origin.as_deref(), false))
+}
+
+/// Renders one JSON response, optionally forbidding every cache.
+fn finish(
+    status: u16,
+    body: &serde_json::Value,
+    origin: Option<&str>,
+    no_store: bool,
+) -> Response<Full<Bytes>> {
+    let text = serde_json::to_vec(body).unwrap_or_default();
+    let mut builder = with_cors(
         Response::builder()
             .status(StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)),
-        origin.as_deref(),
+        origin,
     )
-    .header("content-type", "application/json; charset=utf-8")
-    .body(Full::new(Bytes::from(text)))
-    .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))))
+    .header("content-type", "application/json; charset=utf-8");
+    if no_store {
+        builder = builder.header("cache-control", "no-store");
+    }
+    builder
+        .body(Full::new(Bytes::from(text)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 /// `k=v&k=v` (percent-encoded) → JSON object of strings.

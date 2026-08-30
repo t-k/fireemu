@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  },
+  "appCheck": {
+    "enabled": true,
+    "apps": [
+      {
+        "projectId": "demo-app",
+        "projectNumber": "1234567890",
+        "appId": "shared-app-id"
+      },
+      {
+        "projectId": "demo-other",
+        "projectNumber": "9876543210",
+        "appId": "shared-app-id"
+      }
+    ]
+  }
+}

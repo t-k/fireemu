@@ -345,6 +345,7 @@ dependencies = [
  "ftd-adapter-grpc",
  "ftd-adapter-http",
  "ftd-adapter-ui",
+ "ftd-core-app-check",
  "ftd-core-auth",
  "ftd-core-firestore",
  "ftd-core-functions",
@@ -441,6 +442,7 @@ name = "ftd-adapter-http"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ftd-core-app-check",
  "ftd-core-auth",
  "ftd-core-firestore",
  "ftd-core-limits",
@@ -456,6 +458,7 @@ dependencies = [
  "rsa",
  "serde_json",
  "sha2",
+ "subtle",
  "tokio",
 ]
 

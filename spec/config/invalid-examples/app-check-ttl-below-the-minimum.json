@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "profile": "deterministic",
+  "limits": {
+    "catalog": "firestore-standard-2026-08-25",
+    "queryCatalog": "firestore-standard-query-2026-08-25"
+  },
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  },
+  "appCheck": {
+    "enabled": true,
+    "tokenTtlSeconds": 60
+  }
+}

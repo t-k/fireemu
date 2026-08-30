@@ -400,6 +400,94 @@ impl StorageState {
         gone.len()
     }
 
+    /// Drops every object, blob and upload of the buckets `owned` selects (a session
+    /// reset); returns how many objects went.
+    pub fn remove_buckets_where(&mut self, owned: impl Fn(&str) -> bool) -> usize {
+        let gone: Vec<(BucketName, ObjectName)> = self
+            .objects
+            .keys()
+            .filter(|(b, _)| owned(b.as_str()))
+            .cloned()
+            .collect();
+        for key in &gone {
+            if let Some(m) = self.objects.remove(key) {
+                self.blobs.remove(&m.blob);
+            }
+        }
+        self.uploads.retain(|_, u| !owned(u.bucket.as_str()));
+        gone.len()
+    }
+
+    /// A copy of the objects, blobs and uploads of the buckets `owned` selects (a session
+    /// snapshot); the counters and the token generator are copied as they are.
+    #[must_use]
+    pub fn capture_buckets(&self, owned: impl Fn(&str) -> bool) -> Self {
+        let objects: BTreeMap<(BucketName, ObjectName), ObjectMetadata> = self
+            .objects
+            .iter()
+            .filter(|((b, _), _)| owned(b.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let blobs = objects
+            .values()
+            .filter_map(|m| self.blobs.get_key_value(&m.blob))
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        let uploads = self
+            .uploads
+            .iter()
+            .filter(|(_, u)| owned(u.bucket.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Self {
+            objects,
+            blobs,
+            uploads,
+            next_blob: self.next_blob,
+            next_generation: self.next_generation,
+            next_upload: self.next_upload,
+            rng: self.rng.clone(),
+            events: Vec::new(),
+        }
+    }
+
+    /// Replaces the buckets `owned` selects with `captured`'s objects, blobs and uploads
+    /// (a session restore); the other buckets stay. With `counters` the token generator
+    /// and the counters come back too (the default session, which owns them); otherwise
+    /// the counters only move forward so restored identifiers cannot collide.
+    pub fn restore_buckets(
+        &mut self,
+        owned: impl Fn(&str) -> bool,
+        captured: &Self,
+        counters: bool,
+    ) {
+        self.remove_buckets_where(&owned);
+        for (k, v) in &captured.objects {
+            if owned(k.0.as_str()) {
+                if let Some(bytes) = captured.blobs.get(&v.blob) {
+                    self.blobs.insert(v.blob, bytes.clone());
+                }
+                self.objects.insert(k.clone(), v.clone());
+            }
+        }
+        for (k, v) in &captured.uploads {
+            if owned(v.bucket.as_str()) {
+                self.uploads.insert(k.clone(), v.clone());
+            }
+        }
+        if counters {
+            self.next_blob = captured.next_blob;
+            self.next_generation = captured.next_generation;
+            self.next_upload = captured.next_upload;
+            self.rng = captured.rng.clone();
+        } else {
+            self.next_blob = self.next_blob.max(captured.next_blob);
+            self.next_generation = self.next_generation.max(captured.next_generation);
+            self.next_upload = self.next_upload.max(captured.next_upload);
+        }
+        self.events.clear();
+    }
+
     /// Takes the events recorded since the last call.
     pub fn drain_events(&mut self) -> Vec<StorageEvent> {
         std::mem::take(&mut self.events)

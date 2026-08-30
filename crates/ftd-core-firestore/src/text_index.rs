@@ -224,13 +224,30 @@ impl TextIndexSet {
         if def.language_override == LanguageOverridePolicy::BackendDefaultUnresolved {
             warnings.push("FS_TEXT_LANGUAGE_OVERRIDE_UNRESOLVED".to_owned());
         }
-        let same_shape = self.definitions.iter().any(|d| {
-            d.collection_id == def.collection_id
-                && d.query_scope == def.query_scope
-                && d.fields == def.fields
-                && d.language == def.language
-                && d.language_override == def.language_override
-        });
+        let shape = |d: &TextIndexDefinition| {
+            let mut fields: Vec<String> = d
+                .fields
+                .iter()
+                .map(|f| {
+                    format!(
+                        "{}|{:?}|{:?}",
+                        f.path.canonical(),
+                        f.index_type,
+                        f.match_type
+                    )
+                })
+                .collect();
+            fields.sort();
+            (
+                d.collection_id.clone(),
+                d.query_scope,
+                d.api_scope.clone(),
+                fields,
+                d.language.clone(),
+                d.language_override.clone(),
+            )
+        };
+        let same_shape = self.definitions.iter().any(|d| shape(d) == shape(&def));
         if same_shape {
             warnings.push("FS_TEXT_DUPLICATE_INDEX_DEFINITION".to_owned());
         }
@@ -255,5 +272,97 @@ impl TextIndexSet {
     #[must_use]
     pub fn definitions(&self) -> &[TextIndexDefinition] {
         &self.definitions
+    }
+}
+
+/// The definitions of every database, keyed by `(project, database)`: sessions see and
+/// change only the databases of the projects they own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextIndexCatalog {
+    sets: std::collections::BTreeMap<(String, String), TextIndexSet>,
+}
+
+impl TextIndexCatalog {
+    /// Validates and adds a definition to one database; returns its warnings.
+    pub fn add(
+        &mut self,
+        project: &str,
+        database: &str,
+        def: TextIndexDefinition,
+    ) -> Result<Vec<String>, TextIndexError> {
+        self.sets
+            .entry((project.to_owned(), database.to_owned()))
+            .or_default()
+            .add(def)
+    }
+
+    /// Removes a definition; `true` when it existed.
+    pub fn remove(&mut self, project: &str, database: &str, id: &str) -> bool {
+        let key = (project.to_owned(), database.to_owned());
+        let Some(set) = self.sets.get_mut(&key) else {
+            return false;
+        };
+        let removed = set.remove(id);
+        if set.definitions().is_empty() {
+            self.sets.remove(&key);
+        }
+        removed
+    }
+
+    /// A definition by database and ID.
+    #[must_use]
+    pub fn get(&self, project: &str, database: &str, id: &str) -> Option<&TextIndexDefinition> {
+        self.sets
+            .get(&(project.to_owned(), database.to_owned()))
+            .and_then(|s| s.get(id))
+    }
+
+    /// Every definition with its database, in `(project, database)` then load order.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str, &TextIndexDefinition)> {
+        self.sets.iter().flat_map(|((p, d), set)| {
+            set.definitions()
+                .iter()
+                .map(move |def| (p.as_str(), d.as_str(), def))
+        })
+    }
+
+    /// The definitions of the projects `owned` selects.
+    #[must_use]
+    pub fn extract(&self, owned: impl Fn(&str) -> bool) -> Self {
+        Self {
+            sets: self
+                .sets
+                .iter()
+                .filter(|((p, _), _)| owned(p))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        }
+    }
+
+    /// Replaces the definitions of the projects `owned` selects with `captured`'s.
+    pub fn replace(&mut self, owned: impl Fn(&str) -> bool, captured: &Self) {
+        self.sets.retain(|(p, _), _| !owned(p));
+        for (k, v) in &captured.sets {
+            if owned(&k.0) {
+                self.sets.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    /// Drops the definitions of the projects `owned` selects.
+    pub fn retain_others(&mut self, owned: impl Fn(&str) -> bool) {
+        self.sets.retain(|(p, _), _| !owned(p));
+    }
+
+    /// Number of definitions.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.sets.values().map(|s| s.definitions().len()).sum()
+    }
+
+    /// Whether there is no definition.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }

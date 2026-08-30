@@ -1243,3 +1243,25 @@ service cloud.firestore {
     );
     h.handle.abort();
 }
+
+#[tokio::test]
+async fn id_tokens_are_bound_to_the_requested_project() {
+    let mut h = start().await;
+    let (_, token) = h.user("a@example.com");
+    // The token's audience is demo-app: another project's data is off limits even where
+    // its rules would let any signed-in user in.
+    let err = h
+        .client
+        .get_document(with_bearer(
+            pb::GetDocumentRequest {
+                name: "projects/demo-b/databases/(default)/documents/users/x".to_owned(),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().contains("audience"), "{err}");
+    h.handle.abort();
+}

@@ -1581,6 +1581,19 @@ impl AuthRegistry {
             .is_some_and(|mut o| o.remove(project).is_some())
     }
 
+    /// The first store (the default first, then the registered ones in name order) that
+    /// satisfies `pred`.
+    pub fn find(&self, pred: impl Fn(&AuthStore) -> bool) -> Option<Arc<Mutex<AuthStore>>> {
+        if self.default.lock().is_ok_and(|s| pred(&s)) {
+            return Some(self.default.clone());
+        }
+        let others = self.others.lock().ok()?;
+        others
+            .values()
+            .find(|s| s.lock().is_ok_and(|s| pred(&s)))
+            .cloned()
+    }
+
     /// Every project with a store, the default first.
     #[must_use]
     pub fn projects(&self) -> Vec<String> {

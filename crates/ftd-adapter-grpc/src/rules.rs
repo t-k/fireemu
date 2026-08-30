@@ -301,6 +301,22 @@ pub fn allow_all(_: &FirestoreState, _: &[Write], _: LogicalInstant) -> Result<(
     Ok(())
 }
 
+/// Production Firestore accepts only ID tokens minted for the requested project: a token
+/// whose `aud` names another project (another session's) is refused before any rule
+/// runs, so `request.auth != null` never holds across sessions.
+pub fn check_audience(principal: &Principal, project: &str) -> Result<(), Status> {
+    let Principal::User(ctx) = principal else {
+        return Ok(());
+    };
+    match ctx.token.get("aud") {
+        Some(ftd_core_rules::value::RulesValue::String(aud)) if aud == project => Ok(()),
+        Some(ftd_core_rules::value::RulesValue::String(aud)) => Err(Status::unauthenticated(
+            format!("ID token audience {aud:?} does not match project {project:?}"),
+        )),
+        _ => Err(Status::unauthenticated("ID token has no audience claim")),
+    }
+}
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RwLock<LoadedRules>>,
@@ -456,6 +472,7 @@ impl RulesEnforcer {
         snapshot: Option<&Document>,
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
+        check_audience(principal, path.project().as_str())?;
         self.evaluate(principal, Method::Get, path, snapshot, None, access)
     }
 
@@ -468,6 +485,9 @@ impl RulesEnforcer {
         items: &[(DocumentPath, Option<Document>)],
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
+        if let Some((first, _)) = items.first() {
+            check_audience(principal, first.project().as_str())?;
+        }
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }
@@ -518,6 +538,7 @@ impl RulesEnforcer {
         query: &Query,
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
+        check_audience(principal, parent.project.as_str())?;
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }
@@ -574,6 +595,7 @@ impl RulesEnforcer {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), Status> {
+        check_audience(principal, parent.project.as_str())?;
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }

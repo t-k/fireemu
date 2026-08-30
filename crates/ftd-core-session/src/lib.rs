@@ -9,3 +9,4 @@ pub mod clock;
 pub mod fault;
 pub mod idle;
 pub mod session;
+pub mod tenancy;

@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_core_auth::jwt::verify_id_token_decoded;
-use ftd_core_auth::store::AuthStore;
 use ftd_core_rules::eval::{
     evaluate_request_with, Decision, DenyReason, DocumentAccess, Method, RequestContext,
     RulesService,
@@ -71,8 +70,11 @@ pub struct StorageState {
     pub store: Mutex<ObjectStore>,
     /// Virtual clock.
     pub clock: Arc<Mutex<VirtualClock>>,
-    /// Users (ID token verification).
-    pub auth: Arc<Mutex<AuthStore>>,
+    /// Users of every session project (ID tokens are verified against the store of their
+    /// audience, which must be the bucket's project).
+    pub auth: Arc<ftd_core_auth::store::AuthRegistry>,
+    /// Which session owns which bucket; `None` puts every bucket in `project`.
+    pub tenancy: Option<ftd_core_session::tenancy::SharedTenancy>,
     /// Storage Security Rules (`service firebase.storage`).
     pub rules: Arc<RwLock<LoadedRules>>,
     /// Project (default buckets `{project}.appspot.com` / `{project}.firebasestorage.app`).
@@ -85,8 +87,24 @@ pub struct StorageState {
     /// `firestore.get()` / `firestore.exists()` in Storage rules: the latest Firestore
     /// state of the project; `None` makes those calls fail closed.
     pub firestore: Option<Arc<dyn DocumentAccess + Send + Sync>>,
-    /// The session's fault plan, when one is shared.
-    pub faults: Option<ftd_core_session::fault::SharedFaults>,
+    /// The sessions' fault plans (by the bucket's project), when shared.
+    pub faults: Option<ftd_core_session::fault::SharedFaultRegistry>,
+    /// Told after a fault plan moved the virtual clock.
+    pub clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl StorageState {
+    /// The project a bucket belongs to (the session tenancy, else the configured project).
+    #[must_use]
+    pub fn project_of_bucket(&self, bucket: &str) -> String {
+        self.tenancy
+            .as_ref()
+            .and_then(|t| t.read().ok())
+            .map_or_else(
+                || self.project.clone(),
+                |t| t.project_of_bucket(bucket).to_owned(),
+            )
+    }
 }
 
 /// The fault plan's answer for `operation`: an error response, or nothing (a delay moved
@@ -94,11 +112,12 @@ pub struct StorageState {
 fn fault_response(
     state: &StorageState,
     dialect: Dialect,
+    project: &str,
     operation: &str,
 ) -> Option<StorageResponse> {
     use ftd_core_session::fault::FaultAction;
     for action in
-        ftd_core_session::fault::decide_shared(state.faults.as_ref(), operation, None, None)
+        ftd_core_session::fault::decide_for(state.faults.as_ref(), project, operation, None, None)
     {
         match action {
             FaultAction::ReturnError { code } => {
@@ -132,6 +151,9 @@ fn fault_response(
             FaultAction::Delay { seconds } => {
                 if let Ok(mut clock) = state.clock.lock() {
                     let _ = clock.advance(LogicalDuration::from_seconds(seconds.max(0)));
+                }
+                if let Some(observer) = &state.clock_observer {
+                    observer();
                 }
             }
             FaultAction::Duplicate { .. } | FaultAction::CrashRunner | FaultAction::DeadLetter => {}
@@ -711,7 +733,10 @@ impl StorageState {
             .unwrap_or(LogicalInstant::UNIX_EPOCH)
     }
 
-    fn principal(&self, authorization: Option<&str>) -> Result<Principal, String> {
+    /// The caller of a request on `bucket`: an end-user token is verified against the
+    /// store of its audience, which must be the bucket's project (production Storage
+    /// accepts only tokens minted for its own project).
+    fn principal(&self, authorization: Option<&str>, bucket: &str) -> Result<Principal, String> {
         let Some(value) = authorization else {
             return Ok(Principal::Anonymous);
         };
@@ -724,10 +749,30 @@ impl StorageState {
         if token == "owner" {
             return Ok(Principal::Owner);
         }
-        let store = self
+        let project = self.project_of_bucket(bucket);
+        let store_arc = self
             .auth
+            .store_for(&project)
+            .ok_or_else(|| format!("invalid ID token: no Auth store for project {project:?}"))?;
+        let store = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
+        // The audience is checked before the signature so a token of another session
+        // says so, instead of failing as an unknown user of this one.
+        let aud = ftd_core_auth::jwt::decode_token(token, store.signer())
+            .ok()
+            .and_then(|d| {
+                d.payload
+                    .get("aud")
+                    .and_then(ftd_core_types::json::JsonValue::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        if aud != project {
+            return Err(format!(
+                "invalid ID token: audience {aud:?} does not match the bucket's project {project:?}"
+            ));
+        }
         let (_, decoded) = verify_id_token_decoded(token, &store, self.now())
             .map_err(|e| format!("invalid ID token: {e}"))?;
         drop(store);
@@ -1073,25 +1118,46 @@ pub fn handle(state: &StorageState, req: &StorageRequest) -> StorageResponse {
         (Route::Bucket { .. }, _) => "storage.list",
         _ => "storage.request",
     };
-    if let Some(refused) = fault_response(state, dialect, operation) {
-        return refused;
-    }
+    let bucket_of_route = match &route {
+        Route::Bucket { bucket, .. }
+        | Route::Object { bucket, .. }
+        | Route::BucketMeta { bucket }
+        | Route::Rewrite { bucket, .. }
+        | Route::GcsUpload { bucket } => bucket.clone(),
+    };
     // The JSON API surface is what the Admin SDK / gcloud use: like the official Emulator
     // it is a privileged surface (rules bypassed) unless the caller presents an end-user
     // `Firebase <token>`; the Firebase protocol always goes through the rules.
-    // Admitted for the whole request, before the token is verified: a reset waits for it,
-    // and a request cannot verify against the old Auth store and then write into the new
+    // Admitted for the whole request, before the fault plan is consulted and the token is
+    // verified: a reset waits for it, a fault is counted only for a request that runs, and
+    // a request cannot verify against the old Auth store and then write into the new
     // session. Requests are synchronous, so the admission is short-lived.
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    let bucket_project = state.project_of_bucket(&bucket_of_route);
+    if let Some(refused) = fault_response(state, dialect, &bucket_project, operation) {
+        return refused;
+    }
     let authorization = req.header("authorization");
     let principal = match (dialect, authorization) {
         (Dialect::Gcs, None) => Principal::Owner,
         (Dialect::Gcs, Some(a)) if a.starts_with("Bearer ") => Principal::Owner,
-        _ => match state.principal(authorization) {
+        _ => match state.principal(authorization, &bucket_of_route) {
             Ok(p) => p,
             Err(e) => return error_response(dialect, 401, &e),
         },
     };
+    if let Route::Rewrite { dst_bucket, .. } = &route {
+        // An end user never copies across sessions; the destination is the same project's.
+        if !matches!(principal, Principal::Owner)
+            && state.project_of_bucket(dst_bucket) != bucket_project
+        {
+            return error_response(
+                dialect,
+                403,
+                "the destination bucket belongs to another project",
+            );
+        }
+    }
     let outcome = match route {
         Route::BucketMeta { bucket } => bucket_meta(&bucket, &host),
         Route::Bucket { dialect, bucket } => match req.method.as_str() {
@@ -1452,7 +1518,7 @@ fn finalize_resumable(
     // The caller is the one that started the session (its credentials are verified again
     // now, as the official Emulator does).
     let principal = state
-        .principal(authorization.as_deref())
+        .principal(authorization.as_deref(), b.as_str())
         .map_err(|e| (401, e))?;
     let existing = store.get(&b, &n).cloned();
     let method = if existing.is_some() {

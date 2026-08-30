@@ -415,14 +415,17 @@ fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn storage_state(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
-    auth_store: &Arc<Mutex<AuthStore>>,
+    registry: &Arc<ftd_core_auth::store::AuthRegistry>,
+    tenancy: &ftd_core_session::tenancy::SharedTenancy,
     storage_rules: &Arc<RwLock<LoadedRules>>,
     events: Option<ftd_adapter_http::storage::StorageEventSink>,
     backend: &Arc<LocalBackend>,
-    faults: &ftd_core_session::fault::SharedFaults,
+    faults: &ftd_core_session::fault::SharedFaultRegistry,
+    clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Result<Arc<ftd_adapter_http::storage::StorageState>, String> {
     let parent = ftd_adapter_grpc::decode::Parent {
         project: ftd_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
@@ -434,7 +437,8 @@ fn storage_state(
     Ok(Arc::new(ftd_adapter_http::storage::StorageState {
         store: Mutex::new(ftd_core_storage::store::StorageState::new(cfg.seed ^ 0x57)),
         clock: clock.clone(),
-        auth: auth_store.clone(),
+        auth: registry.clone(),
+        tenancy: Some(tenancy.clone()),
         rules: storage_rules.clone(),
         project: cfg.auth_project.clone(),
         events,
@@ -444,6 +448,7 @@ fn storage_state(
             parent,
         })),
         faults: Some(faults.clone()),
+        clock_observer,
     }))
 }
 
@@ -569,36 +574,21 @@ fn control_state(
     storage: &Arc<ftd_adapter_http::storage::StorageState>,
     functions: Option<&Arc<ftd_adapter_functions::runtime::FunctionsRuntime>>,
     control_token: String,
-    faults: ftd_core_session::fault::SharedFaults,
-    text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexSet>>,
+    faults: ftd_core_session::fault::SharedFaultRegistry,
+    text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexCatalog>>,
     registry: &Arc<ftd_core_auth::store::AuthRegistry>,
+    tenancy: ftd_core_session::tenancy::SharedTenancy,
 ) -> ftd_adapter_http::control::ControlState {
-    let storage_reset = {
-        let storage = storage.clone();
-        Arc::new(move || {
-            if let Ok(mut s) = storage.store.lock() {
-                s.clear();
-            }
-        }) as Arc<dyn Fn() + Send + Sync>
-    };
-    let firestore_reset = {
-        let backend = backend.clone();
-        Arc::new(move || backend.reset()) as Arc<dyn Fn() + Send + Sync>
-    };
-    let auth_reset = {
-        let auth_store = auth_store.clone();
-        Arc::new(move || {
-            if let Ok(mut s) = auth_store.lock() {
-                s.clear();
-            }
-        }) as Arc<dyn Fn() + Send + Sync>
-    };
-    // Snapshot parts: Firestore databases, Storage objects, Auth users, the clock, both
-    // rulesets; a restore also resets the functions runtime.
+    let _ = auth_store;
+    // Snapshot parts: what the session owns (Firestore databases, buckets, users, fault
+    // plan, text indexes) and, for the default session, the shared parts (clock, both
+    // rulesets; a restore also resets the functions runtime).
     let mut snapshot_hooks: Vec<Arc<dyn ftd_adapter_http::control::SnapshotHook>> = vec![
         Arc::new(snapshots::Firestore(backend.clone())),
         Arc::new(snapshots::Storage(storage.clone())),
-        Arc::new(snapshots::Auth(auth_store.clone())),
+        Arc::new(snapshots::Auth(registry.clone())),
+        Arc::new(snapshots::Faults(faults.clone(), cfg.auth_project.clone())),
+        Arc::new(snapshots::TextIndexes(text_indexes.clone())),
         Arc::new(snapshots::SessionClock(clock.clone())),
         Arc::new(snapshots::Rules("firestore rules", rules.clone())),
         Arc::new(snapshots::Rules("storage rules", storage_rules.clone())),
@@ -606,7 +596,9 @@ fn control_state(
     if let Some(runtime) = functions {
         snapshot_hooks.push(Arc::new(snapshots::Functions(runtime.clone())));
     }
-    let mut reset_hooks = vec![firestore_reset, auth_reset, storage_reset];
+    // The default session's scope is wiped by the project hooks; the shared functions
+    // runtime is reset afterwards.
+    let mut reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>> = Vec::new();
     if let Some(runtime) = functions {
         let runtime = runtime.clone();
         reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
@@ -624,6 +616,7 @@ fn control_state(
         faults: Some(faults),
         text_indexes,
         default_project: cfg.auth_project.clone(),
+        tenancy,
         sessions: Mutex::new(std::collections::BTreeMap::from([(
             "default".to_owned(),
             cfg.auth_project.clone(),
@@ -680,10 +673,14 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
         let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed));
         // Text Index definitions (FS-TEXT-VAL-1): validated at start, never executed.
         let text_indexes = Arc::new(Mutex::new(control::load_text_indexes(&cfg)?));
-        // The session's fault plan (spec 18), shared by every adapter; empty until PUT.
-        let faults: ftd_core_session::fault::SharedFaults =
-            Arc::new(Mutex::new(ftd_core_session::fault::FaultState::default()));
+        // The sessions' fault plans (spec 18), shared by every adapter; empty until PUT.
+        let faults: ftd_core_session::fault::SharedFaultRegistry =
+            Arc::new(ftd_core_session::fault::FaultRegistry::new());
         backend.set_faults(faults.clone());
+        // Which session owns which project, bucket and API key.
+        let tenancy: ftd_core_session::tenancy::SharedTenancy = Arc::new(RwLock::new(
+            ftd_core_session::tenancy::Tenancy::new(&cfg.auth_project),
+        ));
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),
@@ -748,18 +745,31 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             events: functions_runtime.as_ref().map(functions::auth_sink),
             control_token: Some(control_token.clone()),
             registry: Some(registry.clone()),
+            tenancy: Some(tenancy.clone()),
         });
+        // A fault plan that moves the clock wakes the functions runtime like the clock
+        // route does.
+        let clock_observer: Option<Arc<dyn Fn() + Send + Sync>> =
+            functions_runtime.as_ref().map(|r| {
+                let r = r.clone();
+                Arc::new(move || r.on_clock_changed()) as Arc<dyn Fn() + Send + Sync>
+            });
+        if let Some(observer) = &clock_observer {
+            backend.set_clock_observer(observer.clone());
+        }
         let storage = storage_state(
             &cfg,
             &clock,
-            &auth_store,
+            &registry,
+            &tenancy,
             &storage_rules,
             functions_runtime.as_ref().map(functions::storage_sink),
             &backend,
             &faults,
+            clock_observer,
         )?;
         if let Some(runtime) = &functions_runtime {
-            runtime.set_faults(faults.clone());
+            runtime.set_faults(faults.for_project(runtime.project()));
         }
         let control = Arc::new(control_state(
             &cfg,
@@ -774,6 +784,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             faults.clone(),
             text_indexes.clone(),
             &registry,
+            tenancy.clone(),
         ));
         print_banner(
             &cfg,

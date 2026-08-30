@@ -1222,7 +1222,7 @@ async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
 
 #[tokio::test]
 async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
-    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
     let gateway = Gateway {
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
@@ -1235,7 +1235,8 @@ async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
     let backend = LocalBackend::new(gateway, clock.clone(), 7);
-    let faults = Arc::new(Mutex::new(FaultState::default()));
+    let registry = Arc::new(ftd_core_session::fault::FaultRegistry::new());
+    let faults = registry.default_state();
     faults.lock().unwrap().install(FaultPlan {
         seed: 1,
         rules: vec![
@@ -1270,7 +1271,7 @@ async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
             },
         ],
     });
-    backend.set_faults(faults.clone());
+    backend.set_faults(registry.clone());
     let write = |name: &str, v: i64| pb::CommitRequest {
         database: "projects/demo-app/databases/(default)".to_owned(),
         writes: vec![update_write(name, &[("v", i(v))])],
@@ -1382,4 +1383,113 @@ async fn execute_pipeline_is_validated_strictly_and_never_executed() {
         .unwrap_err();
     assert_eq!(empty.metadata().get("ftd-code").unwrap(), "FS_PIPE_DECODE");
     handle.abort();
+}
+
+#[tokio::test]
+async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
+    use ftd_core_session::tenancy::Scope;
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = LocalBackend::new(gateway, clock, 7);
+    let write = |project: &str, name: &str| pb::CommitRequest {
+        database: format!("projects/{project}/databases/(default)"),
+        writes: vec![pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("projects/{project}/databases/(default)/documents/{name}"),
+                fields: [("v".to_owned(), i(1))].into_iter().collect(),
+                create_time: None,
+                update_time: None,
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for project in ["demo-a", "demo-b"] {
+        for n in 0..4 {
+            backend
+                .commit_with(
+                    &write(project, &format!("owners/o{n}/items/i{n}")),
+                    &ftd_adapter_grpc::rules::allow_all,
+                )
+                .unwrap();
+        }
+    }
+    let count = |project: &str| {
+        let parent = ftd_adapter_grpc::decode::parse_parent(&format!(
+            "projects/{project}/databases/(default)/documents"
+        ))
+        .unwrap();
+        backend
+            .read_unadmitted(&parent, |db| db.current_version().value())
+            .unwrap_or(0)
+    };
+    assert_eq!(count("demo-a"), 4);
+    // A partition page token is bound to the reset epoch and database generation.
+    let partition = |project: &str, token: &str| pb::PartitionQueryRequest {
+        parent: format!("projects/{project}/databases/(default)/documents"),
+        partition_count: 3,
+        page_size: 1,
+        page_token: token.to_owned(),
+        query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "items".to_owned(),
+                    all_descendants: true,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let first = backend.partition_query(&partition("demo-b", "")).unwrap();
+    assert!(!first.next_page_token.is_empty());
+    assert!(backend
+        .partition_query(&partition("demo-b", &first.next_page_token))
+        .is_ok());
+    // The default session's reset leaves the registered project demo-b alone.
+    backend.reset_scope(&Scope::AllExcept(
+        ["demo-b".to_owned()].into_iter().collect(),
+    ));
+    assert_eq!(count("demo-a"), 0);
+    assert_eq!(count("demo-b"), 4);
+    // Its epoch moved: demo-b's token is refused too (the history it named is gone).
+    let err = backend
+        .partition_query(&partition("demo-b", &first.next_page_token))
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    let again = backend.partition_query(&partition("demo-b", "")).unwrap();
+    backend.reset_scope(&Scope::Project("demo-b".to_owned()));
+    assert_eq!(count("demo-b"), 0);
+    // A project reset bumps only that database's generation: the token is refused.
+    for n in 0..4 {
+        backend
+            .commit_with(
+                &write("demo-b", &format!("owners/o{n}/items/i{n}")),
+                &ftd_adapter_grpc::rules::allow_all,
+            )
+            .unwrap();
+    }
+    assert!(backend
+        .partition_query(&partition("demo-b", &again.next_page_token))
+        .is_err());
+    // Snapshots are scoped the same way.
+    let snapshot = backend.snapshot_scope(&Scope::Project("demo-b".to_owned()));
+    assert_eq!(snapshot.databases.len(), 1);
+    assert!(snapshot.ids.is_none());
+    backend.reset_scope(&Scope::Project("demo-b".to_owned()));
+    backend.restore_scope(&Scope::Project("demo-b".to_owned()), &snapshot);
+    assert_eq!(count("demo-b"), 4);
+    assert!(backend
+        .snapshot_scope(&Scope::AllExcept(std::collections::BTreeSet::new()))
+        .ids
+        .is_some());
 }

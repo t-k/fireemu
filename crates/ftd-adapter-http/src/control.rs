@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
+use ftd_core_session::tenancy::Scope;
 use ftd_core_types::determinism::Clock;
 use ftd_core_types::edition::FirestoreEdition;
 use ftd_core_types::time::{LogicalDuration, LogicalInstant};
@@ -51,8 +52,8 @@ pub trait FunctionsHook: Send + Sync {
 pub trait ProjectHooks: Send + Sync {
     /// A session for `project` was created: allocate its state (an Auth store, ...).
     fn create(&self, project: &str) -> Result<(), String>;
-    /// Wipe the project's state (Firestore databases, default buckets, Auth users).
-    fn reset(&self, project: &str);
+    /// Wipe everything `scope` owns (Firestore databases, buckets, Auth users).
+    fn reset_scope(&self, scope: &Scope);
     /// Drop the project's state and forget it.
     fn remove(&self, project: &str);
 }
@@ -64,20 +65,25 @@ pub type SnapshotPart = Arc<dyn std::any::Any + Send + Sync>;
 /// users, the clock, ...). `restore` runs under the exclusive session barrier, in the
 /// order the hooks were registered.
 pub trait SnapshotHook: Send + Sync {
-    /// What the part is (status output).
+    /// Part name (`firestore`, `auth`, ...).
     fn name(&self) -> &'static str;
-    /// A copy of the current state.
-    fn capture(&self) -> SnapshotPart;
-    /// Replaces the current state with a copy taken by `capture`.
-    fn restore(&self, part: &SnapshotPart) -> Result<(), String>;
+    /// Whether the part is shared by every session (the clock, rules, functions): only the
+    /// default session's snapshots carry it.
+    fn shared(&self) -> bool {
+        false
+    }
+    /// Captures what `scope` owns.
+    fn capture(&self, scope: &Scope) -> SnapshotPart;
+    /// Puts a captured part back for `scope`.
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), String>;
 }
 
-/// A named session snapshot.
+/// A named snapshot.
 pub struct Snapshot {
     /// The clock at capture.
     pub clock: String,
-    /// One part per hook, in hook order.
-    pub parts: Vec<SnapshotPart>,
+    /// One part per hook, in hook order (`None` for a shared part a project session skips).
+    pub parts: Vec<Option<SnapshotPart>>,
 }
 
 /// Shared control-plane state.
@@ -94,21 +100,27 @@ pub struct ControlState {
     pub rules: Arc<RwLock<LoadedRules>>,
     /// Loaded Storage Security Rules (shared with the Storage adapter).
     pub storage_rules: Arc<RwLock<LoadedRules>>,
-    /// Hooks run by `POST /v1/sessions/{s}/reset` (Firestore wipe, Auth wipe, ...).
+    /// Hooks run by a reset of the default session after its scope is wiped (the shared
+    /// parts: the functions runtime).
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
     /// Snapshot capture / restore, one hook per adapter.
     pub snapshot_hooks: Vec<Arc<dyn SnapshotHook>>,
-    /// Snapshots kept in memory by name.
-    pub snapshots: Mutex<std::collections::BTreeMap<String, Snapshot>>,
-    /// The session's fault plan (spec 18), shared with every adapter.
-    pub faults: Option<ftd_core_session::fault::SharedFaults>,
-    /// Text Index definitions (`FS-TEXT-VAL-1`, strict validation only).
-    pub text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexSet>>,
+    /// Snapshots kept in memory, by session then name.
+    pub snapshots:
+        Mutex<std::collections::BTreeMap<String, std::collections::BTreeMap<String, Snapshot>>>,
+    /// The sessions' fault plans (spec 18), one state per session, shared with every
+    /// adapter.
+    pub faults: Option<ftd_core_session::fault::SharedFaultRegistry>,
+    /// Text Index definitions (`FS-TEXT-VAL-1`, strict validation only), by database.
+    pub text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexCatalog>>,
     /// The default session's project.
     pub default_project: String,
+    /// Which session owns which project, bucket and API key.
+    pub tenancy: ftd_core_session::tenancy::SharedTenancy,
     /// Sessions by name → project (`default` is always present). Sessions are isolated
-    /// by project: each has its own Firestore databases, Storage buckets and Auth store;
-    /// the virtual clock, rules, functions and fault plan are shared.
+    /// by project: each has its own Firestore databases, Storage buckets, Auth store,
+    /// fault plan, snapshots and text indexes; the virtual clock, rules and functions
+    /// are shared (they belong to the default session).
     pub sessions: Mutex<std::collections::BTreeMap<String, String>>,
     /// Per-project state hooks for the sessions other than the default one.
     pub project_hooks: Option<Arc<dyn ProjectHooks>>,
@@ -133,6 +145,14 @@ fn error(status: u16, message: &str) -> JsonResponse {
 
 fn ok(body: Value) -> JsonResponse {
     JsonResponse { status: 200, body }
+}
+
+/// What the session owning `project` owns.
+fn scope_of(state: &ControlState, project: &str) -> Scope {
+    state.tenancy.read().map_or_else(
+        |_| Scope::Project(project.to_owned()),
+        |t| t.scope_of(project),
+    )
 }
 
 fn clock_json(clock: &VirtualClock) -> Value {
@@ -192,9 +212,11 @@ pub fn handle_with(
             let Ok(sessions) = state.sessions.lock() else {
                 return error(500, "INTERNAL");
             };
-            ok(
-                json!({"sessions": sessions.iter().map(|(name, project)| json!({"name": name, "project": project})).collect::<Vec<_>>()}),
-            )
+            let tenancy = state.tenancy.read().ok();
+            ok(json!({"sessions": sessions.iter().map(|(name, project)| {
+                let buckets = tenancy.as_ref().map(|t| t.declared_buckets(project)).unwrap_or_default();
+                json!({"name": name, "project": project, "buckets": buckets})
+            }).collect::<Vec<_>>()}))
         }
         ("POST", "/v1/sessions") => create_session(state, body),
         (m, p) if p.starts_with("/v1/sessions/") => session_route(state, m, p, body),
@@ -218,6 +240,7 @@ pub fn handle_with(
             }
         }
         ("GET" | "PUT" | "DELETE", "/v1/storage/rules") => {
+            let _admitted = state.barrier.as_ref().map(|b| b.admit());
             rules_route(&state.storage_rules, method, body)
         }
         ("GET", "/v1/rules") => match state.rules.read() {
@@ -225,6 +248,8 @@ pub fn handle_with(
             Err(_) => error(500, "INTERNAL"),
         },
         ("PUT", "/v1/rules") => {
+            // Admitted like a data request: a snapshot or reset never straddles it.
+            let _admitted = state.barrier.as_ref().map(|b| b.admit());
             let Some(source) = body.get("source").and_then(Value::as_str) else {
                 return error(
                     400,
@@ -242,13 +267,17 @@ pub fn handle_with(
                 Err(e) => error(400, &format!("INVALID_ARGUMENT : rules do not parse: {e}")),
             }
         }
-        ("DELETE", "/v1/rules") => match state.rules.write() {
-            Ok(mut slot) => {
-                *slot = LoadedRules::default();
-                ok(json!({"loaded": false}))
+        ("DELETE", "/v1/rules") => {
+            let _admitted = state.barrier.as_ref().map(|b| b.admit());
+            let slot = state.rules.write();
+            match slot {
+                Ok(mut slot) => {
+                    *slot = LoadedRules::default();
+                    ok(json!({"loaded": false}))
+                }
+                Err(_) => error(500, "INTERNAL"),
             }
-            Err(_) => error(500, "INTERNAL"),
-        },
+        }
         _ => error(404, "NOT_FOUND"),
     }
 }
@@ -331,13 +360,66 @@ fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
             &format!("ALREADY_EXISTS : project {project:?} already has a session"),
         );
     }
+    let mut buckets = Vec::new();
+    for (i, b) in body
+        .get("buckets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let Some(bucket) = b.as_str() else {
+            return error(
+                400,
+                &format!("INVALID_ARGUMENT : buckets[{i}] must be a string"),
+            );
+        };
+        if let Err(e) = ftd_core_storage::name::BucketName::try_new(bucket) {
+            return error(400, &format!("INVALID_ARGUMENT : buckets[{i}]: {e}"));
+        }
+        buckets.push(bucket.to_owned());
+    }
+    let mut api_keys = Vec::new();
+    for (i, k) in body
+        .get("apiKeys")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let Some(key) = k.as_str().filter(|k| {
+            (1..=128).contains(&k.len())
+                && k.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        }) else {
+            return error(
+                400,
+                &format!("INVALID_ARGUMENT : apiKeys[{i}] must be 1..=128 of [A-Za-z0-9._-]"),
+            );
+        };
+        api_keys.push(key.to_owned());
+    }
+    {
+        let Ok(mut tenancy) = state.tenancy.write() else {
+            return error(500, "INTERNAL");
+        };
+        if let Err(e) = tenancy.register(project, &buckets, &api_keys) {
+            return error(409, &format!("ALREADY_EXISTS : {e}"));
+        }
+    }
     if let Some(hooks) = &state.project_hooks {
         if let Err(e) = hooks.create(project) {
+            if let Ok(mut tenancy) = state.tenancy.write() {
+                tenancy.unregister(project);
+            }
             return error(500, &format!("INTERNAL : {e}"));
         }
     }
+    if let Some(faults) = &state.faults {
+        faults.register(project);
+    }
     sessions.insert(name.to_owned(), project.to_owned());
-    ok(json!({"name": name, "project": project, "created": true}))
+    ok(json!({"name": name, "project": project, "buckets": buckets, "created": true}))
 }
 
 fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {
@@ -368,6 +450,18 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         if let Some(hooks) = &state.project_hooks {
             hooks.remove(&project);
         }
+        if let Some(faults) = &state.faults {
+            faults.remove(&project);
+        }
+        if let Ok(mut snapshots) = state.snapshots.lock() {
+            snapshots.remove(session);
+        }
+        if let Ok(mut catalog) = state.text_indexes.lock() {
+            catalog.retain_others(|p| p == project);
+        }
+        if let Ok(mut tenancy) = state.tenancy.write() {
+            tenancy.unregister(&project);
+        }
         if let Ok(mut sessions) = state.sessions.lock() {
             sessions.remove(session);
         }
@@ -376,29 +470,31 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if (method, action) == ("POST", "reset") {
         // Exclusive across every hook: requests in flight finish first, new ones wait.
         let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
+        let scope = scope_of(state, &project);
+        if let Some(hooks) = &state.project_hooks {
+            hooks.reset_scope(&scope);
+        }
         if is_default {
+            // The shared parts (functions) belong to the default session.
             for hook in &state.reset_hooks {
                 hook();
             }
             return ok(
-                json!({"session": session, "project": project, "reset": true, "hooks": state.reset_hooks.len()}),
+                json!({"session": session, "project": project, "reset": true, "scope": "default", "hooks": state.reset_hooks.len()}),
             );
-        }
-        if let Some(hooks) = &state.project_hooks {
-            hooks.reset(&project);
         }
         return ok(
             json!({"session": session, "project": project, "reset": true, "scope": "project"}),
         );
     }
     if let Some(rest) = action.strip_prefix("snapshots") {
-        return snapshot_route(state, session, method, rest, body);
+        return snapshot_route(state, session, &project, method, rest, body);
     }
     if action == "faultPlan" {
-        return fault_plan_route(state, session, method, body);
+        return fault_plan_route(state, session, &project, method, body);
     }
     if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
-        return text_index_route(state, session, method, rest, body);
+        return text_index_route(state, session, &project, method, rest, body);
     }
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if let Some(rest) = action.strip_prefix("functions") {
@@ -421,25 +517,48 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     response
 }
 
+/// Refuses keys outside `allowed` (strict validation: nothing is silently ignored).
+fn only_keys(value: &Value, what: &str, allowed: &[&str]) -> Result<(), String> {
+    let Some(obj) = value.as_object() else {
+        return Err(format!("{what} must be an object"));
+    };
+    for key in obj.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!("{what}.{key} is outside the supported subset"));
+        }
+    }
+    Ok(())
+}
+
 /// Parses one entry of the canonical `firestore.text-indexes.json` (`{"index": {...},
-/// "xFirebaseTestd": {...}}`, or the bare `index` object) into a definition.
+/// "xFirebaseTestd": {...}}`, or the bare `index` object) into its project, database and
+/// definition. Every level is checked strictly: an unknown or output-only field is refused.
 #[allow(clippy::too_many_lines)]
 pub fn parse_text_index(
     entry: &Value,
-) -> Result<ftd_core_firestore::text_index::TextIndexDefinition, String> {
+) -> Result<
+    (
+        String,
+        String,
+        ftd_core_firestore::text_index::TextIndexDefinition,
+    ),
+    String,
+> {
     use ftd_core_firestore::text_index::{
         DefaultTextLanguage, LanguageOverridePolicy, TextIndexDefinition, TextIndexState,
         TextIndexType, TextIndexedField, TextMatchType,
     };
     let (index, local) = match entry.get("index") {
-        Some(index) => (index, entry.get("xFirebaseTestd")),
+        Some(index) => {
+            only_keys(entry, "entry", &["index", "xFirebaseTestd"])?;
+            (index, entry.get("xFirebaseTestd"))
+        }
         None => (entry, None),
     };
-    let Some(obj) = index.as_object() else {
-        return Err("index must be an object".to_owned());
-    };
-    for key in obj.keys() {
-        if ![
+    only_keys(
+        index,
+        "index",
+        &[
             "name",
             "queryScope",
             "apiScope",
@@ -450,18 +569,19 @@ pub fn parse_text_index(
             "multikey",
             "unique",
             "shardCount",
-        ]
-        .contains(&key.as_str())
-        {
-            return Err(format!(
-                "index.{key} is outside the supported Admin API subset"
-            ));
-        }
-        if ["density", "multikey", "unique", "shardCount"].contains(&key.as_str()) {
+        ],
+    )?;
+    for key in ["density", "multikey", "unique", "shardCount"] {
+        if index.get(key).is_some() {
             return Err(format!(
                 "index.{key} is not supported for text indexes (refused rather than ignored)"
             ));
         }
+    }
+    if index.get("state").is_some() {
+        return Err(
+            "index.state is output only (xFirebaseTestd.state models a lifecycle state)".to_owned(),
+        );
     }
     let name = index
         .get("name")
@@ -469,48 +589,63 @@ pub fn parse_text_index(
         .ok_or("index.name is required")?;
     // projects/{p}/databases/{d}/collectionGroups/{c}/indexes/{id}
     let parts: Vec<&str> = name.split('/').collect();
-    let (collection, id) =
-        match parts.as_slice() {
-            ["projects", _, "databases", _, "collectionGroups", c, "indexes", id] => (*c, *id),
-            _ => return Err(
+    let (project, database, collection, id) = match parts.as_slice() {
+        ["projects", p, "databases", d, "collectionGroups", c, "indexes", id] => (*p, *d, *c, *id),
+        _ => {
+            return Err(
                 "index.name must be projects/{p}/databases/{d}/collectionGroups/{c}/indexes/{id}"
                     .to_owned(),
-            ),
-        };
+            )
+        }
+    };
+    ftd_core_types::ids::ProjectId::try_new(project.to_owned())
+        .map_err(|e| format!("index.name project: {e}"))?;
+    ftd_core_types::ids::DatabaseId::try_new(database.to_owned())
+        .map_err(|e| format!("index.name database: {e}"))?;
     let collection_id = ftd_core_types::ids::CollectionId::try_new(collection)
         .map_err(|e| format!("collection group: {e}"))?;
-    let query_scope = match index
-        .get("queryScope")
-        .and_then(Value::as_str)
-        .unwrap_or("COLLECTION")
-    {
-        "COLLECTION" => ftd_core_firestore::index::IndexQueryScope::Collection,
-        "COLLECTION_GROUP" => ftd_core_firestore::index::IndexQueryScope::CollectionGroup,
-        other => return Err(format!("unsupported queryScope {other:?}")),
+    let query_scope = match index.get("queryScope") {
+        None => ftd_core_firestore::index::IndexQueryScope::Collection,
+        Some(Value::String(s)) if s == "COLLECTION" => {
+            ftd_core_firestore::index::IndexQueryScope::Collection
+        }
+        Some(Value::String(s)) if s == "COLLECTION_GROUP" => {
+            ftd_core_firestore::index::IndexQueryScope::CollectionGroup
+        }
+        Some(other) => return Err(format!("unsupported queryScope {other}")),
     };
-    let api_scope = index
-        .get("apiScope")
-        .and_then(Value::as_str)
-        .unwrap_or("ANY_API")
-        .to_owned();
+    let api_scope = match index.get("apiScope") {
+        None => "ANY_API".to_owned(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => return Err(format!("apiScope must be a string, got {other}")),
+    };
     let mut fields = Vec::new();
     for f in index
         .get("fields")
         .and_then(Value::as_array)
         .ok_or("index.fields is required")?
     {
+        only_keys(f, "fields[]", &["fieldPath", "searchConfig"])?;
         let path = f
             .get("fieldPath")
             .and_then(Value::as_str)
             .ok_or("fields[].fieldPath is required")?;
         let path = ftd_core_firestore::field_path::FieldPath::parse(path)
             .map_err(|e| format!("fieldPath {path:?}: {e}"))?;
-        let Some(text) = f.get("searchConfig").and_then(|c| c.get("textSpec")) else {
+        let Some(config) = f.get("searchConfig") else {
             return Err(format!(
                 "field {}: searchConfig.textSpec is required (only text indexes are defined here)",
                 path.canonical()
             ));
         };
+        only_keys(config, "fields[].searchConfig", &["textSpec"])?;
+        let text = config.get("textSpec").ok_or_else(|| {
+            format!(
+                "field {}: searchConfig.textSpec is required",
+                path.canonical()
+            )
+        })?;
+        only_keys(text, "fields[].searchConfig.textSpec", &["indexSpecs"])?;
         let specs = text
             .get("indexSpecs")
             .and_then(Value::as_array)
@@ -521,23 +656,18 @@ pub fn parse_text_index(
                 path.canonical()
             ));
         };
-        let index_type = match spec
-            .get("indexType")
-            .and_then(Value::as_str)
-            .unwrap_or("TOKENIZED")
-        {
-            "TOKENIZED" => TextIndexType::Tokenized,
-            other => return Err(format!("unsupported indexType {other:?} (TOKENIZED only)")),
+        only_keys(spec, "indexSpecs[]", &["indexType", "matchType"])?;
+        let index_type = match spec.get("indexType") {
+            None => TextIndexType::Tokenized,
+            Some(Value::String(s)) if s == "TOKENIZED" => TextIndexType::Tokenized,
+            Some(other) => return Err(format!("unsupported indexType {other} (TOKENIZED only)")),
         };
-        let match_type = match spec
-            .get("matchType")
-            .and_then(Value::as_str)
-            .unwrap_or("MATCH_GLOBALLY")
-        {
-            "MATCH_GLOBALLY" => TextMatchType::MatchGlobally,
-            other => {
+        let match_type = match spec.get("matchType") {
+            None => TextMatchType::MatchGlobally,
+            Some(Value::String(s)) if s == "MATCH_GLOBALLY" => TextMatchType::MatchGlobally,
+            Some(other) => {
                 return Err(format!(
-                    "unsupported matchType {other:?} (MATCH_GLOBALLY only)"
+                    "unsupported matchType {other} (MATCH_GLOBALLY only)"
                 ))
             }
         };
@@ -548,12 +678,18 @@ pub fn parse_text_index(
         });
     }
     let options = index.get("searchIndexOptions");
-    let language = match options
-        .and_then(|o| o.get("textLanguage"))
-        .and_then(Value::as_str)
-    {
-        None | Some("" | "auto") => DefaultTextLanguage::Autodetect,
-        Some(tag) => DefaultTextLanguage::Tag(tag.to_owned()),
+    if let Some(o) = options {
+        only_keys(
+            o,
+            "index.searchIndexOptions",
+            &["textLanguage", "textLanguageOverrideFieldPath"],
+        )?;
+    }
+    let language = match options.and_then(|o| o.get("textLanguage")) {
+        None => DefaultTextLanguage::Autodetect,
+        Some(Value::String(s)) if s.is_empty() || s == "auto" => DefaultTextLanguage::Autodetect,
+        Some(Value::String(tag)) => DefaultTextLanguage::Tag(tag.clone()),
+        Some(other) => return Err(format!("textLanguage must be a string, got {other}")),
     };
     let language_override = match options.and_then(|o| o.get("textLanguageOverrideFieldPath")) {
         Some(Value::String(p)) if !p.is_empty() => LanguageOverridePolicy::ExplicitField(
@@ -562,58 +698,75 @@ pub fn parse_text_index(
         ),
         Some(Value::String(_)) => LanguageOverridePolicy::Disabled,
         Some(_) => return Err("textLanguageOverrideFieldPath must be a string".to_owned()),
-        None => match local
-            .and_then(|l| l.get("languageOverride"))
-            .and_then(Value::as_str)
-        {
-            Some("implicit") => LanguageOverridePolicy::ImplicitLanguageField,
-            Some("disabled") => LanguageOverridePolicy::Disabled,
+        None => match local.and_then(|l| l.get("languageOverride")) {
+            None => LanguageOverridePolicy::BackendDefaultUnresolved,
+            Some(Value::String(s)) if s == "implicit" => {
+                LanguageOverridePolicy::ImplicitLanguageField
+            }
+            Some(Value::String(s)) if s == "disabled" => LanguageOverridePolicy::Disabled,
             Some(other) => {
                 return Err(format!(
-                    "xFirebaseTestd.languageOverride {other:?} must be implicit or disabled"
+                    "xFirebaseTestd.languageOverride {other} must be implicit or disabled"
                 ))
             }
-            None => LanguageOverridePolicy::BackendDefaultUnresolved,
         },
     };
     let mut state = TextIndexState::Ready;
     if let Some(local) = local {
-        let Some(obj) = local.as_object() else {
-            return Err("xFirebaseTestd must be an object".to_owned());
-        };
-        for key in obj.keys() {
-            if !["state", "buildPolicy", "languageOverride"].contains(&key.as_str()) {
-                return Err(format!("unknown xFirebaseTestd key {key:?}"));
+        only_keys(
+            local,
+            "xFirebaseTestd",
+            &["state", "buildPolicy", "languageOverride"],
+        )?;
+        match local.get("state") {
+            None => {}
+            Some(Value::String(s)) => {
+                state = TextIndexState::parse(s).ok_or_else(|| format!("unknown state {s:?}"))?;
+            }
+            Some(other) => {
+                return Err(format!(
+                    "xFirebaseTestd.state must be a string, got {other}"
+                ))
             }
         }
-        if let Some(s) = obj.get("state").and_then(Value::as_str) {
-            state = TextIndexState::parse(s).ok_or_else(|| format!("unknown state {s:?}"))?;
-        }
-        if let Some(p) = obj.get("buildPolicy").and_then(Value::as_str) {
-            if !["synchronous", "validation-only"].contains(&p) {
+        match local.get("buildPolicy") {
+            None => {}
+            Some(Value::String(p)) if p == "synchronous" || p == "validation-only" => {}
+            Some(other) => {
                 return Err(format!(
-                    "buildPolicy {p:?} must be synchronous or validation-only"
-                ));
+                    "buildPolicy {other} must be synchronous or validation-only"
+                ))
             }
         }
     }
-    Ok(TextIndexDefinition {
-        id: id.to_owned(),
-        collection_id,
-        query_scope,
-        api_scope,
-        fields,
-        language,
-        language_override,
-        state,
-    })
+    Ok((
+        project.to_owned(),
+        database.to_owned(),
+        TextIndexDefinition {
+            id: id.to_owned(),
+            collection_id,
+            query_scope,
+            api_scope,
+            fields,
+            language,
+            language_override,
+            state,
+        },
+    ))
 }
 
 /// A definition as JSON (list / describe output).
-fn text_index_json(d: &ftd_core_firestore::text_index::TextIndexDefinition) -> Value {
+fn text_index_json(
+    project: &str,
+    database: &str,
+    d: &ftd_core_firestore::text_index::TextIndexDefinition,
+) -> Value {
     use ftd_core_firestore::text_index::{DefaultTextLanguage, LanguageOverridePolicy};
     json!({
         "id": d.id,
+        "project": project,
+        "database": database,
+        "name": format!("projects/{project}/databases/{database}/collectionGroups/{}/indexes/{}", d.collection_id.as_str(), d.id),
         "collectionGroup": d.collection_id.as_str(),
         "queryScope": match d.query_scope {
             ftd_core_firestore::index::IndexQueryScope::Collection => "COLLECTION",
@@ -634,31 +787,46 @@ fn text_index_json(d: &ftd_core_firestore::text_index::TextIndexDefinition) -> V
 }
 
 /// `firestore/text-indexes` (`:load` a canonical file body, POST one definition, GET
-/// lists), `firestore/text-indexes/{id}` (GET, DELETE) and the 1.x lifecycle actions
-/// (`UNIMPLEMENTED`, no state change). Text indexes are an Enterprise feature.
+/// lists), `firestore/text-indexes/{id}` (GET, DELETE; `body.project` / `body.database`
+/// pick one when the ID exists in several databases) and the 1.x lifecycle actions
+/// (`UNIMPLEMENTED`, no state change). A session sees only the databases of the projects
+/// it owns. Text indexes are an Enterprise feature.
+#[allow(clippy::too_many_lines)]
 fn text_index_route(
     state: &ControlState,
     session: &str,
+    project: &str,
     method: &str,
     rest: &str,
     body: &Value,
 ) -> JsonResponse {
+    use ftd_core_firestore::text_index::TextIndexCatalog;
     if state.edition != FirestoreEdition::Enterprise {
         return error(
             400,
             "FAILED_PRECONDITION : text indexes need firestore.edition = enterprise",
         );
     }
-    let Ok(mut set) = state.text_indexes.lock() else {
+    let scope = scope_of(state, project);
+    let Ok(mut catalog) = state.text_indexes.lock() else {
         return error(500, "INTERNAL");
     };
-    let add = |set: &mut ftd_core_firestore::text_index::TextIndexSet,
-               entry: &Value|
-     -> Result<Value, String> {
-        let def = parse_text_index(entry)?;
+    let add = |catalog: &mut TextIndexCatalog, entry: &Value| -> Result<Value, String> {
+        let (p, d, def) = parse_text_index(entry)?;
+        if !scope.owns_project(&p) {
+            return Err(format!(
+                "index.name names project {p:?}, which this session does not own"
+            ));
+        }
         let id = def.id.clone();
-        let warnings = set.add(def).map_err(|e| e.to_string())?;
-        Ok(json!({"id": id, "warnings": warnings}))
+        let warnings = catalog.add(&p, &d, def).map_err(|e| e.to_string())?;
+        Ok(json!({"id": id, "project": p, "database": d, "warnings": warnings}))
+    };
+    let owned_total = |catalog: &TextIndexCatalog| {
+        catalog
+            .entries()
+            .filter(|(p, _, _)| scope.owns_project(p))
+            .count()
     };
     match (method, rest) {
         ("POST", ":load") => {
@@ -669,7 +837,7 @@ fn text_index_route(
                 );
             };
             // Validated as a whole before any is kept: a bad entry rejects the file.
-            let mut trial = set.clone();
+            let mut trial = catalog.clone();
             let mut loaded = Vec::with_capacity(entries.len());
             for (i, e) in entries.iter().enumerate() {
                 match add(&mut trial, e) {
@@ -677,61 +845,127 @@ fn text_index_route(
                     Err(m) => return error(400, &format!("INVALID_ARGUMENT : indexes[{i}]: {m}")),
                 }
             }
-            *set = trial;
-            ok(json!({"session": session, "loaded": loaded, "total": set.definitions().len()}))
+            *catalog = trial;
+            ok(json!({"session": session, "loaded": loaded, "total": owned_total(&catalog)}))
         }
-        ("POST", "") => match add(&mut set, body) {
+        ("POST", "") => match add(&mut catalog, body) {
             Ok(v) => ok(v),
             Err(m) => error(400, &format!("INVALID_ARGUMENT : {m}")),
         },
-        ("GET", "") => ok(
-            json!({"session": session, "indexes": set.definitions().iter().map(text_index_json).collect::<Vec<_>>()}),
-        ),
-        (m, r) => {
-            let Some(r) = r.strip_prefix('/') else {
+        ("GET", "") => ok(json!({
+            "session": session,
+            "indexes": catalog
+                .entries()
+                .filter(|(p, _, _)| scope.owns_project(p))
+                .map(|(p, d, def)| text_index_json(p, d, def))
+                .collect::<Vec<_>>(),
+        })),
+        (verb, rest) => {
+            let Some(rest) = rest.strip_prefix('/') else {
                 return error(404, "NOT_FOUND");
             };
-            let (id, action) = r.split_once(':').map_or((r, None), |(i, a)| (i, Some(a)));
-            match (m, action) {
-                ("GET", None) => match set.get(id) {
-                    Some(d) => ok(text_index_json(d)),
+            let (id, action) = rest
+                .split_once(':')
+                .map_or((rest, None), |(i, a)| (i, Some(a)));
+            let candidates: Vec<(String, String)> = catalog
+                .entries()
+                .filter(|(p, _, def)| scope.owns_project(p) && def.id == id)
+                .map(|(p, d, _)| (p.to_owned(), d.to_owned()))
+                .collect();
+            let wanted = (
+                body.get("project").and_then(Value::as_str),
+                body.get("database").and_then(Value::as_str),
+            );
+            let target = match candidates.as_slice() {
+                [] => return error(404, &format!("NOT_FOUND : no text index {id:?}")),
+                [one] => one.clone(),
+                many => match many.iter().find(|(p, d)| {
+                    wanted.0.is_none_or(|w| w == p) && wanted.1.is_none_or(|w| w == d)
+                }) {
+                    Some(one) if wanted.0.is_some() || wanted.1.is_some() => one.clone(),
+                    _ => {
+                        return error(
+                            409,
+                            &format!("ALREADY_EXISTS : text index {id:?} exists in several databases; pass body.project and body.database"),
+                        )
+                    }
+                },
+            };
+            let (project, database) = (target.0.as_str(), target.1.as_str());
+            match (verb, action) {
+                ("GET", None) => match catalog.get(project, database, id) {
+                    Some(def) => ok(text_index_json(project, database, def)),
                     None => error(404, &format!("NOT_FOUND : no text index {id:?}")),
                 },
                 ("DELETE", None) => {
-                    if set.remove(id) {
-                        ok(json!({"id": id, "deleted": true}))
+                    if catalog.remove(project, database, id) {
+                        ok(json!({"id": id, "project": project, "database": database, "deleted": true}))
                     } else {
                         error(404, &format!("NOT_FOUND : no text index {id:?}"))
                     }
                 }
                 (
                     "POST",
-                    Some(a @ ("advanceBackfill" | "completeBackfill" | "failBuild" | "repair")),
-                ) => {
-                    if set.get(id).is_none() {
-                        return error(404, &format!("NOT_FOUND : no text index {id:?}"));
-                    }
-                    error(501, &format!("UNIMPLEMENTED : {a} needs the backfill engine (FS-TEXT-IDX-1, 1.x); the index state is unchanged"))
-                }
+                    Some(lifecycle @ ("advanceBackfill" | "completeBackfill" | "failBuild" | "repair")),
+                ) => error(501, &format!("UNIMPLEMENTED : {lifecycle} needs the backfill engine (FS-TEXT-IDX-1, 1.x); the index state is unchanged")),
                 _ => error(404, "NOT_FOUND"),
             }
         }
     }
 }
 
-/// `PUT /v1/sessions/{s}/faultPlan` installs a plan (spec 18.2 shape), `GET` returns it with
-/// the faults that fired, `DELETE` removes it.
+/// Whether `action` means anything for `operation` (a plan naming a combination the
+/// adapters would ignore is refused instead of reporting faults that never happen).
+fn action_allowed(operation: &str, action: &ftd_core_session::fault::FaultAction) -> bool {
+    use ftd_core_session::fault::FaultAction as A;
+    match operation {
+        "firestore.commit" | "storage.upload" => matches!(
+            action,
+            A::ReturnError { .. }
+                | A::Delay { .. }
+                | A::Timeout
+                | A::TransactionConflict
+                | A::DropConnection
+        ),
+        "firestore.read"
+        | "firestore.beginTransaction"
+        | "storage.read"
+        | "storage.delete"
+        | "storage.list"
+        | "storage.request" => matches!(
+            action,
+            A::ReturnError { .. } | A::Delay { .. } | A::Timeout | A::DropConnection
+        ),
+        "functions.invoke" => matches!(
+            action,
+            A::ReturnError { .. }
+                | A::Delay { .. }
+                | A::Timeout
+                | A::DeadLetter
+                | A::CrashRunner
+                | A::DropConnection
+        ),
+        "functions.deliver" => matches!(action, A::Duplicate { .. }),
+        _ => false,
+    }
+}
+
+/// `PUT /v1/sessions/{s}/faultPlan` installs the session's plan (spec 18.2 shape), `GET`
+/// returns it with the faults that fired, `DELETE` removes it. Each session has its own
+/// plan and counters.
 #[allow(clippy::too_many_lines)]
 fn fault_plan_route(
     state: &ControlState,
     session: &str,
+    project: &str,
     method: &str,
     body: &Value,
 ) -> JsonResponse {
     use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
-    let Some(faults) = &state.faults else {
+    let Some(registry) = &state.faults else {
         return error(404, "NOT_FOUND : fault plans are not available");
     };
+    let faults = registry.for_project(project);
     match method {
         "GET" => {
             let Ok(f) = faults.lock() else {
@@ -741,7 +975,7 @@ fn fault_plan_route(
             let fired: Vec<Value> = f
                 .fired()
                 .iter()
-                .map(|r| json!({"operation": r.operation, "occurrence": r.occurrence, "function": r.function, "action": r.action.to_string()}))
+                .map(|r| json!({"operation": r.operation, "occurrence": r.occurrence, "functionOccurrence": r.function_occurrence, "function": r.function, "action": r.action.to_string()}))
                 .collect();
             ok(json!({"session": session, "plan": plan, "fired": fired, "counters": f.counters()}))
         }
@@ -758,18 +992,23 @@ fn fault_plan_route(
                         &format!("INVALID_ARGUMENT : rules[{i}].match is required"),
                     );
                 };
-                let Some(operation) = m
-                    .get("operation")
+                let event_type = m
+                    .get("eventType")
                     .and_then(Value::as_str)
-                    .filter(|o| KNOWN_OPERATIONS.contains(o))
-                else {
-                    return error(
-                        400,
-                        &format!(
-                            "INVALID_ARGUMENT : rules[{i}].match.operation must be one of {}",
-                            KNOWN_OPERATIONS.join(", ")
-                        ),
-                    );
+                    .map(str::to_owned);
+                // A rule naming only an event type is a delivery rule (spec 18.2).
+                let operation = match m.get("operation") {
+                    None if event_type.is_some() => "functions.deliver",
+                    Some(Value::String(o)) if KNOWN_OPERATIONS.contains(&o.as_str()) => o.as_str(),
+                    _ => {
+                        return error(
+                            400,
+                            &format!(
+                                "INVALID_ARGUMENT : rules[{i}].match.operation must be one of {}",
+                                KNOWN_OPERATIONS.join(", ")
+                            ),
+                        )
+                    }
                 };
                 let nth = match m.get("nth") {
                     None | Some(Value::Null) => None,
@@ -799,15 +1038,18 @@ fn fault_plan_route(
                     Some("dropConnection") => FaultAction::DropConnection,
                     _ => return error(400, &format!("INVALID_ARGUMENT : rules[{i}].action.type must be one of returnError, delay, duplicate, crashRunner, timeout, deadLetter, transactionConflict, dropConnection")),
                 };
+                if !action_allowed(operation, &action) {
+                    return error(
+                        400,
+                        &format!("INVALID_ARGUMENT : rules[{i}]: action {action} does not apply to {operation}"),
+                    );
+                }
                 parsed.push(FaultRule {
                     matches: FaultMatch {
                         operation: operation.to_owned(),
                         nth,
                         function: m.get("function").and_then(Value::as_str).map(str::to_owned),
-                        event_type: m
-                            .get("eventType")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
+                        event_type,
                     },
                     action,
                 });
@@ -863,14 +1105,19 @@ fn rule_json(r: &ftd_core_session::fault::FaultRule) -> Value {
 }
 
 /// `snapshots` (POST `{"name"}` captures, GET lists), `snapshots/{name}:restore`,
-/// `snapshots/{name}` (DELETE). Capture and restore hold the exclusive session barrier, so
-/// a snapshot never straddles a request and a restore is atomic across every adapter. A
-/// capture refuses a session with functions work outstanding unless `allowNonQuiescent`
-/// is set (spec 14.3); a restore resets the functions runtime (its queue belongs to the
-/// state it was replaced with).
+/// `snapshots/{name}` (DELETE). Snapshots belong to the session that took them and hold
+/// what it owns: its Firestore databases, buckets, users, fault plan and text indexes;
+/// the default session's also carry the shared parts (clock, rules, the auto-ID generator)
+/// and reset the functions runtime on restore. Capture and restore hold the exclusive
+/// session barrier, so a snapshot never straddles a request and a restore is atomic
+/// across every adapter. A default-session capture refuses outstanding functions work
+/// unless `allowNonQuiescent` is set (spec 14.3): that work is not captured, and a restore
+/// drops it.
+#[allow(clippy::too_many_lines)]
 fn snapshot_route(
     state: &ControlState,
     session: &str,
+    project: &str,
     method: &str,
     rest: &str,
     body: &Value,
@@ -881,14 +1128,17 @@ fn snapshot_route(
             && n.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
+    let scope = scope_of(state, project);
     match (method, rest) {
         ("GET", "") => {
             let Ok(snapshots) = state.snapshots.lock() else {
                 return error(500, "INTERNAL");
             };
             let list: Vec<Value> = snapshots
-                .iter()
-                .map(|(name, s)| json!({"name": name, "clock": s.clock, "parts": s.parts.len()}))
+                .get(session)
+                .into_iter()
+                .flatten()
+                .map(|(name, s)| json!({"name": name, "clock": s.clock, "parts": s.parts.iter().flatten().count()}))
                 .collect();
             ok(json!({"session": session, "snapshots": list}))
         }
@@ -904,15 +1154,26 @@ fn snapshot_route(
                 );
             };
             let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
-            let quiescent = state.functions.as_ref().is_none_or(|f| f.is_idle());
+            let quiescent =
+                !scope.is_default() || state.functions.as_ref().is_none_or(|f| f.is_idle());
             if !quiescent && body.get("allowNonQuiescent").and_then(Value::as_bool) != Some(true) {
                 return error(
                     409,
                     "FAILED_PRECONDITION : functions work is outstanding; await idle first or set allowNonQuiescent",
                 );
             }
-            let parts: Vec<SnapshotPart> =
-                state.snapshot_hooks.iter().map(|h| h.capture()).collect();
+            let parts: Vec<Option<SnapshotPart>> = state
+                .snapshot_hooks
+                .iter()
+                .map(|h| (scope.is_default() || !h.shared()).then(|| h.capture(&scope)))
+                .collect();
+            let names: Vec<&str> = state
+                .snapshot_hooks
+                .iter()
+                .zip(&parts)
+                .filter(|(_, p)| p.is_some())
+                .map(|(h, _)| h.name())
+                .collect();
             let clock = state
                 .clock
                 .lock()
@@ -922,6 +1183,8 @@ fn snapshot_route(
                 return error(500, "INTERNAL");
             };
             let replaced = snapshots
+                .entry(session.to_owned())
+                .or_default()
                 .insert(
                     name.to_owned(),
                     Snapshot {
@@ -931,7 +1194,7 @@ fn snapshot_route(
                 )
                 .is_some();
             ok(
-                json!({"session": session, "name": name, "clock": clock, "replaced": replaced, "parts": state.snapshot_hooks.iter().map(|h| h.name()).collect::<Vec<_>>()}),
+                json!({"session": session, "name": name, "clock": clock, "replaced": replaced, "parts": names}),
             )
         }
         ("POST", r) => {
@@ -942,15 +1205,17 @@ fn snapshot_route(
             let Ok(snapshots) = state.snapshots.lock() else {
                 return error(500, "INTERNAL");
             };
-            let Some(snapshot) = snapshots.get(name) else {
+            let Some(snapshot) = snapshots.get(session).and_then(|s| s.get(name)) else {
                 return error(404, &format!("NOT_FOUND : no snapshot {name:?}"));
             };
             if snapshot.parts.len() != state.snapshot_hooks.len() {
                 return error(500, "INTERNAL : snapshot shape mismatch");
             }
             for (hook, part) in state.snapshot_hooks.iter().zip(&snapshot.parts) {
-                if let Err(e) = hook.restore(part) {
-                    return error(500, &format!("INTERNAL : restoring {}: {e}", hook.name()));
+                if let Some(part) = part {
+                    if let Err(e) = hook.restore(&scope, part) {
+                        return error(500, &format!("INTERNAL : restoring {}: {e}", hook.name()));
+                    }
                 }
             }
             let clock = snapshot.clock.clone();
@@ -964,7 +1229,7 @@ fn snapshot_route(
             let Ok(mut snapshots) = state.snapshots.lock() else {
                 return error(500, "INTERNAL");
             };
-            match snapshots.remove(name) {
+            match snapshots.get_mut(session).and_then(|s| s.remove(name)) {
                 Some(_) => ok(json!({"session": session, "name": name, "deleted": true})),
                 None => error(404, &format!("NOT_FOUND : no snapshot {name:?}")),
             }

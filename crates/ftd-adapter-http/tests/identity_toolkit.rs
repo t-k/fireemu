@@ -29,6 +29,7 @@ fn state() -> AuthState {
         events: None,
         control_token: None,
         registry: None,
+        tenancy: None,
     }
 }
 

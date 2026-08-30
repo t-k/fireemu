@@ -91,6 +91,8 @@ pub struct FaultRecord {
     pub operation: String,
     /// Occurrence number of the operation.
     pub occurrence: u64,
+    /// Occurrence number of the operation for the function (when a function was named).
+    pub function_occurrence: Option<u64>,
     /// Function, if any.
     pub function: Option<String>,
     /// Action taken.
@@ -98,7 +100,7 @@ pub struct FaultRecord {
 }
 
 /// The installed plan plus its occurrence counters and history.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FaultState {
     plan: Option<FaultPlan>,
     counters: BTreeMap<String, u64>,
@@ -181,6 +183,7 @@ impl FaultState {
             self.fired.push(FaultRecord {
                 operation: operation.to_owned(),
                 occurrence,
+                function_occurrence: per_function,
                 function: function.map(str::to_owned),
                 action: rule.action.clone(),
             });
@@ -191,6 +194,72 @@ impl FaultState {
 
 /// The fault state shared by every adapter of a session.
 pub type SharedFaults = std::sync::Arc<std::sync::Mutex<FaultState>>;
+
+/// One fault state per session, looked up by project: a registered session project has
+/// its own plan and counters; every other project shares the default session's.
+#[derive(Debug, Default)]
+pub struct FaultRegistry {
+    default: SharedFaults,
+    others: std::sync::Mutex<BTreeMap<String, SharedFaults>>,
+}
+
+impl FaultRegistry {
+    /// An empty registry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The default session's state.
+    #[must_use]
+    pub fn default_state(&self) -> SharedFaults {
+        self.default.clone()
+    }
+
+    /// Gives `project` its own state (idempotent) and returns it.
+    pub fn register(&self, project: &str) -> SharedFaults {
+        match self.others.lock() {
+            Ok(mut others) => others
+                .entry(project.to_owned())
+                .or_insert_with(SharedFaults::default)
+                .clone(),
+            Err(_) => self.default.clone(),
+        }
+    }
+
+    /// Forgets `project`'s state (its faults fall back to the default session's).
+    pub fn remove(&self, project: &str) {
+        if let Ok(mut others) = self.others.lock() {
+            others.remove(project);
+        }
+    }
+
+    /// The state deciding for `project`.
+    #[must_use]
+    pub fn for_project(&self, project: &str) -> SharedFaults {
+        self.others
+            .lock()
+            .ok()
+            .and_then(|o| o.get(project).cloned())
+            .unwrap_or_else(|| self.default.clone())
+    }
+}
+
+/// The registry shared by every adapter.
+pub type SharedFaultRegistry = std::sync::Arc<FaultRegistry>;
+
+/// Decides for `operation` of `project` on a registry (an absent registry means no faults).
+#[must_use]
+pub fn decide_for(
+    registry: Option<&SharedFaultRegistry>,
+    project: &str,
+    operation: &str,
+    function: Option<&str>,
+    event_type: Option<&str>,
+) -> Vec<FaultAction> {
+    let state = registry.map(|r| r.for_project(project));
+    decide_shared(state.as_ref(), operation, function, event_type)
+}
 
 /// Decides for `operation` on a shared state (an absent or poisoned state means no faults).
 #[must_use]

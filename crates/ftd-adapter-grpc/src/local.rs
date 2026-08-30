@@ -43,8 +43,11 @@ pub struct LocalBackend {
     /// The actor of the commit in progress, staged by the write guard inside the critical
     /// section and consumed by `publish` (same critical section, so never another's).
     pending_actor: Mutex<Option<Actor>>,
-    /// The session's fault plan, when one is shared.
-    faults: Mutex<Option<ftd_core_session::fault::SharedFaults>>,
+    /// The sessions' fault plans (looked up by project), when shared.
+    faults: Mutex<Option<ftd_core_session::fault::SharedFaultRegistry>>,
+    /// Told after a fault plan moved the virtual clock (the functions runtime re-reads
+    /// its schedules and retries).
+    clock_observer: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// Per-database generation, bumped by every wipe of that database (resume tokens are
     /// bound to it, so a project reset invalidates that project's tokens only).
     generations: Mutex<BTreeMap<(String, String), u64>>,
@@ -63,6 +66,16 @@ pub struct LocalBackend {
 
 /// Synchronous observer of commits (see [`LocalBackend::set_change_sink`]).
 pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
+
+/// A session's Firestore snapshot: its databases, and the auto-ID generator when the
+/// session owns it (the default one).
+#[derive(Debug, Clone)]
+pub struct FirestoreSnapshot {
+    /// Databases by `(project, database)`.
+    pub databases: BTreeMap<(String, String), FirestoreState>,
+    /// The auto-ID generator state.
+    pub ids: Option<SplitMix64>,
+}
 
 /// Published after every successful commit (drives `Listen` streams).
 #[derive(Debug, Clone, PartialEq)]
@@ -214,6 +227,7 @@ impl LocalBackend {
             databases: Mutex::new(BTreeMap::new()),
             pending_actor: Mutex::new(None),
             faults: Mutex::new(None),
+            clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             commits: tokio::sync::broadcast::channel(1024).0,
@@ -271,10 +285,27 @@ impl LocalBackend {
     /// Drops every database of one project (a session reset of that project): other
     /// projects' streams and epoch are untouched; the project's streams observe the wipe.
     pub fn reset_project(&self, project: &str) {
+        self.reset_scope(&ftd_core_session::tenancy::Scope::Project(
+            project.to_owned(),
+        ));
+    }
+
+    /// Drops every database `scope` owns. The default session's scope also starts a new
+    /// epoch (streams opened before it end like on a full reset); a project scope only
+    /// bumps the generations of the databases it wiped.
+    pub fn reset_scope(&self, scope: &ftd_core_session::tenancy::Scope) {
+        if scope.is_default() {
+            // Streams opened before the reset see the epoch change before any data is
+            // dropped.
+            self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         let cleared: Vec<(String, String)> = match self.databases.lock() {
             Ok(mut dbs) => {
-                let keys: Vec<(String, String)> =
-                    dbs.keys().filter(|(p, _)| p == project).cloned().collect();
+                let keys: Vec<(String, String)> = dbs
+                    .keys()
+                    .filter(|(p, _)| scope.owns_project(p))
+                    .cloned()
+                    .collect();
                 for k in &keys {
                     dbs.remove(k);
                 }
@@ -283,7 +314,11 @@ impl LocalBackend {
             Err(_) => Vec::new(),
         };
         self.bump_generations(&cleared);
-        for (project, database) in cleared {
+        self.announce_wipe(cleared);
+    }
+
+    fn announce_wipe(&self, databases: Vec<(String, String)>) {
+        for (project, database) in databases {
             let _ = self.commits.send(CommitEvent {
                 actor: Actor::system(),
                 project,
@@ -295,7 +330,7 @@ impl LocalBackend {
         }
     }
 
-    /// A copy of every database (session snapshots).
+    /// A copy of every database (the default session's snapshot).
     #[must_use]
     pub fn snapshot_databases(&self) -> BTreeMap<(String, String), FirestoreState> {
         self.databases
@@ -304,53 +339,86 @@ impl LocalBackend {
             .unwrap_or_default()
     }
 
-    /// Replaces every database with `databases` (snapshot restore): a new epoch, and the
-    /// streams opened before it end like on a reset.
+    /// The databases `scope` owns, plus the auto-ID generator for the default scope (it
+    /// is shared by every project, so only the default session snapshots it).
+    #[must_use]
+    pub fn snapshot_scope(&self, scope: &ftd_core_session::tenancy::Scope) -> FirestoreSnapshot {
+        let databases = self
+            .databases
+            .lock()
+            .map(|dbs| {
+                dbs.iter()
+                    .filter(|((p, _), _)| scope.owns_project(p))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let ids = scope
+            .is_default()
+            .then(|| self.ids.lock().map(|r| r.clone()).ok())
+            .flatten();
+        FirestoreSnapshot { databases, ids }
+    }
+
+    /// Replaces every database with `databases` (the default session's restore): a new
+    /// epoch, and the streams opened before it end like on a reset.
     pub fn restore_databases(&self, databases: BTreeMap<(String, String), FirestoreState>) {
-        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let previous: Vec<(String, String)> = match self.databases.lock() {
+        self.restore_scope(
+            &ftd_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new()),
+            &FirestoreSnapshot {
+                databases,
+                ids: None,
+            },
+        );
+    }
+
+    /// Replaces the databases `scope` owns with the snapshot's (the others stay). The
+    /// default scope starts a new epoch and puts the auto-ID generator back; a project
+    /// scope bumps the generations of the databases it replaced.
+    pub fn restore_scope(
+        &self,
+        scope: &ftd_core_session::tenancy::Scope,
+        snapshot: &FirestoreSnapshot,
+    ) {
+        if scope.is_default() {
+            self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let touched: Vec<(String, String)> = match self.databases.lock() {
             Ok(mut dbs) => {
-                let keys: Vec<(String, String)> = dbs.keys().cloned().collect();
-                *dbs = databases;
+                let mut keys: Vec<(String, String)> = dbs
+                    .keys()
+                    .filter(|(p, _)| scope.owns_project(p))
+                    .cloned()
+                    .collect();
+                for k in &keys {
+                    dbs.remove(k);
+                }
+                for (k, v) in &snapshot.databases {
+                    if scope.owns_project(&k.0) {
+                        if !keys.contains(k) {
+                            keys.push(k.clone());
+                        }
+                        dbs.insert(k.clone(), v.clone());
+                    }
+                }
                 keys
             }
             Err(_) => Vec::new(),
         };
-        for (project, database) in previous {
-            let _ = self.commits.send(CommitEvent {
-                actor: Actor::system(),
-                project,
-                database,
-                version: 0,
-                commit_time: None,
-                changes: Arc::new(Vec::new()),
-            });
+        if let Some(ids) = &snapshot.ids {
+            if let Ok(mut rng) = self.ids.lock() {
+                *rng = ids.clone();
+            }
         }
+        self.bump_generations(&touched);
+        self.announce_wipe(touched);
     }
 
     /// Drops every database (session reset). Listen streams observe the wipe as deletes.
     pub fn reset(&self) {
-        // Streams opened before the reset see the epoch change before any data is dropped.
-        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let cleared: Vec<(String, String)> = match self.databases.lock() {
-            Ok(mut dbs) => {
-                let keys = dbs.keys().cloned().collect();
-                dbs.clear();
-                keys
-            }
-            Err(_) => Vec::new(),
-        };
-        self.bump_generations(&cleared);
-        for (project, database) in cleared {
-            let _ = self.commits.send(CommitEvent {
-                actor: Actor::system(),
-                project,
-                database,
-                version: 0,
-                commit_time: None,
-                changes: Arc::new(Vec::new()),
-            });
-        }
+        self.reset_scope(&ftd_core_session::tenancy::Scope::AllExcept(
+            std::collections::BTreeSet::new(),
+        ));
     }
 
     /// Subscribes to commit events.
@@ -362,18 +430,33 @@ impl LocalBackend {
     /// Publishes a commit: the change sink first (synchronously, inside the database
     /// critical section the caller holds), then the `Listen` broadcast.
     /// Shares the session's fault plan with this backend.
-    pub fn set_faults(&self, faults: ftd_core_session::fault::SharedFaults) {
+    pub fn set_faults(&self, faults: ftd_core_session::fault::SharedFaultRegistry) {
         if let Ok(mut slot) = self.faults.lock() {
             *slot = Some(faults);
         }
     }
 
-    /// Applies the fault plan to `operation` (spec 18): an error action fails the request
-    /// here, a delay moves the virtual clock before it runs.
-    fn fault(&self, operation: &str) -> Result<(), Status> {
+    /// Installs the observer told after a fault plan moved the virtual clock.
+    pub fn set_clock_observer(&self, observer: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut slot) = self.clock_observer.lock() {
+            *slot = Some(observer);
+        }
+    }
+
+    fn clock_moved(&self) {
+        let observer = self.clock_observer.lock().ok().and_then(|o| o.clone());
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
+
+    /// Applies `project`'s fault plan to `operation` (spec 18): an error action fails the
+    /// request here, a delay moves the virtual clock before it runs.
+    fn fault(&self, project: &str, operation: &str) -> Result<(), Status> {
         use ftd_core_session::fault::FaultAction;
         let faults = self.faults.lock().ok().and_then(|f| f.clone());
-        for action in ftd_core_session::fault::decide_shared(faults.as_ref(), operation, None, None)
+        for action in
+            ftd_core_session::fault::decide_for(faults.as_ref(), project, operation, None, None)
         {
             match action {
                 FaultAction::ReturnError { code } => {
@@ -403,6 +486,7 @@ impl LocalBackend {
                             seconds.max(0),
                         ));
                     }
+                    self.clock_moved();
                 }
                 FaultAction::Duplicate { .. }
                 | FaultAction::CrashRunner
@@ -448,7 +532,7 @@ impl LocalBackend {
         writes: &[Write],
         guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
-        self.fault("firestore.commit")?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.now();
         let result = self.with_db(parent, |db| {
             guard(db, writes, now)?;
@@ -558,14 +642,18 @@ impl LocalBackend {
                 crate::encode::decode_instant(t)
             },
         );
-        // Fingerprint of everything a page token must agree with.
+        // Fingerprint of everything a page token must agree with, including the reset
+        // epoch and the database generation: a token from before a reset or restore is
+        // refused instead of resuming against unrelated history at the same version.
         let fingerprint = {
             let text = format!(
-                "{}|{}|{}|{:?}",
+                "{}|{}|{}|{:?}|{}|{}",
                 req.parent,
                 query.scope.collection_id.as_str(),
                 partition_count,
-                read_time.map(ftd_core_types::time::LogicalInstant::as_nanos)
+                read_time.map(ftd_core_types::time::LogicalInstant::as_nanos),
+                self.epoch(),
+                self.database_generation(&parent)
             );
             text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
                 (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
@@ -588,7 +676,7 @@ impl LocalBackend {
             };
             let (v, i) = parsed.ok_or_else(|| {
                 Status::invalid_argument(
-                    "invalid page_token (not issued for this query, count and read time)",
+                    "invalid page_token (not issued for this query, count and read time, or the session was reset)",
                 )
             })?;
             (Some(CommitVersion::from_value(v)), i)
@@ -802,6 +890,7 @@ impl LocalBackend {
     ) -> Result<DocumentSnapshot, Status> {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.now();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
@@ -857,7 +946,6 @@ impl LocalBackend {
         req: &pb::GetDocumentRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::Document, Status> {
-        self.fault("firestore.read")?;
         self.get_document_snapshot(req, guard)?.into_response()
     }
 
@@ -868,8 +956,8 @@ impl LocalBackend {
         req: &pb::BatchGetDocumentsRequest,
         guard: ReadGuard<'_>,
     ) -> Result<BatchGetOutcome, Status> {
-        self.fault("firestore.read")?;
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.now();
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let paths = req
@@ -1049,7 +1137,7 @@ impl LocalBackend {
         mask: Option<&pb::DocumentMask>,
         guard: WriteGuard<'_>,
     ) -> Result<pb::Document, Status> {
-        self.fault("firestore.commit")?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let now = self.now();
@@ -1117,8 +1205,8 @@ impl LocalBackend {
         req: &pb::DeleteDocumentRequest,
         guard: WriteGuard<'_>,
     ) -> Result<(), Status> {
-        self.fault("firestore.commit")?;
         let (parent, write) = Self::plan_delete(req)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.now();
         self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
@@ -1160,8 +1248,8 @@ impl LocalBackend {
 
     /// `BeginTransaction`.
     pub fn begin_transaction(&self, req: &pb::BeginTransactionRequest) -> Result<Vec<u8>, Status> {
-        self.fault("firestore.beginTransaction")?;
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.beginTransaction")?;
         // BeginTransaction without options is read-write (unlike `new_transaction`).
         let now = self.now();
         self.with_db(&parent, |db| {
@@ -1195,8 +1283,8 @@ impl LocalBackend {
         req: &pb::CommitRequest,
         guard: WriteGuard<'_>,
     ) -> Result<pb::CommitResponse, Status> {
-        self.fault("firestore.commit")?;
         let (parent, writes) = Self::plan_commit(req)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let txn = Self::txn(&parent, &req.transaction)?;
         let now = self.now();
         let result = self.with_db(&parent, |db| {
@@ -1225,8 +1313,8 @@ impl LocalBackend {
         req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        self.fault("firestore.read")?;
         let parent = parse_parent(&req.parent).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
                 "RunQuery requires a structured_query",
@@ -1315,8 +1403,8 @@ impl LocalBackend {
         req: &pb::RunAggregationQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::RunAggregationQueryResponse, Status> {
-        self.fault("firestore.read")?;
         let parent = parse_parent(&req.parent).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
             &req.query_type
         else {
@@ -1423,8 +1511,8 @@ impl LocalBackend {
         req: &pb::ListDocumentsRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
-        self.fault("firestore.read")?;
         let parent = parse_parent(&req.parent).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.now();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
@@ -1588,8 +1676,8 @@ impl LocalBackend {
         req: &pb::BatchWriteRequest,
         guard: WriteGuard<'_>,
     ) -> Result<pb::BatchWriteResponse, Status> {
-        self.fault("firestore.commit")?;
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
+        self.fault(parent.project.as_str(), "firestore.commit")?;
         let now = self.now();
         let decoded: Vec<Result<Write, Status>> = req
             .writes

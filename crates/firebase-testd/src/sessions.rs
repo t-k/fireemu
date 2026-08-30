@@ -1,6 +1,6 @@
 //! Sessions other than the default one: isolated by project. Each gets its own Auth
-//! store (registered with the shared verifier), and a reset or delete wipes only that
-//! project's Firestore databases, default Storage buckets and users.
+//! store (registered with the shared verifier); a reset wipes what the session's scope
+//! owns (its Firestore databases, its buckets, its users) and nothing else.
 
 use std::sync::Arc;
 
@@ -8,6 +8,7 @@ use ftd_adapter_grpc::local::LocalBackend;
 use ftd_adapter_http::control::ProjectHooks;
 use ftd_core_auth::mfa::TotpPolicy;
 use ftd_core_auth::store::{AuthRegistry, AuthStore};
+use ftd_core_session::tenancy::Scope;
 use ftd_core_types::determinism::SplitMix64;
 
 /// The daemon's per-project hooks.
@@ -20,31 +21,6 @@ pub struct Projects {
     pub registry: Arc<AuthRegistry>,
     /// Session seed (each project's generator derives from it and the project name).
     pub seed: u64,
-}
-
-impl Projects {
-    fn default_buckets(project: &str) -> [String; 2] {
-        [
-            format!("{project}.appspot.com"),
-            format!("{project}.firebasestorage.app"),
-        ]
-    }
-
-    fn wipe(&self, project: &str) {
-        self.backend.reset_project(project);
-        if let Ok(mut store) = self.storage.store.lock() {
-            for bucket in Self::default_buckets(project) {
-                if let Ok(name) = ftd_core_storage::name::BucketName::try_new(bucket) {
-                    store.remove_bucket(&name);
-                }
-            }
-        }
-        if let Some(auth) = self.registry.store_for(project) {
-            if let Ok(mut auth) = auth.lock() {
-                auth.clear();
-            }
-        }
-    }
 }
 
 impl ProjectHooks for Projects {
@@ -70,12 +46,26 @@ impl ProjectHooks for Projects {
         }
     }
 
-    fn reset(&self, project: &str) {
-        self.wipe(project);
+    fn reset_scope(&self, scope: &Scope) {
+        self.backend.reset_scope(scope);
+        if let Ok(mut store) = self.storage.store.lock() {
+            store.remove_buckets_where(|bucket| {
+                scope.owns_project(&self.storage.project_of_bucket(bucket))
+            });
+        }
+        let auth = match scope {
+            Scope::Project(p) => self.registry.store_for(p),
+            Scope::AllExcept(_) => Some(self.registry.default_store()),
+        };
+        if let Some(auth) = auth {
+            if let Ok(mut auth) = auth.lock() {
+                auth.clear();
+            }
+        }
     }
 
     fn remove(&self, project: &str) {
-        self.wipe(project);
+        self.reset_scope(&Scope::Project(project.to_owned()));
         self.registry.remove(project);
     }
 }

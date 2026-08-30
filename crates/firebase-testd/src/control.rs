@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 /// every entry must validate (FS-TEXT-VAL-1) and the edition must be Enterprise.
 pub fn load_text_indexes(
     cfg: &crate::config::RuntimeConfig,
-) -> Result<ftd_core_firestore::text_index::TextIndexSet, String> {
-    let mut set = ftd_core_firestore::text_index::TextIndexSet::default();
+) -> Result<ftd_core_firestore::text_index::TextIndexCatalog, String> {
+    let mut set = ftd_core_firestore::text_index::TextIndexCatalog::default();
     let Some(path) = &cfg.text_index_file else {
         return Ok(set);
     };
@@ -31,11 +31,11 @@ pub fn load_text_indexes(
         .and_then(Value::as_array)
         .ok_or_else(|| format!("{path}: indexes must be an array"))?;
     for (i, e) in entries.iter().enumerate() {
-        let def = ftd_adapter_http::control::parse_text_index(e)
+        let (project, database, def) = ftd_adapter_http::control::parse_text_index(e)
             .map_err(|m| format!("{path}: indexes[{i}]: {m}"))?;
         let id = def.id.clone();
         let warnings = set
-            .add(def)
+            .add(&project, &database, def)
             .map_err(|e| format!("{path}: indexes[{i}]: {e}"))?;
         for w in warnings {
             eprintln!("[firestore] text index {id}: {w}");

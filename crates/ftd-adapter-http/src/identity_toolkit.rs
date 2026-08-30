@@ -50,6 +50,8 @@ pub struct AuthState {
     /// emulator inspection routes (they expose action codes, SMS codes and account wipes).
     /// `None` refuses every browser-origin request there.
     pub control_token: Option<String>,
+    /// Which session declared which API key (client SDK routes of a session project).
+    pub tenancy: Option<ftd_core_session::tenancy::SharedTenancy>,
     /// Stores of the other session projects: project-scoped routes (`projects/{p}/...`,
     /// `/emulator/v1/projects/{p}/...`) of a registered project use its own store.
     pub registry: Option<Arc<ftd_core_auth::store::AuthRegistry>>,
@@ -207,7 +209,11 @@ fn issue_tokens_with(
 }
 
 fn verify(store: &AuthStore, body: &Value, at: LogicalInstant) -> Result<LocalId, JsonResponse> {
-    let token = str_field(body, "idToken").ok_or_else(|| error(400, "MISSING_ID_TOKEN"))?;
+    let token = match body.get("idToken") {
+        None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
+        Some(Value::String(t)) => t.as_str(),
+        Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
+    };
     let v = verify_id_token(token, store, at).map_err(|e| jwt_error(&e))?;
     store
         .user_by_id(&v.uid)
@@ -312,16 +318,7 @@ pub fn handle_with(
     };
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
-    // Project-scoped routes of a registered session project use that project's store;
-    // everything else (client SDK routes) is the default project's.
-    let scoped_project = path
-        .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
-        .or_else(|| path.strip_prefix("/emulator/v1/projects/"))
-        .and_then(|rest| rest.split('/').next())
-        .filter(|p| !p.is_empty());
-    let store_arc = scoped_project
-        .and_then(|p| state.registry.as_ref().and_then(|r| r.store_for(p)))
-        .unwrap_or_else(|| state.store.clone());
+    let store_arc = select_store(state, path, query, body);
     let _drain = EventDrain {
         store: store_arc.clone(),
         sink: state.events.as_ref(),
@@ -449,6 +446,62 @@ pub fn handle_with(
         "/securetoken.googleapis.com/v1/token" => refresh(&mut store, body, at),
         _ => error(404, "NOT_FOUND"),
     }
+}
+
+/// The store a request is for. Project-scoped routes (Admin SDK, emulator inspection)
+/// name their project; client SDK routes of a session project are recognised by the API
+/// key the session declared, by the audience of the ID token they carry, or by the store
+/// that issued their refresh token; everything else is the default project's.
+fn select_store(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+    body: &Value,
+) -> Arc<Mutex<AuthStore>> {
+    let Some(registry) = &state.registry else {
+        return state.store.clone();
+    };
+    let scoped_project = path
+        .strip_prefix("/identitytoolkit.googleapis.com/v1/projects/")
+        .or_else(|| path.strip_prefix("/emulator/v1/projects/"))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|p| !p.is_empty());
+    if let Some(project) = scoped_project {
+        return registry
+            .store_for(project)
+            .unwrap_or_else(|| state.store.clone());
+    }
+    let api_key = query.and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("key=")));
+    if let Some(key) = api_key {
+        let project = state
+            .tenancy
+            .as_ref()
+            .and_then(|t| t.read().ok())
+            .and_then(|t| t.project_of_api_key(key).map(str::to_owned));
+        if let Some(store) = project.and_then(|p| registry.store_for(&p)) {
+            return store;
+        }
+    }
+    if let Some(token) = str_field(body, "idToken") {
+        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+        let aud = ftd_core_auth::jwt::decode_token(token, signer.as_deref())
+            .ok()
+            .and_then(|d| {
+                d.payload
+                    .get("aud")
+                    .and_then(ftd_core_types::json::JsonValue::as_str)
+                    .map(str::to_owned)
+            });
+        if let Some(store) = aud.and_then(|a| registry.store_for(&a)) {
+            return store;
+        }
+    }
+    if let Some(token) = str_field(body, "refresh_token") {
+        if let Some(store) = registry.find(|s| s.refresh_session(token).is_ok()) {
+            return store;
+        }
+    }
+    state.store.clone()
 }
 
 fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
@@ -1738,7 +1791,7 @@ fn sign_in_with_email_link(
     }
     // With a session: link the (now verified) email to that user instead. The code is
     // consumed only once the request is known to succeed.
-    if str_field(body, "idToken").is_some() {
+    if body.get("idToken").is_some_and(|t| !t.is_null()) {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
@@ -1824,7 +1877,7 @@ fn sign_in_with_phone_number(
     if verified.purpose != VerificationPurpose::SignIn {
         return error(400, "INVALID_SESSION_INFO");
     }
-    if str_field(body, "idToken").is_some() {
+    if body.get("idToken").is_some_and(|t| !t.is_null()) {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
@@ -1922,7 +1975,7 @@ fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> 
         .get("email_verified")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let (uid, is_new) = if str_field(body, "idToken").is_some() {
+    let (uid, is_new) = if body.get("idToken").is_some_and(|t| !t.is_null()) {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,

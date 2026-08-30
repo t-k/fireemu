@@ -21,11 +21,15 @@ fn state(rules: Option<&str>) -> StorageState {
     StorageState {
         store: Mutex::new(ObjectStore::new(9)),
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
-        auth: Arc::new(Mutex::new(AuthStore::new(
+        auth: Arc::new(ftd_core_auth::store::AuthRegistry::new(
             "demo-app",
-            SplitMix64::new(3),
-            TotpPolicy::default(),
-        ))),
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(3),
+                TotpPolicy::default(),
+            ))),
+        )),
+        tenancy: None,
         rules: Arc::new(RwLock::new(rules.map_or_else(LoadedRules::default, |r| {
             LoadedRules::from_source(r).unwrap()
         }))),
@@ -34,6 +38,7 @@ fn state(rules: Option<&str>) -> StorageState {
         barrier: None,
         firestore: None,
         faults: None,
+        clock_observer: None,
     }
 }
 
@@ -480,7 +485,8 @@ service firebase.storage {
 }",
     ));
     let (uid, token) = {
-        let mut store = s.auth.lock().unwrap();
+        let store = s.auth.default_store();
+        let mut store = store.lock().unwrap();
         let uid = store
             .create_user(NewUser::email("u@example.com"), START)
             .unwrap();
@@ -686,7 +692,8 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
 }
 
 fn user_token(s: &StorageState) -> (String, String) {
-    let mut store = s.auth.lock().unwrap();
+    let store = s.auth.default_store();
+    let mut store = store.lock().unwrap();
     let uid = store
         .create_user(NewUser::email("u@example.com"), START)
         .unwrap();
@@ -1283,9 +1290,10 @@ service firebase.storage {
 
 #[test]
 fn fault_plans_fail_storage_operations() {
-    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use ftd_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule};
     let mut s = state(None);
-    let faults = Arc::new(Mutex::new(FaultState::default()));
+    let registry = Arc::new(ftd_core_session::fault::FaultRegistry::new());
+    let faults = registry.default_state();
     faults.lock().unwrap().install(FaultPlan {
         seed: 1,
         rules: vec![FaultRule {
@@ -1300,7 +1308,7 @@ fn fault_plans_fail_storage_operations() {
             },
         }],
     });
-    s.faults = Some(faults);
+    s.faults = Some(registry);
     let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
     let upload = format!("/v0/b/{BUCKET}/o?name=f.txt&uploadType=multipart");
     let r = handle(
@@ -1323,4 +1331,56 @@ fn fault_plans_fail_storage_operations() {
         ),
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+}
+
+#[test]
+fn storage_tokens_are_bound_to_the_buckets_project() {
+    let mut s = state(None);
+    let mut tenancy = ftd_core_session::tenancy::Tenancy::new("demo-app");
+    tenancy.register("demo-b", &[], &[]).unwrap();
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    assert!(s.auth.register(
+        "demo-b",
+        AuthStore::new("demo-b", SplitMix64::new(4), TotpPolicy::default())
+    ));
+    let token_b = {
+        let store = s.auth.store_for("demo-b").unwrap();
+        let mut store = store.lock().unwrap();
+        let uid = store
+            .create_user(NewUser::email("b@example.com"), START)
+            .unwrap();
+        let claims = store.id_token_claims(&uid, None, START).unwrap();
+        format!("Firebase {}", ftd_core_auth::jwt::encode_unsigned(&claims))
+    };
+    let (_, token_a) = user_token(&s);
+    let (ct, body) = multipart(&json!({"contentType": "text/plain"}), "text/plain", b"x");
+    let upload = |bucket: &str| format!("/v0/b/{bucket}/o?name=f.txt&uploadType=multipart");
+    // A demo-b user on demo-app's bucket, and a demo-app user on demo-b's: refused before
+    // any rule runs.
+    for (bucket, token) in [(BUCKET, &token_b), ("demo-b.appspot.com", &token_a)] {
+        let r = handle(
+            &s,
+            &req(
+                "POST",
+                &upload(bucket),
+                &[("authorization", token), ("content-type", &ct)],
+                &body,
+            ),
+        );
+        assert_eq!(r.status, 401, "{}", String::from_utf8_lossy(&r.body));
+        assert!(String::from_utf8_lossy(&r.body).contains("audience"));
+    }
+    // Each user on their own project's bucket.
+    for (bucket, token) in [(BUCKET, &token_a), ("demo-b.appspot.com", &token_b)] {
+        let r = handle(
+            &s,
+            &req(
+                "POST",
+                &upload(bucket),
+                &[("authorization", token), ("content-type", &ct)],
+                &body,
+            ),
+        );
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    }
 }

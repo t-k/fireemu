@@ -357,7 +357,8 @@ pub fn end_user_operation(path: &str) -> &'static str {
         "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:start" => "mfaSignIn:start",
         "/identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize" => "mfaSignIn:finalize",
         "/securetoken.googleapis.com/v1/token" => "securetoken:token",
-        _ => ftd_core_app_check::observe::UNKNOWN_APP_LABEL,
+        // A path this runtime does not serve is one bucket, never a label of its own.
+        _ => "unknown",
     }
 }
 

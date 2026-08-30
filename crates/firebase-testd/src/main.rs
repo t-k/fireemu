@@ -8,7 +8,7 @@
 //!
 //! options: [--config firebase-testd.json] [--firebase-json firebase.json] [--project <id>]
 //!          [--firestore-port 8080] [--http-port 9099] [--storage-port 9199]
-//!          [--functions-port 5001] [--functions <dir>]
+//!          [--functions-port 5001] [--functions <dir>] [--ui-port 4000]
 //! ```
 //!
 //! `up` serves the Firestore v1 gRPC API (local execution behind the strict gateway), the
@@ -22,6 +22,7 @@ mod control;
 mod functions;
 mod sessions;
 mod snapshots;
+mod ui;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -46,7 +47,7 @@ use ftd_proto_firestore::google::firestore::v1::firestore_server::FirestoreServe
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id>] [--only auth,firestore,storage,functions] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id>] [--only auth,firestore,storage,functions] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--functions <dir>] [--ui-port <n>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: firebase-testd up {OPTIONS_USAGE}\n       firebase-testd exec {OPTIONS_USAGE} -- <command...>\n       firebase-testd doctor\n       firebase-testd capabilities");
@@ -187,6 +188,15 @@ fn parse_options(args: &[String]) -> Result<(RuntimeConfig, Selection), String> 
                         .ok_or("--functions-port needs a value")?
                         .parse()
                         .map_err(|e| format!("--functions-port: {e}"))?,
+                );
+                i += 2;
+            }
+            "--ui-port" => {
+                ui::set_port(
+                    args.get(i + 1)
+                        .ok_or("--ui-port needs a value")?
+                        .parse()
+                        .map_err(|e| format!("--ui-port: {e}"))?,
                 );
                 i += 2;
             }
@@ -719,6 +729,8 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
         let functions_addr = functions_listener
             .as_ref()
             .and_then(|l| l.local_addr().ok());
+        let ui_listener = ui::bind().await?;
+        let ui_addr = ui_listener.as_ref().and_then(|l| l.local_addr().ok());
         // Random secrets: the control token browsers must present, and the secret that ties
         // the runner's HTTP server to this daemon's proxy.
         let control_token = random_secret()?;
@@ -784,6 +796,9 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             functions_addr,
         );
         println!("  control token:    FTD_CONTROL_TOKEN={control_token}   (browser requests to privileged control routes must send Authorization: Bearer <token>)");
+        if let Some(addr) = ui_addr {
+            println!("  ui:               http://{addr}/ui");
+        }
         print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
         if let Some(runtime) = &functions_runtime {
             let names: Vec<&str> = runtime
@@ -816,21 +831,38 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             FirestoreServer::new(service)
                 .max_decoding_message_size(10 * 1024 * 1024)
                 .max_encoding_message_size(10 * 1024 * 1024),
-            rest,
+            rest.clone(),
         ));
         let http = tokio::spawn(ftd_adapter_http::server::serve_with_control(
             http_listener,
-            auth,
-            control,
+            auth.clone(),
+            control.clone(),
         ));
         let storage_server = tokio::spawn(ftd_adapter_http::storage_server::serve_storage(
             storage_listener,
-            storage,
+            storage.clone(),
         ));
         let functions_server = match (functions_listener, functions_runtime.clone()) {
             (Some(listener), Some(runtime)) => tokio::spawn(
                 ftd_adapter_functions::http::serve_functions(listener, runtime),
             ),
+            _ => tokio::spawn(std::future::pending()),
+        };
+        let ui_server = match (ui_listener, ui_addr) {
+            (Some(listener), Some(addr)) => {
+                let state = ui::state(ui::Parts {
+                    cfg: &cfg,
+                    control_token: control_token.clone(),
+                    rest: rest.clone(),
+                    backend: backend.clone(),
+                    auth: auth.clone(),
+                    storage: storage.clone(),
+                    control: control.clone(),
+                    functions: functions_runtime.clone(),
+                    addrs: (grpc_addr, http_addr, storage_addr, functions_addr, addr),
+                });
+                tokio::spawn(ftd_adapter_ui::server::serve_ui(listener, state))
+            }
             _ => tokio::spawn(std::future::pending()),
         };
         // Every listener is bound and served: the command may start.
@@ -857,6 +889,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             r = http => Err(format!("HTTP server stopped: {r:?}")),
             r = storage_server => Err(format!("Storage server stopped: {r:?}")),
             r = functions_server => Err(format!("Functions server stopped: {r:?}")),
+            r = ui_server => Err(format!("UI server stopped: {r:?}")),
             status = wait_child(child.as_mut()) => match status {
                 Ok(status) => Ok(Some(exit_code(status))),
                 Err(e) => Err(format!("waiting for the command: {e}")),

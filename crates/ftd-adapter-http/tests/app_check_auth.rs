@@ -485,7 +485,7 @@ fn an_off_service_records_nothing_and_an_unenforced_one_records_every_request() 
             .registry
             .read()
             .expect("readable")
-            .observations()
+            .observed_projects()
             .is_empty(),
         "off does no token work at all"
     );
@@ -501,7 +501,7 @@ fn an_off_service_records_nothing_and_an_unenforced_one_records_every_request() 
         .registry
         .read()
         .expect("readable")
-        .observations();
+        .observations("demo-app");
     assert_eq!(observed.len(), 1);
     assert_eq!(observed[0].service, "auth");
     assert_eq!(observed[0].transport, "http");
@@ -524,7 +524,7 @@ fn an_unknown_path_does_not_create_an_unbounded_operation_label() {
         .registry
         .read()
         .expect("readable")
-        .observations();
+        .observations("demo-app");
     assert_eq!(observed.len(), 1);
     assert_eq!(observed[0].operation, "unknown");
 }

@@ -961,7 +961,7 @@ fn storage_observations_name_the_operation_and_never_carry_the_token() {
         .registry
         .read()
         .expect("readable")
-        .observations();
+        .observations("demo-app");
     assert_eq!(observed.len(), 2);
     assert_eq!(observed[0].service, "storage");
     assert_eq!(observed[0].operation, "storage.upload");
@@ -990,7 +990,7 @@ fn an_off_storage_service_classifies_nothing() {
         .registry
         .read()
         .expect("readable")
-        .observations()
+        .observed_projects()
         .is_empty());
 }
 

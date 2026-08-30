@@ -350,7 +350,7 @@ pub(crate) mod tests {
             gate.registry()
                 .read()
                 .expect("readable")
-                .observations()
+                .observations("demo-app")
                 .len(),
             1
         );
@@ -361,7 +361,7 @@ pub(crate) mod tests {
             .registry()
             .read()
             .expect("readable")
-            .observations()
+            .observed_projects()
             .is_empty());
     }
 

@@ -5,6 +5,9 @@
 //! private key, an instance secret, an epoch value and an `Authorization` credential here, so
 //! none of them has a field. Unverified app identities are aggregated into a bounded `unknown`
 //! bucket rather than becoming a label.
+//!
+//! Observations and counters are kept per project by [`crate::registry::AppCheckRegistry`], so
+//! what one project observed never depends on what another project's traffic did.
 
 use core::fmt;
 
@@ -13,7 +16,10 @@ use ftd_core_types::time::LogicalInstant;
 use crate::verify::{AppCheckCredentialState, AppCheckFailure, BaselineMode};
 
 /// The category of a classified credential.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The ordering is the declaration order and exists only so a counter map can be keyed by a
+/// category; it ranks nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CredentialCategory {
     /// A privileged route with its own credential.
     Bypass,
@@ -46,6 +52,12 @@ impl fmt::Display for CredentialCategory {
 
 /// The bounded label used instead of an unverified app identity.
 pub const UNKNOWN_APP_LABEL: &str = "unknown";
+
+/// The service label of callable Cloud Functions requests.
+///
+/// It is the one service whose operation is a callable name the daemon itself declared, which
+/// is why counters may group by it ([`Observation::callable`]).
+pub const FUNCTIONS_SERVICE: &str = "functions";
 
 /// One classified request, as tests, the control API and a future UI may see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +128,16 @@ impl Observation {
         }
     }
 
+    /// The callable this observation belongs to, for the `functions` service alone.
+    ///
+    /// A callable name reaches the daemon only after it resolved to a function the runtime
+    /// declared, so it is a bounded label; every other service's operation comes from a route
+    /// and is never made one.
+    #[must_use]
+    pub fn callable(&self) -> Option<&str> {
+        (self.service == FUNCTIONS_SERVICE).then_some(self.operation.as_str())
+    }
+
     /// The reason code an unprivileged view may see: detailed reasons collapse to `invalid`.
     #[must_use]
     pub const fn public_category(&self) -> &'static str {
@@ -126,5 +148,68 @@ impl Observation {
     #[must_use]
     pub fn privileged_reason(&self) -> Option<&'static str> {
         self.failure.map(AppCheckFailure::code)
+    }
+}
+
+/// The bounded key one counter is kept under (specification section 15).
+///
+/// Every component is drawn from a set the daemon controls: the fixed service labels, a
+/// verified app ID or [`UNKNOWN_APP_LABEL`], a declared callable name for the `functions`
+/// service, one of four categories and one of two outcomes. Nothing a caller supplies becomes
+/// a label, which is what keeps the counter map bounded without a sampling rule.
+///
+/// The field order is also the order counters are reported in, so a view can group by service
+/// and then by app without sorting again.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ObservationCounterKey {
+    /// Firebase service.
+    pub service: &'static str,
+    /// Verified app ID, or [`UNKNOWN_APP_LABEL`].
+    pub app_id: String,
+    /// Callable function name, for the `functions` service only.
+    pub function: Option<String>,
+    /// Credential category.
+    pub category: CredentialCategory,
+    /// Whether the request was admitted.
+    pub admitted: bool,
+}
+
+impl ObservationCounterKey {
+    /// The key one observation counts under.
+    #[must_use]
+    pub fn of(observation: &Observation) -> Self {
+        Self {
+            service: observation.service,
+            app_id: observation.app_id.clone(),
+            function: observation.callable().map(str::to_owned),
+            category: observation.category,
+            admitted: observation.admitted,
+        }
+    }
+
+    /// The same key with the identity labels collapsed.
+    ///
+    /// A project whose counter map is full folds into this rather than dropping the count or
+    /// growing the label set: the app ID and the callable name become the bounded `unknown`
+    /// treatment section 15 already prescribes for an unverified identity.
+    #[must_use]
+    pub fn aggregated(&self) -> Self {
+        Self {
+            service: self.service,
+            app_id: UNKNOWN_APP_LABEL.to_owned(),
+            function: None,
+            category: self.category,
+            admitted: self.admitted,
+        }
+    }
+
+    /// The stable outcome label: `admitted` or `denied`.
+    #[must_use]
+    pub const fn outcome(&self) -> &'static str {
+        if self.admitted {
+            "admitted"
+        } else {
+            "denied"
+        }
     }
 }

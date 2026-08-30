@@ -13,10 +13,11 @@ use ftd_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::claims::AppCheckClaims;
 use crate::limits::{
-    MAX_APPS, MAX_APP_ID_BYTES, MAX_DEBUG_TOKENS_PER_APP, MAX_DISPLAY_NAME_BYTES,
-    MAX_RETAINED_OBSERVATIONS, MAX_TOKEN_TTL_SECONDS, MIN_TOKEN_TTL_SECONDS,
+    MAX_APPS, MAX_APP_ID_BYTES, MAX_COUNTER_KEYS_PER_PROJECT, MAX_DEBUG_TOKENS_PER_APP,
+    MAX_DISPLAY_NAME_BYTES, MAX_OBSERVED_PROJECTS, MAX_OBSERVED_PROJECT_ID_BYTES,
+    MAX_RETAINED_OBSERVATIONS_PER_PROJECT, MAX_TOKEN_TTL_SECONDS, MIN_TOKEN_TTL_SECONDS,
 };
-use crate::observe::Observation;
+use crate::observe::{Observation, ObservationCounterKey};
 
 /// The SHA-256 digest of a canonical debug token.
 ///
@@ -374,6 +375,60 @@ struct ProjectState {
     generation: AtomicU64,
 }
 
+/// What one project observed: its own bounded ring and its own counters (section 15).
+///
+/// One project per ring is the point. A runtime-wide ring would let heavy traffic to one
+/// project evict another project's recent observations, so what the control API answered for
+/// a session would depend on what unrelated sessions were doing.
+#[derive(Debug, Default)]
+struct ProjectObservations {
+    /// The retained observations, oldest first.
+    ring: VecDeque<Observation>,
+    /// Counters over every observation ever recorded for the project in this epoch of the
+    /// project's lifecycle, including those the ring has already dropped.
+    counters: BTreeMap<ObservationCounterKey, u64>,
+    /// When this ring was last written, for the bounded table's eviction order.
+    touched: u64,
+}
+
+impl ProjectObservations {
+    /// Counts one observation under its bounded key.
+    fn count(&mut self, observation: &Observation) {
+        let key = ObservationCounterKey::of(observation);
+        if let Some(count) = self.counters.get_mut(&key) {
+            *count = count.saturating_add(1);
+            return;
+        }
+        if self.counters.len() < MAX_COUNTER_KEYS_PER_PROJECT {
+            self.counters.insert(key, 1);
+            return;
+        }
+        // The label space of this project is full: fold the count into the key that carries
+        // no identity rather than dropping it or letting the map grow.
+        let folded = key.aggregated();
+        if let Some(count) = self.counters.get_mut(&folded) {
+            *count = count.saturating_add(1);
+        } else if self.counters.len() < MAX_COUNTER_KEYS_PER_PROJECT {
+            self.counters.insert(folded, 1);
+        }
+    }
+
+    /// Retains one observation, dropping this project's oldest beyond the bound.
+    fn retain(&mut self, observation: Observation) {
+        if self.ring.len() >= MAX_RETAINED_OBSERVATIONS_PER_PROJECT {
+            self.ring.pop_front();
+        }
+        self.ring.push_back(observation);
+    }
+}
+
+/// The observation rings of every observed project, and the clock that orders them.
+#[derive(Debug, Default)]
+struct ObservationLog {
+    projects: BTreeMap<String, ProjectObservations>,
+    next_touch: u64,
+}
+
 /// The App Check registry of one daemon.
 ///
 /// Apps come only from canonical configuration in the initial delivery; dynamic debug tokens
@@ -387,7 +442,7 @@ pub struct AppCheckRegistry {
     projects: BTreeMap<String, ProjectState>,
     token_ttl_seconds: i64,
     next_debug_token_seq: AtomicU64,
-    observations: Mutex<VecDeque<Observation>>,
+    observations: Mutex<ObservationLog>,
 }
 
 impl AppCheckRegistry {
@@ -404,7 +459,7 @@ impl AppCheckRegistry {
             projects: BTreeMap::new(),
             token_ttl_seconds,
             next_debug_token_seq: AtomicU64::new(1),
-            observations: Mutex::new(VecDeque::new()),
+            observations: Mutex::new(ObservationLog::default()),
         })
     }
 
@@ -697,31 +752,103 @@ impl AppCheckRegistry {
         }
     }
 
-    /// Records one secret-free observation, dropping the oldest beyond the retained bound.
+    /// Records one secret-free observation in its own project's ring and counters.
+    ///
+    /// The project's ring is created on first use and holds
+    /// [`MAX_RETAINED_OBSERVATIONS_PER_PROJECT`] observations, so a project that is hammered
+    /// evicts only its own history. The table of rings is bounded in turn: a target project is
+    /// resolved from a request path before anything validates it, so an observation for an ID
+    /// no session could ever name, or one arriving when the table is full of registered
+    /// projects, is dropped rather than allocated. A project the registry knows displaces the
+    /// least recently used ring of one it does not, so unregistered traffic cannot crowd the
+    /// real sessions out of the table.
     pub fn record_observation(&self, observation: Observation) {
-        let Ok(mut log) = self.observations.lock() else {
+        let Ok(mut guard) = self.observations.lock() else {
             return;
         };
-        if log.len() >= MAX_RETAINED_OBSERVATIONS {
-            log.pop_front();
+        let log = &mut *guard;
+        let project = observation.project_id.as_str();
+        if !log.projects.contains_key(project) {
+            if project.is_empty() || project.len() > MAX_OBSERVED_PROJECT_ID_BYTES {
+                return;
+            }
+            if log.projects.len() >= MAX_OBSERVED_PROJECTS {
+                let victim = log
+                    .projects
+                    .iter()
+                    .filter(|(observed, _)| !self.projects.contains_key(observed.as_str()))
+                    .min_by_key(|(_, entry)| entry.touched)
+                    .map(|(observed, _)| observed.clone());
+                let Some(victim) = victim else {
+                    return;
+                };
+                log.projects.remove(&victim);
+            }
+            log.projects
+                .insert(project.to_owned(), ProjectObservations::default());
         }
-        log.push_back(observation);
+        log.next_touch = log.next_touch.wrapping_add(1);
+        let touch = log.next_touch;
+        let Some(entry) = log.projects.get_mut(project) else {
+            return;
+        };
+        entry.touched = touch;
+        entry.count(&observation);
+        entry.retain(observation);
     }
 
-    /// The retained observations, oldest first.
+    /// The retained observations of one project, oldest first.
+    ///
+    /// A project with no ring answers with nothing, which is also what a project whose ring
+    /// was just cleared answers: the two are deliberately indistinguishable.
     #[must_use]
-    pub fn observations(&self) -> Vec<Observation> {
+    pub fn observations(&self, project_id: &str) -> Vec<Observation> {
         self.observations
             .lock()
-            .map(|log| log.iter().cloned().collect())
+            .ok()
+            .and_then(|log| {
+                log.projects
+                    .get(project_id)
+                    .map(|entry| entry.ring.iter().cloned().collect())
+            })
             .unwrap_or_default()
     }
 
-    /// Drops the retained observations of the projects `accept` admits: counters reset with
-    /// project state (section 14).
+    /// The counters of one project, in counter-key order (section 15).
+    ///
+    /// They count every observation recorded since the project's state was last reset, not
+    /// only the ones the ring still holds, so eviction never rewrites history.
+    #[must_use]
+    pub fn observation_counters(&self, project_id: &str) -> Vec<(ObservationCounterKey, u64)> {
+        self.observations
+            .lock()
+            .ok()
+            .and_then(|log| {
+                log.projects.get(project_id).map(|entry| {
+                    entry
+                        .counters
+                        .iter()
+                        .map(|(key, count)| (key.clone(), *count))
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    /// The projects that currently hold an observation ring, in project order.
+    #[must_use]
+    pub fn observed_projects(&self) -> Vec<String> {
+        self.observations
+            .lock()
+            .map(|log| log.projects.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Drops the ring and the counters of every project `accept` admits: counters reset with
+    /// project state, and a deleted project keeps nothing at all (section 14).
     pub fn clear_observations<A: Fn(&str) -> bool>(&self, accept: A) {
         if let Ok(mut log) = self.observations.lock() {
-            log.retain(|o| !accept(&o.project_id));
+            log.projects.retain(|project, _| !accept(project));
         }
     }
 }

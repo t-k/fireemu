@@ -528,7 +528,7 @@ fn every_exchange_is_observed_without_a_secret_a_token_or_an_epoch() {
     call(&state, "POST", EXCHANGE, &exchange_body(SECRET));
     call(&state, "POST", EXCHANGE, &exchange_body(OTHER_SECRET));
     let registry = state.registry.read().unwrap();
-    let observations = registry.observations();
+    let observations = registry.observations("demo-app");
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].category.as_str(), "valid");
     assert_eq!(observations[0].app_id, APP_ID);

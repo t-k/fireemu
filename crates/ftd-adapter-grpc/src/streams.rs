@@ -7,11 +7,16 @@
 //! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
 //! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
 //! the snapshot version. A target added with a resume token (or a read time) replays only
-//! what changed since that version: the store keeps every version, so the target's state
-//! at the token is recomputed and diffed against the current snapshot, followed by an
-//! `ExistenceFilter` with the current count (production's post-resume check). Only an
-//! undecodable or future token falls back to `RESET`. Security Rules are re-checked on
-//! every refresh; a denial removes the target with a `PERMISSION_DENIED` cause.
+//! what changed since that version: the target's state at the token is recomputed from the
+//! retained history and diffed against the current snapshot, followed by an
+//! `ExistenceFilter` with the current count (production's post-resume check).
+//!
+//! A token is only honoured while the store can still reproduce its version exactly
+//! (`FirestoreState::is_retained`: not compacted away by the one-hour retention window, not
+//! ahead of this database). An undecodable, future or expired token falls back to `RESET`,
+//! so a token is never resumed against unrelated history; the client drops its cache and
+//! replays from scratch. Security Rules are re-checked on every refresh; a denial removes
+//! the target with a `PERMISSION_DENIED` cause.
 
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
@@ -226,9 +231,10 @@ enum TargetKind {
 enum Resume {
     /// A version the stream handed out earlier (or a read time).
     Version(CommitVersion),
-    /// A read time: the version current at that instant.
+    /// A read time: the version current at that instant, while it is still retained.
     ReadTime(ftd_core_types::time::LogicalInstant),
-    /// Not a token this daemon issued: full replay after a `RESET`.
+    /// Not a token this daemon issued, or one whose version was compacted away: full replay
+    /// after a `RESET`.
     Invalid,
 }
 
@@ -671,6 +677,11 @@ fn refresh_target(
 /// Resume: the target's state at the token becomes the known state, so the diff carries
 /// exactly what changed since; a token this daemon cannot honour resets the target.
 /// Returns whether the target resumed.
+///
+/// "Cannot honour" includes a version the store compacted away: history older than the
+/// retention window is gone, and replaying a target against a version the store can no
+/// longer describe would produce a diff against unrelated history. Such a token is refused
+/// like an unknown one -- `RESET`, then a full replay.
 fn resolve_resume(
     db: &ftd_core_firestore::store::FirestoreState,
     id: i32,
@@ -681,10 +692,10 @@ fn resolve_resume(
     };
     let version = match resume {
         Resume::Version(v) => Some(v),
-        Resume::ReadTime(t) => Some(db.version_at(t)),
+        Resume::ReadTime(t) => db.version_at_retained(t),
         Resume::Invalid => None,
     }
-    .filter(|v| *v <= db.current_version());
+    .filter(|v| db.is_retained(*v));
     if let Some(v) = version {
         state.known = known_at(db, &state.kind, v)?;
         return Ok(true);

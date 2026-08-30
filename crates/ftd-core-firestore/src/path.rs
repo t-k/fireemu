@@ -189,6 +189,40 @@ impl DocumentPath {
             self.relative()
         )
     }
+
+    /// Slash-separated segments of [`Self::resource_name`], without rendering it. Segments
+    /// never contain `/` (identifier syntax), so this is exactly what splitting the rendered
+    /// name on `/` yields.
+    pub fn resource_name_segments(&self) -> impl Iterator<Item = &str> {
+        [
+            "projects",
+            self.project.as_str(),
+            "databases",
+            self.database.as_str(),
+            "documents",
+        ]
+        .into_iter()
+        .chain(
+            self.pairs
+                .iter()
+                .flat_map(|(c, d)| [c.as_str(), d.as_str()]),
+        )
+    }
+
+    /// Orders two paths the way their resource names order as document references
+    /// (segment-wise byte order), without allocating either name.
+    #[must_use]
+    pub fn cmp_resource_name(&self, other: &Self) -> core::cmp::Ordering {
+        self.resource_name_segments()
+            .cmp(other.resource_name_segments())
+    }
+
+    /// Orders this path against a reference value (`name`), without allocating this path's
+    /// resource name.
+    #[must_use]
+    pub fn cmp_reference(&self, name: &str) -> core::cmp::Ordering {
+        self.resource_name_segments().cmp(name.split('/'))
+    }
 }
 
 impl fmt::Display for DocumentPath {

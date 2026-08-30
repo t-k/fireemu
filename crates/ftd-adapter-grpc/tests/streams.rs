@@ -935,3 +935,156 @@ async fn partition_pages_stay_consistent_while_documents_change() {
     );
     handle.abort();
 }
+
+/// A server whose virtual clock the test can move: history retention is expressed in logical
+/// time, so compaction only happens when the clock passes the window.
+async fn start_with_clock() -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+    Arc<Mutex<VirtualClock>>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), handle, clock)
+}
+
+/// Opens a listener on `collection`, reads its initial snapshot and returns its resume token.
+async fn snapshot_token(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    id: i32,
+    collection: &str,
+) -> Vec<u8> {
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    ltx.send(add_query_target(id, collection)).await.unwrap();
+    let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    token
+}
+
+/// Resumes `collection` from `token` on a fresh stream and returns the trace.
+async fn resume_trace(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    id: i32,
+    collection: &str,
+    token: Vec<u8>,
+) -> Vec<String> {
+    let (ltx, lrx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(lrx))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut request = add_query_target(id, collection);
+    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
+    }
+    ltx.send(request).await.unwrap();
+    next_until(&mut listen, "NO_CHANGE[]").await
+}
+
+/// FS-MVCC-04: a token whose version is still retained resumes with the diff since it, and a
+/// token whose version the store compacted away is refused explicitly (`RESET`, then a full
+/// replay) instead of being diffed against unrelated history.
+#[tokio::test]
+async fn retained_and_compacted_resume_tokens_have_distinct_outcomes() {
+    let (mut client, handle, clock) = start_with_clock().await;
+    let commit = |writes| pb::CommitRequest {
+        database: DB.to_owned(),
+        writes,
+        ..Default::default()
+    };
+    client
+        .commit(commit(vec![set_write("w/a", &[("v", s("1"))])]))
+        .await
+        .unwrap();
+    let old_token = snapshot_token(&mut client, 1, "w").await;
+    client
+        .commit(commit(vec![set_write("w/b", &[("v", s("1"))])]))
+        .await
+        .unwrap();
+    let recent_token = snapshot_token(&mut client, 2, "w").await;
+    assert_ne!(old_token, recent_token);
+
+    // The clock passes the read_time retention window; the next commit compacts everything
+    // the window no longer covers, which leaves the first token below the floor.
+    clock
+        .lock()
+        .unwrap()
+        .advance(ftd_core_types::time::LogicalDuration::from_seconds(
+            2 * ftd_adapter_grpc::local::READ_TIME_RETENTION_SECONDS,
+        ))
+        .unwrap();
+    client
+        .commit(commit(vec![set_write("w/c", &[("v", s("1"))])]))
+        .await
+        .unwrap();
+
+    let resumed = resume_trace(&mut client, 3, "w", recent_token).await;
+    assert_eq!(
+        resumed,
+        vec![
+            "ADD[3]",
+            "CHANGE c",
+            "FILTER 3",
+            "CURRENT[3]",
+            "NO_CHANGE[3]",
+            "NO_CHANGE[]"
+        ],
+        "a retained token replays only what changed since it"
+    );
+
+    let expired = resume_trace(&mut client, 4, "w", old_token).await;
+    assert_eq!(
+        expired,
+        vec![
+            "ADD[4]",
+            "RESET[4]",
+            "CHANGE a",
+            "CHANGE b",
+            "CHANGE c",
+            "CURRENT[4]",
+            "NO_CHANGE[4]",
+            "NO_CHANGE[]"
+        ],
+        "a compacted token is refused and the client resyncs from scratch"
+    );
+    handle.abort();
+}
+
+/// The retention window the wire declares is the one the store compacts against.
+#[test]
+fn the_declared_read_time_window_is_the_stores_retention_window() {
+    assert_eq!(
+        ftd_adapter_grpc::local::READ_TIME_RETENTION_SECONDS,
+        ftd_core_firestore::store::READ_TIME_RETENTION_SECONDS
+    );
+}

@@ -29,6 +29,9 @@ send({
             {"name": "fail", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.written", "document": "items/{id}"}, "retry": True},
             {"name": "slow", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized"}, "timeoutSeconds": 1},
             {"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+            # A cron schedule (03:00 UTC daily). The tests start at 12:01 UTC, so it only
+            # comes due for clock advances of a day or more.
+            {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *"}},
             {"name": "onJob", "trigger": {"type": "pubsub", "topic": "jobs"}},
             {"name": "onUser", "trigger": {"type": "auth", "eventType": "google.firebase.auth.user.v1.created"}},
             {"name": "onGone", "trigger": {"type": "auth", "eventType": "providers/firebase.auth/eventTypes/user.delete"}},

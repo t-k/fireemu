@@ -566,10 +566,20 @@ async fn with_auth_context_triggers_see_the_committing_principal() {
 #[tokio::test]
 async fn catch_up_policies_keep_all_the_latest_or_no_due_runs() {
     use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
-    for (policy, expected_runs, expected_skips) in [
-        (CatchUpPolicy::All, 3, 0),
-        (CatchUpPolicy::Latest, 1, 2),
-        (CatchUpPolicy::None, 0, 3),
+    // Fifteen minutes hold three runs of the "every 5 minutes" schedule. What a policy drops
+    // is one summary record per job and clock change, carrying the exact count.
+    for (policy, expected_runs, expected_skipped) in [
+        (CatchUpPolicy::All, 3, None),
+        (
+            CatchUpPolicy::Latest,
+            1,
+            Some("skipped: catch-up latest (2 runs)"),
+        ),
+        (
+            CatchUpPolicy::None,
+            0,
+            Some("skipped: catch-up none (3 runs)"),
+        ),
     ] {
         let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
         clock
@@ -584,11 +594,17 @@ async fn catch_up_policies_keep_all_the_latest_or_no_due_runs() {
             .iter()
             .filter(|r| r.function == "tick" && r.outcome == "ok")
             .count();
-        let skips = history
+        let skips: Vec<&str> = history
             .iter()
             .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
-            .count();
-        assert_eq!((runs, skips), (expected_runs, expected_skips), "{policy:?}");
+            .map(|r| r.outcome.as_str())
+            .collect();
+        assert_eq!(runs, expected_runs, "{policy:?}");
+        assert_eq!(
+            skips,
+            expected_skipped.into_iter().collect::<Vec<_>>(),
+            "{policy:?}"
+        );
     }
 }
 
@@ -721,14 +737,27 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
 #[tokio::test]
 async fn catch_up_latest_and_none_stay_idle_beyond_the_cap() {
     use ftd_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
-    for (policy, expected_runs) in [(CatchUpPolicy::Latest, 1), (CatchUpPolicy::None, 0)] {
+    // FN-CATCHUP-01 / 02: ten years of an "every 5 minutes" schedule is more than a million
+    // occurrences. Neither policy keeps more than one of them, and neither enumerates them:
+    // the deterministic work counter stays in the hundreds and the retained history gains one
+    // summary record, not one record per missed run.
+    for (policy, expected_runs, expected_skipped) in [
+        (
+            CatchUpPolicy::Latest,
+            1,
+            "skipped: catch-up latest (1051775 runs)",
+        ),
+        (
+            CatchUpPolicy::None,
+            0,
+            "skipped: catch-up none (1051776 runs)",
+        ),
+    ] {
         let (runtime, clock) = start_with_policies(OverlapPolicy::Allow, policy).await;
-        // A day: 288 "every 5 minutes" runs, far beyond a small cap of the test config
-        // (1000) only in principle; use a week to exceed it: 2016 runs.
         clock
             .lock()
             .unwrap()
-            .advance(LogicalDuration::from_seconds(7 * 24 * 3600))
+            .advance(LogicalDuration::from_seconds(3_652 * 24 * 3600))
             .unwrap();
         runtime.on_clock_changed();
         assert!(
@@ -742,16 +771,33 @@ async fn catch_up_latest_and_none_stay_idle_beyond_the_cap() {
             .filter(|r| r.function == "tick" && r.outcome == "ok")
             .count();
         assert_eq!(runs, expected_runs, "{policy:?}");
-        let skipped = history
+        let skipped: Vec<&str> = history
             .iter()
             .filter(|r| r.function == "tick" && r.outcome.starts_with("skipped: catch-up"))
-            .count();
-        assert!(skipped >= 1000, "{policy:?}: {skipped}");
-        assert!(
-            history
-                .iter()
-                .any(|r| r.function == "tick" && r.outcome.contains("more)")),
+            .map(|r| r.outcome.as_str())
+            .collect();
+        assert_eq!(skipped, vec![expected_skipped], "{policy:?}");
+        // The cron job in the manifest ("0 3 * * *") has 3652 runs in the same window. A cron
+        // schedule is counted forward, so the count stops at the catch-up cap and the summary
+        // says so rather than paying for the rest.
+        let nightly: Vec<&str> = history
+            .iter()
+            .filter(|r| r.function == "nightly" && r.outcome.starts_with("skipped: catch-up"))
+            .map(|r| r.outcome.as_str())
+            .collect();
+        assert_eq!(
+            nightly,
+            vec![match policy {
+                CatchUpPolicy::Latest => "skipped: catch-up latest (at least 999 runs)",
+                _ => "skipped: catch-up none (at least 1000 runs)",
+            }],
             "{policy:?}"
+        );
+        // Both jobs together: 1.05 million occurrences answered in a few thousand steps.
+        assert!(
+            runtime.catch_up_steps() <= 20_000,
+            "{policy:?}: {} steps for 1055428 occurrences",
+            runtime.catch_up_steps()
         );
         assert_eq!(runtime.status()["catchUpPending"], false);
     }
@@ -827,4 +873,302 @@ async fn scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome() {
         "the duplicate ran: {:?}",
         runtime.history()
     );
+}
+
+/// A finalized object event for the `slow` function (the fake runner never answers it).
+fn slow_object(name: &str) -> StorageEvent {
+    let mut store = StorageState::new(1);
+    let meta = store
+        .put(
+            &BucketName::try_new("demo-app.appspot.com").unwrap(),
+            &ObjectName::try_new(name).unwrap(),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            START,
+        )
+        .unwrap();
+    StorageEvent::Finalized(meta)
+}
+
+#[tokio::test]
+async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
+    // FN-EPOCH-01 / 02 / 04 / 05: a handler that finishes (or times out) after a reset must
+    // not append an invocation record or a dead letter to the new epoch, while the records
+    // committed before the reset stay visible.
+    let (runtime, _clock) = start().await;
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/a", 1).path,
+        before: None,
+        after: Some(doc("items/a", 1)),
+    }]));
+    for _ in 0..100 {
+        if runtime
+            .history()
+            .iter()
+            .any(|r| r.function == "ok" && r.outcome == "ok")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        runtime
+            .history()
+            .iter()
+            .any(|r| r.function == "ok" && r.outcome == "ok"),
+        "{:?}",
+        runtime.history()
+    );
+
+    // A `slow` invocation is in flight (1 s deadline, no answer from the runner).
+    runtime.on_storage_event(&slow_object("late.txt"));
+    for _ in 0..200 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        runtime.status()["running"].as_u64().unwrap_or(0) > 0,
+        "the slow handler is running: {}",
+        runtime.status()
+    );
+
+    // Two resets while it is unresolved: neither new epoch may observe it.
+    runtime.reset();
+    runtime.reset();
+    // Well past the 1 s deadline of `slow`, so its completion has certainly run.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let after = runtime.history();
+    assert!(
+        after
+            .iter()
+            .any(|r| r.function == "ok" && r.outcome == "ok"),
+        "the pre-reset record survives: {after:?}"
+    );
+    assert!(
+        !after.iter().any(|r| r.function == "slow"),
+        "no stale record reached the new epoch: {after:?}"
+    );
+    assert!(
+        !runtime.dead_letters().iter().any(|r| r.function == "slow"),
+        "no stale dead letter reached the new epoch: {:?}",
+        runtime.dead_letters()
+    );
+
+    // FN-EPOCH-03: a current-epoch completion is still recorded.
+    for _ in 0..200 {
+        if runtime.runner_alive() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/z", 1).path,
+        before: None,
+        after: Some(doc("items/z", 1)),
+    }]));
+    let _ = runtime.await_idle(Duration::from_secs(5)).await;
+    assert!(
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "ok" && r.outcome == "ok")
+            .count()
+            >= 2,
+        "{:?}",
+        runtime.history()
+    );
+    runtime.runner().shutdown().await;
+}
+
+#[test]
+fn the_bounded_run_window_matches_enumeration_in_iana_zones() {
+    // FN-CATCHUP-03 / 04: the direct computation the `latest` and `none` catch-up policies
+    // use agrees with the enumerating one against the real daylight-saving rules, across the
+    // 2026 spring gap and fall fold and over a year of a southern-hemisphere zone.
+    use ftd_adapter_functions::zone::resolve;
+    use ftd_core_functions::cron::{RunCount, Schedule};
+    let t = |s: &str| LogicalInstant::parse_rfc3339(s).unwrap();
+    let zones = [
+        "America/New_York",
+        "Europe/Berlin",
+        "Australia/Lord_Howe",
+        "Pacific/Chatham",
+        "Asia/Tokyo",
+    ];
+    let schedules = [
+        "* * * * *",
+        "30 2 * * *",
+        "30 1 * * *",
+        "0 9 * * *",
+        "*/15 9-17 * * mon-fri",
+        "0 0 1 * *",
+    ];
+    let ranges = [
+        ("2026-03-07T00:00:00Z", "2026-03-09T12:00:00Z"),
+        ("2026-10-03T00:00:00Z", "2026-10-05T12:00:00Z"),
+        ("2026-11-01T00:00:00Z", "2026-11-02T12:00:00Z"),
+        ("2026-11-01T05:00:00Z", "2026-11-01T06:20:00Z"),
+        ("2026-04-04T00:00:00Z", "2026-04-06T00:00:00Z"),
+    ];
+    for name in zones {
+        let zone = resolve(Some(name)).unwrap();
+        for source in schedules {
+            let s = Schedule::parse(source).unwrap();
+            for (from, to) in ranges {
+                let (from, to) = (t(from), t(to));
+                let expected = s.runs_between_in(from, to, &*zone, 100_000);
+                let window = s.window_in(from, to, &*zone, 100_000);
+                let label = format!("{name} {source} {from:?}..{to:?}");
+                assert_eq!(window.latest, expected.last().copied(), "latest: {label}");
+                assert_eq!(
+                    window.count,
+                    RunCount::Exact(expected.len() as u64),
+                    "count: {label}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn diagnostic_retention_is_bounded_and_counters_survive_eviction() {
+    // FN-RET-01 / 03 / 04: completing twice the retention budget leaves a bounded window in
+    // the order the records were made, while the cumulative counters keep every outcome.
+    let (runtime, _clock) = start().await;
+    runtime.set_retention(8, 4);
+    for i in 0..20 {
+        let ids = runtime.publish("jobs", &[json!({"n": i})]);
+        assert_eq!(ids.len(), 1);
+    }
+    assert!(
+        runtime.await_idle(Duration::from_secs(10)).await.is_ok(),
+        "{}",
+        runtime.status()
+    );
+    let history = runtime.history();
+    assert_eq!(history.len(), 8, "the retained window is bounded");
+    assert!(
+        history.iter().all(|r| r.function == "onJob"),
+        "the newest records are the ones kept: {history:?}"
+    );
+    // Oldest first inside the window: the event IDs increase.
+    let ids: Vec<u128> = history.iter().map(|r| r.event_id).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "order inside the window is preserved");
+    // The cumulative counter kept every success, evicted records included.
+    assert_eq!(runtime.status()["succeeded"], 20);
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn history_cursors_deliver_deltas_and_resync_across_eviction_and_reset() {
+    // FN-RET-05 / 06: two readers at different cursors each receive only what they are
+    // missing; identical records are still told apart by their sequence; a cursor that fell
+    // out of the retained window, and one from before a reset, are answered with an explicit
+    // resync instead of a duplicate or a gap.
+    use ftd_adapter_functions::runtime::CatchUpPolicy;
+    let (runtime, clock) = start_with_policies(
+        ftd_adapter_functions::runtime::OverlapPolicy::Allow,
+        CatchUpPolicy::None,
+    )
+    .await;
+    runtime.set_retention(8, 8);
+
+    // A reader from the start sees the empty snapshot.
+    let first = runtime.history_since(None);
+    assert!(first.records.is_empty() && !first.resync);
+    let generation = first.cursor.generation;
+
+    // Two identical skipped-schedule records: same function, same outcome text.
+    for _ in 0..2 {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(15 * 60))
+            .unwrap();
+        runtime.on_clock_changed();
+    }
+    let delta = runtime.history_since(Some(first.cursor));
+    assert!(!delta.resync);
+    let skipped: Vec<&str> = delta
+        .records
+        .iter()
+        .filter(|r| r.record.function == "tick")
+        .map(|r| r.record.outcome.as_str())
+        .collect();
+    assert_eq!(
+        skipped,
+        vec![
+            "skipped: catch-up none (3 runs)",
+            "skipped: catch-up none (3 runs)"
+        ],
+        "identical records, delivered once each"
+    );
+    let sequences: Vec<u64> = delta.records.iter().map(|r| r.sequence).collect();
+    let mut unique = sequences.clone();
+    unique.dedup();
+    assert_eq!(sequences, unique, "sequences are distinct and increasing");
+    assert!(sequences.windows(2).all(|w| w[0] < w[1]));
+
+    // A second reader still on the first cursor gets exactly the same delta; a reader on the
+    // new cursor gets nothing.
+    let again = runtime.history_since(Some(first.cursor));
+    assert_eq!(again.records, delta.records, "cursors are independent");
+    let caught_up = runtime.history_since(Some(delta.cursor));
+    assert!(caught_up.records.is_empty() && !caught_up.resync);
+
+    // More records than the window holds: the stale cursor can no longer be answered.
+    let stale = delta.cursor;
+    for _ in 0..12 {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(15 * 60))
+            .unwrap();
+        runtime.on_clock_changed();
+    }
+    let expired = runtime.history_since(Some(stale));
+    assert!(expired.resync, "an evicted cursor forces a resync");
+    assert_eq!(expired.records.len(), 8, "the resync carries the window");
+    assert_eq!(expired.cursor.generation, generation);
+
+    // A reset bumps the generation: the cursor from the previous one is refused as well.
+    let before_reset = expired.cursor;
+    runtime.reset();
+    let after_reset = runtime.history_since(Some(before_reset));
+    assert!(after_reset.resync, "a pre-reset cursor forces a resync");
+    assert_ne!(
+        after_reset.cursor.generation, before_reset.generation,
+        "the reset bumped the generation"
+    );
+    // The records committed before the reset are still visible (cross-epoch history).
+    assert!(after_reset
+        .records
+        .iter()
+        .any(|r| r.record.function == "tick"));
+    // Sequences keep increasing across the reset, so no record is mistaken for another.
+    let highest = after_reset
+        .records
+        .iter()
+        .map(|r| r.sequence)
+        .max()
+        .unwrap_or(0);
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(15 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    let fresh = runtime.history_since(Some(after_reset.cursor));
+    assert!(!fresh.resync);
+    assert!(
+        fresh.records.iter().all(|r| r.sequence > highest),
+        "sequences continue past the reset"
+    );
+    runtime.runner().shutdown().await;
 }

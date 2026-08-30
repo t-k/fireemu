@@ -627,3 +627,173 @@ async fn buckets_are_listed_per_session_project_and_a_missing_host_is_refused() 
     let (status, body) = call(&s, hostless).await;
     assert_eq!(status, 403, "{body}");
 }
+
+/// A runner that speaks the firebase-testd protocol and succeeds at everything: enough for
+/// the log stream to have invocation records to deliver.
+const INLINE_RUNNER: &str = r#"
+import json, sys
+
+def send(m):
+    p = json.dumps(m).encode()
+    sys.stdout.buffer.write(f"{len(p)}\n".encode())
+    sys.stdout.buffer.write(p)
+    sys.stdout.buffer.flush()
+
+send({"type": "hello", "runner": "ui-test", "manifest": {"functions": [
+    {"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}}
+]}})
+while True:
+    line = sys.stdin.buffer.readline()
+    if not line:
+        break
+    msg = json.loads(sys.stdin.buffer.read(int(line.strip())))
+    if msg.get("type") == "shutdown":
+        break
+    if msg.get("type") != "invoke":
+        continue
+    send({"type": "result", "invocationId": msg["invocationId"], "ok": True})
+"#;
+
+/// The UI state with a real functions runtime behind it.
+async fn state_with_functions() -> (
+    Arc<UiState>,
+    Arc<ftd_adapter_functions::runtime::FunctionsRuntime>,
+) {
+    use ftd_adapter_functions::runner::{Runner, SpawnSpec};
+    use ftd_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            "-c".to_owned(),
+            INLINE_RUNNER.to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: std::time::Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = ftd_adapter_functions::manifest_json::parse_manifest(
+        runner.hello().manifest.as_ref().unwrap(),
+    )
+    .unwrap();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let runtime = ftd_adapter_functions::runtime::FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: ftd_core_types::ids::SessionId::new(7),
+            max_running: 4,
+            retry_attempts: 4,
+            max_catch_up_runs: 1000,
+            runner_secret: "s".into(),
+            overlap: OverlapPolicy::Allow,
+            catch_up: CatchUpPolicy::All,
+        },
+        clock,
+        Arc::new(runner),
+        None,
+    );
+    tokio::spawn(runtime.clone().dispatch_loop());
+    let mut state = Arc::try_unwrap(state())
+        .ok()
+        .expect("the state is unshared");
+    state.functions = Some(runtime.clone());
+    (Arc::new(state), runtime)
+}
+
+/// The next server-sent event of a stream, keep-alive comments skipped.
+async fn next_sse(rx: &mut tokio::sync::mpsc::Receiver<bytes::Bytes>) -> (String, Value) {
+    loop {
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the stream produced an event in time")
+            .expect("the stream is open");
+        let frame = String::from_utf8_lossy(&chunk).into_owned();
+        let Some((name, rest)) = frame.split_once('\n') else {
+            continue;
+        };
+        let Some(name) = name.strip_prefix("event: ") else {
+            continue; // a keep-alive comment
+        };
+        let data = rest.trim().strip_prefix("data: ").unwrap_or("null");
+        return (name.to_owned(), serde_json::from_str(data).unwrap());
+    }
+}
+
+async fn open_log_stream(s: &Arc<UiState>) -> tokio::sync::mpsc::Receiver<bytes::Bytes> {
+    let r = handle(s, &request("GET", "/ui/api/functions/logs", &Value::Null)).await;
+    assert_eq!(r.status, 200);
+    match r.body {
+        UiBody::Stream(rx) => rx,
+        UiBody::Full(_) => panic!("the log route answers with a stream"),
+    }
+}
+
+#[tokio::test]
+async fn the_functions_log_stream_sends_deltas_and_resyncs_an_expired_cursor() {
+    // FN-RET-05: each connection follows its own cursor and receives only what it is missing;
+    // a cursor the runtime can no longer answer produces an explicit resync carrying the
+    // retained window, not a silent gap and not a copy of everything on every poll.
+    let (s, runtime) = state_with_functions().await;
+    runtime.run_schedule("tick").unwrap();
+    assert!(runtime
+        .await_idle(std::time::Duration::from_secs(10))
+        .await
+        .is_ok());
+
+    // The first client's snapshot carries the one record made so far.
+    let mut first = open_log_stream(&s).await;
+    let (name, data) = next_sse(&mut first).await;
+    assert_eq!(name, "snapshot");
+    assert_eq!(data["invocations"].as_array().unwrap().len(), 1);
+    let generation = data["generation"].as_u64().unwrap();
+
+    // A second record reaches the first client as a delta of exactly one invocation.
+    runtime.run_schedule("tick").unwrap();
+    assert!(runtime
+        .await_idle(std::time::Duration::from_secs(10))
+        .await
+        .is_ok());
+    let (name, data) = next_sse(&mut first).await;
+    assert_eq!(name, "invocation");
+    assert_eq!(data["function"], "tick");
+    assert_eq!(data["outcome"], "ok");
+    let sequence = data["sequence"].as_u64().unwrap();
+
+    // A client connecting now starts from the whole retained window instead.
+    let mut second = open_log_stream(&s).await;
+    let (name, data) = next_sse(&mut second).await;
+    assert_eq!(name, "snapshot");
+    assert_eq!(data["invocations"].as_array().unwrap().len(), 2);
+    assert_eq!(data["generation"].as_u64().unwrap(), generation);
+
+    // The retention window shrinks below what the first client is missing: it is told to
+    // resync rather than handed a delta with a hole in it.
+    runtime.set_retention(1, 1);
+    for _ in 0..3 {
+        runtime.run_schedule("tick").unwrap();
+        assert!(runtime
+            .await_idle(std::time::Duration::from_secs(10))
+            .await
+            .is_ok());
+    }
+    let mut saw_resync = false;
+    for _ in 0..6 {
+        let (name, data) = next_sse(&mut first).await;
+        if name == "resync" {
+            assert_eq!(data["generation"].as_u64().unwrap(), generation);
+            let window = data["invocations"].as_array().unwrap();
+            assert_eq!(window.len(), 1, "the resync carries the retained window");
+            assert!(window[0]["sequence"].as_u64().unwrap() > sequence);
+            saw_resync = true;
+            break;
+        }
+        assert_eq!(name, "invocation", "only deltas until the cursor expires");
+    }
+    assert!(saw_resync, "the expired cursor produced a resync");
+    runtime.runner().shutdown().await;
+}

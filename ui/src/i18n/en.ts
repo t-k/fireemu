@@ -214,6 +214,8 @@ export const en = {
   "functions.noLogs": "No log lines yet",
   "functions.invocations": "Invocations",
   "functions.noInvocations": "No invocations yet",
+  "functions.invocationsTruncated":
+    "Showing the most recent {count}; the daemon keeps a bounded window of invocation records.",
   "functions.eventId": "Event",
   "functions.attempt": "Attempt",
   "functions.outcome": "Outcome",

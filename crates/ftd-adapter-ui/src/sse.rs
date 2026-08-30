@@ -178,9 +178,27 @@ pub fn new_lines<'a>(previous: &[String], current: &'a [String]) -> &'a [String]
     current
 }
 
+/// One invocation record on the wire, with the sequence that identifies its position in the
+/// runtime's diagnostic stream (two identical outcomes are still distinct records).
+fn invocation_json(r: &ftd_adapter_functions::runtime::SequencedRecord) -> Value {
+    json!({
+        "sequence": r.sequence,
+        "eventId": r.record.event_id.to_string(),
+        "function": r.record.function,
+        "attempt": r.record.attempt,
+        "outcome": r.record.outcome,
+    })
+}
+
 /// `GET functions/logs`: `log` events with runner lines (stderr and `log` frames), and
 /// `invocation` events for every recorded outcome, as they appear; `snapshot` first with
 /// what exists already.
+///
+/// The stream holds a cursor into the runtime's invocation history and asks only for the
+/// records after it, so a slow or long-lived client costs the delta rather than a copy of the
+/// whole history every poll. When the cursor can no longer be honoured — the runtime reset
+/// (a new generation) or the records the client is missing fell out of the retention window —
+/// a `resync` event carries the current window and the client replaces what it holds.
 #[must_use]
 pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     if req.method != "GET" {
@@ -195,13 +213,17 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_DEPTH);
     tokio::spawn(async move {
         let _slot = slot;
-        let record = |r: &ftd_adapter_functions::runtime::InvocationRecord| json!({"eventId": r.event_id.to_string(), "function": r.function, "attempt": r.attempt, "outcome": r.outcome});
         let mut lines = runtime.runner().logs();
-        let mut history = runtime.history();
+        let snapshot = runtime.history_since(None);
+        let mut cursor = snapshot.cursor;
         if tx
             .send(event(
                 "snapshot",
-                &json!({"logs": lines, "invocations": history.iter().map(record).collect::<Vec<_>>()}),
+                &json!({
+                    "generation": cursor.generation,
+                    "logs": lines,
+                    "invocations": snapshot.records.iter().map(invocation_json).collect::<Vec<_>>(),
+                }),
             ))
             .await
             .is_err()
@@ -214,16 +236,9 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
             poll.tick().await;
             let current = runtime.runner().logs();
             let fresh: Vec<String> = new_lines(&lines, &current).to_vec();
-            let now_history = runtime.history();
-            let fresh_records: Vec<Value> = if now_history.len() >= history.len()
-                && now_history[..history.len()] == history[..]
-            {
-                now_history[history.len()..].iter().map(record).collect()
-            } else {
-                now_history.iter().map(record).collect()
-            };
             lines = current;
-            history = now_history;
+            let slice = runtime.history_since(Some(cursor));
+            cursor = slice.cursor;
             let mut sent_something = false;
             for line in fresh {
                 sent_something = true;
@@ -231,10 +246,25 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
                     return;
                 }
             }
-            for r in fresh_records {
+            if slice.resync {
                 sent_something = true;
-                if tx.send(event("invocation", &r)).await.is_err() {
+                let payload = json!({
+                    "generation": cursor.generation,
+                    "invocations": slice.records.iter().map(invocation_json).collect::<Vec<_>>(),
+                });
+                if tx.send(event("resync", &payload)).await.is_err() {
                     return;
+                }
+            } else {
+                for r in &slice.records {
+                    sent_something = true;
+                    if tx
+                        .send(event("invocation", &invocation_json(r)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
             }
             if sent_something {

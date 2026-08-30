@@ -1224,18 +1224,56 @@ pub fn may_overwrite(dir: &Path) -> Result<(), String> {
 }
 
 /// Creates `dir` and every parent, owner-only.
+///
+/// The mode is set **as the directory is created**, not afterwards: a `create` followed by a
+/// `chmod` leaves a window in which the directory is readable by everyone, and the whole
+/// point of these two functions is that an Auth export is never readable by another user.
+#[cfg(unix)]
 fn create_private_dir(dir: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create it: {e}"))?;
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|e| format!("cannot create it: {e}"))?;
+    // `recursive` leaves an existing directory alone, including one this run did not create;
+    // an export directory being reused has to end up private too.
     set_mode(dir, 0o700)
 }
 
+#[cfg(not(unix))]
+fn create_private_dir(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create it: {e}"))
+}
+
 /// Writes a file owner-only, replacing what was there.
+#[cfg(unix)]
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    if let Some(parent) = path.parent() {
+        create_private_dir(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| format!("cannot write it: {e}"))?;
+    file.write_all(bytes)
+        .map_err(|e| format!("cannot write it: {e}"))?;
+    // `mode` only applies to a file this call created; one that was already there keeps its
+    // own permissions until they are set.
+    set_mode(path, 0o600)
+}
+
+#[cfg(not(unix))]
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
-    std::fs::write(path, bytes).map_err(|e| format!("cannot write it: {e}"))?;
-    set_mode(path, 0o600)
+    std::fs::write(path, bytes).map_err(|e| format!("cannot write it: {e}"))
 }
 
 #[cfg(unix)]
@@ -1243,11 +1281,6 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         .map_err(|e| format!("cannot restrict its permissions: {e}"))
-}
-
-#[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> Result<(), String> {
-    Ok(())
 }
 
 /// Removes an existing export directory's contents before a new export replaces it, so a

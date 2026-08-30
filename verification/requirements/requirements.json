@@ -805,6 +805,95 @@
           "conformance/src/normalize.mjs"
         ]
       }
+    },
+    {
+      "id": "CLAIM-01",
+      "statement": "Every word of the public compatibility claim has a testable definition: the claim sentence, the pinned baseline it is qualified by, the products it enumerates and the profile it holds under are one machine-readable contract, and the README may not state it differently.",
+      "criticality": "important",
+      "owner": "compat-contract",
+      "status": "partial",
+      "note": "spec/compatibility/contract.json carries the claim sentence, the pinned firebase-tools 15.28.2 baseline with its lockfile integrity, installed manifest digest, bundled emulator versions and the 2026-08-30 audit date, the official documentation URLs, and the two compatibility profiles as declared configuration key sets. tools/compat-check CC-05 fails when README.md does not carry that sentence verbatim (whitespace-normalized, so wrapping is allowed) and CC-08 fails when a profile names a key or a value spec/config/fireemu.schema.json does not define. Partial: the profiles are declared key sets rather than a runtime switch -- the canonical schema's top-level profile key is still accepted and not interpreted -- so no test yet runs the same official-limitation scenario under both profiles and proves that only the strict one adds a rejection.",
+      "artifacts": {
+        "conformance": "spec/compatibility/contract.json",
+        "integration": [
+          "tools/compat-check/tests/contract_rules.rs",
+          "tools/compat-check/src/lib.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLAIM-02",
+      "statement": "Every official product and orchestration emulator of the pinned firebase-tools release is inventoried in the contract with a scope, a state and a recorded decision, and a surface can neither be forgotten nor invented.",
+      "criticality": "important",
+      "owner": "compat-contract",
+      "status": "implemented",
+      "note": "The contract's baseline.officialEmulators is the fifteen-name inventory of firebase-tools 15.28.2 src/emulator/types.ts (hub, ui, logging, extensions, apphosting, auth, functions, firestore, database, hosting, pubsub, storage, eventarc, dataconnect, tasks), together with the service, downloadable and import/export subsets. tools/compat-check CC-02 fails when an inventory name is enumerated by no surface, when two surfaces claim the same one, and when a surface names an emulator the baseline does not ship; CC-01 fails on a duplicate surface or claim id, an unknown scope or state and a surface with no recorded decision. Two fireemu additions (App Check, the control API) are enumerated as surfaces with official: false so they can never be counted as official parity.",
+      "artifacts": {
+        "conformance": "spec/compatibility/contract.json",
+        "integration": [
+          "tools/compat-check/tests/contract_rules.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLAIM-03",
+      "statement": "Extra strictness cannot masquerade as parity: every behaviour in which fireemu refuses what the official emulator admits is published with its own precision, and the compatibility profile that reproduces official behaviour is separated from the one that adds validation.",
+      "criticality": "important",
+      "owner": "compat-contract",
+      "status": "partial",
+      "note": "Each claim in the contract separates the documented official limitations it must reproduce, the fireemu-only behaviours with their precision, the production-only behaviour that is out of scope, and the preview surfaces whose compatibility is narrower. The firebase profile records that it may add no rejection and names the one value worth calling out: firestore.indexValidationPolicy = firebase reproduces the Firebase backend while emulator reproduces the pinned official emulator, and conservative is neither. conformance/divergences.json remains the executed half: a row may only leave debt by naming the text that publishes it, and check gates it against the recorded fireemu value. Partial: no test runs one official-limitation scenario under both profiles and proves that only strict adds a rejection, because no runtime switch applies a profile yet.",
+      "artifacts": {
+        "conformance": "conformance/divergences.json",
+        "integration": [
+          "tools/compat-check/tests/contract_rules.rs",
+          "conformance/src/diff.test.mjs"
+        ]
+      }
+    },
+    {
+      "id": "CLAIM-04",
+      "statement": "An upstream capability the manifest calls implemented and that no executed test or conformance fixture exercises fails the claim gate, and so does a stale evidence name.",
+      "criticality": "important",
+      "owner": "compat-contract",
+      "status": "implemented",
+      "note": "tools/compat-check CC-03 requires every manifest capability whose status is implemented or partial to be bound by a claim to at least one evidence item that resolves, and reports every item that does not resolve in its own right so a stale name cannot hide behind a live one. Evidence resolves the way tools/traceability-check resolves it: a tests name is a function defined under a tests/ directory, an integration name is a repository-relative file that exists, and a conformance name is a fixture under conformance/fixtures/. All thirty-five manifest entries are bound. The fixture table proves each failure shape: no evidence at all, a ghost test function, a deleted integration file and a fixture id with no fixture.",
+      "artifacts": {
+        "conformance": "conformance/fixtures",
+        "integration": [
+          "tools/compat-check/tests/contract_rules.rs",
+          "crates/fireemu/tests/capabilities.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLAIM-05",
+      "statement": "The README, the capability manifest and the executed evidence cannot contradict each other: an item one public statement calls unimplemented may not be called implemented by another.",
+      "criticality": "important",
+      "owner": "compat-contract",
+      "status": "implemented",
+      "note": "tools/compat-check CC-04 fails when a claim and the manifest disagree on a capability's status, when a claim names a capability the manifest does not declare, and when a manifest entry appears in no claim. CC-07 catches the contradiction class this issue named, in two shapes: an unimplemented item that cross-references another capability the manifest declares implemented (ST-OBJ-1 listed \"Storage triggers (FN-EVT-1)\" while FN-EVT-1 listed them implemented), and a term of the contract's shared vocabulary written with the wrong status anywhere -- in an implemented list, in an unimplemented list, or denied in the README (the README said ExecutePipeline was not implemented while FS-PIPE-RPC-1 declared validation-only support implemented). Both contradictions are fixed: the cross-references moved into notes and the README now states the validation-only semantics.",
+      "artifacts": {
+        "conformance": "crates/fireemu/src/capabilities.json",
+        "integration": [
+          "tools/compat-check/tests/contract_rules.rs",
+          "crates/fireemu/tests/capabilities.rs"
+        ]
+      }
+    },
+    {
+      "id": "CLAIM-06",
+      "statement": "The active / deferred / not-planned scope taxonomy is enforced: a deferred or not-planned product may never read as supported in the manifest or in the README, and no complete-suite or unqualified superset wording may stand while one is in the pinned baseline.",
+      "criticality": "important",
+      "owner": "compat-contract",
+      "status": "implemented",
+      "note": "Realtime Database, Firebase Hosting and App Hosting are deferred and Firebase Extensions is not planned; each declares the terms that may not read as supported. tools/compat-check CC-06 fails when such a term appears in any manifest entry's implemented list, when a README line names it without a scope disclaimer on the same line, when a non-active surface carries a parity claim at all, and when a non-active surface declares no prohibited terms, which would leave it unpoliced. The claim sentence of the contract is itself product-enumerated and version-qualified and says plainly that no complete-suite and no unqualified superset claim is made while those four surfaces are in the baseline; CC-05 keeps the README from stating anything else.",
+      "artifacts": {
+        "conformance": "spec/compatibility/contract.json",
+        "integration": [
+          "tools/compat-check/tests/contract_rules.rs",
+          "README.md"
+        ]
+      }
     }
   ]
 }

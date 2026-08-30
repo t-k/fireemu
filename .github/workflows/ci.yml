@@ -39,6 +39,8 @@ jobs:
         run: cargo run -p limit-catalog-gen -- check
       - name: requirement / mutant / loom traceability
         run: cargo run -p traceability-check
+      - name: compatibility contract, manifest and public claim
+        run: cargo run -p compat-check
       - name: canonical config schema and examples
         run: cargo run -p config-schema-check
       - name: generated protobuf code matches vendored protos

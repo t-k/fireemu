@@ -32,17 +32,37 @@ describe("canonicalDebugSecret", () => {
 });
 
 describe("counterTotals", () => {
+  const counter = (
+    service: string,
+    appId: string,
+    category: string,
+    outcome: string,
+    count: number,
+    fn: string | null = null,
+  ): AppCheckCounter => ({ service, appId, function: fn, category, outcome, count });
+
   const counters: AppCheckCounter[] = [
-    { service: "firestore", appId: "unknown", category: "invalid", outcome: "denied", count: 3 },
-    { service: "firestore", appId: "app-1", category: "valid", outcome: "admitted", count: 5 },
-    { service: "storage", appId: "unknown", category: "bypass", outcome: "admitted", count: 2 },
-    { service: "auth", appId: "unknown", category: "invalid", outcome: "denied", count: 1 },
+    counter("firestore", "unknown", "invalid", "denied", 3),
+    counter("firestore", "app-1", "valid", "admitted", 5),
+    counter("storage", "unknown", "bypass", "admitted", 2),
+    counter("auth", "unknown", "invalid", "denied", 1),
   ];
 
   it("sums the outcomes", () => {
     const totals = counterTotals(counters);
     expect(totals.admitted).toBe(7);
     expect(totals.denied).toBe(4);
+  });
+
+  it("counts the per-callable rows of the functions service like any other row", () => {
+    const totals = counterTotals([
+      ...counters,
+      counter("functions", "app-1", "valid", "admitted", 4, "addMessage"),
+      counter("functions", "unknown", "missing", "admitted", 2, "deleteMessage"),
+    ]);
+    expect(totals.admitted).toBe(13);
+    expect(totals.denied).toBe(4);
+    expect(totals.byCategory).toContainEqual({ category: "missing", count: 2 });
   });
 
   it("merges the categories across services in a stable order", () => {

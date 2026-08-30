@@ -297,6 +297,7 @@ export const en = {
   "appCheck.category": "Credential",
   "appCheck.outcome": "Outcome",
   "appCheck.count": "Count",
+  "appCheck.function": "Function",
   "appCheck.admitted": "admitted",
   "appCheck.denied": "denied",
   "appCheck.recent": "Recent observations",
@@ -307,7 +308,7 @@ export const en = {
   "appCheck.at": "At",
   "appCheck.policyGeneration": "Policy generation",
   "appCheck.ringNote":
-    "The retained observations are one bounded ring for the whole runtime, not one per project, so heavy traffic to another project can push these out of the window. The counters are derived from what the ring still holds.",
+    "This project keeps its own bounded ring, so another project's traffic never pushes these out of the window; only this project's own next requests do. The counters count every classified request since the project was last reset, including the ones the ring has dropped, and they reset with the project state.",
   "appCheck.unknownApp": "unknown",
 
   "runtime.title": "Runtime",

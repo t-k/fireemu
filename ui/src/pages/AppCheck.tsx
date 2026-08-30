@@ -395,6 +395,7 @@ const AppCheck: Component = () => {
                 <tr>
                   <th>{t("appCheck.service")}</th>
                   <th>{t("appCheck.appId")}</th>
+                  <th>{t("appCheck.function")}</th>
                   <th>{t("appCheck.category")}</th>
                   <th>{t("appCheck.outcome")}</th>
                   <th>{t("appCheck.count")}</th>
@@ -406,6 +407,7 @@ const AppCheck: Component = () => {
                     <tr>
                       <td>{row.service}</td>
                       <td class="mono">{row.appId}</td>
+                      <td class="mono">{row.function ?? ""}</td>
                       <td>{row.category}</td>
                       <td>
                         <span class={outcomeBadge(row.outcome === "admitted")}>{row.outcome}</span>

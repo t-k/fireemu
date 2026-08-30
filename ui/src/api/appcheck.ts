@@ -40,9 +40,16 @@ export type DebugTokenRecord = {
 /** The creation response: the only place the raw secret ever appears. */
 export type CreatedDebugToken = DebugTokenRecord & { debugToken: string };
 
+/**
+ * One counter of the selected session's project. The daemon keeps one ring and one set of
+ * counters per project, so nothing here depends on what another project's traffic did, and
+ * the counts include observations the ring has already dropped.
+ */
 export type AppCheckCounter = {
   service: string;
   appId: string;
+  /** The callable name, for the `functions` service alone. */
+  function: string | null;
   category: string;
   outcome: string;
   count: number;

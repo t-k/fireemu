@@ -92,6 +92,8 @@ pub struct ControlState {
     pub snapshots: Mutex<std::collections::BTreeMap<String, Snapshot>>,
     /// The session's fault plan (spec 18), shared with every adapter.
     pub faults: Option<ftd_core_session::fault::SharedFaults>,
+    /// Text Index definitions (`FS-TEXT-VAL-1`, strict validation only).
+    pub text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexSet>>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<dyn FunctionsHook>>,
     /// Session admission barrier: a reset holds it exclusively across every hook, so no
@@ -279,6 +281,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if action == "faultPlan" {
         return fault_plan_route(state, session, method, body);
     }
+    if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
+        return text_index_route(state, session, method, rest, body);
+    }
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if let Some(rest) = action.strip_prefix("functions") {
         return functions_route(state, method, rest);
@@ -298,6 +303,304 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         }
     }
     response
+}
+
+/// Parses one entry of the canonical `firestore.text-indexes.json` (`{"index": {...},
+/// "xFirebaseTestd": {...}}`, or the bare `index` object) into a definition.
+#[allow(clippy::too_many_lines)]
+pub fn parse_text_index(
+    entry: &Value,
+) -> Result<ftd_core_firestore::text_index::TextIndexDefinition, String> {
+    use ftd_core_firestore::text_index::{
+        DefaultTextLanguage, LanguageOverridePolicy, TextIndexDefinition, TextIndexState,
+        TextIndexType, TextIndexedField, TextMatchType,
+    };
+    let (index, local) = match entry.get("index") {
+        Some(index) => (index, entry.get("xFirebaseTestd")),
+        None => (entry, None),
+    };
+    let Some(obj) = index.as_object() else {
+        return Err("index must be an object".to_owned());
+    };
+    for key in obj.keys() {
+        if ![
+            "name",
+            "queryScope",
+            "apiScope",
+            "fields",
+            "searchIndexOptions",
+            "state",
+            "density",
+            "multikey",
+            "unique",
+            "shardCount",
+        ]
+        .contains(&key.as_str())
+        {
+            return Err(format!(
+                "index.{key} is outside the supported Admin API subset"
+            ));
+        }
+        if ["density", "multikey", "unique", "shardCount"].contains(&key.as_str()) {
+            return Err(format!(
+                "index.{key} is not supported for text indexes (refused rather than ignored)"
+            ));
+        }
+    }
+    let name = index
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("index.name is required")?;
+    // projects/{p}/databases/{d}/collectionGroups/{c}/indexes/{id}
+    let parts: Vec<&str> = name.split('/').collect();
+    let (collection, id) =
+        match parts.as_slice() {
+            ["projects", _, "databases", _, "collectionGroups", c, "indexes", id] => (*c, *id),
+            _ => return Err(
+                "index.name must be projects/{p}/databases/{d}/collectionGroups/{c}/indexes/{id}"
+                    .to_owned(),
+            ),
+        };
+    let collection_id = ftd_core_types::ids::CollectionId::try_new(collection)
+        .map_err(|e| format!("collection group: {e}"))?;
+    let query_scope = match index
+        .get("queryScope")
+        .and_then(Value::as_str)
+        .unwrap_or("COLLECTION")
+    {
+        "COLLECTION" => ftd_core_firestore::index::IndexQueryScope::Collection,
+        "COLLECTION_GROUP" => ftd_core_firestore::index::IndexQueryScope::CollectionGroup,
+        other => return Err(format!("unsupported queryScope {other:?}")),
+    };
+    let api_scope = index
+        .get("apiScope")
+        .and_then(Value::as_str)
+        .unwrap_or("ANY_API")
+        .to_owned();
+    let mut fields = Vec::new();
+    for f in index
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or("index.fields is required")?
+    {
+        let path = f
+            .get("fieldPath")
+            .and_then(Value::as_str)
+            .ok_or("fields[].fieldPath is required")?;
+        let path = ftd_core_firestore::field_path::FieldPath::parse(path)
+            .map_err(|e| format!("fieldPath {path:?}: {e}"))?;
+        let Some(text) = f.get("searchConfig").and_then(|c| c.get("textSpec")) else {
+            return Err(format!(
+                "field {}: searchConfig.textSpec is required (only text indexes are defined here)",
+                path.canonical()
+            ));
+        };
+        let specs = text
+            .get("indexSpecs")
+            .and_then(Value::as_array)
+            .ok_or("textSpec.indexSpecs is required")?;
+        let [spec] = specs.as_slice() else {
+            return Err(format!(
+                "field {}: exactly one indexSpec is supported",
+                path.canonical()
+            ));
+        };
+        let index_type = match spec
+            .get("indexType")
+            .and_then(Value::as_str)
+            .unwrap_or("TOKENIZED")
+        {
+            "TOKENIZED" => TextIndexType::Tokenized,
+            other => return Err(format!("unsupported indexType {other:?} (TOKENIZED only)")),
+        };
+        let match_type = match spec
+            .get("matchType")
+            .and_then(Value::as_str)
+            .unwrap_or("MATCH_GLOBALLY")
+        {
+            "MATCH_GLOBALLY" => TextMatchType::MatchGlobally,
+            other => {
+                return Err(format!(
+                    "unsupported matchType {other:?} (MATCH_GLOBALLY only)"
+                ))
+            }
+        };
+        fields.push(TextIndexedField {
+            path,
+            index_type,
+            match_type,
+        });
+    }
+    let options = index.get("searchIndexOptions");
+    let language = match options
+        .and_then(|o| o.get("textLanguage"))
+        .and_then(Value::as_str)
+    {
+        None | Some("" | "auto") => DefaultTextLanguage::Autodetect,
+        Some(tag) => DefaultTextLanguage::Tag(tag.to_owned()),
+    };
+    let language_override = match options.and_then(|o| o.get("textLanguageOverrideFieldPath")) {
+        Some(Value::String(p)) if !p.is_empty() => LanguageOverridePolicy::ExplicitField(
+            ftd_core_firestore::field_path::FieldPath::parse(p)
+                .map_err(|e| format!("textLanguageOverrideFieldPath: {e}"))?,
+        ),
+        Some(Value::String(_)) => LanguageOverridePolicy::Disabled,
+        Some(_) => return Err("textLanguageOverrideFieldPath must be a string".to_owned()),
+        None => match local
+            .and_then(|l| l.get("languageOverride"))
+            .and_then(Value::as_str)
+        {
+            Some("implicit") => LanguageOverridePolicy::ImplicitLanguageField,
+            Some("disabled") => LanguageOverridePolicy::Disabled,
+            Some(other) => {
+                return Err(format!(
+                    "xFirebaseTestd.languageOverride {other:?} must be implicit or disabled"
+                ))
+            }
+            None => LanguageOverridePolicy::BackendDefaultUnresolved,
+        },
+    };
+    let mut state = TextIndexState::Ready;
+    if let Some(local) = local {
+        let Some(obj) = local.as_object() else {
+            return Err("xFirebaseTestd must be an object".to_owned());
+        };
+        for key in obj.keys() {
+            if !["state", "buildPolicy", "languageOverride"].contains(&key.as_str()) {
+                return Err(format!("unknown xFirebaseTestd key {key:?}"));
+            }
+        }
+        if let Some(s) = obj.get("state").and_then(Value::as_str) {
+            state = TextIndexState::parse(s).ok_or_else(|| format!("unknown state {s:?}"))?;
+        }
+        if let Some(p) = obj.get("buildPolicy").and_then(Value::as_str) {
+            if !["synchronous", "validation-only"].contains(&p) {
+                return Err(format!(
+                    "buildPolicy {p:?} must be synchronous or validation-only"
+                ));
+            }
+        }
+    }
+    Ok(TextIndexDefinition {
+        id: id.to_owned(),
+        collection_id,
+        query_scope,
+        api_scope,
+        fields,
+        language,
+        language_override,
+        state,
+    })
+}
+
+/// A definition as JSON (list / describe output).
+fn text_index_json(d: &ftd_core_firestore::text_index::TextIndexDefinition) -> Value {
+    use ftd_core_firestore::text_index::{DefaultTextLanguage, LanguageOverridePolicy};
+    json!({
+        "id": d.id,
+        "collectionGroup": d.collection_id.as_str(),
+        "queryScope": match d.query_scope {
+            ftd_core_firestore::index::IndexQueryScope::Collection => "COLLECTION",
+            ftd_core_firestore::index::IndexQueryScope::CollectionGroup => "COLLECTION_GROUP",
+        },
+        "apiScope": d.api_scope,
+        "fields": d.fields.iter().map(|f| json!({"fieldPath": f.path.canonical(), "indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"})).collect::<Vec<_>>(),
+        "textLanguage": match &d.language { DefaultTextLanguage::Tag(t) => json!(t), DefaultTextLanguage::Autodetect => json!("auto") },
+        "languageOverride": match &d.language_override {
+            LanguageOverridePolicy::ExplicitField(p) => json!({"field": p.canonical()}),
+            LanguageOverridePolicy::ImplicitLanguageField => json!("implicit"),
+            LanguageOverridePolicy::Disabled => json!("disabled"),
+            LanguageOverridePolicy::BackendDefaultUnresolved => json!("unresolved"),
+        },
+        "state": d.state.as_str(),
+        "fidelity": "strict-validation-only",
+    })
+}
+
+/// `firestore/text-indexes` (`:load` a canonical file body, POST one definition, GET
+/// lists), `firestore/text-indexes/{id}` (GET, DELETE) and the 1.x lifecycle actions
+/// (`UNIMPLEMENTED`, no state change). Text indexes are an Enterprise feature.
+fn text_index_route(
+    state: &ControlState,
+    session: &str,
+    method: &str,
+    rest: &str,
+    body: &Value,
+) -> JsonResponse {
+    if state.edition != FirestoreEdition::Enterprise {
+        return error(
+            400,
+            "FAILED_PRECONDITION : text indexes need firestore.edition = enterprise",
+        );
+    }
+    let Ok(mut set) = state.text_indexes.lock() else {
+        return error(500, "INTERNAL");
+    };
+    let add = |set: &mut ftd_core_firestore::text_index::TextIndexSet,
+               entry: &Value|
+     -> Result<Value, String> {
+        let def = parse_text_index(entry)?;
+        let id = def.id.clone();
+        let warnings = set.add(def).map_err(|e| e.to_string())?;
+        Ok(json!({"id": id, "warnings": warnings}))
+    };
+    match (method, rest) {
+        ("POST", ":load") => {
+            let Some(entries) = body.get("indexes").and_then(Value::as_array) else {
+                return error(
+                    400,
+                    "INVALID_ARGUMENT : body.indexes (the canonical file's array) is required",
+                );
+            };
+            // Validated as a whole before any is kept: a bad entry rejects the file.
+            let mut trial = set.clone();
+            let mut loaded = Vec::with_capacity(entries.len());
+            for (i, e) in entries.iter().enumerate() {
+                match add(&mut trial, e) {
+                    Ok(v) => loaded.push(v),
+                    Err(m) => return error(400, &format!("INVALID_ARGUMENT : indexes[{i}]: {m}")),
+                }
+            }
+            *set = trial;
+            ok(json!({"session": session, "loaded": loaded, "total": set.definitions().len()}))
+        }
+        ("POST", "") => match add(&mut set, body) {
+            Ok(v) => ok(v),
+            Err(m) => error(400, &format!("INVALID_ARGUMENT : {m}")),
+        },
+        ("GET", "") => ok(
+            json!({"session": session, "indexes": set.definitions().iter().map(text_index_json).collect::<Vec<_>>()}),
+        ),
+        (m, r) => {
+            let Some(r) = r.strip_prefix('/') else {
+                return error(404, "NOT_FOUND");
+            };
+            let (id, action) = r.split_once(':').map_or((r, None), |(i, a)| (i, Some(a)));
+            match (m, action) {
+                ("GET", None) => match set.get(id) {
+                    Some(d) => ok(text_index_json(d)),
+                    None => error(404, &format!("NOT_FOUND : no text index {id:?}")),
+                },
+                ("DELETE", None) => {
+                    if set.remove(id) {
+                        ok(json!({"id": id, "deleted": true}))
+                    } else {
+                        error(404, &format!("NOT_FOUND : no text index {id:?}"))
+                    }
+                }
+                (
+                    "POST",
+                    Some(a @ ("advanceBackfill" | "completeBackfill" | "failBuild" | "repair")),
+                ) => {
+                    if set.get(id).is_none() {
+                        return error(404, &format!("NOT_FOUND : no text index {id:?}"));
+                    }
+                    error(501, &format!("UNIMPLEMENTED : {a} needs the backfill engine (FS-TEXT-IDX-1, 1.x); the index state is unchanged"))
+                }
+                _ => error(404, "NOT_FOUND"),
+            }
+        }
+    }
 }
 
 /// `PUT /v1/sessions/{s}/faultPlan` installs a plan (spec 18.2 shape), `GET` returns it with

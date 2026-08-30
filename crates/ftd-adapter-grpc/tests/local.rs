@@ -57,6 +57,43 @@ async fn start() -> (
     (FirestoreClient::new(channel), clock, handle)
 }
 
+async fn start_with_edition(
+    edition: FirestoreEdition,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), clock, handle)
+}
+
 fn s(v: &str) -> pb::Value {
     pb::Value {
         value_type: Some(pb::value::ValueType::StringValue(v.to_owned())),
@@ -1264,4 +1301,85 @@ async fn fault_plans_fail_the_nth_commit_and_time_out_reads() {
         .is_ok());
     let fired = faults.lock().unwrap().fired().len();
     assert_eq!(fired, 3);
+}
+
+#[tokio::test]
+async fn execute_pipeline_is_validated_strictly_and_never_executed() {
+    let stage = |name: &str, args: usize| pb::pipeline::Stage {
+        name: name.to_owned(),
+        args: (0..args).map(|_| s("x")).collect(),
+        options: std::collections::HashMap::default(),
+    };
+    let request = |stages: Vec<pb::pipeline::Stage>| pb::ExecutePipelineRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline { stages }),
+                    options: std::collections::HashMap::default(),
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    // Standard edition: pipelines are an Enterprise feature.
+    let (mut client, _, handle) = start().await;
+    let err = client
+        .execute_pipeline(request(vec![stage("collection", 1)]))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(err.metadata().get("ftd-code").unwrap(), "FS_PIPE_EDITION");
+    handle.abort();
+    // Enterprise: decoded, canonicalized, refused explicitly or answered validation-only.
+    let (mut client, _, handle) = start_with_edition(FirestoreEdition::Enterprise).await;
+    let valid = client
+        .execute_pipeline(request(vec![
+            stage("collection", 1),
+            stage("where", 1),
+            stage("limit", 1),
+        ]))
+        .await
+        .unwrap_err();
+    assert_eq!(valid.code(), tonic::Code::Unimplemented);
+    assert_eq!(
+        valid.metadata().get("ftd-pipeline").unwrap(),
+        "collection(1) | where(1) | limit(1)"
+    );
+    assert_eq!(
+        valid.metadata().get("ftd-code").unwrap(),
+        "FS_PIPE_VALIDATION_ONLY"
+    );
+    let unknown = client
+        .execute_pipeline(request(vec![stage("collection", 1), stage("explode", 1)]))
+        .await
+        .unwrap_err();
+    assert_eq!(unknown.code(), tonic::Code::Unimplemented);
+    assert_eq!(
+        unknown.metadata().get("ftd-code").unwrap(),
+        "FS_PIPE_UNSUPPORTED_STAGE"
+    );
+    let write = client
+        .execute_pipeline(request(vec![stage("collection", 1), stage("update", 1)]))
+        .await
+        .unwrap_err();
+    assert_eq!(write.metadata().get("ftd-code").unwrap(), "FS_PIPE_WRITE_0");
+    let misplaced = client
+        .execute_pipeline(request(vec![stage("where", 1)]))
+        .await
+        .unwrap_err();
+    assert_eq!(misplaced.code(), tonic::Code::InvalidArgument);
+    assert_eq!(
+        misplaced.metadata().get("ftd-code").unwrap(),
+        "FS_PIPE_INVALID"
+    );
+    let empty = client
+        .execute_pipeline(pb::ExecutePipelineRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(empty.metadata().get("ftd-code").unwrap(), "FS_PIPE_DECODE");
+    handle.abort();
 }

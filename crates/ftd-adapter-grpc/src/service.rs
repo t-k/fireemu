@@ -382,11 +382,36 @@ impl Firestore for GatewayService {
     type ExecutePipelineStream = BoxStream<pb::ExecutePipelineResponse>;
     async fn execute_pipeline(
         &self,
-        _request: Request<pb::ExecutePipelineRequest>,
+        request: Request<pb::ExecutePipelineRequest>,
     ) -> Result<Response<Self::ExecutePipelineStream>, Status> {
-        Err(Status::unimplemented(
-            "ExecutePipeline decode arrives with FS-PIPE-RPC-1; never forwarded unvalidated",
-        ))
+        // Strict validation only (FS-PIPE-RPC-1): the pipeline is decoded and canonicalized,
+        // unsupported stages are refused explicitly, and a valid pipeline is answered with
+        // UNIMPLEMENTED carrying its canonical form (execution is 1.x).
+        let caller = self.caller(request.metadata())?;
+        if let Some(rules) = &self.rules {
+            rules.require_owner(&caller.principal, "ExecutePipeline")?;
+        }
+        if self.gateway.ctx.edition != ftd_core_types::edition::FirestoreEdition::Enterprise {
+            let mut status = Status::failed_precondition(
+                "pipelines require firestore.edition = enterprise (Enterprise Native)",
+            );
+            if let Ok(v) = "FS_PIPE_EDITION".parse() {
+                status.metadata_mut().insert("ftd-code", v);
+            }
+            return Err(status);
+        }
+        let ast = crate::pipeline::validate_pipeline(request.get_ref())?;
+        let mut status = Status::unimplemented(format!(
+            "FS-PIPE-RPC-1 strict-validation-only: the pipeline is valid ({}) but pipelines are not executed locally",
+            ast.canonical_text()
+        ));
+        if let Ok(v) = ast.canonical_text().parse() {
+            status.metadata_mut().insert("ftd-pipeline", v);
+        }
+        if let Ok(v) = "FS_PIPE_VALIDATION_ONLY".parse() {
+            status.metadata_mut().insert("ftd-code", v);
+        }
+        Err(status)
     }
 
     type RunAggregationQueryStream = BoxStream<pb::RunAggregationQueryResponse>;

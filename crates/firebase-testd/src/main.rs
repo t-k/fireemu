@@ -569,6 +569,7 @@ fn control_state(
     functions: Option<&Arc<ftd_adapter_functions::runtime::FunctionsRuntime>>,
     control_token: String,
     faults: ftd_core_session::fault::SharedFaults,
+    text_indexes: Arc<Mutex<ftd_core_firestore::text_index::TextIndexSet>>,
 ) -> ftd_adapter_http::control::ControlState {
     let storage_reset = {
         let storage = storage.clone();
@@ -619,6 +620,7 @@ fn control_state(
         snapshot_hooks,
         snapshots: Mutex::new(std::collections::BTreeMap::new()),
         faults: Some(faults),
+        text_indexes,
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))
                 as Arc<dyn ftd_adapter_http::control::FunctionsHook>
@@ -663,6 +665,8 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             },
         };
         let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed));
+        // Text Index definitions (FS-TEXT-VAL-1): validated at start, never executed.
+        let text_indexes = Arc::new(Mutex::new(control::load_text_indexes(&cfg)?));
         // The session's fault plan (spec 18), shared by every adapter; empty until PUT.
         let faults: ftd_core_session::fault::SharedFaults =
             Arc::new(Mutex::new(ftd_core_session::fault::FaultState::default()));
@@ -749,6 +753,7 @@ fn run(mut cfg: RuntimeConfig, exec: Option<ExecPlan>) -> ExitCode {
             functions_runtime.as_ref(),
             control_token.clone(),
             faults.clone(),
+            text_indexes.clone(),
         ));
         print_banner(
             &cfg,

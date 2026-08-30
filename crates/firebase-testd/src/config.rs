@@ -41,6 +41,8 @@ pub struct RuntimeConfig {
     pub auth_project: String,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
+    /// Path of `firestore.text-indexes.json`, if configured.
+    pub text_index_file: Option<String>,
     /// Path of the Security Rules source, if configured.
     pub rules_file: Option<String>,
     /// Path of the Storage Security Rules source, if configured.
@@ -86,6 +88,7 @@ impl Default for RuntimeConfig {
             seed: 42,
             auth_project: "demo-app".to_owned(),
             index_file: None,
+            text_index_file: None,
             rules_file: None,
             storage_rules_file: None,
             rules_enforced: true,
@@ -452,6 +455,7 @@ impl RuntimeConfig {
     }
 
     /// Builds the runtime config from parsed JSON.
+    #[allow(clippy::too_many_lines)]
     pub fn from_json(json: &Value) -> Result<Self, ConfigError> {
         let obj = json
             .as_object()
@@ -492,6 +496,9 @@ impl RuntimeConfig {
                         )))
                     }
                 };
+            }
+            if let Some(f) = fs.get("textIndexDefinitionFile").and_then(Value::as_str) {
+                cfg.text_index_file = Some(f.to_owned());
             }
             if let Some(f) = fs.get("indexFile").and_then(Value::as_str) {
                 cfg.index_file = Some(f.to_owned());

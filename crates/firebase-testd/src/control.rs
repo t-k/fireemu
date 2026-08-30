@@ -7,6 +7,43 @@ use ftd_core_firestore::index::{
 use ftd_core_types::ids::CollectionId;
 use serde_json::{json, Value};
 
+/// Loads `firestore.text-indexes.json` when `firestore.textIndexDefinitionFile` is set:
+/// every entry must validate (FS-TEXT-VAL-1) and the edition must be Enterprise.
+pub fn load_text_indexes(
+    cfg: &crate::config::RuntimeConfig,
+) -> Result<ftd_core_firestore::text_index::TextIndexSet, String> {
+    let mut set = ftd_core_firestore::text_index::TextIndexSet::default();
+    let Some(path) = &cfg.text_index_file else {
+        return Ok(set);
+    };
+    if cfg.edition != ftd_core_types::edition::FirestoreEdition::Enterprise {
+        return Err(format!(
+            "{path}: text indexes need firestore.edition = enterprise"
+        ));
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let json: Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    if json.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+        return Err(format!("{path}: schemaVersion 1 is required"));
+    }
+    let entries = json
+        .get("indexes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{path}: indexes must be an array"))?;
+    for (i, e) in entries.iter().enumerate() {
+        let def = ftd_adapter_http::control::parse_text_index(e)
+            .map_err(|m| format!("{path}: indexes[{i}]: {m}"))?;
+        let id = def.id.clone();
+        let warnings = set
+            .add(def)
+            .map_err(|e| format!("{path}: indexes[{i}]: {e}"))?;
+        for w in warnings {
+            eprintln!("[firestore] text index {id}: {w}");
+        }
+    }
+    Ok(set)
+}
+
 /// Loads `firestore.indexes.json` (composite indexes and single-field exemptions).
 pub fn load_indexes(path: &str) -> Result<IndexSet, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -112,8 +149,8 @@ pub fn capabilities_manifest() -> Value {
             "FS-QRY-1": {"status": "implemented", "notes": ["orderBy on missing fields excludes documents", "range filters are type-restricted"]},
             "FS-TXN-1": {"status": "implemented", "precision": "boundary-conformance", "notes": ["serializable: read sets and executed queries are re-validated at commit"]},
             "FS-LSN-1": {"status": "implemented", "implemented": ["query and document targets", "live diffs after every commit", "once", "resume from a resume token or read time: the state at that version is recomputed from the MVCC history and only the changes since are replayed, followed by an ExistenceFilter with the current count (an undecodable or future token RESETs)", "back-pressure: bounded response channel, commits coalesced into one refresh while the client is slow, 1000 targets per stream (RESOURCE_EXHAUSTED beyond)"], "notes": ["existence filters carry the count only (no bloom filter): the replay is exact, so the client never has to guess"]},
-            "FS-PIPE-RPC-1": {"status": "unimplemented"},
-            "FS-TEXT-VAL-1": {"status": "unimplemented"},
+            "FS-PIPE-RPC-1": {"status": "implemented", "precision": "strict-validation-only", "implemented": ["ExecutePipeline / StructuredPipeline decode", "stage identification against the documented registry (collection, collection_group, database, documents, select, add_fields, remove_fields, where, sort, limit, offset, distinct, aggregate, find_nearest, sample, union, unnest, replace_with)", "input stage placement and arity checks", "write stages (update, delete) refused as FS-PIPE-WRITE-0", "unknown stages refused (FS_PIPE_UNSUPPORTED_STAGE), never skipped"], "unimplemented": ["local execution (a valid pipeline is answered with UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY carrying its canonical form)", "proxy / record-only modes"], "notes": ["Standard edition answers FAILED_PRECONDITION FS_PIPE_EDITION", "owner-only while rules are enforced"]},
+            "FS-TEXT-VAL-1": {"status": "implemented", "precision": "strict-validation-only", "implemented": ["firestore.textIndexDefinitionFile (schemaVersion 1, Admin API Index subset + xFirebaseTestd) validated at start", "control API: POST firestore/text-indexes:load, POST / GET firestore/text-indexes, GET / DELETE firestore/text-indexes/{id}", "duplicate IDs refused, duplicate shapes warned (FS_TEXT_DUPLICATE_INDEX_DEFINITION), unresolved language override warned, unsupported options refused"], "unimplemented": ["backfill lifecycle (advanceBackfill, completeBackfill, failBuild, repair answer UNIMPLEMENTED without changing state; FS-TEXT-IDX-1)", "posting data and local search (Milestone G)"], "notes": ["Enterprise edition only"]},
             "AUTH-CORE-1": {"status": "implemented", "implemented": ["accounts:signUp (email, anonymous)", "accounts:signInWithPassword", "accounts:signInWithCustomToken", "accounts:lookup", "accounts:update", "accounts:sendOobCode / resetPassword / signInWithEmailLink (PASSWORD_RESET, VERIFY_EMAIL, EMAIL_SIGNIN, VERIFY_AND_CHANGE_EMAIL; applyActionCode through accounts:update)", "accounts:sendVerificationCode / signInWithPhoneNumber", "accounts:createAuthUri", "securetoken token (JSON and form)", "Admin: projects/{p}/accounts create/lookup/update/delete/batchGet, mfaInfo / mfa.enrollments (phone), linkProviderUserInfo / deleteProvider", "Emulator routes: /emulator/v1/projects/{p}/oobCodes, verificationCodes, accounts (DELETE), config"], "notes": ["nothing is mailed or texted: codes are read from the emulator routes and are deterministic from the session seed", "reCAPTCHA tokens are accepted unchecked"]},
             "AUTH-TOKEN-1": {"status": "implemented", "implemented": ["unsigned-emulator (alg none, the Firebase Auth Emulator format)", "session-rsa (RS256 with a 2048-bit key derived from the session seed; JWKS at /.well-known/jwks.json and the securetoken@system.gserviceaccount.com path)"], "notes": ["with session-rsa every surface (Identity Toolkit, Firestore rules, Storage rules) refuses unsigned or foreign-signed tokens", "the Firebase Admin SDK accepts only alg none while FIREBASE_AUTH_EMULATOR_HOST is set, so verifyIdToken through the Admin SDK needs unsigned-emulator"]},
             "AUTH-MFA-TOTP-1": {"status": "implemented", "precision": "boundary-conformance", "notes": ["window and enrollment TTL are local policies"]},

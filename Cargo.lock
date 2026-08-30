@@ -441,6 +441,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "ftd-core-auth",
+ "ftd-core-firestore",
  "ftd-core-limits",
  "ftd-core-rules",
  "ftd-core-session",

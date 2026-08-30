@@ -32,6 +32,9 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         faults: Some(Arc::new(Mutex::new(
             ftd_core_session::fault::FaultState::default(),
         ))),
+        text_indexes: Arc::new(Mutex::new(
+            ftd_core_firestore::text_index::TextIndexSet::default(),
+        )),
     }
 }
 
@@ -369,4 +372,99 @@ fn pubsub_publish_routes_check_the_project_and_the_message_shape() {
     let calls = published.0.lock().unwrap();
     assert_eq!(calls.len(), 3);
     assert_eq!(calls[2].1[0]["data"], "eyJhIjoxfQ==");
+}
+
+#[test]
+fn text_index_definitions_are_loaded_listed_and_lifecycle_actions_are_unimplemented() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    let entry = |id: &str, field: &str, language: &str| {
+        json!({
+            "index": {
+                "name": format!("projects/demo-app/databases/(default)/collectionGroups/products/indexes/{id}"),
+                "queryScope": "COLLECTION",
+                "apiScope": "ANY_API",
+                "fields": [{"fieldPath": field, "searchConfig": {"textSpec": {"indexSpecs": [{"indexType": "TOKENIZED", "matchType": "MATCH_GLOBALLY"}]}}}],
+                "searchIndexOptions": {"textLanguage": language, "textLanguageOverrideFieldPath": "language"}
+            },
+            "xFirebaseTestd": {"state": "READY", "buildPolicy": "validation-only"}
+        })
+    };
+    let base = "/v1/sessions/default/firestore/text-indexes";
+    // Standard edition: refused.
+    let r = handle(
+        &s,
+        "POST",
+        &format!("{base}:load"),
+        &json!({"indexes": [entry("t1", "title", "ja")]}),
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    s.edition = FirestoreEdition::Enterprise;
+    // A bad entry rejects the whole file; nothing is kept.
+    let r = handle(
+        &s,
+        "POST",
+        &format!("{base}:load"),
+        &json!({"indexes": [entry("t1", "title", "ja"), entry("t2", "title", "japanese")]}),
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(r.body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("indexes[1]"));
+    assert!(handle(&s, "GET", base, &json!({})).body["indexes"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let r = handle(
+        &s,
+        "POST",
+        &format!("{base}:load"),
+        &json!({"indexes": [entry("t1", "title", "ja"), entry("t2", "body", "en-US")]}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["total"], 2);
+    // One more through POST; a duplicate id and a duplicate shape.
+    let r = handle(&s, "POST", base, &entry("t1", "other", "ja"));
+    assert_eq!(r.status, 400);
+    let r = handle(&s, "POST", base, &entry("t3", "title", "ja"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        r.body["warnings"],
+        json!(["FS_TEXT_DUPLICATE_INDEX_DEFINITION"])
+    );
+    // Unsupported options are refused rather than ignored; unknown local keys too.
+    let mut unique = entry("t4", "title", "ja");
+    unique["index"]["unique"] = json!(true);
+    assert_eq!(handle(&s, "POST", base, &unique).status, 400);
+    let mut local = entry("t5", "title", "ja");
+    local["xFirebaseTestd"]["shards"] = json!(3);
+    assert_eq!(handle(&s, "POST", base, &local).status, 400);
+    let one = handle(&s, "GET", &format!("{base}/t2"), &json!({}));
+    assert_eq!(one.status, 200);
+    assert_eq!(one.body["textLanguage"], "en-US");
+    assert_eq!(one.body["languageOverride"]["field"], "language");
+    assert_eq!(one.body["fidelity"], "strict-validation-only");
+    for action in ["advanceBackfill", "completeBackfill", "failBuild", "repair"] {
+        let r = handle(&s, "POST", &format!("{base}/t2:{action}"), &json!({}));
+        assert_eq!(r.status, 501, "{action}");
+    }
+    assert_eq!(
+        handle(&s, "GET", &format!("{base}/t2"), &json!({})).body["state"],
+        "READY"
+    );
+    assert_eq!(
+        handle(&s, "DELETE", &format!("{base}/t2"), &json!({})).status,
+        200
+    );
+    assert_eq!(
+        handle(&s, "GET", &format!("{base}/t2"), &json!({})).status,
+        404
+    );
+    assert_eq!(
+        handle(&s, "GET", base, &json!({})).body["indexes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }

@@ -895,3 +895,59 @@ fn declared_checksums_end_the_session_on_mismatch() {
     s.append_upload(&id, 0, b"abc", t(0)).unwrap();
     assert!(s.finalize_upload(&id, t(0)).is_ok());
 }
+
+#[test]
+fn an_owned_chunk_is_adopted_by_an_empty_session_and_follows_every_append_rule() {
+    let mut s = StorageState::new(4);
+    let (b, n) = (bucket(), name("owned.bin"));
+    let id = s
+        .begin_upload(
+            &b,
+            &n,
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(1),
+        )
+        .unwrap();
+    // The first chunk of an empty session becomes the session buffer as it is.
+    let chunk = vec![9u8; 4096];
+    let at = chunk.as_ptr();
+    assert_eq!(s.append_upload_owned(&id, 0, chunk, t(1)), Ok(4096));
+    assert_eq!(s.pending_upload(&id, t(1)).unwrap().bytes.as_ptr(), at);
+    // A later chunk appends, a gap is refused, a repeat is ignored.
+    assert_eq!(
+        s.append_upload_owned(&id, 4096, vec![1u8; 4], t(1)),
+        Ok(4100)
+    );
+    assert_eq!(
+        s.append_upload_owned(&id, 4200, vec![1u8; 4], t(1)),
+        Err(StorageError::UploadOffset { expected: 4100 })
+    );
+    assert_eq!(s.append_upload_owned(&id, 0, vec![9u8; 8], t(1)), Ok(4100));
+    let meta = s.finalize_upload(&id, t(2)).unwrap();
+    assert_eq!(meta.size, 4100);
+    // The committed blob is still the buffer the first chunk arrived in.
+    assert_eq!(s.bytes(&meta).len(), 4100);
+
+    // A declared total is enforced on the adopted chunk as well.
+    let id = s
+        .begin_upload(
+            &b,
+            &name("small.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            Some(2),
+            t(3),
+        )
+        .unwrap();
+    assert_eq!(
+        s.append_upload_owned(&id, 0, vec![1u8; 3], t(3)),
+        Err(StorageError::UploadSizeMismatch)
+    );
+    assert_eq!(
+        s.append_upload_owned(&id, 0, vec![1u8; 1], t(3)),
+        Err(StorageError::UploadFinalized),
+        "a size mismatch ends the session"
+    );
+}

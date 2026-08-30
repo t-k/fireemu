@@ -229,6 +229,22 @@ fn cors(
     b
 }
 
+/// The refusal a body that was not accepted turns into.
+fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Bytes>> {
+    let (status, message, retry_after) = match e {
+        BodyError::TooLarge => (413, &b"payload too large"[..], false),
+        BodyError::BudgetExhausted => (503, &b"storage upload memory budget exhausted"[..], true),
+        BodyError::Incomplete => (400, &b"incomplete request body"[..], false),
+    };
+    let mut builder = cors(Response::builder().status(status), origin);
+    if retry_after {
+        builder = builder.header("retry-after", "1");
+    }
+    builder
+        .body(Full::new(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
 async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
@@ -281,22 +297,7 @@ async fn respond(
     // so the bytes the handler works on are accounted for the whole time they exist here.
     let mut buffer = match collect_body(budget, declared, req.into_body()).await {
         Ok(buffer) => buffer,
-        Err(e) => {
-            let (status, message, retry_after) = match e {
-                BodyError::TooLarge => (413, &b"payload too large"[..], false),
-                BodyError::BudgetExhausted => {
-                    (503, &b"storage upload memory budget exhausted"[..], true)
-                }
-                BodyError::Incomplete => (400, &b"incomplete request body"[..], false),
-            };
-            let mut builder = cors(Response::builder().status(status), origin.as_deref());
-            if retry_after {
-                builder = builder.header("retry-after", "1");
-            }
-            return Ok(builder
-                .body(Full::new(Bytes::from_static(message)))
-                .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
-        }
+        Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };
     let body = buffer.take();
     let trace = std::env::var_os("FTD_TRACE_STORAGE").is_some();

@@ -5,10 +5,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use ftd_adapter_http::storage::{handle, StorageRequest, StorageState};
+use ftd_adapter_http::storage_server::{
+    serve_storage_with_budget, BodyBudget, MAX_STORAGE_BODY_BYTES,
+};
 use ftd_core_auth::mfa::TotpPolicy;
 use ftd_core_auth::store::{AuthStore, NewUser};
 use ftd_core_rules::runtime::LoadedRules;
 use ftd_core_session::clock::VirtualClock;
+use ftd_core_storage::name::{BucketName, ObjectName};
 use ftd_core_storage::store::StorageState as ObjectStore;
 use ftd_core_types::determinism::SplitMix64;
 use ftd_core_types::time::LogicalInstant;
@@ -40,6 +44,16 @@ fn req(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> StorageRequest {
+    owned_req(method, path_and_query, headers, body.to_vec())
+}
+
+/// [`req`] with a body the caller owns (buffer identity is observable).
+fn owned_req(
+    method: &str,
+    path_and_query: &str,
+    headers: &[(&str, &str)],
+    body: Vec<u8>,
+) -> StorageRequest {
     let (path, query) = path_and_query
         .split_once('?')
         .map_or((path_and_query, ""), |(p, q)| (p, q));
@@ -52,7 +66,7 @@ fn req(
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect::<BTreeMap<_, _>>(),
-        body: body.to_vec(),
+        body,
     }
 }
 
@@ -1217,4 +1231,315 @@ service firebase.storage {
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     assert_eq!(json_body(&r)["size"], data.len().to_string());
+}
+
+// ------------------------------------------------------------------------------------------
+// Upload buffer ownership and the in-flight body budget (STG-MEM-01..04)
+//
+// Copy elimination is proven by buffer identity: the address of the blob the store keeps is
+// the address of the buffer the request arrived in. A payload-sized clone anywhere on the
+// path would move the bytes to a different allocation and fail these assertions.
+// ------------------------------------------------------------------------------------------
+
+/// Address of the bytes the store holds for `name`, and their length.
+fn stored_buffer(s: &StorageState, name: &str) -> (*const u8, usize) {
+    let store = s.store.lock().unwrap();
+    let meta = store
+        .get(
+            &BucketName::try_new(BUCKET).unwrap(),
+            &ObjectName::try_new(name).unwrap(),
+        )
+        .unwrap_or_else(|| panic!("{name} was not stored"));
+    let bytes = store.bytes(meta);
+    (bytes.as_ptr(), bytes.len())
+}
+
+const PAYLOAD_BYTES: usize = 1 << 20;
+
+fn payload() -> Vec<u8> {
+    (0..PAYLOAD_BYTES)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_media_upload_hands_its_request_buffer_to_the_store() {
+    let s = state(None);
+    let body = payload();
+    let (arrived_at, len) = (body.as_ptr(), body.len());
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=media.bin"),
+            &[("content-type", "application/octet-stream")],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        stored_buffer(&s, "media.bin"),
+        (arrived_at, len),
+        "the stored blob is the buffer the request arrived in"
+    );
+}
+
+#[test]
+fn a_multipart_upload_carves_the_data_part_out_of_its_request_buffer() {
+    let s = state(None);
+    let data = payload();
+    let (ct, body) = multipart(
+        &json!({"name": "multipart.bin"}),
+        "application/octet-stream",
+        &data,
+    );
+    let arrived_at = body.as_ptr();
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        stored_buffer(&s, "multipart.bin"),
+        (arrived_at, data.len()),
+        "the data part is carved out of the request buffer, not copied out of it"
+    );
+    let store = s.store.lock().unwrap();
+    let meta = store
+        .get(
+            &BucketName::try_new(BUCKET).unwrap(),
+            &ObjectName::try_new("multipart.bin").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        store.bytes(meta),
+        data.as_slice(),
+        "the exact bytes survive"
+    );
+}
+
+#[test]
+fn a_resumable_upload_adopts_the_request_buffer_of_its_only_chunk() {
+    let s = state(None);
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=resumable.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+                (
+                    "x-goog-upload-header-content-length",
+                    &PAYLOAD_BYTES.to_string(),
+                ),
+            ],
+            b"",
+        ),
+    );
+    assert_eq!(start.status, 200);
+    let session = header(&start, "x-goog-upload-url").unwrap().to_owned();
+    let (_, query) = session.split_once("/o?").unwrap();
+    let body = payload();
+    let (arrived_at, len) = (body.as_ptr(), body.len());
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?{query}"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(
+        stored_buffer(&s, "resumable.bin"),
+        (arrived_at, len),
+        "the session adopts the chunk buffer instead of copying it"
+    );
+}
+
+#[test]
+fn a_rejected_checksum_stores_nothing() {
+    let s = state(None);
+    let body = payload();
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=bad.bin"),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("x-goog-hash", "crc32c=AAAAAA=="),
+            ],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 400, "{}", String::from_utf8_lossy(&r.body));
+    let store = s.store.lock().unwrap();
+    assert!(store
+        .get(
+            &BucketName::try_new(BUCKET).unwrap(),
+            &ObjectName::try_new("bad.bin").unwrap()
+        )
+        .is_none());
+}
+
+// ------------------------------------------------------------------------------------------
+// The in-flight body budget over a real socket (STG-MEM-03).
+// ------------------------------------------------------------------------------------------
+
+const CHUNK: usize = 1 << 20;
+
+fn upload_head(name: &str, len: usize) -> String {
+    format!(
+        "POST /upload/storage/v1/b/{BUCKET}/o?uploadType=media&name={name} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+    )
+}
+
+/// Waits until `budget` holds exactly `bytes` (the server charges a body before it reads it).
+async fn await_in_flight(budget: &BodyBudget, bytes: usize) {
+    for _ in 0..1_000_000 {
+        if budget.in_flight() == bytes {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!(
+        "in-flight budget stayed at {} bytes, expected {bytes}",
+        budget.in_flight()
+    );
+}
+
+async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+#[tokio::test]
+async fn the_body_budget_rejects_an_upload_that_does_not_fit_and_admits_it_once_released() {
+    use tokio::io::AsyncWriteExt;
+    /// 1.5 MiB: one 1 MiB body is admitted, two are not.
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
+    assert_eq!(BUDGET.in_flight(), 0);
+
+    // One upload in flight: its declared size is charged before the body is read.
+    let mut first = tokio::net::TcpStream::connect(addr).await.unwrap();
+    first
+        .write_all(upload_head("first.bin", CHUNK).as_bytes())
+        .await
+        .unwrap();
+    first.write_all(&[7u8; 4096]).await.unwrap();
+    await_in_flight(&BUDGET, CHUNK).await;
+
+    // A second one no longer fits and is refused before it allocates anything.
+    let mut second = tokio::net::TcpStream::connect(addr).await.unwrap();
+    second
+        .write_all(upload_head("second.bin", CHUNK).as_bytes())
+        .await
+        .unwrap();
+    let rejected = read_response(&mut second).await;
+    assert!(
+        rejected.starts_with("HTTP/1.1 503"),
+        "over-budget upload: {rejected}"
+    );
+    assert!(
+        rejected.to_lowercase().contains("retry-after: 1"),
+        "{rejected}"
+    );
+    assert_eq!(
+        BUDGET.in_flight(),
+        CHUNK,
+        "the refused upload charged nothing"
+    );
+
+    // The admitted upload finishes and gives its charge back.
+    first.write_all(&vec![7u8; CHUNK - 4096]).await.unwrap();
+    let accepted = read_response(&mut first).await;
+    assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+    await_in_flight(&BUDGET, 0).await;
+
+    // With the budget free again the same upload is admitted.
+    let mut third = tokio::net::TcpStream::connect(addr).await.unwrap();
+    third
+        .write_all(upload_head("third.bin", CHUNK).as_bytes())
+        .await
+        .unwrap();
+    third.write_all(&vec![7u8; CHUNK]).await.unwrap();
+    let again = read_response(&mut third).await;
+    assert!(again.starts_with("HTTP/1.1 200"), "{again}");
+    await_in_flight(&BUDGET, 0).await;
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_body_over_the_object_boundary_is_refused_without_buffering_it() {
+    use tokio::io::AsyncWriteExt;
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(upload_head("over.bin", MAX_STORAGE_BODY_BYTES + 1).as_bytes())
+        .await
+        .unwrap();
+    let response = read_response(&mut stream).await;
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+    assert_eq!(BUDGET.in_flight(), 0, "nothing was charged");
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_failed_upload_releases_its_buffer() {
+    use tokio::io::AsyncWriteExt;
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(None));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!(
+        "POST /upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=failed.bin HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nX-Goog-Hash: crc32c=AAAAAA==\r\nContent-Length: {CHUNK}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&vec![7u8; CHUNK]).await.unwrap();
+    let response = read_response(&mut stream).await;
+    assert!(
+        response.starts_with("HTTP/1.1 400"),
+        "checksum mismatch: {response}"
+    );
+    await_in_flight(&BUDGET, 0).await;
+    let store = shared.store.lock().unwrap();
+    assert!(
+        store
+            .get(
+                &BucketName::try_new(BUCKET).unwrap(),
+                &ObjectName::try_new("failed.bin").unwrap()
+            )
+            .is_none(),
+        "a failed upload publishes no object"
+    );
+    server.abort();
 }

@@ -3,7 +3,13 @@ all-features = true
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+    # RUSTSEC-2023-0071 (Marvin attack, a timing side channel in RSA PKCS#1 v1.5 decryption).
+    # fireemu uses `rsa` only to sign and verify its own local RS256 session tokens on a
+    # loopback test runtime; no RSA decryption path exists and no upstream fix is published.
+    # Revisit when `rsa` ships a constant-time release.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is used for local RS256 signatures only; no decryption oracle is exposed and no fixed release exists" },
+]
 
 [licenses]
 version = 2

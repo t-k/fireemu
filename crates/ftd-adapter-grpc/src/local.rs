@@ -1,5 +1,17 @@
-//! Local execution backend: one `FirestoreState` per (project, database) behind a mutex, a
-//! shared virtual clock, strict gateway validation before every query.
+//! Local execution backend: one `FirestoreState` per (project, database), each behind its
+//! own mutex, a shared virtual clock, strict gateway validation before every query.
+//!
+//! Locking layers, outermost first:
+//!
+//! 1. the session [`AdmissionBarrier`]: every operation runs admitted, a reset / capture /
+//!    restore takes it exclusively, so nothing observes or straddles a half-reset session;
+//! 2. the database catalog (`databases`): held only long enough to locate or create one
+//!    entry and clone its [`DatabaseHandle`], never while an operation runs;
+//! 3. one database's own lock: it serializes that database's operations and nothing else,
+//!    so unrelated projects and databases make progress concurrently.
+//!
+//! The order is always 1 -> 2 -> 3 and no layer is re-entered, so the layering cannot
+//! deadlock. Commit actor attribution is operation-local (see [`Actor`]).
 
 // `tonic::Status` is the error type dictated by the generated service trait.
 #![allow(clippy::result_large_err)]
@@ -35,14 +47,95 @@ pub const DEFAULT_LIST_PAGE_SIZE: usize = 100;
 /// How far back a `read_time` selector may reach (Firestore: one hour without PITR).
 pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 
+/// One database: its state and its own lock. The catalog hands out `Arc` references to
+/// it, so an operation holds this lock alone and never the catalog's.
+#[derive(Debug, Default)]
+struct DatabaseEntry {
+    cell: Mutex<DatabaseCell>,
+}
+
+impl DatabaseEntry {
+    /// A fresh, attached entry holding a restored state.
+    fn restored(state: FirestoreState) -> Self {
+        Self {
+            cell: Mutex::new(DatabaseCell {
+                detached: false,
+                state,
+            }),
+        }
+    }
+}
+
+/// A database's state behind its lock, with the flag that retires it.
+#[derive(Debug, Default)]
+struct DatabaseCell {
+    /// Set by the reset / restore that removed this database from the catalog. A handle
+    /// retained across that removal must not read or mutate state nobody can reach any
+    /// more, so every operation through it answers `UNAVAILABLE` instead.
+    detached: bool,
+    state: FirestoreState,
+}
+
+/// A retained reference to one database, from [`LocalBackend::database_handle`].
+///
+/// The handle keeps the database alive but not current: a reset or a snapshot restore
+/// detaches it, and every later operation through it fails with `UNAVAILABLE` rather than
+/// mutating state that has been dropped from the catalog. Operations through a handle take
+/// no session admission - callers that need one (every request surface) go through
+/// [`LocalBackend`]'s own methods instead.
+#[derive(Clone)]
+pub struct DatabaseHandle(Arc<DatabaseEntry>);
+
+impl std::fmt::Debug for DatabaseHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseHandle")
+            .field("detached", &self.is_detached())
+            .finish()
+    }
+}
+
+impl DatabaseHandle {
+    /// Runs `f` under this database's own lock. `UNAVAILABLE` once the database has been
+    /// detached by a reset or a restore, or when its lock is poisoned.
+    pub fn with<T>(
+        &self,
+        f: impl FnOnce(&mut FirestoreState) -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let mut cell = self.0.cell.lock().map_err(|_| lock_poisoned())?;
+        if cell.detached {
+            return Err(detached());
+        }
+        f(&mut cell.state)
+    }
+
+    /// Reads under this database's own lock; `None` once detached or poisoned.
+    fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
+        let cell = self.0.cell.lock().ok()?;
+        (!cell.detached).then(|| f(&cell.state))
+    }
+
+    /// Whether a reset or restore has retired this database.
+    #[must_use]
+    pub fn is_detached(&self) -> bool {
+        self.0.cell.lock().is_ok_and(|c| c.detached)
+    }
+
+    /// Retires the database under its own lock: the caller has already removed it from the
+    /// catalog, and this waits for whatever operation is still running inside it.
+    fn detach(&self) {
+        if let Ok(mut cell) = self.0.cell.lock() {
+            cell.detached = true;
+        }
+    }
+}
+
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
     clock: Arc<Mutex<VirtualClock>>,
-    databases: Mutex<BTreeMap<(String, String), FirestoreState>>,
-    /// The actor of the commit in progress, staged by the write guard inside the critical
-    /// section and consumed by `publish` (same critical section, so never another's).
-    pending_actor: Mutex<Option<Actor>>,
+    /// The database catalog. Locked only to locate, create or retire an entry: an
+    /// operation clones the entry's handle and releases this lock before it runs.
+    databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
     /// The sessions' fault plans (looked up by project), when shared.
     faults: Mutex<Option<ftd_core_session::fault::SharedFaultRegistry>>,
     /// Told after a fault plan moved the virtual clock (the functions runtime re-reads
@@ -103,6 +196,12 @@ fn status(e: DecodeError) -> Status {
 }
 
 /// The principal behind a commit, in Eventarc's `authtype` / `authid` terms.
+///
+/// Attribution is operation-local: a write guard stages the actor with
+/// [`LocalBackend::set_actor`] and `publish` takes it back, both inside the one database
+/// critical section that the operation's own thread holds without yielding (see
+/// `PENDING_ACTOR`). Concurrent operations in different databases therefore never consume
+/// each other's principal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actor {
     /// `app_user`, `service_account`, `unauthenticated`, `system`.
@@ -143,6 +242,48 @@ impl Actor {
 
 fn lock_poisoned() -> Status {
     Status::internal("backend state lock poisoned")
+}
+
+fn detached() -> Status {
+    Status::unavailable(
+        "the database was reset or restored while this operation held a handle to it",
+    )
+}
+
+thread_local! {
+    /// The actor staged by the write guard of the operation running on this thread.
+    ///
+    /// Guard, commit and publish run on one thread inside a single database critical
+    /// section with no await point in between, so this slot belongs to exactly one
+    /// operation at a time - unlike a slot on the backend, which every database would
+    /// share. [`ActorScope`] clears it at both ends of the critical section, so an actor
+    /// staged by a guard whose commit then failed is never attributed to a later commit.
+    static PENDING_ACTOR: std::cell::RefCell<Option<Actor>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Clears the operation-local actor slot on entry and on the way out.
+struct ActorScope;
+
+impl ActorScope {
+    fn enter() -> Self {
+        Self::clear();
+        Self
+    }
+
+    fn clear() {
+        PENDING_ACTOR.with(|slot| {
+            if let Ok(mut slot) = slot.try_borrow_mut() {
+                *slot = None;
+            }
+        });
+    }
+}
+
+impl Drop for ActorScope {
+    fn drop(&mut self) {
+        Self::clear();
+    }
 }
 
 /// One item of a batch get (core snapshot; encoded after authorization).
@@ -229,7 +370,6 @@ impl LocalBackend {
             gateway,
             clock,
             databases: Mutex::new(BTreeMap::new()),
-            pending_actor: Mutex::new(None),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
@@ -268,13 +408,7 @@ impl LocalBackend {
         self.generations
             .lock()
             .ok()
-            .and_then(|g| {
-                g.get(&(
-                    parent.project.as_str().to_owned(),
-                    parent.database.as_str().to_owned(),
-                ))
-                .copied()
-            })
+            .and_then(|g| g.get(&database_key(parent)).copied())
             .unwrap_or(0)
     }
 
@@ -303,22 +437,39 @@ impl LocalBackend {
             // dropped.
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        let cleared: Vec<(String, String)> = match self.databases.lock() {
+        let cleared = self.take_scope(scope);
+        self.bump_generations(&cleared);
+        self.announce_wipe(cleared);
+    }
+
+    /// Removes every database `scope` owns from the catalog and detaches it, returning the
+    /// keys in catalog order.
+    ///
+    /// The catalog lock is released before the entries are detached, so a reset never
+    /// holds it while it waits; detaching takes each removed database's own lock, so the
+    /// reset waits for the operations still running inside exactly those databases and
+    /// leaves the rest of the catalog alone.
+    fn take_scope(&self, scope: &ftd_core_session::tenancy::Scope) -> Vec<(String, String)> {
+        let removed: Vec<((String, String), DatabaseHandle)> = match self.databases.lock() {
             Ok(mut dbs) => {
                 let keys: Vec<(String, String)> = dbs
                     .keys()
                     .filter(|(p, _)| scope.owns_project(p))
                     .cloned()
                     .collect();
-                for k in &keys {
-                    dbs.remove(k);
-                }
-                keys
+                keys.into_iter()
+                    .filter_map(|k| dbs.remove(&k).map(|e| (k, DatabaseHandle(e))))
+                    .collect()
             }
             Err(_) => Vec::new(),
         };
-        self.bump_generations(&cleared);
-        self.announce_wipe(cleared);
+        removed
+            .into_iter()
+            .map(|(key, handle)| {
+                handle.detach();
+                key
+            })
+            .collect()
     }
 
     fn announce_wipe(&self, databases: Vec<(String, String)>) {
@@ -337,26 +488,47 @@ impl LocalBackend {
     /// A copy of every database (the default session's snapshot).
     #[must_use]
     pub fn snapshot_databases(&self) -> BTreeMap<(String, String), FirestoreState> {
+        self.copy_databases(&ftd_core_session::tenancy::Scope::AllExcept(
+            std::collections::BTreeSet::new(),
+        ))
+    }
+
+    /// The handles of the databases `scope` owns, in catalog order.
+    fn handles_of(
+        &self,
+        scope: &ftd_core_session::tenancy::Scope,
+    ) -> Vec<((String, String), DatabaseHandle)> {
         self.databases
             .lock()
-            .map(|dbs| dbs.clone())
+            .map(|dbs| {
+                dbs.iter()
+                    .filter(|((p, _), _)| scope.owns_project(p))
+                    .map(|(k, v)| (k.clone(), DatabaseHandle(v.clone())))
+                    .collect()
+            })
             .unwrap_or_default()
+    }
+
+    /// Copies the databases `scope` owns, each under its own lock.
+    ///
+    /// Cross-database atomicity is the [`AdmissionBarrier`]'s: capture runs under the
+    /// exclusive guard, so no operation is in flight and the copies all belong to the same
+    /// session state.
+    fn copy_databases(
+        &self,
+        scope: &ftd_core_session::tenancy::Scope,
+    ) -> BTreeMap<(String, String), FirestoreState> {
+        self.handles_of(scope)
+            .into_iter()
+            .filter_map(|(key, handle)| handle.read(Clone::clone).map(|state| (key, state)))
+            .collect()
     }
 
     /// The databases `scope` owns, plus the auto-ID generator for the default scope (it
     /// is shared by every project, so only the default session snapshots it).
     #[must_use]
     pub fn snapshot_scope(&self, scope: &ftd_core_session::tenancy::Scope) -> FirestoreSnapshot {
-        let databases = self
-            .databases
-            .lock()
-            .map(|dbs| {
-                dbs.iter()
-                    .filter(|((p, _), _)| scope.owns_project(p))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let databases = self.copy_databases(scope);
         let ids = scope
             .is_default()
             .then(|| self.ids.lock().map(|r| r.clone()).ok())
@@ -387,28 +559,19 @@ impl LocalBackend {
         if scope.is_default() {
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        let touched: Vec<(String, String)> = match self.databases.lock() {
-            Ok(mut dbs) => {
-                let mut keys: Vec<(String, String)> = dbs
-                    .keys()
-                    .filter(|(p, _)| scope.owns_project(p))
-                    .cloned()
-                    .collect();
-                for k in &keys {
-                    dbs.remove(k);
-                }
-                for (k, v) in &snapshot.databases {
-                    if scope.owns_project(&k.0) {
-                        if !keys.contains(k) {
-                            keys.push(k.clone());
-                        }
-                        dbs.insert(k.clone(), v.clone());
+        // The replaced databases are detached first: a handle retained across the restore
+        // belongs to the state that was thrown away, and answers UNAVAILABLE.
+        let mut touched = self.take_scope(scope);
+        if let Ok(mut dbs) = self.databases.lock() {
+            for (k, v) in &snapshot.databases {
+                if scope.owns_project(&k.0) {
+                    if !touched.contains(k) {
+                        touched.push(k.clone());
                     }
+                    dbs.insert(k.clone(), Arc::new(DatabaseEntry::restored(v.clone())));
                 }
-                keys
             }
-            Err(_) => Vec::new(),
-        };
+        }
         if let Some(ids) = &snapshot.ids {
             if let Ok(mut rng) = self.ids.lock() {
                 *rng = ids.clone();
@@ -514,18 +677,21 @@ impl LocalBackend {
 
     /// Stages the actor of the commit about to be published (called by write guards inside
     /// the database critical section).
+    ///
+    /// The actor is kept in this thread's operation-local slot, not on the backend, so a
+    /// commit running concurrently in another database cannot consume it (see [`Actor`]).
+    #[allow(clippy::unused_self)]
     pub fn set_actor(&self, actor: Actor) {
-        if let Ok(mut slot) = self.pending_actor.lock() {
-            *slot = Some(actor);
-        }
+        PENDING_ACTOR.with(|slot| {
+            if let Ok(mut slot) = slot.try_borrow_mut() {
+                *slot = Some(actor);
+            }
+        });
     }
 
     fn publish(&self, parent: &Parent, result: &CommitResult) {
-        let actor = self
-            .pending_actor
-            .lock()
-            .ok()
-            .and_then(|mut a| a.take())
+        let actor = PENDING_ACTOR
+            .with(|slot| slot.try_borrow_mut().ok().and_then(|mut s| s.take()))
             .unwrap_or_else(Actor::system);
         let event = CommitEvent {
             actor,
@@ -762,12 +928,25 @@ impl LocalBackend {
         parent: &Parent,
         f: impl FnOnce(&FirestoreState) -> T,
     ) -> Option<T> {
-        let dbs = self.databases.lock().ok()?;
-        dbs.get(&(
-            parent.project.as_str().to_owned(),
-            parent.database.as_str().to_owned(),
+        // The catalog lock is dropped before the database's own lock is taken.
+        let handle = {
+            let dbs = self.databases.lock().ok()?;
+            DatabaseHandle(dbs.get(&database_key(parent))?.clone())
+        };
+        handle.read(f)
+    }
+
+    /// The handle of one database, creating its entry when the database does not exist
+    /// yet. The catalog lock is held only for this lookup.
+    ///
+    /// Operations through the returned handle take no session admission and are not
+    /// coordinated with a reset beyond the handle's own detachment; request surfaces
+    /// should use [`LocalBackend`]'s operations, which admit first.
+    pub fn database_handle(&self, parent: &Parent) -> Result<DatabaseHandle, Status> {
+        let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
+        Ok(DatabaseHandle(
+            dbs.entry(database_key(parent)).or_default().clone(),
         ))
-        .map(f)
     }
 
     fn with_db<T>(
@@ -778,19 +957,13 @@ impl LocalBackend {
         // Admitted for the whole critical section: a reset waits for it and nothing runs
         // against a half-reset session.
         let _admitted = self.barrier.admit();
-        let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
-        // An actor staged by a guard whose commit then failed must not be attributed to
-        // this critical section's commit.
-        if let Ok(mut actor) = self.pending_actor.lock() {
-            actor.take();
-        }
-        let db = dbs
-            .entry((
-                parent.project.as_str().to_owned(),
-                parent.database.as_str().to_owned(),
-            ))
-            .or_default();
-        f(db)
+        // The catalog is locked only for the lookup; the operation then runs under this
+        // database's own lock, so other databases are free to make progress.
+        let handle = self.database_handle(parent)?;
+        // Attribution is confined to this operation: whatever a previous one left on this
+        // thread is dropped here, and whatever this one stages is dropped on the way out.
+        let _actor = ActorScope::enter();
+        handle.with(f)
     }
 
     fn auto_id(&self) -> String {
@@ -1826,6 +1999,14 @@ fn decode_aggregations(
         aggregations.push(agg);
     }
     Ok((aliases, aggregations))
+}
+
+/// Catalog key of a database.
+fn database_key(parent: &Parent) -> (String, String) {
+    (
+        parent.project.as_str().to_owned(),
+        parent.database.as_str().to_owned(),
+    )
 }
 
 fn database_tag(parent: &Parent) -> u64 {

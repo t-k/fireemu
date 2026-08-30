@@ -1130,3 +1130,55 @@ async fn list_page_tokens_are_bound_to_their_listing() {
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     handle.abort();
 }
+
+#[tokio::test]
+async fn database_snapshots_restore_documents_and_start_a_new_epoch() {
+    let gateway = Gateway {
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = LocalBackend::new(gateway, clock, 7);
+    let write = |name: &str, v: i64| pb::CommitRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        writes: vec![update_write(name, &[("v", i(v))])],
+        ..Default::default()
+    };
+    backend.commit(&write("snap/a", 1)).unwrap();
+    let taken = backend.snapshot_databases();
+    assert_eq!(taken.len(), 1);
+    backend.commit(&write("snap/a", 2)).unwrap();
+    backend.commit(&write("snap/b", 1)).unwrap();
+    let epoch = backend.epoch();
+    backend.restore_databases(taken);
+    assert_eq!(backend.epoch(), epoch + 1, "a restore is a new epoch");
+    let get = |name: &str| pb::GetDocumentRequest {
+        name: format!("projects/demo-app/databases/(default)/documents/{name}"),
+        ..Default::default()
+    };
+    let a = backend
+        .get_document(&get("snap/a"), &ftd_adapter_grpc::rules::allow_all_reads)
+        .unwrap();
+    assert_eq!(
+        a.fields["v"].value_type,
+        Some(pb::value::ValueType::IntegerValue(1))
+    );
+    assert_eq!(
+        backend
+            .get_document(&get("snap/b"), &ftd_adapter_grpc::rules::allow_all_reads)
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    // The restored state keeps committing.
+    backend.commit(&write("snap/c", 1)).unwrap();
+    assert!(backend
+        .get_document(&get("snap/c"), &ftd_adapter_grpc::rules::allow_all_reads)
+        .is_ok());
+}

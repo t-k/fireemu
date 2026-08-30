@@ -237,6 +237,39 @@ impl LocalBackend {
         self.epoch.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// A copy of every database (session snapshots).
+    #[must_use]
+    pub fn snapshot_databases(&self) -> BTreeMap<(String, String), FirestoreState> {
+        self.databases
+            .lock()
+            .map(|dbs| dbs.clone())
+            .unwrap_or_default()
+    }
+
+    /// Replaces every database with `databases` (snapshot restore): a new epoch, and the
+    /// streams opened before it end like on a reset.
+    pub fn restore_databases(&self, databases: BTreeMap<(String, String), FirestoreState>) {
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let previous: Vec<(String, String)> = match self.databases.lock() {
+            Ok(mut dbs) => {
+                let keys: Vec<(String, String)> = dbs.keys().cloned().collect();
+                *dbs = databases;
+                keys
+            }
+            Err(_) => Vec::new(),
+        };
+        for (project, database) in previous {
+            let _ = self.commits.send(CommitEvent {
+                actor: Actor::system(),
+                project,
+                database,
+                version: 0,
+                commit_time: None,
+                changes: Arc::new(Vec::new()),
+            });
+        }
+    }
+
     /// Drops every database (session reset). Listen streams observe the wipe as deletes.
     pub fn reset(&self) {
         // Streams opened before the reset see the epoch change before any data is dropped.

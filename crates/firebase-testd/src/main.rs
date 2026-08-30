@@ -20,6 +20,7 @@
 mod config;
 mod control;
 mod functions;
+mod snapshots;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -586,6 +587,19 @@ fn control_state(
             }
         }) as Arc<dyn Fn() + Send + Sync>
     };
+    // Snapshot parts: Firestore databases, Storage objects, Auth users, the clock, both
+    // rulesets; a restore also resets the functions runtime.
+    let mut snapshot_hooks: Vec<Arc<dyn ftd_adapter_http::control::SnapshotHook>> = vec![
+        Arc::new(snapshots::Firestore(backend.clone())),
+        Arc::new(snapshots::Storage(storage.clone())),
+        Arc::new(snapshots::Auth(auth_store.clone())),
+        Arc::new(snapshots::SessionClock(clock.clone())),
+        Arc::new(snapshots::Rules("firestore rules", rules.clone())),
+        Arc::new(snapshots::Rules("storage rules", storage_rules.clone())),
+    ];
+    if let Some(runtime) = functions {
+        snapshot_hooks.push(Arc::new(snapshots::Functions(runtime.clone())));
+    }
     let mut reset_hooks = vec![firestore_reset, auth_reset, storage_reset];
     if let Some(runtime) = functions {
         let runtime = runtime.clone();
@@ -599,6 +613,8 @@ fn control_state(
         rules: rules.clone(),
         storage_rules: storage_rules.clone(),
         reset_hooks,
+        snapshot_hooks,
+        snapshots: Mutex::new(std::collections::BTreeMap::new()),
         functions: functions.map(|r| {
             Arc::new(functions::Hook(r.clone()))
                 as Arc<dyn ftd_adapter_http::control::FunctionsHook>

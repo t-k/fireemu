@@ -27,6 +27,8 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         functions: None,
         control_token: "test-token".to_owned(),
         barrier: None,
+        snapshot_hooks: Vec::new(),
+        snapshots: Mutex::new(std::collections::BTreeMap::new()),
     }
 }
 
@@ -134,5 +136,103 @@ fn browser_requests_need_the_control_token_on_privileged_routes() {
     assert_eq!(
         handle(&s, "POST", "/v1/sessions/default/reset", &json!({})).status,
         200
+    );
+}
+
+/// A hook whose state is a string; restore reports what it was given.
+struct Slot(Mutex<String>);
+
+impl ftd_adapter_http::control::SnapshotHook for Slot {
+    fn name(&self) -> &'static str {
+        "slot"
+    }
+    fn capture(&self) -> ftd_adapter_http::control::SnapshotPart {
+        Arc::new(self.0.lock().unwrap().clone())
+    }
+    fn restore(&self, part: &ftd_adapter_http::control::SnapshotPart) -> Result<(), String> {
+        let value = part.downcast_ref::<String>().ok_or("not a string")?;
+        self.0.lock().unwrap().clone_from(value);
+        Ok(())
+    }
+}
+
+#[test]
+fn snapshots_capture_every_part_and_restore_them_atomically() {
+    let slot = Arc::new(Slot(Mutex::new("one".to_owned())));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.snapshot_hooks = vec![slot.clone()];
+    let bad = handle(&s, "POST", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(bad.status, 400);
+    let bad = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "no spaces here"}),
+    );
+    assert_eq!(bad.status, 400);
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "base"}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["parts"], json!(["slot"]));
+    assert_eq!(r.body["replaced"], false);
+    *slot.0.lock().unwrap() = "two".to_owned();
+    let list = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(list.body["snapshots"][0]["name"], "base");
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots/base:restore",
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(*slot.0.lock().unwrap(), "one");
+    assert_eq!(
+        handle(
+            &s,
+            "POST",
+            "/v1/sessions/default/snapshots/nothing:restore",
+            &json!({})
+        )
+        .status,
+        404
+    );
+    // Overwriting keeps one entry; deleting removes it.
+    *slot.0.lock().unwrap() = "three".to_owned();
+    let r = handle(
+        &s,
+        "POST",
+        "/v1/sessions/default/snapshots",
+        &json!({"name": "base"}),
+    );
+    assert_eq!(r.body["replaced"], true);
+    assert_eq!(
+        handle(
+            &s,
+            "DELETE",
+            "/v1/sessions/default/snapshots/base",
+            &json!({})
+        )
+        .status,
+        200
+    );
+    assert_eq!(
+        handle(
+            &s,
+            "DELETE",
+            "/v1/sessions/default/snapshots/base",
+            &json!({})
+        )
+        .status,
+        404
+    );
+    assert!(
+        handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({})).body["snapshots"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }

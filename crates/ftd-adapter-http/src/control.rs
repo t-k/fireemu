@@ -45,6 +45,29 @@ pub trait FunctionsHook: Send + Sync {
     fn publish(&self, topic: &str, messages: &[Value]) -> Result<Vec<String>, String>;
 }
 
+/// One adapter's part of a session snapshot: an opaque copy of its state.
+pub type SnapshotPart = Arc<dyn std::any::Any + Send + Sync>;
+
+/// Captures and restores one adapter's state (Firestore databases, Storage objects, Auth
+/// users, the clock, ...). `restore` runs under the exclusive session barrier, in the
+/// order the hooks were registered.
+pub trait SnapshotHook: Send + Sync {
+    /// What the part is (status output).
+    fn name(&self) -> &'static str;
+    /// A copy of the current state.
+    fn capture(&self) -> SnapshotPart;
+    /// Replaces the current state with a copy taken by `capture`.
+    fn restore(&self, part: &SnapshotPart) -> Result<(), String>;
+}
+
+/// A named session snapshot.
+pub struct Snapshot {
+    /// The clock at capture.
+    pub clock: String,
+    /// One part per hook, in hook order.
+    pub parts: Vec<SnapshotPart>,
+}
+
 /// Shared control-plane state.
 pub struct ControlState {
     /// The virtual clock shared by every adapter.
@@ -61,6 +84,10 @@ pub struct ControlState {
     pub storage_rules: Arc<RwLock<LoadedRules>>,
     /// Hooks run by `POST /v1/sessions/{s}/reset` (Firestore wipe, Auth wipe, ...).
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
+    /// Snapshot capture / restore, one hook per adapter.
+    pub snapshot_hooks: Vec<Arc<dyn SnapshotHook>>,
+    /// Snapshots kept in memory by name.
+    pub snapshots: Mutex<std::collections::BTreeMap<String, Snapshot>>,
     /// Functions runtime, when configured.
     pub functions: Option<Arc<dyn FunctionsHook>>,
     /// Session admission barrier: a reset holds it exclusively across every hook, so no
@@ -236,6 +263,9 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         }
         return ok(json!({"session": session, "reset": true, "hooks": state.reset_hooks.len()}));
     }
+    if let Some(rest) = action.strip_prefix("snapshots") {
+        return snapshot_route(state, session, method, rest, body);
+    }
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if let Some(rest) = action.strip_prefix("functions") {
         return functions_route(state, method, rest);
@@ -255,6 +285,117 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         }
     }
     response
+}
+
+/// `snapshots` (POST `{"name"}` captures, GET lists), `snapshots/{name}:restore`,
+/// `snapshots/{name}` (DELETE). Capture and restore hold the exclusive session barrier, so
+/// a snapshot never straddles a request and a restore is atomic across every adapter. A
+/// capture refuses a session with functions work outstanding unless `allowNonQuiescent`
+/// is set (spec 14.3); a restore resets the functions runtime (its queue belongs to the
+/// state it was replaced with).
+fn snapshot_route(
+    state: &ControlState,
+    session: &str,
+    method: &str,
+    rest: &str,
+    body: &Value,
+) -> JsonResponse {
+    let valid_name = |n: &str| {
+        !n.is_empty()
+            && n.len() <= 64
+            && n.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    match (method, rest) {
+        ("GET", "") => {
+            let Ok(snapshots) = state.snapshots.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let list: Vec<Value> = snapshots
+                .iter()
+                .map(|(name, s)| json!({"name": name, "clock": s.clock, "parts": s.parts.len()}))
+                .collect();
+            ok(json!({"session": session, "snapshots": list}))
+        }
+        ("POST", "") => {
+            let Some(name) = body
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|n| valid_name(n))
+            else {
+                return error(
+                    400,
+                    "INVALID_ARGUMENT : name ([A-Za-z0-9._-], at most 64 characters) is required",
+                );
+            };
+            let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
+            let quiescent = state.functions.as_ref().is_none_or(|f| f.is_idle());
+            if !quiescent && body.get("allowNonQuiescent").and_then(Value::as_bool) != Some(true) {
+                return error(
+                    409,
+                    "FAILED_PRECONDITION : functions work is outstanding; await idle first or set allowNonQuiescent",
+                );
+            }
+            let parts: Vec<SnapshotPart> =
+                state.snapshot_hooks.iter().map(|h| h.capture()).collect();
+            let clock = state
+                .clock
+                .lock()
+                .map(|c| c.now().to_rfc3339().unwrap_or_default())
+                .unwrap_or_default();
+            let Ok(mut snapshots) = state.snapshots.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let replaced = snapshots
+                .insert(
+                    name.to_owned(),
+                    Snapshot {
+                        clock: clock.clone(),
+                        parts,
+                    },
+                )
+                .is_some();
+            ok(
+                json!({"session": session, "name": name, "clock": clock, "replaced": replaced, "parts": state.snapshot_hooks.iter().map(|h| h.name()).collect::<Vec<_>>()}),
+            )
+        }
+        ("POST", r) => {
+            let Some(name) = r.strip_prefix('/').and_then(|r| r.strip_suffix(":restore")) else {
+                return error(404, "NOT_FOUND");
+            };
+            let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
+            let Ok(snapshots) = state.snapshots.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let Some(snapshot) = snapshots.get(name) else {
+                return error(404, &format!("NOT_FOUND : no snapshot {name:?}"));
+            };
+            if snapshot.parts.len() != state.snapshot_hooks.len() {
+                return error(500, "INTERNAL : snapshot shape mismatch");
+            }
+            for (hook, part) in state.snapshot_hooks.iter().zip(&snapshot.parts) {
+                if let Err(e) = hook.restore(part) {
+                    return error(500, &format!("INTERNAL : restoring {}: {e}", hook.name()));
+                }
+            }
+            let clock = snapshot.clock.clone();
+            drop(snapshots);
+            ok(json!({"session": session, "name": name, "restored": true, "clock": clock}))
+        }
+        ("DELETE", r) => {
+            let Some(name) = r.strip_prefix('/') else {
+                return error(404, "NOT_FOUND");
+            };
+            let Ok(mut snapshots) = state.snapshots.lock() else {
+                return error(500, "INTERNAL");
+            };
+            match snapshots.remove(name) {
+                Some(_) => ok(json!({"session": session, "name": name, "deleted": true})),
+                None => error(404, &format!("NOT_FOUND : no snapshot {name:?}")),
+            }
+        }
+        _ => error(404, "NOT_FOUND"),
+    }
 }
 
 fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonResponse {

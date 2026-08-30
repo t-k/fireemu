@@ -408,7 +408,7 @@ impl PendingSignInId {
 }
 
 /// Deterministic in-memory auth store for one project.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthStore {
     project_id: String,
     rng: SplitMix64,

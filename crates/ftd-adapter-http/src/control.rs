@@ -48,14 +48,48 @@ pub trait FunctionsHook: Send + Sync {
     fn project(&self) -> String;
 }
 
+/// One adapter's failure during a session-state transition (a reset, a deletion, a
+/// snapshot capture or a restore). The part names the store that could not take part, so
+/// the response can say whether Storage or Auth was the one that refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransitionFailure {
+    /// The store that failed (`firestore`, `storage`, `auth`, ...).
+    pub part: &'static str,
+    /// What went wrong.
+    pub message: String,
+}
+
+impl TransitionFailure {
+    /// A failure of `part`.
+    pub fn new(part: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            part,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for TransitionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.part, self.message)
+    }
+}
+
+impl std::error::Error for TransitionFailure {}
+
 /// Per-project state management for sessions other than the default one.
+///
+/// `reset_scope` and `remove` own several stores at once (Firestore databases, Storage
+/// buckets, an Auth store). Both must check every store they will touch before they
+/// mutate any of them, so that a failure leaves the project exactly as it was: the
+/// control routes report the failure instead of publishing a half-wiped session.
 pub trait ProjectHooks: Send + Sync {
     /// A session for `project` was created: allocate its state (an Auth store, ...).
     fn create(&self, project: &str) -> Result<(), String>;
     /// Wipe everything `scope` owns (Firestore databases, buckets, Auth users).
-    fn reset_scope(&self, scope: &Scope);
+    fn reset_scope(&self, scope: &Scope) -> Result<(), TransitionFailure>;
     /// Drop the project's state and forget it.
-    fn remove(&self, project: &str);
+    fn remove(&self, project: &str) -> Result<(), TransitionFailure>;
 }
 
 /// One adapter's part of a session snapshot: an opaque copy of its state.
@@ -64,6 +98,13 @@ pub type SnapshotPart = Arc<dyn std::any::Any + Send + Sync>;
 /// Captures and restores one adapter's state (Firestore databases, Storage objects, Auth
 /// users, the clock, ...). `restore` runs under the exclusive session barrier, in the
 /// order the hooks were registered.
+///
+/// A restore is a validate / prepare / apply protocol driven by [`snapshot_route`]: every
+/// hook's [`SnapshotHook::validate`] runs first, then every hook's
+/// [`SnapshotHook::capture`] takes a pre-image, and only then does the first
+/// [`SnapshotHook::restore`] mutate anything. A hook that rejects the apply is rolled back
+/// by re-applying the pre-image to the hooks before it, so no request ever observes a
+/// half-restored session.
 pub trait SnapshotHook: Send + Sync {
     /// Part name (`firestore`, `auth`, ...).
     fn name(&self) -> &'static str;
@@ -72,11 +113,23 @@ pub trait SnapshotHook: Send + Sync {
     fn shared(&self) -> bool {
         false
     }
-    /// Captures what `scope` owns.
-    fn capture(&self, scope: &Scope) -> SnapshotPart;
+    /// Captures what `scope` owns. Never mutates: the restore protocol also uses it to
+    /// take the pre-image it rolls back to.
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure>;
+    /// Whether `part` belongs to this hook and `scope` can be restored right now, without
+    /// mutating anything. Every hook is validated before any hook applies.
+    fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
     /// Puts a captured part back for `scope`.
-    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), String>;
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
 }
+
+/// How many named snapshots one session may retain (`SNAP-MEM-01`). Each one holds a full
+/// copy of the session's Firestore databases, Storage objects, Auth store, fault state and
+/// text indexes, so an unbounded set of unique names would keep a test's whole history
+/// resident for the daemon's lifetime. Capturing a new name beyond this budget is refused
+/// with `RESOURCE_EXHAUSTED` (429) and changes nothing; replacing a name that is already
+/// retained is always allowed and releases what that name held.
+pub const MAX_SNAPSHOTS_PER_SESSION: usize = 16;
 
 /// A named snapshot.
 pub struct Snapshot {
@@ -105,9 +158,9 @@ pub struct ControlState {
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
     /// Snapshot capture / restore, one hook per adapter.
     pub snapshot_hooks: Vec<Arc<dyn SnapshotHook>>,
-    /// Snapshots kept in memory, by session then name.
-    pub snapshots:
-        Mutex<std::collections::BTreeMap<String, std::collections::BTreeMap<String, Snapshot>>>,
+    /// Snapshots kept in memory, by session then name (at most
+    /// [`MAX_SNAPSHOTS_PER_SESSION`] per session).
+    pub snapshots: Mutex<SnapshotStore>,
     /// The sessions' fault plans (spec 18), one state per session, shared with every
     /// adapter.
     pub faults: Option<ftd_core_session::fault::SharedFaultRegistry>,
@@ -121,7 +174,7 @@ pub struct ControlState {
     /// by project: each has its own Firestore databases, Storage buckets, Auth store,
     /// fault plan, snapshots and text indexes; the virtual clock, rules and functions
     /// are shared (they belong to the default session).
-    pub sessions: Mutex<std::collections::BTreeMap<String, String>>,
+    pub sessions: Mutex<SessionMap>,
     /// Per-project state hooks for the sessions other than the default one.
     pub project_hooks: Option<Arc<dyn ProjectHooks>>,
     /// Functions runtime, when configured.
@@ -153,6 +206,68 @@ fn scope_of(state: &ControlState, project: &str) -> Scope {
         |_| Scope::Project(project.to_owned()),
         |t| t.scope_of(project),
     )
+}
+
+/// Retained snapshots by session then name.
+pub type SnapshotStore =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, Snapshot>>;
+
+/// Sessions by name to project.
+pub type SessionMap = std::collections::BTreeMap<String, String>;
+
+/// Whether every book a session is registered in can be written. The only failure these
+/// locks have is poisoning, which is permanent, so a probe that passes means the apply
+/// that follows cannot fail on a lock. Each is taken and released on its own: a caller
+/// runs project hooks between the probe and the apply, and those reach the same registries.
+fn probe_session_books(state: &ControlState) -> Option<JsonResponse> {
+    let poisoned = if state.sessions.lock().is_err() {
+        "the session map"
+    } else if state.tenancy.write().is_err() {
+        "the tenancy registry"
+    } else if state.text_indexes.lock().is_err() {
+        "the text index catalog"
+    } else if state.snapshots.lock().is_err() {
+        "the snapshot store"
+    } else {
+        return None;
+    };
+    Some(error(
+        500,
+        &format!("INTERNAL : {poisoned} is poisoned; the session is unchanged"),
+    ))
+}
+
+/// Applies `apply` to every book a session is registered in at once, so that a
+/// deregistration cannot be observed half done. The locks are taken in the order a
+/// creation takes them (the session map, then the tenancy registry, then the text index
+/// catalog, then the snapshot store), and both callers hold the exclusive barrier.
+fn with_session_books(
+    state: &ControlState,
+    apply: impl FnOnce(
+        &mut SnapshotStore,
+        &mut ftd_core_firestore::text_index::TextIndexCatalog,
+        &mut ftd_core_session::tenancy::Tenancy,
+        &mut SessionMap,
+    ),
+) -> Result<(), String> {
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "the session map is poisoned".to_owned())?;
+    let mut tenancy = state
+        .tenancy
+        .write()
+        .map_err(|_| "the tenancy registry is poisoned".to_owned())?;
+    let mut catalog = state
+        .text_indexes
+        .lock()
+        .map_err(|_| "the text index catalog is poisoned".to_owned())?;
+    let mut snapshots = state
+        .snapshots
+        .lock()
+        .map_err(|_| "the snapshot store is poisoned".to_owned())?;
+    apply(&mut snapshots, &mut catalog, &mut tenancy, &mut sessions);
+    Ok(())
 }
 
 fn clock_json(clock: &VirtualClock) -> Value {
@@ -349,17 +464,16 @@ fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
             "INVALID_ARGUMENT : name must be lowercase letters, digits and dashes (1..=63)",
         );
     }
-    let Ok(mut sessions) = state.sessions.lock() else {
-        return error(500, "INTERNAL");
-    };
-    if sessions.contains_key(name) {
-        return error(409, &format!("ALREADY_EXISTS : session {name:?}"));
-    }
-    if sessions.values().any(|p| p == project) {
-        return error(
-            409,
-            &format!("ALREADY_EXISTS : project {project:?} already has a session"),
-        );
+    // A first look without the barrier: a name or project that is already taken is
+    // refused without disturbing the requests in flight (taking the barrier exclusively
+    // publishes a new epoch, ADR-011). The authoritative check runs under it below.
+    match state.sessions.lock() {
+        Ok(sessions) => {
+            if let Some(taken) = conflicting_session(&sessions, name, project) {
+                return taken;
+            }
+        }
+        Err(_) => return error(500, "INTERNAL : the session map is poisoned"),
     }
     let mut buckets = Vec::new();
     for (i, b) in body
@@ -403,11 +517,18 @@ fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
     // Exclusive while the session comes into being: no request observes the tenancy, the
     // Auth store, the fault state and the session map in a half-registered state, and
     // whatever the default session had stored under this project is wiped so the new
-    // session starts empty rather than inheriting it.
+    // session starts empty rather than inheriting it. The barrier is taken before the
+    // session map, in the same order a reset and a deletion take them.
     let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
+    let Ok(mut sessions) = state.sessions.lock() else {
+        return error(500, "INTERNAL : the session map is poisoned");
+    };
+    if let Some(taken) = conflicting_session(&sessions, name, project) {
+        return taken;
+    }
     {
         let Ok(mut tenancy) = state.tenancy.write() else {
-            return error(500, "INTERNAL");
+            return error(500, "INTERNAL : the tenancy registry is poisoned");
         };
         if let Err(e) = tenancy.register(project, &buckets, &api_keys) {
             return error(409, &format!("ALREADY_EXISTS : {e}"));
@@ -420,7 +541,23 @@ fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
             }
             return error(500, &format!("INTERNAL : {e}"));
         }
-        hooks.reset_scope(&Scope::Project(project.to_owned()));
+        // Wiping what the default session held under the project is part of the creation:
+        // a store that refuses it takes the whole creation back.
+        if let Err(e) = hooks.reset_scope(&Scope::Project(project.to_owned())) {
+            let undone = hooks.remove(project).is_ok();
+            if let Ok(mut tenancy) = state.tenancy.write() {
+                tenancy.unregister(project);
+            }
+            let tail = if undone {
+                "; nothing was registered"
+            } else {
+                "; the project's Auth store could not be dropped either"
+            };
+            return error(
+                500,
+                &format!("INTERNAL : creating session {name:?}: {e}{tail}"),
+            );
+        }
     }
     if let Ok(mut catalog) = state.text_indexes.lock() {
         catalog.retain_others(|p| p == project);
@@ -430,6 +567,24 @@ fn create_session(state: &ControlState, body: &Value) -> JsonResponse {
     }
     sessions.insert(name.to_owned(), project.to_owned());
     ok(json!({"name": name, "project": project, "buckets": buckets, "created": true}))
+}
+
+/// The refusal for a session name or project that is already taken, if either is.
+fn conflicting_session(
+    sessions: &std::collections::BTreeMap<String, String>,
+    name: &str,
+    project: &str,
+) -> Option<JsonResponse> {
+    if sessions.contains_key(name) {
+        return Some(error(409, &format!("ALREADY_EXISTS : session {name:?}")));
+    }
+    if sessions.values().any(|p| p == project) {
+        return Some(error(
+            409,
+            &format!("ALREADY_EXISTS : project {project:?} already has a session"),
+        ));
+    }
+    None
 }
 
 fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {
@@ -456,46 +611,10 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
                 "INVALID_ARGUMENT : the default session cannot be deleted; reset it",
             );
         }
-        let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
-        if let Some(hooks) = &state.project_hooks {
-            hooks.remove(&project);
-        }
-        if let Some(faults) = &state.faults {
-            faults.remove(&project);
-        }
-        if let Ok(mut snapshots) = state.snapshots.lock() {
-            snapshots.remove(session);
-        }
-        if let Ok(mut catalog) = state.text_indexes.lock() {
-            catalog.retain_others(|p| p == project);
-        }
-        if let Ok(mut tenancy) = state.tenancy.write() {
-            tenancy.unregister(&project);
-        }
-        if let Ok(mut sessions) = state.sessions.lock() {
-            sessions.remove(session);
-        }
-        return ok(json!({"session": session, "project": project, "deleted": true}));
+        return delete_session(state, session, &project);
     }
     if (method, action) == ("POST", "reset") {
-        // Exclusive across every hook: requests in flight finish first, new ones wait.
-        let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
-        let scope = scope_of(state, &project);
-        if let Some(hooks) = &state.project_hooks {
-            hooks.reset_scope(&scope);
-        }
-        if is_default {
-            // The shared parts (functions) belong to the default session.
-            for hook in &state.reset_hooks {
-                hook();
-            }
-            return ok(
-                json!({"session": session, "project": project, "reset": true, "scope": "default", "hooks": state.reset_hooks.len()}),
-            );
-        }
-        return ok(
-            json!({"session": session, "project": project, "reset": true, "scope": "project"}),
-        );
+        return reset_session(state, session, &project, is_default);
     }
     if let Some(rest) = action.strip_prefix("snapshots") {
         return snapshot_route(state, session, &project, method, rest, body);
@@ -532,6 +651,80 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
         }
     }
     response
+}
+
+/// `DELETE /v1/sessions/{s}`: wipes the project's state and deregisters the session, or
+/// reports which store refused and leaves the session exactly as it was
+/// (`SESSION-ATOMIC-03`, `SESSION-ATOMIC-05`).
+fn delete_session(state: &ControlState, session: &str, project: &str) -> JsonResponse {
+    let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
+    // Validate before anything mutates: every book the deletion writes is probed first.
+    // The probes are taken and released one at a time because the project hooks reach the
+    // same registries, and holding one across them would deadlock.
+    if let Some(refusal) = probe_session_books(state) {
+        return refusal;
+    }
+    // The adapter state goes first: it is the fallible half of the deletion, and it
+    // validates its own stores before wiping any of them. Nothing the session is
+    // registered in has changed yet, so a refusal leaves the session usable.
+    if let Some(hooks) = &state.project_hooks {
+        if let Err(e) = hooks.remove(project) {
+            return error(
+                500,
+                &format!("INTERNAL : deleting session {session:?}: {e}; the session is unchanged"),
+            );
+        }
+    }
+    if let Some(faults) = &state.faults {
+        faults.remove(project);
+    }
+    let books = with_session_books(state, |snapshots, catalog, tenancy, sessions| {
+        snapshots.remove(session);
+        catalog.retain_others(|p| p == project);
+        tenancy.unregister(project);
+        sessions.remove(session);
+    });
+    if let Err(e) = books {
+        return error(
+            500,
+            &format!("INTERNAL : session {session:?} was wiped but not deregistered: {e}"),
+        );
+    }
+    ok(json!({"session": session, "project": project, "deleted": true}))
+}
+
+/// `POST /v1/sessions/{s}/reset`: wipes what the session owns, or reports which store
+/// refused and leaves every store as it was (`SESSION-ATOMIC-03`).
+fn reset_session(
+    state: &ControlState,
+    session: &str,
+    project: &str,
+    is_default: bool,
+) -> JsonResponse {
+    // Exclusive across every hook: requests in flight finish first, new ones wait. Taking
+    // it publishes the new epoch (ADR-011), so work that started in the previous one is
+    // discarded whether or not the wipe below succeeds, which is the conservative side of
+    // the invariant.
+    let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
+    let scope = scope_of(state, project);
+    if let Some(hooks) = &state.project_hooks {
+        if let Err(e) = hooks.reset_scope(&scope) {
+            return error(
+                500,
+                &format!("INTERNAL : resetting session {session:?}: {e}; no store was wiped"),
+            );
+        }
+    }
+    if is_default {
+        // The shared parts (functions) belong to the default session.
+        for hook in &state.reset_hooks {
+            hook();
+        }
+        return ok(
+            json!({"session": session, "project": project, "reset": true, "scope": "default", "hooks": state.reset_hooks.len()}),
+        );
+    }
+    ok(json!({"session": session, "project": project, "reset": true, "scope": "project"}))
 }
 
 /// Refuses keys outside `allowed` (strict validation: nothing is silently ignored).
@@ -1130,6 +1323,13 @@ fn rule_json(r: &ftd_core_session::fault::FaultRule) -> Value {
 /// across every adapter. A default-session capture refuses outstanding functions work
 /// unless `allowNonQuiescent` is set (spec 14.3): that work is not captured, and a restore
 /// drops it.
+///
+/// A capture is all or nothing: every hook is copied before any of them is retained, so a
+/// store that cannot be read refuses the snapshot instead of leaving an empty part behind.
+/// A session retains at most [`MAX_SNAPSHOTS_PER_SESSION`] names; a new name beyond that
+/// is `RESOURCE_EXHAUSTED` (429) and changes nothing, while capturing over a retained name
+/// is always admitted and releases what that name held. `GET` reports `retained`, `limit`
+/// and `remaining`.
 #[allow(clippy::too_many_lines)]
 fn snapshot_route(
     state: &ControlState,
@@ -1149,7 +1349,7 @@ fn snapshot_route(
     match (method, rest) {
         ("GET", "") => {
             let Ok(snapshots) = state.snapshots.lock() else {
-                return error(500, "INTERNAL");
+                return error(500, "INTERNAL : the snapshot store is poisoned");
             };
             let list: Vec<Value> = snapshots
                 .get(session)
@@ -1157,7 +1357,14 @@ fn snapshot_route(
                 .flatten()
                 .map(|(name, s)| json!({"name": name, "clock": s.clock, "parts": s.parts.iter().flatten().count()}))
                 .collect();
-            ok(json!({"session": session, "snapshots": list}))
+            let retained = list.len();
+            ok(json!({
+                "session": session,
+                "snapshots": list,
+                "retained": retained,
+                "limit": MAX_SNAPSHOTS_PER_SESSION,
+                "remaining": MAX_SNAPSHOTS_PER_SESSION.saturating_sub(retained),
+            }))
         }
         ("POST", "") => {
             let Some(name) = body
@@ -1179,11 +1386,39 @@ fn snapshot_route(
                     "FAILED_PRECONDITION : functions work is outstanding; await idle first or set allowNonQuiescent",
                 );
             }
-            let parts: Vec<Option<SnapshotPart>> = state
-                .snapshot_hooks
-                .iter()
-                .map(|h| (scope.is_default() || !h.shared()).then(|| h.capture(&scope)))
-                .collect();
+            // Admission before any state is copied: a new name beyond the budget is
+            // refused and nothing is captured, so the retained set is unchanged. A name
+            // that is already retained is a replacement and is always admitted.
+            match state.snapshots.lock() {
+                Ok(snapshots) => {
+                    if let Some(refusal) = over_budget(&snapshots, session, name) {
+                        return refusal;
+                    }
+                }
+                Err(_) => return error(500, "INTERNAL : the snapshot store is poisoned"),
+            }
+            // Every part is captured before any of them is kept: a store that cannot be
+            // copied refuses the whole snapshot rather than leaving an empty part behind
+            // that a later restore would put back as the truth (SESSION-ATOMIC-01).
+            let mut parts: Vec<Option<SnapshotPart>> =
+                Vec::with_capacity(state.snapshot_hooks.len());
+            for hook in &state.snapshot_hooks {
+                if scope.is_default() || !hook.shared() {
+                    match hook.capture(&scope) {
+                        Ok(part) => parts.push(Some(part)),
+                        Err(e) => {
+                            return error(
+                                500,
+                                &format!(
+                                    "INTERNAL : capturing {e}; snapshot {name:?} was not taken"
+                                ),
+                            )
+                        }
+                    }
+                } else {
+                    parts.push(None);
+                }
+            }
             let names: Vec<&str> = state
                 .snapshot_hooks
                 .iter()
@@ -1197,8 +1432,12 @@ fn snapshot_route(
                 .map(|c| c.now().to_rfc3339().unwrap_or_default())
                 .unwrap_or_default();
             let Ok(mut snapshots) = state.snapshots.lock() else {
-                return error(500, "INTERNAL");
+                return error(500, "INTERNAL : the snapshot store is poisoned");
             };
+            if let Some(refusal) = over_budget(&snapshots, session, name) {
+                return refusal;
+            }
+            // The replaced entry is dropped here: what only it held is released.
             let replaced = snapshots
                 .entry(session.to_owned())
                 .or_default()
@@ -1210,8 +1449,11 @@ fn snapshot_route(
                     },
                 )
                 .is_some();
+            let retained = snapshots
+                .get(session)
+                .map_or(0, std::collections::BTreeMap::len);
             ok(
-                json!({"session": session, "name": name, "clock": clock, "replaced": replaced, "parts": names}),
+                json!({"session": session, "name": name, "clock": clock, "replaced": replaced, "parts": names, "retained": retained, "limit": MAX_SNAPSHOTS_PER_SESSION}),
             )
         }
         ("POST", r) => {
@@ -1219,24 +1461,27 @@ fn snapshot_route(
                 return error(404, "NOT_FOUND");
             };
             let _exclusive = state.barrier.as_ref().map(|b| b.exclusive());
-            let Ok(snapshots) = state.snapshots.lock() else {
-                return error(500, "INTERNAL");
+            // The parts are lifted out of the store (they are reference-counted copies)
+            // and the lock released: the hooks below take locks of their own.
+            let (parts, clock) = match state.snapshots.lock() {
+                Ok(snapshots) => match snapshots.get(session).and_then(|s| s.get(name)) {
+                    Some(snapshot) => (snapshot.parts.clone(), snapshot.clock.clone()),
+                    None => return error(404, &format!("NOT_FOUND : no snapshot {name:?}")),
+                },
+                Err(_) => return error(500, "INTERNAL : the snapshot store is poisoned"),
             };
-            let Some(snapshot) = snapshots.get(session).and_then(|s| s.get(name)) else {
-                return error(404, &format!("NOT_FOUND : no snapshot {name:?}"));
-            };
-            if snapshot.parts.len() != state.snapshot_hooks.len() {
+            if parts.len() != state.snapshot_hooks.len() {
                 return error(500, "INTERNAL : snapshot shape mismatch");
             }
-            for (hook, part) in state.snapshot_hooks.iter().zip(&snapshot.parts) {
-                if let Some(part) = part {
-                    if let Err(e) = hook.restore(&scope, part) {
-                        return error(500, &format!("INTERNAL : restoring {}: {e}", hook.name()));
-                    }
-                }
+            let applicable: Vec<(&Arc<dyn SnapshotHook>, &SnapshotPart)> = state
+                .snapshot_hooks
+                .iter()
+                .zip(&parts)
+                .filter_map(|(hook, part)| part.as_ref().map(|part| (hook, part)))
+                .collect();
+            if let Err(e) = restore_parts(&scope, &applicable) {
+                return error(500, &e);
             }
-            let clock = snapshot.clock.clone();
-            drop(snapshots);
             ok(json!({"session": session, "name": name, "restored": true, "clock": clock}))
         }
         ("DELETE", r) => {
@@ -1244,15 +1489,79 @@ fn snapshot_route(
                 return error(404, "NOT_FOUND");
             };
             let Ok(mut snapshots) = state.snapshots.lock() else {
-                return error(500, "INTERNAL");
+                return error(500, "INTERNAL : the snapshot store is poisoned");
             };
+            // Dropping the entry releases every part only it held.
             match snapshots.get_mut(session).and_then(|s| s.remove(name)) {
-                Some(_) => ok(json!({"session": session, "name": name, "deleted": true})),
+                Some(_) => {
+                    let retained = snapshots
+                        .get(session)
+                        .map_or(0, std::collections::BTreeMap::len);
+                    ok(
+                        json!({"session": session, "name": name, "deleted": true, "retained": retained, "limit": MAX_SNAPSHOTS_PER_SESSION}),
+                    )
+                }
                 None => error(404, &format!("NOT_FOUND : no snapshot {name:?}")),
             }
         }
         _ => error(404, "NOT_FOUND"),
     }
+}
+
+/// The refusal for a capture that would take `session` past
+/// [`MAX_SNAPSHOTS_PER_SESSION`], if it would. Replacing a retained name never does.
+fn over_budget(snapshots: &SnapshotStore, session: &str, name: &str) -> Option<JsonResponse> {
+    let held = snapshots.get(session)?;
+    if held.contains_key(name) || held.len() < MAX_SNAPSHOTS_PER_SESSION {
+        return None;
+    }
+    Some(error(
+        429,
+        &format!(
+            "RESOURCE_EXHAUSTED : session {session:?} already retains {} snapshots (the per-session budget); delete one or capture over a name it already holds",
+            held.len()
+        ),
+    ))
+}
+
+/// Restores every part of a snapshot as one transition: validate, then take a pre-image of
+/// every hook, then apply in hook order. A hook that refuses the apply is reported and the
+/// hooks before it are put back to their pre-image, so the session is the one that entered
+/// the route rather than a mixture of two (`SESSION-ATOMIC-02`, `SESSION-ATOMIC-05`).
+fn restore_parts(
+    scope: &Scope,
+    applicable: &[(&Arc<dyn SnapshotHook>, &SnapshotPart)],
+) -> Result<(), String> {
+    for (hook, part) in applicable {
+        hook.validate(scope, part)
+            .map_err(|e| format!("INTERNAL : restoring {e}; nothing was restored"))?;
+    }
+    let mut pre_image = Vec::with_capacity(applicable.len());
+    for (hook, _) in applicable {
+        pre_image.push(hook.capture(scope).map_err(|e| {
+            format!("INTERNAL : preparing the rollback of {e}; nothing was restored")
+        })?);
+    }
+    for (i, (hook, part)) in applicable.iter().enumerate() {
+        let Err(failure) = hook.restore(scope, part) else {
+            continue;
+        };
+        let mut rollback: Vec<String> = Vec::new();
+        for ((earlier, _), pre) in applicable[..i].iter().zip(&pre_image).rev() {
+            if let Err(e) = earlier.restore(scope, pre) {
+                rollback.push(e.to_string());
+            }
+        }
+        return Err(if rollback.is_empty() {
+            format!("INTERNAL : restoring {failure}; the session was rolled back to the state it had before the restore")
+        } else {
+            format!(
+                "INTERNAL : restoring {failure}; the rollback failed too ({}) and the session is partially restored",
+                rollback.join(", ")
+            )
+        });
+    }
+    Ok(())
 }
 
 fn functions_route(state: &ControlState, method: &str, rest: &str) -> JsonResponse {

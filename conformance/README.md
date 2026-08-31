@@ -159,15 +159,17 @@ object keys sorted.
 Divergences live in `src/firestore-probe/divergences.mjs`, keyed `<program>#<step>`: each
 pins the answer fireemu gives (down to the body, or its result-set digest) with the reason,
 so `firestore:check` fails on any unlisted difference *and* on drift from a pinned one. The
-register currently holds 20 rows in five families: the optimistic transaction model (fireemu
-aborts the transaction, the official emulator locks and aborts the out-of-band writer),
-official REST-adapter defects fireemu does not reproduce (a bytes query parameter hangs the
-connection, `?readTime=` misparses, two HTTP 500s), official leniencies fireemu refuses (a
-selector-less query, a write addressed to another database, an uppercase database id), a
-multi-aggregation counting defect of the official emulator, and capabilities fireemu serves
-that the official emulator refuses (`orderBy(__name__, desc)`, `PartitionQuery`). Every row
-is also published in `spec/compatibility/contract.json` under
-`officialEmulatorDivergences`.
+register currently holds 15 rows in four families: official REST-adapter defects fireemu does
+not reproduce (a bytes query parameter hangs the connection, `?readTime=` misparses, two HTTP
+500s), official leniencies fireemu refuses (a selector-less query, a write addressed to
+another database, an uppercase database id), a multi-aggregation counting defect of the
+official emulator, and capabilities fireemu serves that the official emulator refuses
+(`orderBy(__name__, desc)`, `PartitionQuery`). The transaction-contention family is no longer
+here: fireemu now takes the same pessimistic locks as the official emulator (a read-write
+transaction locks the documents it reads and the collections its queries scan, and a write
+against a locked document is refused with `ABORTED` "Transaction lock timeout." while the
+transaction commits), so those rows are gated directly against the oracle. Every row is also
+published in `spec/compatibility/contract.json` under `officialEmulatorDivergences`.
 
 ## Layout
 

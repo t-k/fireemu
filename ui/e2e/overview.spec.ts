@@ -26,7 +26,7 @@ test.describe("Overview", () => {
     await expect(scope.getByTestId("scope-requests")).toContainText("supported");
     await expect(scope.getByTestId("scope-coverage")).toContainText("supported");
     await expect(scope.getByTestId("scope-alerts")).toContainText("supported");
-    await expect(scope.getByTestId("scope-logging")).toContainText("substituted");
+    await expect(scope.getByTestId("scope-logging")).toContainText("supported");
   });
 
   test("labels the deterministic controls as fireemu-only and groups them apart", async ({

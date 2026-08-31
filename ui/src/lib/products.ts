@@ -58,7 +58,7 @@ export const productScope = (): readonly ProductScopeRow[] => [
   },
   { id: "coverage", nameKey: "scope.coverage", status: "supported", noteKey: "scope.coverageNote" },
   { id: "alerts", nameKey: "scope.alerts", status: "supported", noteKey: "scope.alertsNote" },
-  { id: "logging", nameKey: "scope.logging", status: "substituted", noteKey: "scope.loggingNote" },
+  { id: "logging", nameKey: "scope.logging", status: "supported", noteKey: "scope.loggingNote" },
 ];
 
 /** The i18n key of a status's short label. */

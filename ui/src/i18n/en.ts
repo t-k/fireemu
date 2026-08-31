@@ -428,7 +428,7 @@ export const en = {
     "Supported (UI-PARITY-04): the Alerts page publishes a Firebase alert through the official Eventarc google-channel / publishEvents mechanism, firing every registered onAlertPublished handler. Parity, not a fireemu-only injection.",
   "scope.logging": "Logging emulator (WebSocket, port 4500)",
   "scope.loggingNote":
-    "Substituted: fireemu does not serve the official Logging WebSocket. The live Functions log stream (server-sent events, filterable by level and text) is the local substitute.",
+    "Supported: the daemon serves the official Logging emulator WebSocket on port 4500 (loopback-only, bounded history). This UI additionally streams the same logs over server-sent events, filterable by level and text.",
 
   "functions.filter": "Filter",
   "functions.filterLevel": "Level",

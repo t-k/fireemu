@@ -20,8 +20,8 @@ describe("product scope", () => {
     expect(productScope().find((r) => r.id === "alerts")?.status).toBe("supported");
   });
 
-  it("marks the official Logging emulator as substituted by the SSE stream", () => {
-    expect(productScope().find((r) => r.id === "logging")?.status).toBe("substituted");
+  it("marks the official Logging emulator supported (the daemon serves its WebSocket)", () => {
+    expect(productScope().find((r) => r.id === "logging")?.status).toBe("supported");
   });
 
   it("keeps the four active parity products supported", () => {

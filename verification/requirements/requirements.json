@@ -70,6 +70,57 @@
       "note": "terminal_event_rejects_every_transition builds a real event, so it allocates: on macOS with Kani 0.67 it hits the known 'malloc with missing definition' limitation recorded in the README and only verifies where the allocator is modelled."
     },
     {
+      "id": "INV-EVENT-002",
+      "statement": "Every EventDelivery state change follows one named legal transition and changes only its target event.",
+      "criticality": "critical",
+      "owner": "core-events",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "EventDelivery.tla::LegalStateTransitions",
+        "mutation": [
+          "M-TLA-EVENT-LEGAL-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-events/tests/state_machine.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-EVENT-003",
+      "statement": "An event attempt counter changes only on Start and then increases by exactly one for that event.",
+      "criticality": "critical",
+      "owner": "core-events",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "EventDelivery.tla::AttemptsChangeOnlyOnStart",
+        "mutation": [
+          "M-RETRY-002",
+          "M-TLA-EVENT-ATTEMPTS-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-events/tests/state_machine.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-EVENT-004",
+      "statement": "DiscardStale applies only when the event's captured epoch is strictly older than the current session epoch.",
+      "criticality": "critical",
+      "owner": "core-events",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "EventDelivery.tla::StaleDiscardRequiresOlderEpoch",
+        "mutation": [
+          "M-EPOCH-001",
+          "M-TLA-EVENT-STALE-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-events/tests/outbox.rs",
+          "crates/fireemu-core-events/tests/state_machine.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-IDLE-001",
       "statement": "await-idle must not return while causal work (including child enqueue reservations and Text Index backfill) is active.",
       "criticality": "critical",

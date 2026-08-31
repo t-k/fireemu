@@ -352,6 +352,7 @@ dependencies = [
  "fireemu-adapter-functions",
  "fireemu-adapter-grpc",
  "fireemu-adapter-http",
+ "fireemu-adapter-logging",
  "fireemu-adapter-pubsub",
  "fireemu-adapter-ui",
  "fireemu-core-app-check",
@@ -443,6 +444,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "subtle",
+ "tokio",
+]
+
+[[package]]
+name = "fireemu-adapter-logging"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde_json",
+ "sha1",
  "tokio",
 ]
 
@@ -1787,6 +1798,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]

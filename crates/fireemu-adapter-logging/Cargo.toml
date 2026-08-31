@@ -1,0 +1,21 @@
+[package]
+name = "fireemu-adapter-logging"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The official Firebase Logging emulator: an RFC 6455 WebSocket server that streams the EmulatorLog wire format (firebase-tools loggingEmulator.js) over a bounded log bus"
+
+[dependencies]
+serde_json.workspace = true
+sha1 = "0.10"
+base64 = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util", "time"] }
+
+[lints]
+workspace = true

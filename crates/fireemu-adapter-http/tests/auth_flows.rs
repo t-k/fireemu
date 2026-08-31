@@ -1111,7 +1111,7 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
         "POST",
         &collection,
         &owner(),
-        &json!({"displayName": "Customer A", "allowPasswordSignup": true}),
+        &json!({"displayName": "Customer A", "allowPasswordSignup": true, "disableAuth": true}),
     );
     assert_eq!(created.status, 200, "{}", created.body);
     let name = created.body["name"].as_str().unwrap();
@@ -1126,13 +1126,15 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let updated = handle_with(
         &s,
         "PATCH",
-        &item,
+        &format!("{item}?updateMask=displayName,enableAnonymousUser"),
         &owner(),
         &json!({"displayName": "Customer B", "enableAnonymousUser": true}),
     );
     assert_eq!(updated.status, 200, "{}", updated.body);
     assert_eq!(updated.body["displayName"], "Customer B");
     assert_eq!(updated.body["enableAnonymousUser"], true);
+    assert_eq!(updated.body["allowPasswordSignup"], true);
+    assert_eq!(updated.body["disableAuth"], true);
 
     let deleted = handle_with(&s, "DELETE", &item, &owner(), &json!({}));
     assert_eq!(deleted.status, 200, "{}", deleted.body);
@@ -1194,6 +1196,23 @@ fn tenant_authentication_flags_are_enforced() {
             allow_password_signup: true,
             enable_email_link_signin: true,
             enable_anonymous_user: true,
+            ..TenantMetadata::default()
+        },
+    ));
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "restricted", "email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let refresh_token = created["refreshToken"].as_str().unwrap().to_owned();
+    assert!(registry.update_tenant(
+        "demo-app",
+        "restricted",
+        TenantMetadata {
+            allow_password_signup: true,
+            enable_email_link_signin: true,
+            enable_anonymous_user: true,
             disable_auth: true,
             ..TenantMetadata::default()
         },
@@ -1202,6 +1221,14 @@ fn tenant_authentication_flags_are_enforced() {
         &s,
         &format!("{V1}/accounts:signUp"),
         &json!({"tenantId": "restricted", "email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");
+
+    let (status, refused) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh_token}),
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");

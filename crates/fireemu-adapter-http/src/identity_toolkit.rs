@@ -689,16 +689,8 @@ fn dispatch_with_blocking_hook(
     let signed_in = is_authentication
         && response.status == 200
         && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
-    let issued_session = signed_in
-        .then(|| verify_session(&candidate, &response.body, at).ok())
-        .flatten();
-    let persisted_claim_names: Vec<String> = uid
-        .as_ref()
-        .and_then(|uid| candidate.user(uid))
-        .map(|user| user.custom_claims.entries().keys().cloned().collect())
-        .unwrap_or_default();
     drop(store);
-    let mut session_claims = None;
+    let mut blocking_responses = Vec::new();
     if response.status == 200 {
         if let Some(uid) = uid {
             if is_new {
@@ -722,6 +714,10 @@ fn dispatch_with_blocking_hook(
                 ) {
                     return error(400, &reason);
                 }
+                blocking_responses.push((
+                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                    value,
+                ));
             }
             if signed_in {
                 let value = {
@@ -736,62 +732,97 @@ fn dispatch_with_blocking_hook(
                         Err(reason) => return error(400, &reason),
                     }
                 };
-                match apply_blocking_response(
+                if let Err(reason) = apply_blocking_response(
                     &mut candidate,
                     &uid,
                     fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                     &value,
                 ) {
-                    Ok(claims) => session_claims = claims,
-                    Err(reason) => return error(400, &reason),
+                    return error(400, &reason);
                 }
-            }
-            if let Some(mut session) = issued_session {
-                for name in &persisted_claim_names {
-                    session.extra_claims.remove(name);
-                }
-                if let Some(user) = candidate.user(&uid) {
-                    for name in user.custom_claims.entries().keys() {
-                        session.extra_claims.remove(name);
-                    }
-                }
-                if let Some(claims) = session_claims {
-                    for (name, value) in claims.entries() {
-                        if let Err(reason) = session.extra_claims.insert(name, value.clone()) {
-                            return error(
-                                400,
-                                &format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {reason}"),
-                            );
-                        }
-                    }
-                }
-                let provider = provider_from_id(&session.provider);
-                let tokens = match issue_tokens_with(
-                    &mut candidate,
-                    &uid,
-                    session.second_factor.as_ref(),
-                    at,
-                    Some(&session.extra_claims),
-                    Some(provider),
-                ) {
-                    Ok(tokens) => tokens,
-                    Err(refusal) => return refusal,
-                };
-                for field in ["idToken", "refreshToken", "expiresIn", "email"] {
-                    response.body[field] = tokens[field].clone();
-                }
-                if let Some(user) = candidate.user(&uid) {
-                    response.body["displayName"] = json!(user.display_name);
-                    response.body["photoUrl"] = json!(user.photo_url);
-                    response.body["emailVerified"] = json!(user.email_verified);
-                }
+                blocking_responses.push((
+                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                    value,
+                ));
             }
         }
     }
     let Ok(mut live) = store_arc.lock() else {
         return error(500, "INTERNAL");
     };
-    *live = candidate;
+    let mut committed = live.clone();
+    response = dispatch(handler, &mut committed, query, body, headers, at);
+    if response.status != 200 {
+        return response;
+    }
+    let uid = response
+        .body
+        .get("localId")
+        .and_then(Value::as_str)
+        .and_then(|uid| committed.user_by_id(uid))
+        .map(|user| user.local_id.clone());
+    if let Some(uid) = uid {
+        let signed_in = is_authentication
+            && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
+        let mut issued_session = signed_in
+            .then(|| verify_session(&committed, &response.body, at).ok())
+            .flatten();
+        let persisted_claim_names: Vec<String> = committed
+            .user(&uid)
+            .map(|user| user.custom_claims.entries().keys().cloned().collect())
+            .unwrap_or_default();
+        let mut session_claims = None;
+        for (event, value) in &blocking_responses {
+            match apply_blocking_response(&mut committed, &uid, *event, value) {
+                Ok(claims)
+                    if *event
+                        == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn =>
+                {
+                    session_claims = claims;
+                }
+                Ok(_) => {}
+                Err(reason) => return error(400, &reason),
+            }
+        }
+        if let Some(mut session) = issued_session.take() {
+            for name in &persisted_claim_names {
+                session.extra_claims.remove(name);
+            }
+            if let Some(user) = committed.user(&uid) {
+                for name in user.custom_claims.entries().keys() {
+                    session.extra_claims.remove(name);
+                }
+            }
+            if let Some(claims) = session_claims {
+                for (name, value) in claims.entries() {
+                    if let Err(reason) = session.extra_claims.insert(name, value.clone()) {
+                        return error(400, &format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {reason}"));
+                    }
+                }
+            }
+            let provider = provider_from_id(&session.provider);
+            let tokens = match issue_tokens_with(
+                &mut committed,
+                &uid,
+                session.second_factor.as_ref(),
+                at,
+                Some(&session.extra_claims),
+                Some(provider),
+            ) {
+                Ok(tokens) => tokens,
+                Err(refusal) => return refusal,
+            };
+            for field in ["idToken", "refreshToken", "expiresIn", "email"] {
+                response.body[field] = tokens[field].clone();
+            }
+            if let Some(user) = committed.user(&uid) {
+                response.body["displayName"] = json!(user.display_name);
+                response.body["photoUrl"] = json!(user.photo_url);
+                response.body["emailVerified"] = json!(user.email_verified);
+            }
+        }
+    }
+    *live = committed;
     response
 }
 
@@ -1133,6 +1164,64 @@ fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {
     }
 }
 
+fn merged_tenant_metadata(
+    mut metadata: fireemu_core_auth::store::TenantMetadata,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<fireemu_core_auth::store::TenantMetadata, JsonResponse> {
+    const FIELDS: [&str; 5] = [
+        "displayName",
+        "allowPasswordSignup",
+        "enableEmailLinkSignin",
+        "enableAnonymousUser",
+        "disableAuth",
+    ];
+    let params = query_params(query);
+    let fields: Vec<&str> = params.get("updateMask").map_or_else(
+        || {
+            FIELDS
+                .into_iter()
+                .filter(|field| body.get(*field).is_some())
+                .collect()
+        },
+        |mask| mask.split(',').filter(|field| !field.is_empty()).collect(),
+    );
+    if fields.iter().any(|field| !FIELDS.contains(field)) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    for field in fields {
+        match field {
+            "displayName" => {
+                metadata.display_name = match body.get(field) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(value)) => Some(value.clone()),
+                    Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+                };
+            }
+            "allowPasswordSignup" => {
+                metadata.allow_password_signup = bool_update(body, field)?;
+            }
+            "enableEmailLinkSignin" => {
+                metadata.enable_email_link_signin = bool_update(body, field)?;
+            }
+            "enableAnonymousUser" => {
+                metadata.enable_anonymous_user = bool_update(body, field)?;
+            }
+            "disableAuth" => metadata.disable_auth = bool_update(body, field)?,
+            _ => unreachable!("tenant update mask was validated"),
+        }
+    }
+    Ok(metadata)
+}
+
+fn bool_update(body: &Value, field: &str) -> Result<bool, JsonResponse> {
+    match body.get(field) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
 fn tenant_json(
     project: &str,
     tenant: &str,
@@ -1220,7 +1309,13 @@ fn tenant_management(
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
-            let metadata = tenant_metadata(body);
+            let Some(current) = registry.tenant_metadata(project, tenant) else {
+                return error(404, "TENANT_NOT_FOUND");
+            };
+            let metadata = match merged_tenant_metadata(current, body, query) {
+                Ok(metadata) => metadata,
+                Err(response) => return response,
+            };
             if !registry.update_tenant(project, tenant, metadata.clone()) {
                 return error(404, "TENANT_NOT_FOUND");
             }
@@ -1259,6 +1354,7 @@ fn tenant_policy_denial(
     let authenticates = matches!(
         handler,
         routes::Handler::SignUp
+            | routes::Handler::Token
             | routes::Handler::SignInWithPassword
             | routes::Handler::SignInWithCustomToken
             | routes::Handler::SignInWithEmailLink

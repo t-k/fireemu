@@ -670,22 +670,25 @@ fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Val
 
 struct ReentrantAdminHook {
     state: std::sync::Weak<AuthState>,
+    mutate: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AuthBlockingHook for ReentrantAdminHook {
     fn invoke(
         &self,
         event: BlockingAuthEvent,
-        _user: &fireemu_core_auth::store::UserRecord,
+        user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, String> {
-        if event == BlockingAuthEvent::BeforeSignIn {
+        if event == BlockingAuthEvent::BeforeSignIn
+            && self.mutate.load(std::sync::atomic::Ordering::SeqCst)
+        {
             let state = self.state.upgrade().ok_or("test state disappeared")?;
             let response = handle_with(
                 &state,
-                "GET",
-                &format!("{ADMIN}/accounts:batchGet"),
+                "POST",
+                &format!("{ADMIN}/accounts:update"),
                 &owner(),
-                &json!({}),
+                &json!({"localId": user.local_id.as_str(), "disableUser": true}),
             );
             if response.status != 200 {
                 return Err(format!("Admin callback failed: {}", response.body));
@@ -696,20 +699,30 @@ impl AuthBlockingHook for ReentrantAdminHook {
 }
 
 #[test]
-fn blocking_auth_can_call_back_into_admin_auth_without_deadlocking() {
+fn blocking_auth_rebases_on_admin_mutations_without_deadlocking_or_losing_them() {
+    let mutate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hook_mutate = mutate.clone();
     let state = Arc::new_cyclic(|weak| {
         let mut state = state();
         state.blocking = Some(Arc::new(ReentrantAdminHook {
             state: weak.clone(),
+            mutate: hook_mutate.clone(),
         }));
         state
     });
+    let (status, created) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "callback@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    mutate.store(true, std::sync::atomic::Ordering::SeqCst);
     let request_state = state.clone();
     let (sent, received) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = post(
             &request_state,
-            &format!("{V1}/accounts:signUp"),
+            &format!("{V1}/accounts:signInWithPassword"),
             &json!({"email": "callback@example.com", "password": "hunter22"}),
         );
         let _ = sent.send(result);
@@ -718,7 +731,17 @@ fn blocking_auth_can_call_back_into_admin_auth_without_deadlocking() {
     let (status, body) = received
         .recv_timeout(std::time::Duration::from_secs(2))
         .expect("blocking Auth must not hold the gate needed by Admin Auth");
-    assert_eq!(status, 200, "{body}");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "USER_DISABLED");
+    assert!(
+        state
+            .store
+            .lock()
+            .unwrap()
+            .user_by_email("callback@example.com")
+            .unwrap()
+            .disabled
+    );
 }
 
 #[test]

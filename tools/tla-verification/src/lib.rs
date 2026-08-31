@@ -108,6 +108,80 @@ pub struct MutationResult {
     pub detail: String,
 }
 
+/// Full-property disposition report for regenerated mutation candidates.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TriageReport {
+    /// Persisted schema version.
+    pub schema_version: u32,
+    /// Date on which the candidate set was regenerated.
+    pub date: String,
+    /// Relationship to the earlier count-only observation.
+    pub historical_observation: HistoricalObservation,
+    /// Modules included in this frozen candidate cohort.
+    pub models: Vec<String>,
+    /// Every candidate in the regenerated repository-owned manifests.
+    pub candidates: Vec<TriageCandidate>,
+}
+
+/// Audit note for a historical observation that lacked a result artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoricalObservation {
+    /// Candidate count reported by the earlier experiment.
+    pub reported_count: u32,
+    /// Whether individual historical candidates can be mapped.
+    pub mapping: HistoricalMapping,
+    /// Why the old observation can or cannot be mapped to current candidates.
+    pub rationale: String,
+}
+
+/// Supported historical-candidate mapping states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalMapping {
+    /// No stable identifiers or result artifact survived from the old run.
+    Unreproducible,
+}
+
+/// One regenerated candidate and its full-property disposition.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TriageCandidate {
+    /// Stable mutation identifier.
+    pub candidate_id: String,
+    /// TLA+ module name.
+    pub model: String,
+    /// Property expected to detect the mutation.
+    pub property: String,
+    /// Human-readable mutation operator.
+    pub operator: String,
+    /// Exact original source span replaced by the mutant.
+    pub source_span: String,
+    /// Result from the referenced full-configuration evidence.
+    pub outcome: MutationOutcome,
+    /// Repository-relative evidence file, required for accepted coverage.
+    pub evidence: Option<String>,
+    /// Final disposition after full-property analysis.
+    pub disposition: TriageDisposition,
+    /// Nonempty explanation for the disposition.
+    pub rationale: String,
+}
+
+/// Exhaustive disposition of a regenerated candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriageDisposition {
+    /// An already-configured property detected the candidate.
+    Covered,
+    /// A new property was added to detect the candidate.
+    PropertyAdded,
+    /// The candidate is behaviorally equivalent under the model bounds.
+    Equivalent,
+    /// The candidate does not represent a valid semantic defect.
+    Invalid,
+}
+
 /// Exhaustive outcome classification for one mutation run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -359,6 +433,99 @@ pub fn verify_repository_evidence(root: &Path, jar: &Path) -> Result<Vec<String>
     Ok(verified)
 }
 
+/// Verifies that a triage report exactly covers its frozen model cohort and evidence rows.
+pub fn verify_triage_report(root: &Path, report_path: &Path) -> Result<usize, String> {
+    let report = parse_triage(
+        &fs::read_to_string(report_path)
+            .map_err(|error| format!("read {}: {error}", report_path.display()))?,
+    )?;
+    let tla_directory = root.join("verification/tla");
+    let mut expected_count = 0_usize;
+    for model in &report.models {
+        let manifest_path = tla_directory
+            .join("mutations")
+            .join(format!("{model}.json"));
+        let manifest = parse_manifest(
+            &fs::read_to_string(&manifest_path)
+                .map_err(|error| format!("read {}: {error}", manifest_path.display()))?,
+        )?;
+        if manifest.model != *model {
+            return Err(format!(
+                "triage model {model} does not match manifest model {}",
+                manifest.model
+            ));
+        }
+        expected_count += manifest.mutations.len();
+        for mutation in &manifest.mutations {
+            let candidate = report
+                .candidates
+                .iter()
+                .find(|candidate| candidate.candidate_id == mutation.id)
+                .ok_or_else(|| format!("triage is missing candidate {}", mutation.id))?;
+            if candidate.model != *model
+                || candidate.property != mutation.property
+                || candidate.operator != mutation.operator
+                || candidate.source_span != mutation.from
+            {
+                return Err(format!(
+                    "triage candidate {} does not match its mutation manifest",
+                    mutation.id
+                ));
+            }
+            let evidence_reference = candidate.evidence.as_deref().ok_or_else(|| {
+                format!(
+                    "triage candidate {} requires evidence",
+                    candidate.candidate_id
+                )
+            })?;
+            let relative_evidence = Path::new(evidence_reference);
+            if relative_evidence.is_absolute()
+                || relative_evidence
+                    .components()
+                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            {
+                return Err(format!(
+                    "triage candidate {} has an unsafe evidence path",
+                    candidate.candidate_id
+                ));
+            }
+            let evidence_path = root.join(relative_evidence);
+            let evidence = parse_evidence(
+                &fs::read_to_string(&evidence_path)
+                    .map_err(|error| format!("read {}: {error}", evidence_path.display()))?,
+            )?;
+            let result = evidence
+                .results
+                .iter()
+                .find(|result| result.id == mutation.id)
+                .ok_or_else(|| {
+                    format!(
+                        "triage candidate {} is missing from {}",
+                        mutation.id,
+                        evidence_path.display()
+                    )
+                })?;
+            if evidence.model != *model
+                || result.property != mutation.property
+                || result.outcome != candidate.outcome
+                || !result.outcome.is_killed()
+            {
+                return Err(format!(
+                    "triage candidate {} does not match killed evidence",
+                    mutation.id
+                ));
+            }
+        }
+    }
+    if report.candidates.len() != expected_count {
+        return Err(format!(
+            "triage has {} candidates for {expected_count} manifest mutations",
+            report.candidates.len()
+        ));
+    }
+    Ok(expected_count)
+}
+
 /// Parses and validates a mutation manifest.
 pub fn parse_manifest(json: &str) -> Result<MutationManifest, String> {
     let manifest: MutationManifest =
@@ -431,6 +598,91 @@ pub fn parse_evidence(json: &str) -> Result<MutationEvidence, String> {
         }
     }
     Ok(evidence)
+}
+
+/// Parses and validates a full-property triage report.
+pub fn parse_triage(json: &str) -> Result<TriageReport, String> {
+    let report: TriageReport = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    validate_schema(report.schema_version)?;
+    if report.date.trim().is_empty() {
+        return Err("triage date must not be empty".to_owned());
+    }
+    if report.historical_observation.reported_count == 0 {
+        return Err("historical reportedCount must be positive".to_owned());
+    }
+    if report.historical_observation.rationale.trim().is_empty() {
+        return Err("historical observation requires non-empty rationale".to_owned());
+    }
+    if report.candidates.is_empty() {
+        return Err("triage must contain at least one candidate".to_owned());
+    }
+    if report.models.is_empty() {
+        return Err("triage must contain at least one model".to_owned());
+    }
+    let mut models = HashSet::new();
+    for model in &report.models {
+        validate_tla_identifier("model", model)?;
+        if !models.insert(model.as_str()) {
+            return Err(format!("duplicate triage model {model}"));
+        }
+    }
+    let mut ids = HashSet::new();
+    for candidate in &report.candidates {
+        if !is_mutation_id(&candidate.candidate_id) {
+            return Err(format!(
+                "invalid triage candidate id {}",
+                candidate.candidate_id
+            ));
+        }
+        if !ids.insert(candidate.candidate_id.as_str()) {
+            return Err(format!(
+                "duplicate triage candidate {}",
+                candidate.candidate_id
+            ));
+        }
+        validate_tla_identifier("model", &candidate.model)?;
+        if !models.contains(candidate.model.as_str()) {
+            return Err(format!(
+                "triage candidate {} uses unlisted model {}",
+                candidate.candidate_id, candidate.model
+            ));
+        }
+        validate_tla_identifier("property", &candidate.property)?;
+        for (field, value) in [
+            ("operator", candidate.operator.as_str()),
+            ("sourceSpan", candidate.source_span.as_str()),
+            ("rationale", candidate.rationale.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!(
+                    "triage candidate {} requires non-empty {field}",
+                    candidate.candidate_id
+                ));
+            }
+        }
+        if matches!(
+            candidate.disposition,
+            TriageDisposition::Covered | TriageDisposition::PropertyAdded
+        ) {
+            if candidate
+                .evidence
+                .as_deref()
+                .is_none_or(|path| path.trim().is_empty())
+            {
+                return Err(format!(
+                    "triage candidate {} requires evidence",
+                    candidate.candidate_id
+                ));
+            }
+            if !candidate.outcome.is_killed() {
+                return Err(format!(
+                    "triage candidate {} requires a killed outcome",
+                    candidate.candidate_id
+                ));
+            }
+        }
+    }
+    Ok(report)
 }
 
 /// Computes the lowercase SHA-256 digest of a file without loading it all at once.

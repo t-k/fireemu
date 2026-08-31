@@ -6,9 +6,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use tla_verification::{run_mutations, verify_repository_evidence, RunOptions};
+use tla_verification::{
+    run_mutations, verify_repository_evidence, verify_triage_report, RunOptions,
+};
 
-const USAGE: &str = "Usage:\n  tla-verification mutate --module PATH --config PATH --manifest PATH --jar PATH --evidence PATH [--java PATH] [--timeout-seconds N]\n  tla-verification verify-evidence [--root PATH] [--jar PATH]\n";
+const USAGE: &str = "Usage:\n  tla-verification mutate --module PATH --config PATH --manifest PATH --jar PATH --evidence PATH [--java PATH] [--timeout-seconds N]\n  tla-verification verify-evidence [--root PATH] [--jar PATH]\n  tla-verification verify-triage [--root PATH] [--report PATH]\n";
 
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
@@ -32,8 +34,24 @@ fn run(arguments: &[String]) -> Result<(), String> {
         }
         "mutate" => mutate(&arguments[1..]),
         "verify-evidence" => verify(&arguments[1..]),
+        "verify-triage" => verify_triage(&arguments[1..]),
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+fn verify_triage(arguments: &[String]) -> Result<(), String> {
+    let mut flags = parse_flags(arguments)?;
+    let root = flags
+        .remove("root")
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let report = flags.remove("report").map_or_else(
+        || root.join("verification/tla/triage/2026-08-31-full-property.json"),
+        PathBuf::from,
+    );
+    reject_unused_flags(&flags)?;
+    let count = verify_triage_report(&root, &report)?;
+    println!("TLA mutation triage: ok ({count} candidates, 0 open)");
+    Ok(())
 }
 
 fn mutate(arguments: &[String]) -> Result<(), String> {

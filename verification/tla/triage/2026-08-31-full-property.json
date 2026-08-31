@@ -1,0 +1,259 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-08-31",
+  "historicalObservation": {
+    "reportedCount": 17,
+    "mapping": "unreproducible",
+    "rationale": "The earlier state-invariant-only experiment recorded only a total of 17 gaps; it persisted neither stable candidate identifiers nor a result artifact. The current cohort was regenerated from repository-owned exact-span mutants with every configured safety and temporal property enabled, so individual one-to-one mapping would be fabricated."
+  },
+  "models": [
+    "AuthTotp",
+    "AwaitIdle",
+    "EventDelivery",
+    "SessionEpoch"
+  ],
+  "candidates": [
+    {
+      "candidateId": "M-TLA-AUTH-REUSE-001",
+      "model": "AuthTotp",
+      "property": "NoTotpCodeReuse",
+      "operator": "remove-replay-guard",
+      "sourceSpan": "/\\ (lastAccepted = NoStep \\/ step > lastAccepted)",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AuthTotp.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-AUTH-ENROLLMENT-001",
+      "model": "AuthTotp",
+      "property": "NoSecondFactorWithoutEnrollment",
+      "operator": "issue-second-factor-token-after-expiry",
+      "sourceSpan": "/\\ tokenSecond' = TRUE\n    /\\ acceptedAt' = clock\n    /\\ UNCHANGED <<clock, state, sessionEnd, enrollmentAcceptedAt>>",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AuthTotp.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-AUTH-LIVENESS-001",
+      "model": "AuthTotp",
+      "property": "EnrollmentEventuallyFinalizesOrExpires",
+      "operator": "remove-enrollment-fairness",
+      "sourceSpan": "Fairness ==\n    /\\ WF_vars(Tick)\n    /\\ WF_vars(ExpireEnrollment)\n    /\\ \\A s \\in Steps: WF_vars(FinalizeEnrollment(s))",
+      "outcome": "killed_temporal",
+      "evidence": "verification/tla/evidence/AuthTotp.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-AUTH-WINDOW-FINALIZE-001",
+      "model": "AuthTotp",
+      "property": "AcceptedOnlyWithinWindow",
+      "operator": "finalize-with-any-totp-step",
+      "sourceSpan": "/\\ InWindow(step)\n    /\\ state' = \"Enrolled\"",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AuthTotp.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-AUTH-WINDOW-VERIFY-001",
+      "model": "AuthTotp",
+      "property": "AcceptedOnlyWithinWindow",
+      "operator": "verify-with-any-totp-step",
+      "sourceSpan": "/\\ InWindow(step)\n    /\\ (lastAccepted = NoStep \\/ step > lastAccepted)",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AuthTotp.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-AUTH-EXPIRY-001",
+      "model": "AuthTotp",
+      "property": "EnrollmentAcceptedBeforeExpiry",
+      "operator": "finalize-expired-enrollment",
+      "sourceSpan": "/\\ clock <= sessionEnd\n    /\\ InWindow(step)",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AuthTotp.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-IDLE-SAFETY-001",
+      "model": "AwaitIdle",
+      "property": "NoFalseIdle",
+      "operator": "return-before-blocking-work-drains",
+      "sourceSpan": "/\\ Blocking = {}\n    /\\ fenceState' = \"returned\"",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AwaitIdle.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-IDLE-LIVENESS-001",
+      "model": "AwaitIdle",
+      "property": "AwaitIdleEventuallyReturns",
+      "operator": "remove-return-idle-fairness",
+      "sourceSpan": "/\\ WF_vars(ReturnIdle)",
+      "outcome": "killed_temporal",
+      "evidence": "verification/tla/evidence/AwaitIdle.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-IDLE-IDENTITY-EXTERNAL-001",
+      "model": "AwaitIdle",
+      "property": "NoIdentityReuse",
+      "operator": "reuse-external-work-identity",
+      "sourceSpan": "/\\ i \\notin used\n    /\\ FreshAvailable",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AwaitIdle.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-IDLE-IDENTITY-CHILD-001",
+      "model": "AwaitIdle",
+      "property": "NoIdentityReuse",
+      "operator": "reuse-child-work-identity",
+      "sourceSpan": "/\\ c \\notin used\n    /\\ reserved' = reserved \\ {p}",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AwaitIdle.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-IDLE-FENCE-ADMISSION-001",
+      "model": "AwaitIdle",
+      "property": "FenceClosedToNewExternalWork",
+      "operator": "admit-external-work-while-waiting",
+      "sourceSpan": "/\\ fenceState = \"none\"\n    /\\ i \\notin used",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AwaitIdle.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-IDLE-FENCE-LIFECYCLE-001",
+      "model": "AwaitIdle",
+      "property": "FenceLifecycleMonotonic",
+      "operator": "reopen-returned-fence",
+      "sourceSpan": "/\\ fenceState' = \"returned\"\n    /\\ Record(\"ReturnIdle\", {})\n    /\\ UNCHANGED <<active, reserved, kind, depth, used, fenced>>",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AwaitIdle.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-IDLE-RESERVATION-001",
+      "model": "AwaitIdle",
+      "property": "CoveredReservationsBlock",
+      "operator": "exclude-covered-reservations-from-blocking",
+      "sourceSpan": "Blocking == (reserved \\cap fenced) \\cup {i \\in active : i \\in fenced /\\ Fenced(i)}",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/AwaitIdle.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-EVENT-TERMINAL-001",
+      "model": "EventDelivery",
+      "property": "NoTerminalRegression",
+      "operator": "allow-cancel-from-terminal-state",
+      "sourceSpan": "/\\ state[e] \\in NonTerminal\n    /\\ state' = [state EXCEPT ![e] = \"Cancelled\"]",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/EventDelivery.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-EVENT-LIVENESS-001",
+      "model": "EventDelivery",
+      "property": "EventEventuallyTerminates",
+      "operator": "remove-worker-fairness",
+      "sourceSpan": "Fairness == \\A e \\in Events: WF_vars(Progress(e))",
+      "outcome": "killed_temporal",
+      "evidence": "verification/tla/evidence/EventDelivery.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-EVENT-LEGAL-001",
+      "model": "EventDelivery",
+      "property": "LegalStateTransitions",
+      "operator": "retry-due-from-leased",
+      "sourceSpan": "/\\ state[e] = \"RetryWaiting\"\n    /\\ state' = [state EXCEPT ![e] = \"Pending\"]",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/EventDelivery.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-EVENT-ATTEMPTS-001",
+      "model": "EventDelivery",
+      "property": "AttemptsChangeOnlyOnStart",
+      "operator": "start-without-incrementing-attempts",
+      "sourceSpan": "/\\ attempts' = [attempts EXCEPT ![e] = attempts[e] + 1]\n    /\\ RecordEvent(\"Start\", e)\n    /\\ UNCHANGED <<eventEpoch, epoch>>",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/EventDelivery.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-EVENT-STALE-001",
+      "model": "EventDelivery",
+      "property": "StaleDiscardRequiresOlderEpoch",
+      "operator": "discard-current-epoch-event",
+      "sourceSpan": "/\\ eventEpoch[e] < epoch\n    /\\ state' = [state EXCEPT ![e] = \"DiscardedStaleEpoch\"]",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/EventDelivery.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-EPOCH-ISOLATION-001",
+      "model": "SessionEpoch",
+      "property": "EpochIsolation",
+      "operator": "allow-stale-work-to-apply",
+      "sourceSpan": "/\\ workEpoch[w] = epoch\n    /\\ applied' =",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/SessionEpoch.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-EPOCH-CAPTURE-001",
+      "model": "SessionEpoch",
+      "property": "WorkCapturedOnlyWhileActive",
+      "operator": "capture-work-outside-active-state",
+      "sourceSpan": "CaptureWork(w) ==\n    /\\ state = \"Active\"",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/SessionEpoch.json",
+      "disposition": "property_added",
+      "rationale": "A new history or boundary property was added and the full unchanged configuration now kills this candidate."
+    },
+    {
+      "candidateId": "M-TLA-EPOCH-MONOTONIC-001",
+      "model": "SessionEpoch",
+      "property": "EpochNeverDecreases",
+      "operator": "choose-any-reset-epoch",
+      "sourceSpan": "/\\ epoch' = epoch + 1",
+      "outcome": "killed_safety",
+      "evidence": "verification/tla/evidence/SessionEpoch.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    },
+    {
+      "candidateId": "M-TLA-RESET-LIVENESS-001",
+      "model": "SessionEpoch",
+      "property": "ResetEventuallyActivatesNewEpoch",
+      "operator": "remove-reset-completion-fairness",
+      "sourceSpan": "Fairness == WF_vars(CompleteReset)",
+      "outcome": "killed_temporal",
+      "evidence": "verification/tla/evidence/SessionEpoch.json",
+      "disposition": "covered",
+      "rationale": "An existing configured safety or temporal property kills this candidate under the full unchanged configuration."
+    }
+  ]
+}

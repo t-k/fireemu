@@ -1,7 +1,7 @@
 //! Contract tests for persisted mutation manifests and evidence.
 
 use tla_verification::{
-    parse_evidence, parse_manifest, sha256_file, MutationEvidence, MutationOutcome,
+    parse_evidence, parse_manifest, parse_triage, sha256_file, MutationEvidence, MutationOutcome,
 };
 
 fn valid_manifest() -> &'static str {
@@ -33,6 +33,30 @@ fn valid_evidence() -> &'static str {
             "property": "LegalStateTransitions",
             "outcome": "killed_safety",
             "detail": "Invariant LegalStateTransitions is violated"
+        }]
+    }"#
+}
+
+fn valid_triage() -> &'static str {
+    r#"{
+        "schemaVersion": 1,
+        "date": "2026-08-31",
+        "historicalObservation": {
+            "reportedCount": 17,
+            "mapping": "unreproducible",
+            "rationale": "The historical run did not persist candidate identifiers or results."
+        },
+        "models": ["EventDelivery"],
+        "candidates": [{
+            "candidateId": "M-TLA-EVENT-LEGAL-001",
+            "model": "EventDelivery",
+            "property": "LegalStateTransitions",
+            "operator": "retry-due-from-leased",
+            "sourceSpan": "state[e] = Pending",
+            "outcome": "killed_safety",
+            "evidence": "verification/tla/evidence/EventDelivery.json",
+            "disposition": "property_added",
+            "rationale": "The transition-history property detects the expanded source state."
         }]
     }"#
 }
@@ -150,4 +174,45 @@ fn sha256_file_returns_lowercase_hex() {
 fn public_evidence_type_is_deserializable() {
     let evidence: MutationEvidence = serde_json::from_str(valid_evidence()).expect("shape");
     assert_eq!(evidence.schema_version, 1);
+}
+
+#[test]
+fn triage_rejects_unknown_dispositions_empty_rationale_and_duplicate_candidates() {
+    let triage = parse_triage(valid_triage()).expect("valid triage");
+    assert_eq!(triage.historical_observation.reported_count, 17);
+
+    let unknown = valid_triage().replace("property_added", "still_open");
+    assert!(parse_triage(&unknown).is_err());
+
+    let empty_rationale = valid_triage().replace(
+        "The transition-history property detects the expanded source state.",
+        "  ",
+    );
+    assert!(parse_triage(&empty_rationale)
+        .unwrap_err()
+        .contains("non-empty rationale"));
+
+    let duplicate = valid_triage().replace(
+        "]\n    }",
+        ", {\"candidateId\":\"M-TLA-EVENT-LEGAL-001\",\"model\":\"EventDelivery\",\"property\":\"LegalStateTransitions\",\"operator\":\"duplicate\",\"sourceSpan\":\"A\",\"outcome\":\"killed_safety\",\"evidence\":\"verification/tla/evidence/EventDelivery.json\",\"disposition\":\"covered\",\"rationale\":\"duplicate row\"}]\n    }",
+    );
+    assert!(parse_triage(&duplicate)
+        .unwrap_err()
+        .contains("duplicate triage candidate"));
+}
+
+#[test]
+fn covered_and_property_added_triage_rows_require_killed_evidence_references() {
+    let missing_evidence = valid_triage().replace(
+        "            \"evidence\": \"verification/tla/evidence/EventDelivery.json\",\n",
+        "",
+    );
+    assert!(parse_triage(&missing_evidence)
+        .unwrap_err()
+        .contains("requires evidence"));
+
+    let survived = valid_triage().replace("killed_safety", "survived");
+    assert!(parse_triage(&survived)
+        .unwrap_err()
+        .contains("requires a killed outcome"));
 }

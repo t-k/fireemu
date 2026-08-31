@@ -39,3 +39,15 @@ cargo run -p traceability-check
 `traceability-check` also requires each referenced property to be defined by its module, registered by the same-stem cfg under `INVARIANT(S)` or `PROPERTY/PROPERTIES`, and connected to at least one referenced killed semantic mutation for that property. Requirements without a TLA+ reference retain the global Rust mutation-catalog check.
 
 These commands are intentionally manual. This workflow does not add a new CI job; the existing fast traceability gate validates checked-in metadata and digest-bound evidence.
+
+## Full-property triage
+
+`triage/2026-08-31-full-property.json` freezes the four original models after running every exact-span mutant with each model's complete cfg, including temporal properties. The older observation reported 17 gaps but did not persist candidate identifiers or a result artifact, so the report records that individual historical mapping is unreproducible instead of inventing one. The regenerated cohort contains 22 candidates: 10 were already covered and 12 required new history or boundary properties. Every candidate is now killed.
+
+Validate that every frozen manifest mutation has an exact triage row and matching killed evidence:
+
+```sh
+cargo run -p tla-verification -- verify-triage
+```
+
+`AwaitIdleIgnoreTextIndex.cfg` is an additional policy configuration. Regenerate its evidence with the same `AwaitIdle.json` manifest when `AwaitIdle.tla` changes; the default same-stem cfg remains the traceability contract.

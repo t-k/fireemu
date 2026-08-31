@@ -147,6 +147,72 @@
       }
     },
     {
+      "id": "INV-IDLE-002",
+      "statement": "Work identities are allocated at most once across external registration and causal child handoff.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AwaitIdle.tla::NoIdentityReuse",
+        "mutation": [
+          "M-TLA-IDLE-IDENTITY-EXTERNAL-001",
+          "M-TLA-IDLE-IDENTITY-CHILD-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-session/tests/idle.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-IDLE-003",
+      "statement": "A requested await-idle fence admits no new external work and advances monotonically from waiting to returned.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AwaitIdle.tla::FenceClosedToNewExternalWork",
+        "mutation": [
+          "M-TLA-IDLE-FENCE-ADMISSION-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-session/tests/idle.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-IDLE-004",
+      "statement": "An await-idle fence never reopens after it has returned.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AwaitIdle.tla::FenceLifecycleMonotonic",
+        "mutation": [
+          "M-TLA-IDLE-FENCE-LIFECYCLE-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-session/tests/idle.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-IDLE-005",
+      "statement": "Every child-enqueue reservation captured by a fence remains blocking regardless of the child work kind or ignore policy.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AwaitIdle.tla::CoveredReservationsBlock",
+        "mutation": [
+          "M-IDLE-002",
+          "M-TLA-IDLE-RESERVATION-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-session/tests/idle.rs"
+        ]
+      }
+    },
+    {
       "id": "LIVE-RESET-001",
       "statement": "After a reset begins, the new epoch eventually becomes Active.",
       "criticality": "critical",

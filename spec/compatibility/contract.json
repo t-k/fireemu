@@ -1661,8 +1661,7 @@
       ],
       "notes": [],
       "gaps": [
-        "the export trigger the CLI drives through the hub (POST /_admin/export answers 501)",
-        "the Logging emulator stream the UI and Functions workflows consume"
+        "the export trigger the CLI drives through the hub (POST /_admin/export answers 501)"
       ],
       "prohibitedClaimTerms": [],
       "claims": [
@@ -1676,13 +1675,14 @@
             },
             {
               "id": "CLI-05",
-              "status": "partial"
+              "status": "implemented"
             }
           ],
           "evidence": {
             "tests": [],
             "integration": [
               "crates/fireemu/tests/hub.rs",
+              "crates/fireemu-adapter-logging/tests/websocket_client.rs",
               "tools/sdk-smoke/rules-unit-testing.mjs"
             ],
             "conformance": []
@@ -1709,21 +1709,63 @@
       "officialEmulator": "logging",
       "officialDefaultPort": 4500,
       "officialTraits": [],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: the structured log stream the official UI consumes on the logging port is not served.",
+      "state": "claimed",
+      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only and with a bounded history, both documented divergences.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
+        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md",
         "docs.local/issues/open/match-emulator-suite-ui-workflows.md"
       ],
       "notes": [],
       "gaps": [
-        "the EmulatorLog wire format on the logging port"
+        "end-to-end differential verification of the official Emulator UI's Logs page consuming the stream (a browser matrix); the primary evidence is a Rust client asserting the handshake and a functions log frame"
       ],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "LOGGING-CLAIM-STREAM",
+          "statement": "The Logging emulator serves the EmulatorLog wire format of firebase-tools 15.28.2 over a WebSocket on the official logging port, exports FIREBASE_LOGGING_EMULATOR_HOST and is discoverable through the Emulator Hub.",
+          "capabilities": [
+            {
+              "id": "LOG-01",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-logging/tests/websocket_client.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official transport keeps every log line in memory forever and serves the whole history to each new connection"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "the WebSocket handshake is refused unless the Host header names loopback (the same DNS-rebinding guard the other fireemu listeners apply); the official server has none",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the retained history is bounded to the most recent 1000 frames rather than unbounded, so an unbounded producer cannot exhaust memory",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "control-character stripping drops lone C0/DEL bytes as well as ANSI escape sequences, where Node's stripVTControlCharacters removes only the escape sequences",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the functions runner's lines are fed to the bus tagged emulator=functions, but function-name tagging of those lines is best effort and currently absent (a runner line carries an invocation id, not a function name), and only the first codebase's runner is polled",
+              "precision": "documented-divergence"
+            }
+          ],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "pubsub",

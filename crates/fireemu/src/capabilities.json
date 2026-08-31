@@ -683,18 +683,35 @@
     ]
   },
   "CLI-05": {
-    "status": "partial",
+    "status": "implemented",
     "precision": "boundary-conformance",
     "implemented": [
       "the Hub background-trigger switch: disabling drops Firestore, Storage, Pub/Sub and Auth events instead of holding them, so re-enabling delivers nothing retroactively, which is what the official emulator does (its background-trigger route answers 204 and discards the body)",
       "HTTP and callable invocations, manual functions/{name}:run requests and virtual-clock schedule runs keep working while background triggers are disabled: none of them is a data-change delivery",
-      "events already accepted keep their place in the outbox and are still delivered and retried, as upstream drains the work queue it had already taken on"
+      "events already accepted keep their place in the outbox and are still delivered and retried, as upstream drains the work queue it had already taken on",
+      "the Logging emulator: an RFC 6455 WebSocket on the official port 4500 (emulators.logging, daemon.loggingPort, --logging-port) that streams the EmulatorLog wire format loggingEmulator.js defines, exports FIREBASE_LOGGING_EMULATOR_HOST to the exec child and the functions runner, and is advertised in the Emulator Hub GET /emulators listing. See the LOG-01 capability for the wire-format detail and divergences"
     ],
-    "unimplemented": [
-      "the Logging emulator stream (the official port 4500) is out of scope for this release: an emulators.logging entry is reported and nothing is served on that port. The functions log stream the UI consumes lives on the control API instead (GET /v1/sessions/{s}/functions)"
-    ],
+    "unimplemented": [],
     "notes": [
       "the switch is process-wide, not per session: one functions runtime serves every session"
+    ]
+  },
+  "LOG-01": {
+    "status": "implemented",
+    "precision": "boundary-conformance",
+    "implemented": [
+      "each log line is one WebSocket text frame {\"level\": <lowercase>, \"data\": <merged splat objects with metadata>, \"timestamp\": <ms since epoch on the virtual clock>, \"message\": <text, VT/control characters stripped>}, as loggingEmulator.js WebSocketTransport.log produces",
+      "data.metadata.emulator.name tags the emulator (EmulatorLogger.forEmulator) and data.metadata.function.name tags the function (forFunction); function user output is type USER forced to level info",
+      "on connect a client is sent the whole retained history and then live frames, with no request/response, no filtering and no authentication",
+      "the RFC 6455 handshake (Sec-WebSocket-Accept = base64(SHA-1(key + magic))), masked client frames, ping/pong and a clean close",
+      "the functions runner's log lines are fed into the bus tagged emulator=functions, and each emulator's own lifecycle line is tagged with emulator=<name>"
+    ],
+    "unimplemented": [
+      "function-name tagging of runner lines (a runner line carries an invocation id, not a function name) and secondary-codebase runner lines: only the first codebase's runner is polled",
+      "differential verification of the official Emulator UI's Logs page consuming the stream end to end (a browser matrix); the primary evidence is a Rust client that connects to the bound port and asserts the handshake and a functions log frame"
+    ],
+    "notes": [
+      "divergences from the official emulator, all recorded on the logging surface: the handshake is loopback-only (the official server has none), the retained history is bounded to 1000 frames (the official one is unbounded in memory), and control-character stripping also drops lone C0/DEL bytes, not only ANSI sequences"
     ]
   },
   "DATA-1": {

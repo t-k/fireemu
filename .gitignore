@@ -1,4 +1,5 @@
 .worktrees/
+.worktree/
 /docs.local/
 AGENTS.override.md
 CLAUDE.local.md

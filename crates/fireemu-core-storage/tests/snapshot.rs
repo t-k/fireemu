@@ -81,3 +81,29 @@ fn restore_shares_the_captured_blobs_instead_of_copying_them() {
         "the restore points at the captured allocation"
     );
 }
+
+#[test]
+fn restoring_an_older_snapshot_never_reuses_an_issued_generation() {
+    let mut live = StorageState::new(7);
+    put(&mut live, "object.txt", b"captured".to_vec());
+    let capture = live.capture_buckets(|_| true);
+
+    put(&mut live, "object.txt", b"newer".to_vec());
+    put(&mut live, "other.txt", b"highest".to_vec());
+    let highest_issued = live
+        .get(&bucket(), &name("other.txt"))
+        .expect("later object")
+        .generation;
+
+    live.restore_buckets(|_| true, &capture, true);
+    put(&mut live, "object.txt", b"after restore".to_vec());
+    let generation_after_restore = live
+        .get(&bucket(), &name("object.txt"))
+        .expect("restored object was replaced")
+        .generation;
+
+    assert!(
+        generation_after_restore > highest_issued,
+        "restore must preserve the allocator high-water above every issued generation"
+    );
+}

@@ -652,6 +652,7 @@ fn apply_blocking_response(
 // route behavior; grouping them in a second request type would duplicate that boundary.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn dispatch_with_blocking_hook(
+    state: &AuthState,
     blocking: &dyn AuthBlockingHook,
     handler: routes::Handler,
     store_arc: &Arc<Mutex<AuthStore>>,
@@ -662,7 +663,7 @@ fn dispatch_with_blocking_hook(
     at: LogicalInstant,
 ) -> JsonResponse {
     let mut candidate = store.clone();
-    let mut response = dispatch(handler, &mut candidate, query, body, headers, at);
+    let response = dispatch(handler, &mut candidate, query, body, headers, at);
     let is_authentication = matches!(
         handler,
         routes::Handler::SignUp
@@ -682,6 +683,7 @@ fn dispatch_with_blocking_hook(
         .as_deref()
         .and_then(|uid| candidate.user_by_id(uid))
         .map(|user| user.local_id.clone());
+    let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
             store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
@@ -689,6 +691,8 @@ fn dispatch_with_blocking_hook(
     let signed_in = is_authentication
         && response.status == 200
         && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
+    let project = store.project_id().to_owned();
+    let tenant = store.tenant_id().map(str::to_owned);
     drop(store);
     let mut blocking_responses = Vec::new();
     if response.status == 200 {
@@ -747,33 +751,57 @@ fn dispatch_with_blocking_hook(
             }
         }
     }
-    let Ok(mut live) = store_arc.lock() else {
-        return error(500, "INTERNAL");
-    };
-    let mut committed = live.clone();
-    response = dispatch(handler, &mut committed, query, body, headers, at);
-    if response.status != 200 {
-        return response;
-    }
-    let uid = response
-        .body
-        .get("localId")
-        .and_then(Value::as_str)
-        .and_then(|uid| committed.user_by_id(uid))
-        .map(|user| user.local_id.clone());
-    if let Some(uid) = uid {
-        let signed_in = is_authentication
-            && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
-        let mut issued_session = signed_in
-            .then(|| verify_session(&committed, &response.body, at).ok())
-            .flatten();
-        let persisted_claim_names: Vec<String> = committed
-            .user(&uid)
-            .map(|user| user.custom_claims.entries().keys().cloned().collect())
-            .unwrap_or_default();
-        let mut session_claims = None;
-        for (event, value) in &blocking_responses {
-            match apply_blocking_response(&mut committed, &uid, *event, value) {
+    let commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
+        if tenant.is_some() {
+            if let Some(denial) = tenant_policy_denial_with_metadata(handler, metadata, body) {
+                return denial;
+            }
+        }
+        let Ok(mut live) = store_arc.lock() else {
+            return error(500, "INTERNAL");
+        };
+        let mut committed = live.clone();
+        let mut committed_response = if handler == routes::Handler::SignUp && is_new {
+            sign_up(
+                &mut committed,
+                body,
+                at,
+                speculative_uid
+                    .as_ref()
+                    .map(fireemu_core_auth::store::LocalId::as_str),
+            )
+        } else {
+            dispatch(handler, &mut committed, query, body, headers, at)
+        };
+        if committed_response.status != 200 {
+            return committed_response;
+        }
+        let uid = committed_response
+            .body
+            .get("localId")
+            .and_then(Value::as_str)
+            .and_then(|uid| committed.user_by_id(uid))
+            .map(|user| user.local_id.clone());
+        if is_authentication && uid != speculative_uid {
+            return error(
+                400,
+                "BLOCKING_FUNCTION_ERROR_RESPONSE : identity changed while the hook was running",
+            );
+        }
+        if let Some(uid) = uid {
+            let signed_in = is_authentication
+                && (committed_response.body.get("idToken").is_some()
+                    || committed_response.body.get("id_token").is_some());
+            let mut issued_session = signed_in
+                .then(|| verify_session(&committed, &committed_response.body, at).ok())
+                .flatten();
+            let persisted_claim_names: Vec<String> = committed
+                .user(&uid)
+                .map(|user| user.custom_claims.entries().keys().cloned().collect())
+                .unwrap_or_default();
+            let mut session_claims = None;
+            for (event, value) in &blocking_responses {
+                match apply_blocking_response(&mut committed, &uid, *event, value) {
                 Ok(claims)
                     if *event
                         == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn =>
@@ -783,47 +811,58 @@ fn dispatch_with_blocking_hook(
                 Ok(_) => {}
                 Err(reason) => return error(400, &reason),
             }
-        }
-        if let Some(mut session) = issued_session.take() {
-            for name in &persisted_claim_names {
-                session.extra_claims.remove(name);
             }
-            if let Some(user) = committed.user(&uid) {
-                for name in user.custom_claims.entries().keys() {
+            if let Some(mut session) = issued_session.take() {
+                for name in &persisted_claim_names {
                     session.extra_claims.remove(name);
                 }
-            }
-            if let Some(claims) = session_claims {
-                for (name, value) in claims.entries() {
-                    if let Err(reason) = session.extra_claims.insert(name, value.clone()) {
-                        return error(400, &format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {reason}"));
+                if let Some(user) = committed.user(&uid) {
+                    for name in user.custom_claims.entries().keys() {
+                        session.extra_claims.remove(name);
                     }
                 }
-            }
-            let provider = provider_from_id(&session.provider);
-            let tokens = match issue_tokens_with(
-                &mut committed,
-                &uid,
-                session.second_factor.as_ref(),
-                at,
-                Some(&session.extra_claims),
-                Some(provider),
-            ) {
-                Ok(tokens) => tokens,
-                Err(refusal) => return refusal,
-            };
-            for field in ["idToken", "refreshToken", "expiresIn", "email"] {
-                response.body[field] = tokens[field].clone();
-            }
-            if let Some(user) = committed.user(&uid) {
-                response.body["displayName"] = json!(user.display_name);
-                response.body["photoUrl"] = json!(user.photo_url);
-                response.body["emailVerified"] = json!(user.email_verified);
+                if let Some(claims) = session_claims {
+                    for (name, value) in claims.entries() {
+                        if let Err(reason) = session.extra_claims.insert(name, value.clone()) {
+                            return error(
+                                400,
+                                &format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {reason}"),
+                            );
+                        }
+                    }
+                }
+                let provider = provider_from_id(&session.provider);
+                let tokens = match issue_tokens_with(
+                    &mut committed,
+                    &uid,
+                    session.second_factor.as_ref(),
+                    at,
+                    Some(&session.extra_claims),
+                    Some(provider),
+                ) {
+                    Ok(tokens) => tokens,
+                    Err(refusal) => return refusal,
+                };
+                for field in ["idToken", "refreshToken", "expiresIn", "email"] {
+                    committed_response.body[field] = tokens[field].clone();
+                }
+                if let Some(user) = committed.user(&uid) {
+                    committed_response.body["displayName"] = json!(user.display_name);
+                    committed_response.body["photoUrl"] = json!(user.photo_url);
+                    committed_response.body["emailVerified"] = json!(user.email_verified);
+                }
             }
         }
+        *live = committed;
+        committed_response
+    };
+    match (tenant.as_deref(), state.registry.as_ref()) {
+        (Some(tenant), Some(registry)) => {
+            registry.with_existing_tenant_metadata(&project, tenant, commit)
+        }
+        (Some(_), None) => error(400, "TENANT_NOT_FOUND"),
+        (None, _) => commit(None),
     }
-    *live = committed;
-    response
 }
 
 /// Routes one request with its headers (privileged routes check them).
@@ -833,6 +872,7 @@ fn dispatch_with_blocking_hook(
 /// only then does the handler run. Every step reads the same route table
 /// (`AUTH-ROUTE-03`).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn handle_with(
     state: &AuthState,
     method: &str,
@@ -948,6 +988,7 @@ pub fn handle_with(
     let response = if route.class == routes::RouteClass::EndUser {
         if let Some(blocking) = &state.blocking {
             dispatch_with_blocking_hook(
+                state,
                 blocking.as_ref(),
                 route.handler,
                 &store_arc,
@@ -1018,7 +1059,7 @@ fn dispatch(
                 body: json!({"keys": keys}),
             }
         }
-        Handler::SignUp => sign_up(store, body, at),
+        Handler::SignUp => sign_up(store, body, at, None),
         Handler::SignInWithPassword => sign_in_with_password(store, body, at),
         Handler::SignInWithCustomToken => sign_in_with_custom_token(store, body, at),
         Handler::Lookup => lookup(store, body, at, false),
@@ -1164,11 +1205,10 @@ fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {
     }
 }
 
-fn merged_tenant_metadata(
-    mut metadata: fireemu_core_auth::store::TenantMetadata,
+fn tenant_metadata_patch(
     body: &Value,
     query: Option<&str>,
-) -> Result<fireemu_core_auth::store::TenantMetadata, JsonResponse> {
+) -> Result<fireemu_core_auth::store::TenantMetadataPatch, JsonResponse> {
     const FIELDS: [&str; 5] = [
         "displayName",
         "allowPasswordSignup",
@@ -1189,29 +1229,30 @@ fn merged_tenant_metadata(
     if fields.iter().any(|field| !FIELDS.contains(field)) {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
+    let mut patch = fireemu_core_auth::store::TenantMetadataPatch::default();
     for field in fields {
         match field {
             "displayName" => {
-                metadata.display_name = match body.get(field) {
+                patch.display_name = Some(match body.get(field) {
                     None | Some(Value::Null) => None,
                     Some(Value::String(value)) => Some(value.clone()),
                     Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-                };
+                });
             }
             "allowPasswordSignup" => {
-                metadata.allow_password_signup = bool_update(body, field)?;
+                patch.allow_password_signup = Some(bool_update(body, field)?);
             }
             "enableEmailLinkSignin" => {
-                metadata.enable_email_link_signin = bool_update(body, field)?;
+                patch.enable_email_link_signin = Some(bool_update(body, field)?);
             }
             "enableAnonymousUser" => {
-                metadata.enable_anonymous_user = bool_update(body, field)?;
+                patch.enable_anonymous_user = Some(bool_update(body, field)?);
             }
-            "disableAuth" => metadata.disable_auth = bool_update(body, field)?,
+            "disableAuth" => patch.disable_auth = Some(bool_update(body, field)?),
             _ => unreachable!("tenant update mask was validated"),
         }
     }
-    Ok(metadata)
+    Ok(patch)
 }
 
 fn bool_update(body: &Value, field: &str) -> Result<bool, JsonResponse> {
@@ -1309,16 +1350,13 @@ fn tenant_management(
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
-            let Some(current) = registry.tenant_metadata(project, tenant) else {
-                return error(404, "TENANT_NOT_FOUND");
-            };
-            let metadata = match merged_tenant_metadata(current, body, query) {
-                Ok(metadata) => metadata,
+            let patch = match tenant_metadata_patch(body, query) {
+                Ok(patch) => patch,
                 Err(response) => return response,
             };
-            if !registry.update_tenant(project, tenant, metadata.clone()) {
+            let Some(metadata) = registry.patch_tenant(project, tenant, patch) else {
                 return error(404, "TENANT_NOT_FOUND");
-            }
+            };
             JsonResponse {
                 status: 200,
                 body: tenant_json(project, tenant, &metadata),
@@ -1349,8 +1387,19 @@ fn tenant_policy_denial(
     let tenant = store.tenant_id()?;
     let metadata = state
         .registry
-        .as_ref()?
-        .tenant_metadata(store.project_id(), tenant)?;
+        .as_ref()
+        .and_then(|registry| registry.tenant_metadata(store.project_id(), tenant));
+    tenant_policy_denial_with_metadata(handler, metadata.as_ref(), body)
+}
+
+fn tenant_policy_denial_with_metadata(
+    handler: routes::Handler,
+    metadata: Option<&fireemu_core_auth::store::TenantMetadata>,
+    body: &Value,
+) -> Option<JsonResponse> {
+    let Some(metadata) = metadata else {
+        return Some(error(400, "TENANT_NOT_FOUND"));
+    };
     let authenticates = matches!(
         handler,
         routes::Handler::SignUp
@@ -1498,7 +1547,12 @@ fn percent_decode(s: &str) -> String {
 /// `accounts:signUp`: a password user when an email or a password is present (both are then
 /// required, the email first, as the official emulator checks them), otherwise an anonymous
 /// user. `localId` is an Admin-only parameter on this route.
-fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn sign_up(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    forced_local_id: Option<&str>,
+) -> JsonResponse {
     if body.get("localId").is_some_and(|v| !v.is_null()) {
         return error(400, "UNEXPECTED_PARAMETER : User ID");
     }
@@ -1547,7 +1601,7 @@ fn sign_up(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespo
         }
         uid
     } else {
-        match store.create_user(new_user, at) {
+        match store.create_user_with_id(new_user, forced_local_id, at) {
             Ok(uid) => uid,
             Err(e) => return auth_error(&e),
         }

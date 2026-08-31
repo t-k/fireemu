@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::jwt::{encode_unsigned, verify_id_token_decoded, JwtError};
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser, TenantMetadataPatch};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 
@@ -64,4 +64,46 @@ fn tenant_ids_cannot_contain_export_path_separators() {
         .ensure_tenant("demo-app", "forward/slash")
         .is_none());
     assert!(registry.ensure_tenant("demo-app", "back\\slash").is_none());
+}
+
+#[test]
+fn concurrent_tenant_patches_compose_without_reverting_security_fields() {
+    let default = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = Arc::new(AuthRegistry::new("demo-app", default));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+
+    let display_registry = registry.clone();
+    let display_barrier = barrier.clone();
+    let display = std::thread::spawn(move || {
+        display_barrier.wait();
+        display_registry.patch_tenant(
+            "demo-app",
+            "customer",
+            TenantMetadataPatch {
+                display_name: Some(Some("Customer".to_owned())),
+                ..TenantMetadataPatch::default()
+            },
+        )
+    });
+    let disable_registry = registry.clone();
+    let disable_barrier = barrier.clone();
+    let disable = std::thread::spawn(move || {
+        disable_barrier.wait();
+        disable_registry.patch_tenant(
+            "demo-app",
+            "customer",
+            TenantMetadataPatch {
+                disable_auth: Some(true),
+                ..TenantMetadataPatch::default()
+            },
+        )
+    });
+    barrier.wait();
+    display.join().unwrap().unwrap();
+    disable.join().unwrap().unwrap();
+
+    let metadata = registry.tenant_metadata("demo-app", "customer").unwrap();
+    assert_eq!(metadata.display_name.as_deref(), Some("Customer"));
+    assert!(metadata.disable_auth);
 }

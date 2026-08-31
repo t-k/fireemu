@@ -673,6 +673,79 @@ struct ReentrantAdminHook {
     mutate: Arc<std::sync::atomic::AtomicBool>,
 }
 
+#[derive(Clone, Copy)]
+enum TenantMutation {
+    Disable,
+    Delete,
+}
+
+struct TenantMutatingHook {
+    registry: Arc<fireemu_core_auth::store::AuthRegistry>,
+    mutation: TenantMutation,
+    enabled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AuthBlockingHook for TenantMutatingHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        if event == BlockingAuthEvent::BeforeSignIn
+            && self.enabled.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            match self.mutation {
+                TenantMutation::Disable => {
+                    let mut metadata = self
+                        .registry
+                        .tenant_metadata("demo-app", "customer")
+                        .ok_or("tenant disappeared")?;
+                    metadata.disable_auth = true;
+                    if !self
+                        .registry
+                        .update_tenant("demo-app", "customer", metadata)
+                    {
+                        return Err("tenant update failed".to_owned());
+                    }
+                }
+                TenantMutation::Delete => {
+                    if !self.registry.delete_tenant("demo-app", "customer") {
+                        return Err("tenant delete failed".to_owned());
+                    }
+                }
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
+struct CreatingAdminHook {
+    state: std::sync::Weak<AuthState>,
+}
+
+impl AuthBlockingHook for CreatingAdminHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        if event == BlockingAuthEvent::BeforeCreate {
+            let state = self.state.upgrade().ok_or("test state disappeared")?;
+            let response = handle_with(
+                &state,
+                "POST",
+                &format!("{ADMIN}/accounts"),
+                &owner(),
+                &json!({"email": "admin-created@example.com", "password": "hunter22"}),
+            );
+            if response.status != 200 {
+                return Err(format!("Admin callback failed: {}", response.body));
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
 impl AuthBlockingHook for ReentrantAdminHook {
     fn invoke(
         &self,
@@ -742,6 +815,63 @@ fn blocking_auth_rebases_on_admin_mutations_without_deadlocking_or_losing_them()
             .unwrap()
             .disabled
     );
+}
+
+#[test]
+fn blocking_auth_rechecks_tenant_disablement_and_deletion_before_commit() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    for (mutation, expected) in [
+        (TenantMutation::Disable, "PROJECT_DISABLED"),
+        (TenantMutation::Delete, "TENANT_NOT_FOUND"),
+    ] {
+        let enabled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut state = state();
+        let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
+        registry.ensure_tenant("demo-app", "customer").unwrap();
+        state.registry = Some(registry.clone());
+        state.blocking = Some(Arc::new(TenantMutatingHook {
+            registry,
+            mutation,
+            enabled: enabled.clone(),
+        }));
+        let (status, created) = post(
+            &state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"tenantId": "customer", "email": "tenant@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{created}");
+        enabled.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let (status, refused) = post(
+            &state,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"tenantId": "customer", "email": "tenant@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], expected);
+    }
+}
+
+#[test]
+fn blocking_auth_never_replays_a_response_onto_a_different_generated_user() {
+    let state = Arc::new_cyclic(|weak| {
+        let mut state = state();
+        state.blocking = Some(Arc::new(CreatingAdminHook {
+            state: weak.clone(),
+        }));
+        state
+    });
+
+    let (status, refused) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "original@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    let store = state.store.lock().unwrap();
+    assert!(store.user_by_email("admin-created@example.com").is_some());
+    assert!(store.user_by_email("original@example.com").is_none());
 }
 
 #[test]

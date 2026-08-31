@@ -2367,6 +2367,21 @@ pub struct TenantMetadata {
     pub disable_auth: bool,
 }
 
+/// Fields changed by one atomic tenant PATCH operation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TenantMetadataPatch {
+    /// `None` leaves the field unchanged; `Some(None)` clears it.
+    pub display_name: Option<Option<String>>,
+    /// `None` leaves the field unchanged.
+    pub allow_password_signup: Option<bool>,
+    /// `None` leaves the field unchanged.
+    pub enable_email_link_signin: Option<bool>,
+    /// `None` leaves the field unchanged.
+    pub enable_anonymous_user: Option<bool>,
+    /// `None` leaves the field unchanged.
+    pub disable_auth: Option<bool>,
+}
+
 impl AuthRegistry {
     /// A registry around the default project's store.
     #[must_use]
@@ -2453,15 +2468,15 @@ impl AuthRegistry {
     #[must_use]
     pub fn operation_gate(&self, project: &str, tenant: Option<&str>) -> Arc<Mutex<()>> {
         let key = (project.to_owned(), tenant.unwrap_or_default().to_owned());
-        self.operation_gates
-            .lock()
-            .map(|mut gates| {
+        self.operation_gates.lock().map_or_else(
+            |_| Arc::new(Mutex::new(())),
+            |mut gates| {
                 gates
                     .entry(key)
                     .or_insert_with(|| Arc::new(Mutex::new(())))
                     .clone()
-            })
-            .unwrap_or_else(|_| Arc::new(Mutex::new(())))
+            },
+        )
     }
 
     /// Returns a tenant store, creating its isolated namespace on first use.
@@ -2529,6 +2544,57 @@ impl AuthRegistry {
             .ok()?
             .get(&(project.to_owned(), tenant.to_owned()))
             .cloned()
+    }
+
+    /// Runs a closure while both the tenant namespace and metadata entry are locked.
+    ///
+    /// This is the commit boundary for authentication that raced tenant deletion or policy
+    /// changes. The closure must not call back into this registry.
+    pub fn with_existing_tenant_metadata<R>(
+        &self,
+        project: &str,
+        tenant: &str,
+        inspect: impl FnOnce(Option<&TenantMetadata>) -> R,
+    ) -> R {
+        let key = (project.to_owned(), tenant.to_owned());
+        let Ok(stores) = self.tenants.lock() else {
+            return inspect(None);
+        };
+        let Ok(metadata) = self.tenant_metadata.lock() else {
+            return inspect(None);
+        };
+        let selected = stores
+            .contains_key(&key)
+            .then(|| metadata.get(&key))
+            .flatten();
+        inspect(selected)
+    }
+
+    /// Applies one tenant metadata patch under a single lock acquisition.
+    pub fn patch_tenant(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+    ) -> Option<TenantMetadata> {
+        let mut values = self.tenant_metadata.lock().ok()?;
+        let value = values.get_mut(&(project.to_owned(), tenant.to_owned()))?;
+        if let Some(display_name) = patch.display_name {
+            value.display_name = display_name;
+        }
+        if let Some(setting) = patch.allow_password_signup {
+            value.allow_password_signup = setting;
+        }
+        if let Some(setting) = patch.enable_email_link_signin {
+            value.enable_email_link_signin = setting;
+        }
+        if let Some(setting) = patch.enable_anonymous_user {
+            value.enable_anonymous_user = setting;
+        }
+        if let Some(setting) = patch.disable_auth {
+            value.disable_auth = setting;
+        }
+        Some(value.clone())
     }
 
     /// Replaces tenant metadata; `false` when the tenant is unknown.

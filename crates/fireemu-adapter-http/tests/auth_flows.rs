@@ -393,7 +393,9 @@ fn fixture_identity_providers_sign_in_link_and_show_up_as_provider_info() {
     assert_eq!(status, 200, "{signed}");
     assert_eq!(signed["isNewUser"], true);
     assert_eq!(signed["providerId"], "google.com");
-    assert_eq!(signed["federatedId"], "g-123");
+    // google.com reports the account URL as the federatedId (the official fakeFetchUserInfoFromIdp).
+    assert_eq!(signed["federatedId"], "https://accounts.google.com/g-123");
+    assert_eq!(signed["rawId"], "g-123");
     assert_eq!(signed["displayName"], "G User");
     assert_eq!(signed["emailVerified"], true);
     let c = claims(signed["idToken"].as_str().unwrap());
@@ -450,11 +452,17 @@ fn fixture_identity_providers_sign_in_link_and_show_up_as_provider_info() {
         refused["error"]["message"],
         "FEDERATED_USER_ID_ALREADY_LINKED"
     );
-    // Malformed assertions.
+    // Malformed assertions. A request with no credential at all is a NotImplementedError (501,
+    // as the official emulator raises it); an unparseable or sub-less id_token is a 400.
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": "providerId=google.com", "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 501);
     for post_body in [
-        "providerId=google.com",
-        "id_token=notjson&providerId=google.com",
-        &format!(
+        "id_token=notjson&providerId=google.com".to_owned(),
+        format!(
             "id_token={}&providerId=google.com",
             percent(r#"{"email":"x@y"}"#)
         ),
@@ -466,6 +474,25 @@ fn fixture_identity_providers_sign_in_link_and_show_up_as_provider_info() {
         );
         assert_eq!(status, 400, "{post_body}");
     }
+    // A providerId is required (the official INVALID_CREDENTIAL_OR_PROVIDER_ID).
+    let (status, no_provider) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("id_token={}", idp_jwt(&json!({"sub": "x"}))), "requestUri": "http://localhost"}),
+    );
+    assert_eq!(status, 400);
+    assert!(no_provider["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("INVALID_CREDENTIAL_OR_PROVIDER_ID"));
+    // A missing requestUri is MISSING_REQUEST_URI.
+    let (status, no_uri) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": "providerId=google.com&id_token=x"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(no_uri["error"]["message"], "MISSING_REQUEST_URI");
     // Admin: link and unlink providers.
     let (status, _) = admin(
         &s,
@@ -723,25 +750,31 @@ fn the_inspection_routes_are_project_scoped_and_can_wipe_accounts() {
 fn an_unverified_provider_email_never_claims_an_existing_account() {
     let s = state();
     let victim = sign_up(&s, "victim@example.com");
-    // An unverified email that belongs to someone else: the account is not taken over and
-    // no second account is created for the address (production's EMAIL_EXISTS, which the
-    // SDKs surface as account-exists-with-different-credential).
+    // An unverified email that belongs to someone else: the account is not taken over, no
+    // token is issued and no second account is created. The official emulator answers
+    // needConfirmation (the SDKs surface it as account-exists-with-different-credential), not
+    // a signed-in session.
     let forged = json!({"sub": "attacker", "email": "victim@example.com", "email_verified": false});
     let (status, refused) = post(
         &s,
         &format!("{V1}/accounts:signInWithIdp"),
         &json!({"postBody": format!("id_token={}&providerId=google.com", idp_jwt(&forged)), "requestUri": "http://localhost"}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "EMAIL_EXISTS");
+    assert_eq!(status, 200, "{refused}");
+    assert_eq!(refused["needConfirmation"], true);
+    assert_eq!(refused["localId"], victim["localId"]);
+    assert!(refused.get("idToken").is_none());
+    assert!(refused.get("refreshToken").is_none());
     // Without the claim at all the email is treated as unverified too.
     let silent = json!({"sub": "attacker-2", "email": "victim@example.com"});
-    let (status, _) = post(
+    let (status, silent_refused) = post(
         &s,
         &format!("{V1}/accounts:signInWithIdp"),
         &json!({"postBody": format!("id_token={}&providerId=github.com", idp_jwt(&silent)), "requestUri": "http://localhost"}),
     );
-    assert_eq!(status, 400);
+    assert_eq!(status, 200);
+    assert_eq!(silent_refused["needConfirmation"], true);
+    assert!(silent_refused.get("idToken").is_none());
     let (_, lookup) = post(
         &s,
         &format!("{V1}/accounts:lookup"),
@@ -986,4 +1019,225 @@ fn a_registered_project_has_its_own_users_behind_the_project_scoped_routes() {
     );
     assert!(registry.remove("demo-b"));
     assert!(!registry.remove("demo-b"));
+}
+
+// ---- SAML / OIDC federated sign-in and the identity-provider widget pages ---------------------
+
+/// A `postBody`-only request URI (the Node SDK's `signInWithCredential` sends a dummy one).
+const DUMMY_URI: &str = "http://localhost";
+
+#[test]
+fn a_saml_assertion_signs_in_and_carries_the_attribute_statements() {
+    let s = state();
+    // The SAML flow sends a fake id_token (for the sub) plus a JSON SAMLResponse; the email
+    // comes from the assertion subject nameId and is always trusted (emailVerified is true),
+    // and the attributeStatements become the rawUserInfo.
+    let saml = json!({
+        "assertion": {
+            "subject": {"nameId": "person@saml.example.com"},
+            "attributeStatements": {"department": ["eng"], "role": ["admin"]}
+        }
+    });
+    let post_body = format!(
+        "providerId=saml.myidp&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub": "saml-user-1"}).to_string()),
+        percent(&saml.to_string())
+    );
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": post_body, "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["providerId"], "saml.myidp");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(signed["email"], "person@saml.example.com");
+    assert_eq!(signed["emailVerified"], true);
+    assert_eq!(signed["rawId"], "saml-user-1");
+    assert_eq!(signed["federatedId"], "saml-user-1");
+    let raw: Value = serde_json::from_str(signed["rawUserInfo"].as_str().unwrap()).unwrap();
+    assert_eq!(raw["department"], json!(["eng"]));
+    let c = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(c["firebase"]["sign_in_provider"], "saml.myidp");
+    assert_eq!(
+        c["firebase"]["identities"]["saml.myidp"],
+        json!(["saml-user-1"])
+    );
+}
+
+#[test]
+fn a_saml_response_missing_its_assertion_parts_is_refused_precisely() {
+    let s = state();
+    let id_token = percent(&json!({"sub": "u"}).to_string());
+    let cases = [
+        (
+            json!({}),
+            "INVALID_IDP_RESPONSE ((Missing assertion in SAMLResponse.))",
+        ),
+        (
+            json!({"assertion": {}}),
+            "INVALID_IDP_RESPONSE ((Missing assertion.subject in SAMLResponse.))",
+        ),
+        (
+            json!({"assertion": {"subject": {}}}),
+            "INVALID_IDP_RESPONSE ((Missing assertion.subject.nameId in SAMLResponse.))",
+        ),
+    ];
+    for (saml, message) in cases {
+        let post_body = format!(
+            "providerId=saml.x&id_token={id_token}&SAMLResponse={}",
+            percent(&saml.to_string())
+        );
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({"postBody": post_body, "requestUri": DUMMY_URI}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["message"], message);
+    }
+}
+
+#[test]
+fn an_oidc_assertion_keeps_the_claims_as_raw_user_info() {
+    let s = state();
+    let oidc =
+        json!({"sub": "oidc-9", "email": "o@example.com", "email_verified": true, "name": "O"});
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&id_token={}", percent(&oidc.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["providerId"], "oidc.corp");
+    // oidc.* keeps the whole claims blob as rawUserInfo (unlike google.com's shaped blob).
+    let raw: Value = serde_json::from_str(signed["rawUserInfo"].as_str().unwrap()).unwrap();
+    assert_eq!(raw["sub"], "oidc-9");
+    assert_eq!(raw["email"], "o@example.com");
+    // federatedId is the raw id for a non-google provider.
+    assert_eq!(signed["federatedId"], "oidc-9");
+}
+
+#[test]
+fn the_provider_id_is_lowercased_and_credentials_can_arrive_in_the_uri_fragment() {
+    let s = state();
+    // A popup handoff puts the credential in the request URI (query and/or fragment); the
+    // provider id is matched case-insensitively.
+    let id_token = percent(
+        &json!({"sub": "frag-1", "email": "f@example.com", "email_verified": true}).to_string(),
+    );
+    let request_uri = format!("http://localhost/handler?providerId=OIDC.Corp#id_token={id_token}");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"requestUri": request_uri}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["providerId"], "oidc.corp");
+    assert_eq!(signed["rawId"], "frag-1");
+}
+
+#[test]
+fn an_access_token_credential_is_not_implemented() {
+    let s = state();
+    // The emulator supports id_token, not access_token: google.com/apple.com and any other
+    // provider each get a NotImplementedError (501).
+    for provider in ["google.com", "apple.com", "oidc.corp"] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({"postBody": format!("providerId={provider}&access_token=opaque-token"), "requestUri": DUMMY_URI}),
+        );
+        assert_eq!(status, 501, "{provider}: {body}");
+        assert_eq!(body["error"]["status"], "NOT_IMPLEMENTED");
+    }
+    // A JSON access_token that parses as claims IS accepted (the emulator parses either token),
+    // and the supplied token is echoed back as oauthAccessToken.
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&access_token={}", percent(&json!({"sub": "at-1"}).to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["rawId"], "at-1");
+    assert_eq!(signed["oauthAccessToken"], "{\"sub\":\"at-1\"}");
+}
+
+#[test]
+fn create_auth_uri_with_a_provider_is_not_implemented() {
+    let s = state();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"providerId": "google.com", "continueUri": "http://localhost", "identifier": "a@b.com"}),
+    );
+    assert_eq!(status, 501, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Sign-in with IDP is not yet supported."
+    );
+    // Missing continueUri / malformed identifier are their own 400s.
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "a@b.com"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["message"], "MISSING_CONTINUE_URI");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"identifier": "no-at-sign", "continueUri": "http://localhost"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["message"], "INVALID_IDENTIFIER");
+}
+
+#[test]
+fn a_provider_id_with_control_characters_is_refused() {
+    let s = state();
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId={}&id_token={}", percent("saml.\u{0000}evil"), percent(&json!({"sub": "x"}).to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("INVALID_CREDENTIAL_OR_PROVIDER_ID"));
+}
+
+#[test]
+fn the_idp_widget_handler_lists_accounts_and_escapes_them() {
+    use fireemu_adapter_http::identity_toolkit::widget;
+    let s = state();
+    // Seed an account at a provider whose display name carries markup.
+    let oidc = json!({"sub": "w-1", "email": "w@example.com", "name": "<script>alert(1)</script>", "email_verified": true});
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&id_token={}", percent(&oidc.to_string())), "requestUri": DUMMY_URI}),
+    );
+    assert_eq!(status, 200);
+    let rendered = widget::render(
+        &s,
+        "/emulator/auth/handler",
+        Some("apiKey=fake-api-key&providerId=oidc.corp"),
+    );
+    assert_eq!(rendered.status, 200);
+    assert!(rendered.content_type.starts_with("text/html"));
+    assert!(rendered.body.contains("Sign-in with"));
+    assert!(rendered.body.contains("w@example.com"));
+    // The injected display name is escaped: no raw <script> reaches the page.
+    assert!(!rendered.body.contains("<script>alert(1)</script>"));
+    assert!(rendered.body.contains("&lt;script&gt;"));
+    // Missing apiKey / providerId is a 400 JSON envelope.
+    let bad = widget::render(&s, "/emulator/auth/handler", Some("providerId=oidc.corp"));
+    assert_eq!(bad.status, 400);
+    assert!(bad.body.contains("missing apiKey or providerId"));
+    // The iframe helper page is static HTML.
+    let iframe = widget::render(&s, "/emulator/auth/iframe", None);
+    assert_eq!(iframe.status, 200);
+    assert!(iframe.body.contains("Auth Emulator Helper Iframe"));
 }

@@ -86,6 +86,33 @@ pub struct FederatedIdentity {
     pub photo_url: Option<String>,
 }
 
+/// The outcome of a federated identity-provider sign-in.
+///
+/// The official emulator either signs the user in (linking the identity to an existing
+/// account or creating one) or, when an unverified assertion names an email an existing
+/// account already owns, asks the client to confirm before linking (`needConfirmation`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdpSignIn {
+    /// Signed in: the user, whether it was created, and whether an account already linked
+    /// this provider under a different raw id (`emailRecycled`).
+    SignedIn {
+        /// The signed-in user.
+        uid: LocalId,
+        /// Whether the account was created by this sign-in.
+        is_new: bool,
+        /// Whether the account already linked this provider under a different raw id.
+        email_recycled: bool,
+    },
+    /// The assertion's email is owned by an existing account and the assertion did not vouch
+    /// for the email: the client must confirm before the identity is linked. No state changes.
+    NeedConfirmation {
+        /// The account owning the email.
+        uid: LocalId,
+        /// The federated providers already linked to that account (`verifiedProvider`).
+        verified_providers: Vec<String>,
+    },
+}
+
 /// Out-of-band (email action) code kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OobRequestType {
@@ -1331,6 +1358,23 @@ impl AuthStore {
             .map(Arc::as_ref)
     }
 
+    /// Every identity linked at `provider_id`, in account-creation order: the accounts the identity-provider
+    /// login widget offers for reuse (`listProviderInfosByProviderId`).
+    #[must_use]
+    pub fn provider_infos(&self, provider_id: &str) -> Vec<FederatedIdentity> {
+        let mut users: Vec<&UserRecord> = self.users.values().map(Arc::as_ref).collect();
+        users.sort_by_key(|u| u.sequence);
+        users
+            .into_iter()
+            .filter_map(|u| {
+                u.federated
+                    .iter()
+                    .find(|f| f.provider_id == provider_id)
+                    .cloned()
+            })
+            .collect()
+    }
+
     /// Links a federated identity to `uid` (replacing the user's identity at that provider).
     pub fn link_federated(
         &mut self,
@@ -1370,36 +1414,90 @@ impl AuthStore {
         Ok(user.federated.len() != before)
     }
 
-    /// Signs in with a federated identity: the user it is linked to, else the user owning
-    /// the identity's email (the identity is linked to it, as the Emulator does for a
-    /// verified provider email), else a new user. Returns the user and whether it was
-    /// created.
+    /// Signs in with a federated identity, matching the official emulator's create-or-link
+    /// semantics (`signInWithIdp` / `verifyAssertion`).
+    ///
+    /// The identity is matched first by its `(providerId, rawId)`. When no account links it and
+    /// the project keeps one account per email (`allowDuplicateEmails` is false), the
+    /// assertion's email is matched next:
+    ///
+    /// - if the provider vouches for the email (`emailVerified`), the identity is linked to the
+    ///   owning account. When that account's own email was unverified, a verified identity-provider email
+    ///   takes it over: its password, phone number and existing providers are cleared and its
+    ///   tokens are invalidated (the account is recycled), exactly as the official emulator
+    ///   does. `emailRecycled` reports that the account already linked this provider under a
+    ///   different raw id.
+    /// - if the provider does not vouch for the email, the account owning it must be confirmed
+    ///   before linking: [`IdpSignIn::NeedConfirmation`] is returned and nothing changes.
+    ///
+    /// Otherwise a new account is created and the identity linked to it.
     pub fn sign_in_with_idp(
         &mut self,
         identity: FederatedIdentity,
         email_verified: bool,
         now: LogicalInstant,
-    ) -> Result<(LocalId, bool), AuthError> {
-        // Only an email the provider vouches for may claim an existing account: an
-        // assertion with an unverified email must not take over the user owning it.
-        let existing = self
-            .user_by_federated(&identity.provider_id, &identity.raw_id)
-            .or_else(|| {
-                identity
-                    .email
-                    .as_deref()
-                    .filter(|_| email_verified)
-                    .and_then(|e| self.user_by_email(e))
-            })
-            .map(|u| (u.local_id.clone(), u.disabled));
-        if let Some((uid, disabled)) = existing {
+    ) -> Result<IdpSignIn, AuthError> {
+        // 1. An account already linking this exact provider identity signs straight in.
+        if let Some(u) = self.user_by_federated(&identity.provider_id, &identity.raw_id) {
+            let (uid, disabled) = (u.local_id.clone(), u.disabled);
             if disabled {
                 return Err(AuthError::UserDisabled);
             }
+            self.link_profile_from_identity(&uid, &identity);
             self.link_federated(&uid, identity)?;
             self.record_sign_in(&uid, now);
-            return Ok((uid, false));
+            return Ok(IdpSignIn::SignedIn {
+                uid,
+                is_new: false,
+                email_recycled: false,
+            });
         }
+        // 2. Match the assertion's email, unless the project allows duplicate emails.
+        if !self.config.allow_duplicate_emails {
+            if let Some(email) = identity.email.clone() {
+                if let Some(u) = self.user_by_email(&email) {
+                    let uid = u.local_id.clone();
+                    let disabled = u.disabled;
+                    let owner_email_verified = u.email_verified;
+                    let email_recycled = u.federated.iter().any(|f| {
+                        f.provider_id == identity.provider_id && f.raw_id != identity.raw_id
+                    });
+                    if !email_verified {
+                        // The assertion does not vouch for the email: confirm before linking.
+                        let verified_providers =
+                            u.federated.iter().map(|f| f.provider_id.clone()).collect();
+                        return Ok(IdpSignIn::NeedConfirmation {
+                            uid,
+                            verified_providers,
+                        });
+                    }
+                    if disabled {
+                        return Err(AuthError::UserDisabled);
+                    }
+                    // A verified IdP email over an unverified-email account recycles it: the
+                    // password, phone and any other providers are dropped and its tokens are
+                    // invalidated so nothing minted under the old owner survives.
+                    if !owner_email_verified {
+                        if let Some(user) = self.users.get_mut(&uid).map(Arc::make_mut) {
+                            user.password = None;
+                            user.phone_number = None;
+                            user.federated.clear();
+                            user.tokens_valid_after = Self::whole_second(now);
+                        }
+                    }
+                    self.set_email_verified_flag(&uid, true);
+                    self.link_profile_from_identity(&uid, &identity);
+                    self.link_federated(&uid, identity)?;
+                    self.record_sign_in(&uid, now);
+                    return Ok(IdpSignIn::SignedIn {
+                        uid,
+                        is_new: false,
+                        email_recycled,
+                    });
+                }
+            }
+        }
+        // 3. No match: a new account, linked to the identity.
         let uid = self.create_user(
             NewUser {
                 email: identity.email.clone(),
@@ -1408,13 +1506,34 @@ impl AuthStore {
             },
             now,
         )?;
-        if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
-            u.display_name.clone_from(&identity.display_name);
-            u.photo_url.clone_from(&identity.photo_url);
-        }
+        self.link_profile_from_identity(&uid, &identity);
         self.link_federated(&uid, identity)?;
         self.record_sign_in(&uid, now);
-        Ok((uid, true))
+        Ok(IdpSignIn::SignedIn {
+            uid,
+            is_new: true,
+            email_recycled: false,
+        })
+    }
+
+    /// Refreshes the account's display name and photo from an assertion when the assertion
+    /// carries them (the official emulator updates the profile on every federated sign-in).
+    fn link_profile_from_identity(&mut self, uid: &LocalId, identity: &FederatedIdentity) {
+        if let Some(u) = self.users.get_mut(uid).map(Arc::make_mut) {
+            if identity.display_name.is_some() {
+                u.display_name.clone_from(&identity.display_name);
+            }
+            if identity.photo_url.is_some() {
+                u.photo_url.clone_from(&identity.photo_url);
+            }
+        }
+    }
+
+    /// Sets the account's email-verified flag.
+    fn set_email_verified_flag(&mut self, uid: &LocalId, verified: bool) {
+        if let Some(u) = self.users.get_mut(uid).map(Arc::make_mut) {
+            u.email_verified = verified;
+        }
     }
 
     /// Enrolls a phone second factor (the number was verified by the caller).

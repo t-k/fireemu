@@ -1,15 +1,22 @@
 //! Contracts and tooling for repository-owned TLA+ verification evidence.
 
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::{self, Read};
-use std::path::Path;
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current persisted manifest and evidence schema version.
 pub const SCHEMA_VERSION: u32 = 1;
+
+static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
 /// A strict list of semantic mutations for one TLA+ module.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -122,6 +129,217 @@ impl MutationOutcome {
     }
 }
 
+/// Inputs and process controls for one complete mutation run.
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    /// Original TLA+ module.
+    pub module: PathBuf,
+    /// TLC configuration copied unchanged for every mutation.
+    pub config: PathBuf,
+    /// Semantic mutation manifest.
+    pub manifest: PathBuf,
+    /// Pinned TLA+ tools JAR.
+    pub jar: PathBuf,
+    /// Atomic destination for generated evidence.
+    pub evidence: PathBuf,
+    /// Java executable, overridable for testing.
+    pub java_bin: PathBuf,
+    /// Maximum wall-clock time for one mutant.
+    pub timeout: Duration,
+}
+
+/// Executes every mutation in a fresh directory and atomically writes its evidence.
+pub fn run_mutations(options: &RunOptions) -> Result<MutationEvidence, String> {
+    let source = fs::read_to_string(&options.module)
+        .map_err(|error| format!("read {}: {error}", options.module.display()))?;
+    let manifest_json = fs::read_to_string(&options.manifest)
+        .map_err(|error| format!("read {}: {error}", options.manifest.display()))?;
+    let manifest = parse_manifest(&manifest_json)?;
+    let module_name = options
+        .module
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "module path must have a UTF-8 file stem".to_owned())?;
+    if manifest.model != module_name {
+        return Err(format!(
+            "manifest model {} does not match module {module_name}",
+            manifest.model
+        ));
+    }
+    let config_bytes = fs::read(&options.config)
+        .map_err(|error| format!("read {}: {error}", options.config.display()))?;
+    File::open(&options.jar).map_err(|error| format!("read {}: {error}", options.jar.display()))?;
+
+    for mutation in &manifest.mutations {
+        mutation.materialize(&source)?;
+    }
+
+    let tlc_version = query_tlc_version(
+        &options.java_bin,
+        &options.jar,
+        options.timeout.min(Duration::from_secs(5)),
+    );
+    let mut results = Vec::with_capacity(manifest.mutations.len());
+    for mutation in &manifest.mutations {
+        let mutated = mutation.materialize(&source)?;
+        let work = TemporaryDirectory::new("tla-mutant")?;
+        let module_file_name = required_file_name(&options.module)?;
+        let config_file_name = required_file_name(&options.config)?;
+        fs::write(work.path.join(&module_file_name), mutated)
+            .map_err(|error| format!("write mutated module: {error}"))?;
+        fs::write(work.path.join(&config_file_name), &config_bytes)
+            .map_err(|error| format!("write copied config: {error}"))?;
+
+        let execution = execute_tlc(
+            &options.java_bin,
+            &options.jar,
+            &work.path,
+            &module_file_name,
+            &config_file_name,
+            options.timeout,
+        );
+        let (outcome, detail) = classify_execution(execution);
+        results.push(MutationResult {
+            id: mutation.id.clone(),
+            property: mutation.property.clone(),
+            outcome,
+            detail,
+        });
+    }
+
+    let generated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock precedes Unix epoch: {error}"))?
+        .as_secs()
+        .to_string();
+    let evidence = MutationEvidence {
+        schema_version: SCHEMA_VERSION,
+        model: manifest.model,
+        generated_at,
+        tlc_version,
+        module_sha256: sha256_file(&options.module).map_err(|error| error.to_string())?,
+        config_sha256: sha256_file(&options.config).map_err(|error| error.to_string())?,
+        manifest_sha256: sha256_file(&options.manifest).map_err(|error| error.to_string())?,
+        jar_sha256: sha256_file(&options.jar).map_err(|error| error.to_string())?,
+        results,
+    };
+    write_evidence_atomic(&options.evidence, &evidence)?;
+    Ok(evidence)
+}
+
+/// Verifies evidence freshness, manifest completeness, property binding, and killed outcomes.
+pub fn verify_evidence(
+    module: &Path,
+    config: &Path,
+    manifest: &Path,
+    jar: &Path,
+    evidence: &Path,
+) -> Result<MutationEvidence, String> {
+    let evidence_value = parse_evidence(
+        &fs::read_to_string(evidence)
+            .map_err(|error| format!("read {}: {error}", evidence.display()))?,
+    )?;
+    for (label, actual, recorded) in [
+        (
+            "module",
+            sha256_file(module).map_err(|error| error.to_string())?,
+            evidence_value.module_sha256.as_str(),
+        ),
+        (
+            "config",
+            sha256_file(config).map_err(|error| error.to_string())?,
+            evidence_value.config_sha256.as_str(),
+        ),
+        (
+            "manifest",
+            sha256_file(manifest).map_err(|error| error.to_string())?,
+            evidence_value.manifest_sha256.as_str(),
+        ),
+        (
+            "jar",
+            sha256_file(jar).map_err(|error| error.to_string())?,
+            evidence_value.jar_sha256.as_str(),
+        ),
+    ] {
+        if actual != recorded {
+            return Err(format!("{label} digest mismatch"));
+        }
+    }
+    let manifest_value = parse_manifest(
+        &fs::read_to_string(manifest)
+            .map_err(|error| format!("read {}: {error}", manifest.display()))?,
+    )?;
+    if evidence_value.model != manifest_value.model {
+        return Err(format!(
+            "evidence model {} does not match manifest model {}",
+            evidence_value.model, manifest_value.model
+        ));
+    }
+    if evidence_value.results.len() != manifest_value.mutations.len() {
+        return Err(format!(
+            "evidence has {} results for {} manifest mutations",
+            evidence_value.results.len(),
+            manifest_value.mutations.len()
+        ));
+    }
+    for (mutation, result) in manifest_value.mutations.iter().zip(&evidence_value.results) {
+        if mutation.id != result.id {
+            return Err(format!(
+                "evidence result {} does not match manifest mutation {}",
+                result.id, mutation.id
+            ));
+        }
+        if mutation.property != result.property {
+            return Err(format!(
+                "mutation {} evidence property {} does not match {}",
+                mutation.id, result.property, mutation.property
+            ));
+        }
+        if !result.outcome.is_killed() {
+            return Err(format!(
+                "mutation {} was not killed: {:?}",
+                mutation.id, result.outcome
+            ));
+        }
+    }
+    Ok(evidence_value)
+}
+
+/// Verifies every repository mutation manifest against its same-model evidence.
+pub fn verify_repository_evidence(root: &Path, jar: &Path) -> Result<Vec<String>, String> {
+    let mutation_directory = root.join("verification/tla/mutations");
+    if !mutation_directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut manifests = fs::read_dir(&mutation_directory)
+        .map_err(|error| format!("read {}: {error}", mutation_directory.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    manifests.sort();
+    let mut verified = Vec::with_capacity(manifests.len());
+    for manifest in manifests {
+        let model = manifest
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{} has no UTF-8 model name", manifest.display()))?;
+        let tla_directory = root.join("verification/tla");
+        verify_evidence(
+            &tla_directory.join(format!("{model}.tla")),
+            &tla_directory.join(format!("{model}.cfg")),
+            &manifest,
+            jar,
+            &tla_directory.join("evidence").join(format!("{model}.json")),
+        )?;
+        verified.push(model.to_owned());
+    }
+    Ok(verified)
+}
+
 /// Parses and validates a mutation manifest.
 pub fn parse_manifest(json: &str) -> Result<MutationManifest, String> {
     let manifest: MutationManifest =
@@ -209,6 +427,227 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
         hasher.update(&buffer[..read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn write_evidence_atomic(path: &Path, evidence: &MutationEvidence) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "evidence path must have a parent directory".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("create evidence directory {}: {error}", parent.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "evidence path must have a UTF-8 file name".to_owned())?;
+    let temporary = parent.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        std::process::id(),
+        UNIQUE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let write_result = (|| -> Result<(), String> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| format!("create {}: {error}", temporary.display()))?;
+        let mut json = serde_json::to_vec_pretty(evidence).map_err(|error| error.to_string())?;
+        json.push(b'\n');
+        file.write_all(&json)
+            .map_err(|error| format!("write {}: {error}", temporary.display()))?;
+        file.sync_all()
+            .map_err(|error| format!("sync {}: {error}", temporary.display()))?;
+        fs::rename(&temporary, path).map_err(|error| {
+            format!(
+                "rename {} to {}: {error}",
+                temporary.display(),
+                path.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn query_tlc_version(java_bin: &Path, jar: &Path, timeout: Duration) -> String {
+    let mut command = Command::new(java_bin);
+    command
+        .args([OsString::from("-cp"), jar.as_os_str().to_owned()])
+        .args(["tlc2.TLC", "-version"]);
+    match execute_command(&mut command, timeout) {
+        Execution::Completed { stdout, .. } => {
+            let text = String::from_utf8_lossy(&stdout);
+            text.lines()
+                .find(|line| !line.trim().is_empty())
+                .map(str::trim)
+                .map_or_else(|| "unreported".to_owned(), str::to_owned)
+        }
+        Execution::Timeout | Execution::LaunchError(_) => "unreported".to_owned(),
+    }
+}
+
+struct TemporaryDirectory {
+    path: PathBuf,
+}
+
+impl TemporaryDirectory {
+    fn new(prefix: &str) -> Result<Self, String> {
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            UNIQUE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+enum Execution {
+    Completed {
+        status: ExitStatus,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+    Timeout,
+    LaunchError(String),
+}
+
+fn execute_tlc(
+    java_bin: &Path,
+    jar: &Path,
+    workdir: &Path,
+    module_file_name: &OsString,
+    config_file_name: &OsString,
+    timeout: Duration,
+) -> Execution {
+    let mut command = Command::new(java_bin);
+    command
+        .current_dir(workdir)
+        .arg("-cp")
+        .arg(jar)
+        .arg("tlc2.TLC")
+        .arg("-workers")
+        .arg("auto")
+        .arg("-deadlock")
+        .arg("-config")
+        .arg(config_file_name)
+        .arg(module_file_name)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    execute_command(&mut command, timeout)
+}
+
+fn execute_command(command: &mut Command, timeout: Duration) -> Execution {
+    let mut child = match command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => return Execution::LaunchError(error.to_string()),
+    };
+    let stdout = child.stdout.take().map(|mut stdout| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.read_to_end(&mut bytes);
+            bytes
+        })
+    });
+    let stderr = child.stderr.take().map(|mut stderr| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stderr.read_to_end(&mut bytes);
+            bytes
+        })
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(5)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Execution::LaunchError(error.to_string());
+            }
+        }
+    };
+    let stdout = stdout
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    match status {
+        Some(status) => Execution::Completed {
+            status,
+            stdout,
+            stderr,
+        },
+        None => Execution::Timeout,
+    }
+}
+
+fn classify_execution(execution: Execution) -> (MutationOutcome, String) {
+    match execution {
+        Execution::Timeout => (MutationOutcome::Timeout, "TLC timed out".to_owned()),
+        Execution::LaunchError(error) => (MutationOutcome::ToolError, bounded_detail(&error)),
+        Execution::Completed {
+            status,
+            stdout,
+            stderr,
+        } => {
+            let text = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+            let outcome = if text.contains("Temporal properties were violated") {
+                MutationOutcome::KilledTemporal
+            } else if text.contains("Invariant") && text.contains("is violated")
+                || text.contains("Action property") && text.contains("is violated")
+            {
+                MutationOutcome::KilledSafety
+            } else if status.success() {
+                MutationOutcome::Survived
+            } else {
+                MutationOutcome::ToolError
+            };
+            let status_label = status
+                .code()
+                .map_or_else(|| "signal".to_owned(), |code| format!("exit {code}"));
+            (outcome, bounded_detail(&format!("{status_label}: {text}")))
+        }
+    }
+}
+
+fn bounded_detail(value: &str) -> String {
+    const MAX_CHARS: usize = 4096;
+    let normalized = value.trim();
+    if normalized.chars().count() <= MAX_CHARS {
+        normalized.to_owned()
+    } else {
+        normalized.chars().take(MAX_CHARS).collect()
+    }
+}
+
+fn required_file_name(path: &Path) -> Result<OsString, String> {
+    path.file_name()
+        .map(std::ffi::OsStr::to_owned)
+        .ok_or_else(|| format!("{} must have a file name", path.display()))
 }
 
 fn validate_schema(version: u32) -> Result<(), String> {

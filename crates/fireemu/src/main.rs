@@ -535,6 +535,12 @@ fn read_firebase_json(path: &Path) -> Result<(serde_json::Value, PathBuf), CliEr
             path.display()
         )));
     }
+    if !json.is_object() {
+        return Err(CliError::refused(format!(
+            "{}: firebase.json must be an object",
+            path.display()
+        )));
+    }
     Ok((json, path.to_path_buf()))
 }
 
@@ -599,10 +605,14 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         Some(p) => {
             let (json, canonical) = read_config_file(p)?;
             if canonical {
-                let firebase = config::firebase_json_reference(&json)?
-                    .map(|reference| project_dir(p).join(reference))
-                    .map(|path| read_firebase_json(&path))
-                    .transpose()?;
+                let firebase = if raw.firebase_json.is_none() {
+                    config::firebase_json_reference(&json)?
+                        .map(|reference| project_dir(p).join(reference))
+                        .map(|path| read_firebase_json(&path))
+                        .transpose()?
+                } else {
+                    None
+                };
                 (RuntimeConfig::from_json(&json)?, firebase)
             } else {
                 (RuntimeConfig::default(), Some((json, p.clone())))

@@ -303,6 +303,7 @@ fn init_force_refuses_missing_canonical_and_directory_sources_or_destinations() 
             Some(r#"{"schemaVersion":1}"#),
             "not a firebase.json",
         ),
+        ("non-object", "array.json", Some("[]"), "must be an object"),
     ] {
         let dir = scratch(&format!("init-source-{label}"));
         if let Some(body) = body {
@@ -581,6 +582,7 @@ fn a_canonical_config_live_loads_its_relative_firebase_json_reference() {
     let env = env_of(&dir, &["--config", canonical.to_str().unwrap()]);
     assert_eq!(env["GCLOUD_PROJECT"], "demo-embedded");
 
+    std::fs::remove_file(dir.join("firebase.json")).unwrap();
     let env = env_of(
         &dir,
         &[

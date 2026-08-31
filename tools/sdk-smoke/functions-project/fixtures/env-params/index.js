@@ -8,6 +8,7 @@
 // The daemon forwards everything a runner writes to its own stderr, so the line below is what
 // `crates/fireemu/tests/functions_environment.rs` asserts on.
 const { onRequest } = require("firebase-functions/v2/https");
+const functionsV1 = require("firebase-functions/v1");
 const params = require("firebase-functions/params");
 const secret = params.defineSecret("FX_SECRET");
 
@@ -50,3 +51,8 @@ exports.fxEnvEcho = onRequest({ secrets: [secret] }, (_req, res) =>
 exports.fxEnvNoSecret = onRequest((_req, res) =>
   res.status(200).json({ paramSecret: process.env.FX_SECRET ?? null }),
 );
+exports.fxEnvLegacySecret = functionsV1
+  .runWith({ secrets: ["FX_SECRET"] })
+  .https.onRequest((_req, res) =>
+    res.status(200).json({ paramSecret: process.env.FX_SECRET ?? null }),
+  );

@@ -180,7 +180,7 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
     let invoked = exec_script(
         &dir,
         "demo-envchain",
-        "curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-envchain/us-central1/fxEnvEcho; printf '\\n'; curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-envchain/us-central1/fxEnvNoSecret",
+        "curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-envchain/us-central1/fxEnvEcho; printf '\\n'; curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-envchain/us-central1/fxEnvNoSecret; printf '\\n'; curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-envchain/us-central1/fxEnvLegacySecret",
     );
     let invoked_err = String::from_utf8_lossy(&invoked.stderr);
     assert_eq!(invoked.status.code(), Some(0), "{invoked_err}");
@@ -190,12 +190,13 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
         .collect();
     assert_eq!(
         responses.len(),
-        2,
+        3,
         "{}",
         String::from_utf8_lossy(&invoked.stdout)
     );
     assert_eq!(responses[0]["paramSecret"], "a local secret value");
     assert_eq!(responses[1]["paramSecret"], serde_json::Value::Null);
+    assert_eq!(responses[2]["paramSecret"], "a local secret value");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -187,24 +187,26 @@ function firstRegion(ep) {
 // Options that control the managed deployment platform have no local scheduling or IAM
 // effect, but discovery must retain them so diagnostics never imply that they disappeared.
 function platformOptions(ep) {
-  if (!ep || ep.platform !== "gcfv2") return undefined;
+  if (!ep) return undefined;
   const options = {};
-  const preserveExternalChanges =
-    ep.preserveExternalChanges ?? discoveredGlobalOptions.preserveExternalChanges;
-  if (preserveExternalChanges != null)
-    options.preserveExternalChanges = Boolean(preserveExternalChanges);
-  if (ep.availableMemoryMb != null) options.availableMemoryMb = ep.availableMemoryMb;
-  if (ep.minInstances != null) options.minInstances = ep.minInstances;
-  if (ep.maxInstances != null) options.maxInstances = ep.maxInstances;
-  if (ep.cpu != null) options.cpu = String(ep.cpu);
-  if (ep.ingressSettings != null) options.ingressSettings = ep.ingressSettings;
-  if (ep.httpsTrigger?.invoker?.length) options.invoker = ep.httpsTrigger.invoker;
-  if (ep.serviceAccountEmail != null) options.serviceAccountEmail = ep.serviceAccountEmail;
-  if (ep.vpc?.connector != null) options.vpcConnector = ep.vpc.connector;
-  if (ep.vpc?.egressSettings != null) options.vpcEgressSettings = ep.vpc.egressSettings;
-  if (Array.isArray(ep.vpc?.networkInterfaces))
-    options.networkInterfaces = ep.vpc.networkInterfaces;
-  if (ep.labels && Object.keys(ep.labels).length > 0) options.labels = ep.labels;
+  if (ep.platform === "gcfv2") {
+    const preserveExternalChanges =
+      ep.preserveExternalChanges ?? discoveredGlobalOptions.preserveExternalChanges;
+    if (preserveExternalChanges != null)
+      options.preserveExternalChanges = Boolean(preserveExternalChanges);
+    if (ep.availableMemoryMb != null) options.availableMemoryMb = ep.availableMemoryMb;
+    if (ep.minInstances != null) options.minInstances = ep.minInstances;
+    if (ep.maxInstances != null) options.maxInstances = ep.maxInstances;
+    if (ep.cpu != null) options.cpu = String(ep.cpu);
+    if (ep.ingressSettings != null) options.ingressSettings = ep.ingressSettings;
+    if (ep.httpsTrigger?.invoker?.length) options.invoker = ep.httpsTrigger.invoker;
+    if (ep.serviceAccountEmail != null) options.serviceAccountEmail = ep.serviceAccountEmail;
+    if (ep.vpc?.connector != null) options.vpcConnector = ep.vpc.connector;
+    if (ep.vpc?.egressSettings != null) options.vpcEgressSettings = ep.vpc.egressSettings;
+    if (Array.isArray(ep.vpc?.networkInterfaces))
+      options.networkInterfaces = ep.vpc.networkInterfaces;
+    if (ep.labels && Object.keys(ep.labels).length > 0) options.labels = ep.labels;
+  }
   if (Array.isArray(ep.secretEnvironmentVariables)) {
     options.secrets = ep.secretEnvironmentVariables.map((secret) => secret.key).filter(Boolean);
   }
@@ -386,6 +388,8 @@ function describe(name, fn, instrumentation) {
   const base = { name, entryPoint: name };
   if (ep?.omit === true) return { ...base, omitted: true };
   if (ep && ep.platform === "gcfv1") {
+    const deployment = platformOptions(ep);
+    if (deployment) base.platformOptions = deployment;
     if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
     const region = firstRegion(ep);
     if (region) base.region = region;

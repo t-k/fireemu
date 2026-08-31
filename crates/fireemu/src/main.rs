@@ -1528,6 +1528,16 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
             cfg.rules_file.as_deref().unwrap_or("config")
         ),
     }
+    if cfg.rules_enforced {
+        for (database, files) in &cfg.firestore_databases {
+            if database == "(default)" {
+                continue;
+            }
+            if let Some(path) = &files.rules {
+                println!("  rules [{database}]: enforced from {path}");
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

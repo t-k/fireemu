@@ -412,18 +412,11 @@ fn a_named_firestore_database_is_reported_rather_than_folded_into_the_default_on
     );
     let out = exec_with(&["--firebase-json", firebase.to_str().unwrap()], &["true"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let text = stderr(&out);
-    assert!(text.contains("reports"), "{text}");
-    assert!(
-        text.contains("not loaded"),
-        "the named database's own rules are not loaded and that must be said: {text}"
-    );
-    // The (default) entry did load: the banner says the rules are enforced from that file.
-    assert!(
-        String::from_utf8_lossy(&out.stdout).contains("firestore.rules"),
-        "{}",
-        String::from_utf8_lossy(&out.stdout)
-    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("firestore.rules"), "{text}");
+    assert!(text.contains("rules [reports]: enforced from "), "{text}");
+    assert!(text.contains("reports.rules"), "{text}");
+    assert!(!stderr(&out).contains("not loaded"), "{}", stderr(&out));
 }
 
 #[test]

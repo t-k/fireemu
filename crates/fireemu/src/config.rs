@@ -710,9 +710,8 @@ impl RuntimeConfig {
     /// Applies the parts of a `firebase.json` the daemon can honour. Paths are relative to
     /// `base`.
     ///
-    /// - `firestore` in object or array form: `rules` and `indexes` (also the legacy `index`
-    ///   spelling) of the `(default)` database; a named database is reported, never silently
-    ///   merged into the default one;
+    /// - `firestore` in object or array form: per-database `rules` and `indexes` (also the legacy
+    ///   `index` spelling), with named databases isolated from `(default)`;
     /// - `storage` in object or array form: the `rules` of the entry without a `target`, or
     ///   of the first one;
     /// - `functions` in object or array form: every codebase is parsed and validated, and the

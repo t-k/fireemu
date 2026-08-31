@@ -164,6 +164,122 @@ fn is_snake_case(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
+fn is_tla_identifier(value: &str) -> bool {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic())
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn safe_tla_reference(reference: &str) -> Option<(&str, &str)> {
+    let (module, property) = reference.split_once("::")?;
+    if property.contains("::") || !is_tla_identifier(property) {
+        return None;
+    }
+    let path = Path::new(module);
+    let file_name = path.file_name()?.to_str()?;
+    if file_name != module
+        || !path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("tla"))
+        || !path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(is_tla_identifier)
+    {
+        return None;
+    }
+    Some((module, property))
+}
+
+fn strip_tla_comments(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    let mut block_depth = 0_u32;
+    let mut line_comment = false;
+    while let Some(character) = characters.next() {
+        let next = characters.peek().copied();
+        if line_comment {
+            if character == '\n' {
+                line_comment = false;
+                output.push(character);
+            }
+        } else if block_depth > 0 {
+            if character == '(' && next == Some('*') {
+                block_depth += 1;
+                characters.next();
+            } else if character == '*' && next == Some(')') {
+                block_depth -= 1;
+                characters.next();
+            } else if character == '\n' {
+                output.push(character);
+            }
+        } else if character == '\\' && next == Some('*') {
+            line_comment = true;
+            characters.next();
+        } else if character == '(' && next == Some('*') {
+            block_depth = 1;
+            characters.next();
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn tla_defines_property(source: &str, property: &str) -> bool {
+    strip_tla_comments(source).lines().any(|line| {
+        line.trim_start()
+            .strip_prefix(property)
+            .is_some_and(|rest| rest.trim_start().starts_with("=="))
+    })
+}
+
+fn cfg_registered_properties(config: &str) -> BTreeSet<String> {
+    let mut properties = BTreeSet::new();
+    let mut collecting = false;
+    for line in strip_tla_comments(config).lines() {
+        for token in line.split_whitespace() {
+            if is_cfg_directive(token) {
+                collecting = matches!(
+                    token,
+                    "INVARIANT" | "INVARIANTS" | "PROPERTY" | "PROPERTIES"
+                );
+            } else if collecting && is_tla_identifier(token) {
+                properties.insert(token.to_owned());
+            }
+        }
+    }
+    properties
+}
+
+fn is_cfg_directive(token: &str) -> bool {
+    matches!(
+        token,
+        "CONSTANT"
+            | "CONSTANTS"
+            | "CONSTRAINT"
+            | "CONSTRAINTS"
+            | "ACTION_CONSTRAINT"
+            | "ACTION_CONSTRAINTS"
+            | "INIT"
+            | "NEXT"
+            | "VIEW"
+            | "SYMMETRY"
+            | "TYPE"
+            | "TYPE_CONSTRAINT"
+            | "CHECK_DEADLOCK"
+            | "ALIAS"
+            | "POSTCONDITION"
+            | "PERIODIC"
+            | "INVARIANT"
+            | "INVARIANTS"
+            | "PROPERTY"
+            | "PROPERTIES"
+    )
+}
+
 /// Everything the checker can resolve an artifact name against.
 struct RepoIndex {
     /// Functions carrying `#[kani::proof]` under `verification/kani`.
@@ -471,18 +587,31 @@ pub fn check(root: &Path) -> Report {
                     problems.push(format!("requirement {id}: empty tla artifact"));
                 }
                 ArtifactRef::Pending(name) => report.pending.push(format!("{id}: tla {name}")),
-                ArtifactRef::Named(name) => match name.split_once("::") {
-                    Some((module, property))
-                        if Path::new(module)
-                            .extension()
-                            .is_some_and(|x| x.eq_ignore_ascii_case("tla"))
-                            && !property.is_empty() =>
-                    {
+                ArtifactRef::Named(name) => match safe_tla_reference(name) {
+                    Some((module, property)) => {
                         if resolve {
                             let path = root.join("verification/tla").join(module);
                             match fs::read_to_string(&path) {
-                                Ok(text) if text.contains(&format!("{property} ==")) => {
-                                    have.tla = true;
+                                Ok(text) if tla_defines_property(&text, property) => {
+                                    let config_name = Path::new(module).with_extension("cfg");
+                                    let config_path =
+                                        root.join("verification/tla").join(&config_name);
+                                    match fs::read_to_string(&config_path) {
+                                        Ok(config)
+                                            if cfg_registered_properties(&config)
+                                                .contains(property) =>
+                                        {
+                                            have.tla = true;
+                                        }
+                                        Ok(_) => problems.push(format!(
+                                            "requirement {id}: TLA+ config {} does not register {property}",
+                                            config_name.display()
+                                        )),
+                                        Err(_) => problems.push(format!(
+                                            "requirement {id}: TLA+ config {} is missing",
+                                            config_name.display()
+                                        )),
+                                    }
                                 }
                                 Ok(_) => problems.push(format!(
                                     "requirement {id}: TLA+ module {module} does not define {property}"

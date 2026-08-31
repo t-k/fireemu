@@ -121,6 +121,12 @@ proptest! {
 }
 ";
 
+const TLA_SOURCE: &str = r"---- MODULE Model ----
+Safe == TRUE
+TemporalSafe == <>TRUE
+====
+";
+
 #[allow(clippy::too_many_lines)]
 fn cases() -> Vec<Case> {
     let integration = ("crates/fixture/tests/it.rs", "#[test] fn it() {}");
@@ -182,6 +188,78 @@ fn cases() -> Vec<Case> {
                 ("crates/fixture/tests/props.rs", PROPERTY_SOURCE),
             ],
             expect: Expect::OkWithPending(0),
+        },
+        // A property definition is not evidence unless the same-stem cfg checks it.
+        Case {
+            name: "tla-property-not-configured",
+            status: "implemented",
+            artifacts: json!({"tla": "Model.tla::Safe"}),
+            files: vec![
+                integration,
+                ("verification/tla/Model.tla", TLA_SOURCE),
+                ("verification/tla/Model.cfg", "INIT Init\nNEXT Next\n"),
+            ],
+            expect: Expect::Problem("Model.cfg does not register Safe"),
+        },
+        // Comments and constant assignments never register a property.
+        Case {
+            name: "tla-property-comment-only",
+            status: "implemented",
+            artifacts: json!({"tla": "Model.tla::Safe"}),
+            files: vec![
+                integration,
+                ("verification/tla/Model.tla", TLA_SOURCE),
+                (
+                    "verification/tla/Model.cfg",
+                    "\\* INVARIANT Safe\nCONSTANTS NamedProperty = Safe\n",
+                ),
+            ],
+            expect: Expect::Problem("Model.cfg does not register Safe"),
+        },
+        // Singular same-line directives are supported by TLC and by the gate.
+        Case {
+            name: "tla-singular-same-line",
+            status: "implemented",
+            artifacts: json!({"tla": "Model.tla::TemporalSafe"}),
+            files: vec![
+                integration,
+                ("verification/tla/Model.tla", TLA_SOURCE),
+                ("verification/tla/Model.cfg", "PROPERTY TemporalSafe\n"),
+            ],
+            expect: Expect::OkWithPending(0),
+        },
+        // Plural directives may list property names on following lines.
+        Case {
+            name: "tla-plural-multiline",
+            status: "implemented",
+            artifacts: json!({"tla": "Model.tla::Safe"}),
+            files: vec![
+                integration,
+                ("verification/tla/Model.tla", TLA_SOURCE),
+                (
+                    "verification/tla/Model.cfg",
+                    "INVARIANTS\n  Safe\nPROPERTIES\n  TemporalSafe\n",
+                ),
+            ],
+            expect: Expect::OkWithPending(0),
+        },
+        Case {
+            name: "tla-same-stem-config-missing",
+            status: "implemented",
+            artifacts: json!({"tla": "Model.tla::Safe"}),
+            files: vec![
+                integration,
+                ("verification/tla/Model.tla", TLA_SOURCE),
+                ("verification/tla/Other.cfg", "INVARIANT Safe\n"),
+            ],
+            expect: Expect::Problem("TLA+ config Model.cfg is missing"),
+        },
+        Case {
+            name: "tla-unsafe-module-path",
+            status: "implemented",
+            artifacts: json!({"tla": "../Model.tla::Safe"}),
+            files: vec![integration],
+            expect: Expect::Problem("tla artifact must be Module.tla::Property"),
         },
         // TRACE-REF-05: a missing fuzz target fails validation.
         Case {

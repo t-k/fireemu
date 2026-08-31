@@ -231,12 +231,63 @@ async fn reset_discards_in_flight_work() {
     runtime.runner().shutdown().await;
 }
 
+#[tokio::test]
+async fn schedule_retry_options_control_attempts_and_logical_backoff() {
+    let (runtime, clock) = start().await;
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .count(),
+        1
+    );
+
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(3))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .count(),
+        2
+    );
+
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(6))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(runtime.await_idle(Duration::from_secs(2)).await.is_ok());
+    let attempts: Vec<u32> = runtime
+        .history()
+        .iter()
+        .filter(|record| record.function == "failSchedule")
+        .map(|record| record.attempt)
+        .collect();
+    assert_eq!(attempts, vec![1, 2, 3]);
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|record| record.function == "failSchedule" && record.attempt == 3));
+    runtime.runner().shutdown().await;
+}
+
 #[test]
 fn manifest_json_round_trips_and_rejects_bad_input() {
     let v = json!({"functions": [
         {"name": "a", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.updated", "document": "x/{id}"}, "timeoutSeconds": 5, "retry": true},
         {"name": "b", "trigger": {"type": "callable"}},
-        {"name": "c", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo"}, "region": "asia-northeast1"},
+        {"name": "c", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo", "retryConfig": {"retryCount": 4, "maxRetrySeconds": 90, "maxBackoffSeconds": 30, "maxDoublings": 2, "minBackoffSeconds": 3}}, "region": "asia-northeast1", "retry": true},
         {"name": "d", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "b"}},
         {"name": "e", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn"}}
     ]});
@@ -246,6 +297,16 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
     let back = manifest_to_json(&m);
     assert_eq!(back["functions"][0]["retry"], true);
     assert_eq!(back["functions"][1]["trigger"]["callable"], true);
+    assert_eq!(
+        back["functions"][2]["trigger"]["retryConfig"],
+        json!({
+            "retryCount": 4,
+            "maxRetrySeconds": 90,
+            "maxBackoffSeconds": 30,
+            "maxDoublings": 2,
+            "minBackoffSeconds": 3,
+        })
+    );
     assert_eq!(back["functions"][4]["trigger"]["eventType"], "beforeSignIn");
     for bad in [
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "nope", "document": "a/{b}"}}]}),

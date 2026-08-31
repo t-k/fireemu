@@ -219,7 +219,10 @@ impl EventRecord {
         now: LogicalInstant,
     ) -> Result<FailureOutcome, EventTransitionError> {
         self.guard("fail", matches!(self.state, EventState::Running))?;
-        if policy.allows_retry_after(self.attempt) {
+        let elapsed = now
+            .checked_duration_since(self.event.logical_time)
+            .unwrap_or_else(|| fireemu_core_types::time::LogicalDuration::from_nanos(i128::MAX));
+        if policy.allows_retry_after_elapsed(self.attempt, elapsed) {
             let retry_at = now
                 .checked_add(policy.backoff_for_attempt(self.attempt))
                 .ok_or(EventTransitionError::RetryInstantOverflow)?;

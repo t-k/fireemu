@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-options",
+  "private": true,
+  "main": "index.js",
+  "description": "GlobalOptions and ScheduleOptions discovery fixture."
+}

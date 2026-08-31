@@ -15,8 +15,13 @@
 //! handler runs that never can. `functions.unservedTriggers = "report"` asks for the official
 //! carry-on instead.
 
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
+
+use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 
 /// The fixture codebases live beside the smoke's functions project so that Node resolves
 /// `firebase-functions` through `tools/sdk-smoke/node_modules`.
@@ -168,4 +173,115 @@ fn blocking_identity_exports_are_discovered_as_served_triggers() {
     assert_eq!(out.status.code(), Some(0), "{err}");
     assert!(!err.contains("function ignored"), "{err}");
     assert!(!err.contains("blocking identity event"), "{err}");
+}
+
+#[tokio::test]
+async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
+    if !have_sdk() {
+        return;
+    }
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("blocking-auth");
+    let spec = SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![
+            ("GCLOUD_PROJECT".to_owned(), "demo-blocking".to_owned()),
+            ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
+        ],
+        hello_timeout: Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let port = runner
+        .hello()
+        .http_port
+        .expect("blocking triggers need HTTP");
+    let body = serde_json::json!({
+        "data": {
+            "user": {"uid": "user-1", "email": "a@example.com"},
+            "context": {"eventType": "beforeCreate"}
+        }
+    })
+    .to_string();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "POST /demo-blocking/us-central1/fxBeforeCreate HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: test-secret\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .unwrap();
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).unwrap();
+    let response = fireemu_adapter_functions::http::parse_response(&raw, "POST").unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&response.body).unwrap()["displayName"],
+        "created"
+    );
+    runner.shutdown().await;
+}
+
+/// `GlobalOptions` with local runtime meaning and every `ScheduleOptions` retry field survive
+/// real SDK discovery; `omit` deliberately removes an export from emulation.
+#[tokio::test]
+async fn global_and_schedule_options_reach_the_runtime_manifest() {
+    if !have_sdk() {
+        return;
+    }
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("function-options");
+    let spec = SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![
+            ("GCLOUD_PROJECT".to_owned(), "demo-options".to_owned()),
+            ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
+        ],
+        hello_timeout: Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = runner.hello().manifest.as_ref().unwrap();
+    let functions = manifest["functions"].as_array().unwrap();
+    assert!(functions
+        .iter()
+        .all(|function| function["name"] != "fxOmitted"));
+    let callable = functions
+        .iter()
+        .find(|function| function["name"] == "fxCallable")
+        .unwrap();
+    assert_eq!(callable["region"], "asia-northeast1");
+    assert_eq!(callable["timeoutSeconds"], 17);
+    assert_eq!(callable["concurrency"], 3);
+    assert_eq!(callable["trigger"]["enforceAppCheck"], true);
+    let schedule = functions
+        .iter()
+        .find(|function| function["name"] == "fxSchedule")
+        .unwrap();
+    assert_eq!(schedule["region"], "europe-west1");
+    assert_eq!(schedule["timeoutSeconds"], 23);
+    assert_eq!(schedule["concurrency"], 2);
+    assert_eq!(schedule["trigger"]["timeZone"], "America/New_York");
+    assert_eq!(schedule["trigger"]["retryConfig"]["retryCount"], 4);
+    assert_eq!(schedule["trigger"]["retryConfig"]["maxRetrySeconds"], 90);
+    assert_eq!(schedule["trigger"]["retryConfig"]["minBackoffSeconds"], 3);
+    assert_eq!(schedule["trigger"]["retryConfig"]["maxBackoffSeconds"], 30);
+    assert_eq!(schedule["trigger"]["retryConfig"]["maxDoublings"], 2);
+    runner.shutdown().await;
 }

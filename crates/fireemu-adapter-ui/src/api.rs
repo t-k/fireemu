@@ -319,7 +319,19 @@ pub fn trigger_json(trigger: &Trigger) -> Value {
         Trigger::Schedule {
             schedule,
             time_zone,
-        } => json!({"kind": "schedule", "schedule": schedule.as_str(), "timeZone": time_zone}),
+            retry,
+        } => json!({
+            "kind": "schedule",
+            "schedule": schedule.as_str(),
+            "timeZone": time_zone,
+            "retryConfig": {
+                "retryCount": retry.retry_count,
+                "maxRetrySeconds": retry.max_retry_seconds,
+                "maxBackoffSeconds": retry.max_backoff_seconds,
+                "maxDoublings": retry.max_doublings,
+                "minBackoffSeconds": retry.min_backoff_seconds,
+            },
+        }),
     }
 }
 

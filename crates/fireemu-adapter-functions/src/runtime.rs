@@ -2231,7 +2231,26 @@ impl FunctionsRuntime {
                 LogicalDuration::from_seconds(0),
             );
             let policy = if retry {
-                self.retry
+                self.manifest.get(function).map_or(self.retry, |spec| {
+                    if let Trigger::Schedule { retry, .. } = &spec.trigger {
+                        let seconds = |value: u64| {
+                            LogicalDuration::from_seconds(i64::try_from(value).unwrap_or(i64::MAX))
+                        };
+                        let minimum = seconds(retry.min_backoff_seconds);
+                        let maximum =
+                            seconds(retry.max_backoff_seconds.max(retry.min_backoff_seconds));
+                        RetryPolicy::try_with_limits(
+                            retry.retry_count.saturating_add(1),
+                            minimum,
+                            maximum,
+                            retry.max_doublings,
+                            (retry.max_retry_seconds > 0).then(|| seconds(retry.max_retry_seconds)),
+                        )
+                        .unwrap_or(self.retry)
+                    } else {
+                        self.retry
+                    }
+                })
             } else {
                 single.unwrap_or(self.retry)
             };

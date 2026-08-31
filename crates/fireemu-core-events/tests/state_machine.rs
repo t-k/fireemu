@@ -112,6 +112,25 @@ fn backoff_is_capped_and_never_overflows() {
 }
 
 #[test]
+fn scheduler_backoff_becomes_linear_and_obeys_the_retry_window() {
+    let p = RetryPolicy::try_with_limits(
+        10,
+        LogicalDuration::from_seconds(1),
+        LogicalDuration::from_seconds(60),
+        2,
+        Some(LogicalDuration::from_seconds(10)),
+    )
+    .unwrap();
+    assert_eq!(p.backoff_for_attempt(1), LogicalDuration::from_seconds(1));
+    assert_eq!(p.backoff_for_attempt(2), LogicalDuration::from_seconds(2));
+    assert_eq!(p.backoff_for_attempt(3), LogicalDuration::from_seconds(4));
+    assert_eq!(p.backoff_for_attempt(4), LogicalDuration::from_seconds(8));
+    assert_eq!(p.backoff_for_attempt(5), LogicalDuration::from_seconds(12));
+    assert!(p.allows_retry_after_elapsed(3, LogicalDuration::from_seconds(6)));
+    assert!(!p.allows_retry_after_elapsed(3, LogicalDuration::from_seconds(7)));
+}
+
+#[test]
 fn terminal_states_never_regress() {
     for terminal in [
         |r: &mut EventRecord| {

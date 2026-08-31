@@ -19,8 +19,8 @@
 use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
     AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec,
-    IgnoredFunction, IgnoredScope, ObjectEvent, TaskRateLimits, TaskRetryConfig, Trigger,
-    DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    IgnoredFunction, IgnoredScope, ObjectEvent, ScheduleRetryConfig, TaskRateLimits,
+    TaskRetryConfig, Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::PathPattern;
 use serde_json::{json, Value};
@@ -44,6 +44,15 @@ fn millis_to_seconds(millis: u64) -> f64 {
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn non_negative_u32(n: f64) -> u32 {
     n.max(0.0).min(f64::from(u32::MAX)) as u32
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn non_negative_u64(n: f64) -> u64 {
+    n.max(0.0).min(u64::MAX as f64) as u64
 }
 
 /// Parses the canonical manifest JSON.
@@ -261,9 +270,28 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
             let time_zone = s(trigger, "timeZone").filter(|z| !z.is_empty());
             crate::zone::resolve(time_zone.as_deref())
                 .map_err(|e| format!("manifest: function {name:?}: time zone: {e}"))?;
+            let defaults = ScheduleRetryConfig::default();
+            let retry_number = |key: &str| {
+                trigger
+                    .get("retryConfig")
+                    .and_then(|retry| retry.get(key))
+                    .and_then(Value::as_f64)
+            };
             Trigger::Schedule {
                 schedule,
                 time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: retry_number("retryCount")
+                        .map_or(defaults.retry_count, non_negative_u32),
+                    max_retry_seconds: retry_number("maxRetrySeconds")
+                        .map_or(defaults.max_retry_seconds, non_negative_u64),
+                    max_backoff_seconds: retry_number("maxBackoffSeconds")
+                        .map_or(defaults.max_backoff_seconds, non_negative_u64),
+                    max_doublings: retry_number("maxDoublings")
+                        .map_or(defaults.max_doublings, non_negative_u32),
+                    min_backoff_seconds: retry_number("minBackoffSeconds")
+                        .map_or(defaults.min_backoff_seconds, non_negative_u64),
+                },
             }
         }
         other => {
@@ -353,7 +381,19 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                 Trigger::Schedule {
                     schedule,
                     time_zone,
-                } => json!({"type": "schedule", "schedule": schedule.as_str(), "timeZone": time_zone}),
+                    retry,
+                } => json!({
+                    "type": "schedule",
+                    "schedule": schedule.as_str(),
+                    "timeZone": time_zone,
+                    "retryConfig": {
+                        "retryCount": retry.retry_count,
+                        "maxRetrySeconds": retry.max_retry_seconds,
+                        "maxBackoffSeconds": retry.max_backoff_seconds,
+                        "maxDoublings": retry.max_doublings,
+                        "minBackoffSeconds": retry.min_backoff_seconds,
+                    },
+                }),
             };
             json!({
                 "name": f.name,

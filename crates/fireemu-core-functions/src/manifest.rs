@@ -264,6 +264,33 @@ impl Default for TaskRetryConfig {
     }
 }
 
+/// Cloud Scheduler retry settings attached to an `onSchedule` function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduleRetryConfig {
+    /// Additional attempts after the first invocation.
+    pub retry_count: u32,
+    /// Total retry window in seconds; zero means no time-based limit.
+    pub max_retry_seconds: u64,
+    /// Backoff ceiling in seconds.
+    pub max_backoff_seconds: u64,
+    /// Number of exponential doublings before the delay grows linearly.
+    pub max_doublings: u32,
+    /// Initial backoff in seconds.
+    pub min_backoff_seconds: u64,
+}
+
+impl Default for ScheduleRetryConfig {
+    fn default() -> Self {
+        Self {
+            retry_count: 0,
+            max_retry_seconds: 0,
+            max_backoff_seconds: 3_600,
+            max_doublings: 5,
+            min_backoff_seconds: 5,
+        }
+    }
+}
+
 impl TaskRetryConfig {
     /// The backoff before attempt `attempt` (1-based), by the official formula
     /// (`taskQueue.js:263`).
@@ -392,6 +419,8 @@ pub enum Trigger {
         schedule: Schedule,
         /// IANA time zone (`None` = UTC).
         time_zone: Option<String>,
+        /// Per-function Cloud Scheduler retry policy.
+        retry: ScheduleRetryConfig,
     },
 }
 
@@ -691,6 +720,7 @@ impl FunctionManifest {
             Trigger::Schedule {
                 schedule,
                 time_zone,
+                ..
             } => Some((f, schedule, time_zone.as_deref())),
             _ => None,
         })

@@ -209,7 +209,12 @@ function describeV1Event(base, type, resource, schedule, retry) {
       ...base,
       ...v1,
       retry: Number(schedule.retryConfig?.retryCount || 0) > 0,
-      trigger: { type: "schedule", schedule: schedule.schedule, timeZone: schedule.timeZone || undefined },
+      trigger: {
+        type: "schedule",
+        schedule: schedule.schedule,
+        timeZone: schedule.timeZone || undefined,
+        retryConfig: schedule.retryConfig || {},
+      },
     };
   }
   const authMatch = type.match(/^providers\/firebase\.auth\/eventTypes\/user\.(create|delete)$/);
@@ -255,6 +260,7 @@ function describe(name, fn, instrumentation) {
   const callable = () => ({ type: "http", callable: true, ...callableAppCheck(instrumentation, fn) });
   const ep = fn.__endpoint;
   const base = { name, entryPoint: name };
+  if (ep?.omit === true) return { ...base, omitted: true };
   if (ep && ep.platform === "gcfv1") {
     if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
     const region = firstRegion(ep);
@@ -280,6 +286,7 @@ function describe(name, fn, instrumentation) {
           type: "schedule",
           schedule: ep.scheduleTrigger.schedule,
           timeZone: ep.scheduleTrigger.timeZone || undefined,
+          retryConfig: ep.scheduleTrigger.retryConfig || {},
         },
       };
     }
@@ -659,7 +666,7 @@ async function main() {
   // `ignored` array with its region, its trigger type and its product scope, and the daemon
   // decides what to do with it.
   const manifest = {
-    functions: described.filter((d) => !d.ignored),
+    functions: described.filter((d) => !d.ignored && !d.omitted),
     ignored: described
       .filter((d) => d.ignored)
       .map((d) => ({
@@ -671,7 +678,7 @@ async function main() {
       })),
   };
   let httpPort;
-  if (manifest.functions.some((f) => f.trigger.type === "http" || f.trigger.type === "tasks")) {
+  if (manifest.functions.some((f) => f.trigger.type === "http" || f.trigger.type === "tasks" || f.trigger.type === "blockingAuth")) {
     try {
       const server = await makeHttpServer(functions, manifest);
       if (server) httpPort = server.address().port;

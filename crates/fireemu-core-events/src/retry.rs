@@ -9,6 +9,8 @@ pub struct RetryPolicy {
     max_attempts: u32,
     base_backoff: LogicalDuration,
     max_backoff: LogicalDuration,
+    max_doublings: Option<u32>,
+    max_retry_duration: Option<LogicalDuration>,
 }
 
 /// Invalid retry policy parameters.
@@ -55,7 +57,26 @@ impl RetryPolicy {
             max_attempts,
             base_backoff,
             max_backoff,
+            max_doublings: None,
+            max_retry_duration: None,
         })
+    }
+
+    /// Builds a policy with Cloud Scheduler's bounded exponential phase and retry window.
+    pub fn try_with_limits(
+        max_attempts: u32,
+        base_backoff: LogicalDuration,
+        max_backoff: LogicalDuration,
+        max_doublings: u32,
+        max_retry_duration: Option<LogicalDuration>,
+    ) -> Result<Self, RetryPolicyError> {
+        if max_retry_duration.is_some_and(|duration| duration.as_nanos() < 0) {
+            return Err(RetryPolicyError::NegativeBackoff);
+        }
+        let mut policy = Self::try_new(max_attempts, base_backoff, max_backoff)?;
+        policy.max_doublings = Some(max_doublings);
+        policy.max_retry_duration = max_retry_duration;
+        Ok(policy)
     }
 
     /// Total attempts including the first delivery.
@@ -83,12 +104,14 @@ impl RetryPolicy {
         let base = self.base_backoff.as_nanos();
         let cap = self.max_backoff.as_nanos();
         let shift = attempt.saturating_sub(1);
-        // 2^shift * base overflows i128 for shift >= 127 regardless of base > 0.
-        let scaled = if shift >= 120 {
-            None
-        } else {
-            base.checked_mul(1i128 << shift)
-        };
+        let doublings = self.max_doublings.map_or(shift, |limit| shift.min(limit));
+        // 2^shift * base overflows i128 for large shifts regardless of base > 0.
+        let exponential = (doublings < 120)
+            .then(|| base.checked_mul(1i128 << doublings))
+            .flatten();
+        let linear_steps = shift.saturating_sub(doublings);
+        let scaled = exponential
+            .and_then(|unit| unit.checked_mul(i128::from(linear_steps).saturating_add(1)));
         LogicalDuration::from_nanos(scaled.map_or(cap, |v| v.min(cap)))
     }
 
@@ -96,5 +119,18 @@ impl RetryPolicy {
     #[must_use]
     pub const fn allows_retry_after(&self, attempt: u32) -> bool {
         attempt < self.max_attempts
+    }
+
+    /// Whether the retry after `attempt` fits both the attempt and elapsed-time limits.
+    #[must_use]
+    pub fn allows_retry_after_elapsed(&self, attempt: u32, elapsed: LogicalDuration) -> bool {
+        if !self.allows_retry_after(attempt) {
+            return false;
+        }
+        self.max_retry_duration.is_none_or(|limit| {
+            elapsed
+                .checked_add(self.backoff_for_attempt(attempt))
+                .is_some_and(|next| next <= limit)
+        })
     }
 }

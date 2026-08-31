@@ -83,6 +83,7 @@ send({
             # A cron schedule (03:00 UTC daily). The tests start at 12:01 UTC, so it only
             # comes due for clock advances of a day or more.
             {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *"}},
+            {"name": "failSchedule", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "retryConfig": {"retryCount": 2, "minBackoffSeconds": 3, "maxBackoffSeconds": 30, "maxDoublings": 1, "maxRetrySeconds": 60}}, "retry": True},
             {"name": "onJob", "trigger": {"type": "pubsub", "topic": "jobs"}},
             {"name": "onUser", "trigger": {"type": "auth", "eventType": "google.firebase.auth.user.v1.created"}},
             {"name": "onGone", "trigger": {"type": "auth", "eventType": "providers/firebase.auth/eventTypes/user.delete"}},

@@ -701,6 +701,13 @@ impl LocalBackend {
                     if release > wait_until {
                         return Err(Status::aborted("Transaction lock timeout."));
                     }
+                    // The holder's lock is released only once the clock has reached its
+                    // expiry. If the clock did not actually advance there (it can only fail to
+                    // move forward, never backward -- e.g. a poisoned clock lock), stop instead
+                    // of retrying forever: refuse the write rather than hang the request.
+                    if self.now() < release {
+                        return Err(Status::aborted("Transaction lock timeout."));
+                    }
                     // The holder has now expired; retry against the released state.
                 }
             }

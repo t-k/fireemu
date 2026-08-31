@@ -139,6 +139,98 @@ fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
     assert_eq!(std::fs::read(path).unwrap(), before);
 }
 
+#[test]
+fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
+    let dir = scratch("init-wizard");
+    write(&dir, "firebase.json", "{}\n");
+
+    let out = run_in(&dir, &["init", "--interactive"], Some("\n\ny\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("strict (recommended)"), "{stdout}");
+    assert!(
+        stdout.contains("additional validation and production limit checks"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("firebase reproduces the pinned official emulator behavior"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("loaded again on every fireemu start"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Create fireemu.json? [Y/n]"), "{stdout}");
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
+    assert_eq!(generated["profile"], "strict");
+    assert_eq!(generated["firebaseJson"], "firebase.json");
+}
+
+#[test]
+fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
+    let explicit = scratch("init-explicit");
+    write(&explicit, "project.json", "{}\n");
+    let out = run_in(
+        &explicit,
+        &[
+            "init",
+            "--yes",
+            "--profile",
+            "firebase",
+            "--firebase-json",
+            "project.json",
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(explicit.join("fireemu.json")).unwrap())
+            .unwrap();
+    assert_eq!(generated["profile"], "firebase");
+    assert_eq!(generated["firebaseJson"], "project.json");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
+
+    let redirected = scratch("init-redirected");
+    let out = run_in(&redirected, &["init"], Some("firebase\nmissing.json\nn\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(redirected.join("fireemu.json")).unwrap())
+            .unwrap();
+    assert_eq!(generated["profile"], "strict");
+    assert!(generated.get("firebaseJson").is_none());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
+}
+
+#[test]
+fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
+    for (label, args) in [
+        ("conflicting modes", vec!["init", "--interactive", "--yes"]),
+        (
+            "duplicate profile",
+            vec!["init", "--profile", "strict", "--profile", "firebase"],
+        ),
+        (
+            "duplicate source",
+            vec![
+                "init",
+                "--firebase-json",
+                "a.json",
+                "--firebase-json",
+                "b.json",
+            ],
+        ),
+        ("bad profile", vec!["init", "--profile", "production"]),
+        ("missing profile", vec!["init", "--profile"]),
+        ("missing source", vec!["init", "--firebase-json"]),
+    ] {
+        let dir = scratch(&format!("init-usage-{}", label.replace(' ', "-")));
+        let out = run_in(&dir, &args, None);
+        assert_eq!(out.status.code(), Some(2), "{label}: {}", stderr(&out));
+        assert!(!dir.join("fireemu.json").exists(), "{label}");
+    }
+}
+
 fn config_schema_url() -> &'static str {
     "https://fireemu.dev/spec/config/fireemu.schema.json"
 }

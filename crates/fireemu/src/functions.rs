@@ -61,6 +61,11 @@ fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, St
                 for byte in bytes {
                     *hash = hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte);
                 }
+            } else if kind.is_symlink() {
+                return Err(format!(
+                    "watch {}: symbolic links outside node_modules are not supported",
+                    child.display()
+                ));
             }
         }
         Ok(())
@@ -104,6 +109,11 @@ fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf,
                 }
                 std::fs::copy(&path, &target)
                     .map_err(|e| format!("snapshot {}: {e}", path.display()))?;
+            } else if kind.is_symlink() {
+                return Err(format!(
+                    "snapshot {}: symbolic links outside node_modules are not supported",
+                    path.display()
+                ));
             }
         }
         Ok(())
@@ -1345,6 +1355,27 @@ mod tests {
 
         std::fs::remove_dir_all(snapshot).unwrap();
         assert!(root.join("node_modules/pkg/index.js").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reload_snapshot_rejects_source_symlinks_instead_of_silently_omitting_them() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-snapshot-symlink-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::write(root.join("lib/index.js"), "export const value = 1;").unwrap();
+        symlink("index.js", root.join("lib/alias.js")).unwrap();
+
+        let error = snapshot_functions_source(&root, &[]).unwrap_err();
+        assert!(error.contains("symbolic link"), "unexpected error: {error}");
+        assert!(error.contains("lib/alias.js"), "unexpected error: {error}");
+
         std::fs::remove_dir_all(root).unwrap();
     }
 

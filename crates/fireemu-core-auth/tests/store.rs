@@ -163,6 +163,47 @@ fn emails_and_phone_numbers_are_validated_and_unique_across_users() {
 }
 
 #[test]
+fn duplicate_email_mode_allows_create_and_update_and_signs_in_the_active_account() {
+    let mut s = store();
+    s.set_config(ProjectAuthConfig {
+        allow_duplicate_emails: true,
+        ..ProjectAuthConfig::default()
+    });
+
+    let first = s
+        .create_user(NewUser::email("shared@example.com"), t0())
+        .unwrap();
+    s.set_password(&first, "first-password").unwrap();
+    let second = s
+        .create_user(NewUser::email("shared@example.com"), t(1))
+        .unwrap();
+    s.set_password(&second, "second-password").unwrap();
+
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        second,
+        "the most recently assigned account is the email lookup target"
+    );
+    assert_eq!(
+        s.verify_password("shared@example.com", "second-password", t(2)),
+        Ok(second.clone())
+    );
+    assert_eq!(
+        s.verify_password("shared@example.com", "first-password", t(2)),
+        Err(AuthError::InvalidPassword),
+        "email sign-in is resolved to one active account before checking its password"
+    );
+
+    s.set_email(&first, "other@example.com").unwrap();
+    s.set_email(&first, "shared@example.com").unwrap();
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        first,
+        "updating an account makes it the active lookup target"
+    );
+}
+
+#[test]
 fn passwords_are_validated_hashed_and_verified() {
     let mut s = store();
     let ghost = ghost(&mut s);

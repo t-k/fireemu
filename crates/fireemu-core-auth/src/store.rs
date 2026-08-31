@@ -367,11 +367,8 @@ impl PasswordDigest {
 
 /// The project-level Auth configuration `auth_export/config.json` carries.
 ///
-/// fireemu records it so that an import followed by an export does not lose it. Neither
-/// switch changes fireemu's behaviour yet: `allowDuplicateEmails` and the improved email
-/// privacy mode are Identity Platform settings the emulated surface does not implement, and
-/// silently rewriting them to the defaults would be exactly the loss the export format
-/// exists to prevent.
+/// fireemu records it so that an import followed by an export does not lose it. Both switches
+/// also affect the matching and error behavior of the emulated Identity Toolkit surface.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProjectAuthConfig {
     /// `signIn.allowDuplicateEmails`.
@@ -553,6 +550,10 @@ pub struct AuthStore {
     /// analogue of the Storage `Arc<Vec<u8>>` blobs). Every mutation site clones exactly the
     /// one user it touches through [`Arc::make_mut`].
     users: BTreeMap<LocalId, Arc<UserRecord>>,
+    /// The account currently selected by an email-only lookup. Duplicate-email mode still
+    /// has one active lookup target, matching the official emulator's `email -> localId`
+    /// index: the most recently created or updated account wins.
+    local_id_for_email: BTreeMap<String, LocalId>,
     counter: u64,
     refresh_tokens: BTreeMap<String, RefreshSession>,
     next_id_override: Option<String>,
@@ -645,6 +646,7 @@ impl AuthStore {
             rng,
             policy,
             users: BTreeMap::new(),
+            local_id_for_email: BTreeMap::new(),
             counter: 0,
             refresh_tokens: BTreeMap::new(),
             next_id_override: None,
@@ -774,6 +776,9 @@ impl AuthStore {
     pub fn delete_user_by_id(&mut self, uid: &str) -> Result<(), AuthError> {
         let key = LocalId(uid.to_owned());
         let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
+        if let Some(email) = &user.email {
+            self.local_id_for_email.remove(email);
+        }
         self.refresh_tokens.retain(|_, s| s.uid != key);
         self.pending_sign_in_owners.retain(|_, owner| *owner != key);
         self.verification_codes.retain(|_, c| match &c.purpose {
@@ -789,6 +794,7 @@ impl AuthStore {
     /// deterministic generator are kept so IDs stay reproducible per session.
     pub fn clear(&mut self) {
         self.users.clear();
+        self.local_id_for_email.clear();
         self.refresh_tokens.clear();
         self.oob_codes.clear();
         self.verification_codes.clear();
@@ -938,6 +944,7 @@ impl AuthStore {
         let mut mfa = MfaState::default();
         mfa.import_factors(user.totp_factors, user.phone_factors)
             .map_err(ImportUserError::SecondFactor)?;
+        let email = user.email.clone();
         self.users.insert(
             local_id.clone(),
             Arc::new(UserRecord {
@@ -959,6 +966,9 @@ impl AuthStore {
                 password,
             }),
         );
+        if let Some(email) = email {
+            self.local_id_for_email.insert(email, local_id.clone());
+        }
         Ok(local_id)
     }
 
@@ -979,15 +989,16 @@ impl AuthStore {
             .map(Arc::as_ref)
     }
 
-    /// Changes the email (unique across users).
+    /// Changes the email, enforcing uniqueness unless duplicate-email mode is enabled.
     pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
         if !email.contains('@') || email.chars().any(char::is_control) {
             return Err(AuthError::InvalidEmail);
         }
-        if self
-            .users
-            .values()
-            .any(|u| u.local_id != *uid && u.email.as_deref() == Some(email))
+        if !self.config.allow_duplicate_emails
+            && self
+                .users
+                .values()
+                .any(|u| u.local_id != *uid && u.email.as_deref() == Some(email))
         {
             return Err(AuthError::EmailExists);
         }
@@ -996,7 +1007,11 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        user.email = Some(email.to_owned());
+        if let Some(old) = user.email.replace(email.to_owned()) {
+            self.local_id_for_email.remove(&old);
+        }
+        self.local_id_for_email
+            .insert(email.to_owned(), uid.clone());
         Ok(())
     }
 
@@ -1091,10 +1106,11 @@ impl AuthStore {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(AuthError::InvalidEmail);
             }
-            if self
-                .users
-                .values()
-                .any(|u| u.email.as_deref() == Some(email.as_str()))
+            if !self.config.allow_duplicate_emails
+                && self
+                    .users
+                    .values()
+                    .any(|u| u.email.as_deref() == Some(email.as_str()))
             {
                 return Err(AuthError::EmailExists);
             }
@@ -1113,6 +1129,7 @@ impl AuthStore {
         else {
             return Err(AuthError::LocalIdExists);
         };
+        let email = new.email.clone();
         slot.insert(Arc::new(UserRecord {
             local_id: local_id.clone(),
             email: new.email,
@@ -1134,6 +1151,9 @@ impl AuthStore {
             federated: Vec::new(),
             password: None,
         }));
+        if let Some(email) = email {
+            self.local_id_for_email.insert(email, local_id.clone());
+        }
         self.created_users.push(local_id.clone());
         Ok(local_id)
     }
@@ -1692,7 +1712,9 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        user.email = None;
+        if let Some(email) = user.email.take() {
+            self.local_id_for_email.remove(&email);
+        }
         user.email_verified = false;
         Ok(())
     }
@@ -1718,9 +1740,7 @@ impl AuthStore {
     ) -> Result<LocalId, AuthError> {
         let private = self.config.enable_improved_email_privacy;
         let (uid, disabled, ok) = self
-            .users
-            .values()
-            .find(|u| u.email.as_deref() == Some(email))
+            .user_by_email(email)
             .map(|u| {
                 (
                     u.local_id.clone(),
@@ -1753,9 +1773,9 @@ impl AuthStore {
     /// Looks up a user by email.
     #[must_use]
     pub fn user_by_email(&self, email: &str) -> Option<&UserRecord> {
-        self.users
-            .values()
-            .find(|u| u.email.as_deref() == Some(email))
+        self.local_id_for_email
+            .get(email)
+            .and_then(|uid| self.users.get(uid))
             .map(Arc::as_ref)
     }
 

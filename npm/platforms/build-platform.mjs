@@ -65,7 +65,7 @@ export function platformManifest(platform, version) {
     engines: { node: ">=20" },
     // No `bin`: the executable is launched by the `fireemu` package, and declaring it here
     // would put two entries in the same `node_modules/.bin/fireemu`.
-    files: ["bin", "README.md", "LICENSE"],
+    files: ["bin", "README.md", "LICENSE", "THIRD_PARTY_LICENSES.txt"],
     preferUnplugged: true,
   };
 }
@@ -122,6 +122,7 @@ export function buildPlatformPackage({ platformName, binaryPath, outDir, version
   );
   writeFileSync(join(out, "README.md"), platformReadme(platform, version));
   cpSync(join(repoRoot, "LICENSE"), join(out, "LICENSE"));
+  cpSync(join(repoRoot, "THIRD_PARTY_LICENSES.txt"), join(out, "THIRD_PARTY_LICENSES.txt"));
   return out;
 }
 

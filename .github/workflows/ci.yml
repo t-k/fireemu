@@ -110,6 +110,7 @@ jobs:
           key: package
       - run: pnpm -C ui install --frozen-lockfile
       - run: pnpm -C ui build
+      - run: node --test npm/scripts/distribution-licenses.test.mjs
       - run: cargo build --release --locked -p fireemu
       - run: node npm/scripts/pack-local.mjs
       - run: node npm/scripts/verify-install.mjs --dist npm/dist

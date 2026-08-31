@@ -3,9 +3,9 @@
 //
 //   node npm/scripts/prepare-launcher.mjs
 //
-// The package page (`npm/README.md`) and the licence live once in the repository and are
+// The package page (`npm/README.md`) and license files live once in the repository and are
 // copied in at pack time rather than duplicated, so there is no second copy to forget. Both
-// copies are ignored by git; `npm pack` needs them on disk because `files` names them.
+// generated copies are ignored by git; `npm pack` needs them on disk because `files` names them.
 
 import { copyFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -20,6 +20,7 @@ export function prepareLauncher(root = repoRoot) {
   for (const [from, to] of [
     [join(root, "npm", "README.md"), join(launcher, "README.md")],
     [join(root, "LICENSE"), join(launcher, "LICENSE")],
+    [join(root, "THIRD_PARTY_LICENSES.txt"), join(launcher, "THIRD_PARTY_LICENSES.txt")],
   ]) {
     copyFileSync(from, to);
     written.push(to);

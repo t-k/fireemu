@@ -1,5 +1,16 @@
-//! The Auth Emulator identity-provider login widget pages, reproduced from the pinned
-//! firebase-tools `widget_ui.js` / `handlers.js` (byte-for-byte for the static parts).
+//! SPDX-License-Identifier: MIT
+//!
+//! Portions of this file are derived from the Firebase CLI:
+//! https://github.com/firebase/firebase-tools, version 15.28.2.
+//!
+//! Copyright (c) 2015 Firebase
+//!
+//! The Auth Emulator identity-provider login widget pages are reproduced from the pinned
+//! Firebase CLI `widget_ui.js` / `handlers.js` (byte-for-byte for the static parts).
+//! Modified by the fireemu project to split the page into Rust template constants; dynamic
+//! account values are generated separately and HTML-escaped.
+//!
+//! The full MIT license is included in `THIRD_PARTY_LICENSES.txt`.
 //!
 //! Generated content: do not hand-edit the three template constants below.
 

@@ -25,5 +25,6 @@ npm/dist/
 npm/platforms/build/
 npm/fireemu/README.md
 npm/fireemu/LICENSE
+npm/fireemu/THIRD_PARTY_LICENSES.txt
 # node_modules directories and the symlinks the smokes use for them
 node_modules

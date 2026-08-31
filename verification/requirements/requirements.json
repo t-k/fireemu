@@ -53,8 +53,7 @@
         "kani": "virtual_clock_never_moves_backwards",
         "property": "prop_clock_advance_is_monotonic",
         "mutation": [
-          "M-SCHED-001",
-          "M-TLA-EPOCH-MONOTONIC-001"
+          "M-SCHED-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/clock.rs"

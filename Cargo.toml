@@ -24,6 +24,7 @@ members = [
     "crates/fireemu",
     "tools/limit-catalog-gen",
     "tools/traceability-check",
+    "tools/tla-verification",
     "tools/compat-check",
     "tools/config-schema-check",
     "tools/proto-gen",
@@ -58,3 +59,4 @@ missing_panics_doc = "allow"
 proptest = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"

@@ -25,6 +25,8 @@ fn import(dir: &Path) -> std::process::Output {
             "0",
             "--hub-port",
             "0",
+            "--logging-port",
+            "0",
             "--ui-port",
             "0",
             "--import",

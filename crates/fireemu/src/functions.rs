@@ -235,6 +235,9 @@ pub struct EmulatorHosts {
     /// reads (`CLOUD_EVENTARC_EMULATOR_HOST`, which carries an `http://` prefix) at this
     /// listener.
     pub functions: Option<String>,
+    /// The Logging emulator WebSocket (`FIREBASE_LOGGING_EMULATOR_HOST`), a bare host:port. The
+    /// runner's functions inherit it so any Firebase tooling they load can find the log stream.
+    pub logging: Option<String>,
 }
 
 /// Where a located runner script came from.
@@ -527,6 +530,9 @@ async fn start_codebase(
         // Cloud Tasks' variable carries no scheme, unlike Eventarc's (`env.js:34-39`).
         env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), host.clone()));
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), host.clone()));
+    }
+    if let Some(host) = &hosts.logging {
+        env.push(("FIREBASE_LOGGING_EMULATOR_HOST".to_owned(), host.clone()));
     }
     // Debug mode is granted only when the daemon is the sole source of both callable
     // credentials. The runner inherits an allowlist that does not contain these names, and

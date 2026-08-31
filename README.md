@@ -30,7 +30,7 @@ fireemu is compatible with the listed Local Emulator Suite products as shipped b
 | Cloud Functions for Firebase | `functions` | active | parity claimed |
 | Emulator Suite UI | `ui` | active | open gap: fireemu serves its own UI, no workflow parity is claimed |
 | Emulator Hub | `hub` | active | open gap: the discovery API on port 4400 is not served |
-| Emulator logging | `logging` | active | open gap: the log stream on port 4500 is not served |
+| Emulator logging | `logging` | active | parity claimed for the EmulatorLog WebSocket on port 4500 (loopback-only, bounded history) |
 | Cloud Pub/Sub | `pubsub` | active | parity claimed for the documented gRPC subset |
 | Eventarc | `eventarc` | active | open gap |
 | Cloud Tasks | `tasks` | active | open gap |
@@ -242,7 +242,7 @@ const env = await initializeTestEnvironment({});
 
 **Background triggers.** Disabling them **drops** the Firestore, Storage, Pub/Sub and Auth events that arrive while they are off; nothing is held and nothing is replayed when they come back. That is what the official emulator does (its background-trigger route answers `204` and discards the body), and it is the property the switch exists for: seeding data must not fire the triggers a later assertion depends on. HTTP and callable invocations, manual `functions/{name}:run` requests and virtual-clock schedule runs keep working throughout, and events already accepted are still delivered and retried.
 
-The Logging emulator stream (the official port 4500) is **out of scope for this release**; an `emulators.logging` entry is reported and nothing is served on that port. The functions log stream the UI consumes lives on the control API instead.
+**The Logging emulator.** fireemu serves the official Logging emulator: an RFC 6455 WebSocket on port 4500 (`emulators.logging`, `daemon.loggingPort`, `--logging-port`) that streams the `EmulatorLog` wire format `firebase-tools` defines -- one text frame per line, `{"level", "data", "timestamp", "message"}`, with `data.metadata.emulator.name` / `data.metadata.function.name` tags -- fed by the functions runner's output and the emulators' lifecycle lines. `FIREBASE_LOGGING_EMULATOR_HOST` is exported to the `exec` child and the functions runner, and the emulator is advertised in the Hub's `GET /emulators` listing. Unlike the official emulator it starts best effort by default (set the port to `0` to turn it off), the handshake is loopback-only, and the retained history is bounded to the most recent 1000 frames rather than unbounded in memory. The same information is also available over the control API and the fireemu UI's SSE stream.
 
 ### `firebase.json` and `.firebaserc`
 

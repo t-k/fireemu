@@ -26,6 +26,7 @@ fireemu-adapter-grpc = { path = "../fireemu-adapter-grpc" }
 fireemu-adapter-http = { path = "../fireemu-adapter-http" }
 fireemu-adapter-functions = { path = "../fireemu-adapter-functions" }
 fireemu-adapter-pubsub = { path = "../fireemu-adapter-pubsub" }
+fireemu-adapter-logging = { path = "../fireemu-adapter-logging" }
 fireemu-adapter-ui = { path = "../fireemu-adapter-ui" }
 fireemu-core-functions = { path = "../fireemu-core-functions" }
 fireemu-core-pubsub = { path = "../fireemu-core-pubsub" }

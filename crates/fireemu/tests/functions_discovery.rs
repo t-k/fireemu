@@ -52,6 +52,8 @@ fn exec(source: &Path, config: Option<&Path>) -> Output {
         "0",
         "--functions-port",
         "0",
+        "--logging-port",
+        "0",
         "--ui-port",
         "0",
         "--hub-port",

@@ -88,6 +88,9 @@ pub const DEFAULT_HUB_PORT: u16 = 4400;
 /// The Emulator UI's official default port.
 pub const DEFAULT_UI_PORT: u16 = 4000;
 
+/// The Logging emulator's official default port (`firebase-tools` `Constants.getDefaultPort`).
+pub const DEFAULT_LOGGING_PORT: u16 = 4500;
+
 /// Effective daemon configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
@@ -160,6 +163,17 @@ pub struct RuntimeConfig {
     /// Whether `--ui-port`, `emulators.ui` or `daemon.uiPort` pinned the UI address. Like
     /// the Hub's, a busy default port only disables the UI; a busy explicit one is an error.
     pub ui_addr_explicit: bool,
+    /// Logging emulator WebSocket bind address (`emulators.logging`, `daemon.loggingPort`,
+    /// `--logging-port`). The official default port is 4500.
+    pub logging_addr: String,
+    /// Whether the Logging emulator is served. Unlike the official emulator, which starts it
+    /// only when the UI starts or `START_LOGGING_EMULATOR=true`, fireemu serves it best effort
+    /// by default; setting the port to 0 turns it off.
+    pub logging_enabled: bool,
+    /// Whether `--logging-port`, `emulators.logging` or `daemon.loggingPort` pinned the address.
+    /// Like the Hub's and UI's, a busy default port only disables logging; a busy explicit one
+    /// is an error.
+    pub logging_addr_explicit: bool,
     /// `emulators.singleProjectMode`. fireemu isolates every project into its own session, so
     /// this is recorded and published rather than enforced separately.
     pub single_project_mode: bool,
@@ -353,6 +367,9 @@ impl Default for RuntimeConfig {
             ui_addr: format!("127.0.0.1:{DEFAULT_UI_PORT}"),
             ui_enabled: true,
             ui_addr_explicit: false,
+            logging_addr: format!("127.0.0.1:{DEFAULT_LOGGING_PORT}"),
+            logging_enabled: true,
+            logging_addr_explicit: false,
             single_project_mode: false,
             functions_source: None,
             functions_codebases: Vec::new(),
@@ -757,9 +774,11 @@ impl RuntimeConfig {
                         self.ui_enabled = enabled;
                         self.ui_addr_explicit = true;
                     }
-                    "logging" => report.notices.push(
-                        "emulators.logging: the Logging emulator stream is out of scope for this release; nothing is served on that port".to_owned(),
-                    ),
+                    "logging" => {
+                        self.logging_addr = emulator_addr(entry, name, &self.logging_addr)?;
+                        self.logging_enabled = !self.logging_addr.ends_with(":0");
+                        self.logging_addr_explicit = true;
+                    }
                     other => {
                         let selected = only.explicit && only_names(only, other);
                         if let Some(why) = unserved_official_service(other) {
@@ -1182,6 +1201,7 @@ impl RuntimeConfig {
                 "pubsubPort",
                 "hubPort",
                 "uiPort",
+                "loggingPort",
                 "clockStart",
                 "seed",
                 "authProject",
@@ -1199,6 +1219,11 @@ impl RuntimeConfig {
             cfg.ui_addr = format!("127.0.0.1:{port}");
             cfg.ui_enabled = port != 0;
             cfg.ui_addr_explicit = true;
+        }
+        if let Some(port) = d.get("loggingPort").and_then(Value::as_u64) {
+            cfg.logging_addr = format!("127.0.0.1:{port}");
+            cfg.logging_enabled = port != 0;
+            cfg.logging_addr_explicit = true;
         }
         if let Some(port) = d.get("storagePort").and_then(Value::as_u64) {
             cfg.storage_addr = format!("127.0.0.1:{port}");

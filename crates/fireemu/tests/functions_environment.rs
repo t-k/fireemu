@@ -56,6 +56,8 @@ fn exec(source: &Path, project: &str) -> Output {
             "0",
             "--functions-port",
             "0",
+            "--logging-port",
+            "0",
             "--ui-port",
             "0",
             "--hub-port",

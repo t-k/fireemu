@@ -68,7 +68,7 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
@@ -357,6 +357,7 @@ struct RawOptions {
     pubsub_port: Option<u16>,
     hub_port: Option<u16>,
     ui_port: Option<u16>,
+    logging_port: Option<u16>,
     functions_source: Option<String>,
     inspect_functions: Option<u16>,
     verbosity: Verbosity,
@@ -445,6 +446,10 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
             }
             "--hub-port" => {
                 raw.hub_port = Some(port_arg(args, i, "--hub-port")?);
+                i += 2;
+            }
+            "--logging-port" => {
+                raw.logging_port = Some(port_arg(args, i, "--logging-port")?);
                 i += 2;
             }
             "--functions" => {
@@ -556,6 +561,11 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
         cfg.ui_addr = with_port(&cfg.ui_addr, p);
         cfg.ui_enabled = p != 0;
         cfg.ui_addr_explicit = true;
+    }
+    if let Some(p) = raw.logging_port {
+        cfg.logging_addr = with_port(&cfg.logging_addr, p);
+        cfg.logging_enabled = p != 0;
+        cfg.logging_addr_explicit = true;
     }
 }
 
@@ -735,6 +745,8 @@ struct BoundAddrs {
     hub: Option<std::net::SocketAddr>,
     /// The Emulator UI, when it is enabled and its port could be bound.
     ui: Option<std::net::SocketAddr>,
+    /// The Logging emulator WebSocket, when it is enabled and its port could be bound.
+    logging: Option<std::net::SocketAddr>,
     /// The control API and App Check listener. Always bound: it is fireemu's own plane, not
     /// an emulated product, and the UI, the SDK smokes and `exec` all need it. It is the
     /// same socket as `auth` whenever `auth` is selected.
@@ -764,7 +776,7 @@ struct BoundAddrs {
 fn child_environment(
     cfg: &RuntimeConfig,
     only: &Selection,
-    addrs: BoundAddrs,
+    addrs: &BoundAddrs,
     control_token: &str,
 ) -> Vec<(String, String)> {
     let mut env = vec![
@@ -813,6 +825,13 @@ fn child_environment(
     if let Some(addr) = addrs.hub {
         env.push(("FIREBASE_EMULATOR_HUB".to_owned(), addr.to_string()));
     }
+    if let Some(addr) = addrs.logging {
+        // `FIREBASE_LOGGING_EMULATOR_HOST` is a bare host:port, as `loggingEmulator.js` reads it.
+        env.push((
+            "FIREBASE_LOGGING_EMULATOR_HOST".to_owned(),
+            addr.to_string(),
+        ));
+    }
     // App Check shares the control listener, so its variables name that address.
     if only.app_check_available(&cfg.app_check) {
         env.push((
@@ -839,7 +858,7 @@ fn child_environment(
 /// command's environment, so a shell configured for other emulators cannot leak into it.
 /// `FIREBASE_DATABASE_EMULATOR_HOST` is on the list although fireemu never sets it: an
 /// inherited one would point a Realtime Database client at something fireemu does not serve.
-const OWNED_VARIABLES: [&str; 13] = [
+const OWNED_VARIABLES: [&str; 14] = [
     "FIRESTORE_EMULATOR_HOST",
     "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
     "FIREBASE_AUTH_EMULATOR_HOST",
@@ -847,6 +866,7 @@ const OWNED_VARIABLES: [&str; 13] = [
     "STORAGE_EMULATOR_HOST",
     "FIREBASE_DATABASE_EMULATOR_HOST",
     "FIREBASE_EMULATOR_HUB",
+    "FIREBASE_LOGGING_EMULATOR_HOST",
     "FIREEMU_FUNCTIONS_HOST",
     "CLOUD_EVENTARC_EMULATOR_HOST",
     "CLOUD_TASKS_EMULATOR_HOST",
@@ -1028,6 +1048,9 @@ struct Listeners {
     functions: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
     hub: Option<tokio::net::TcpListener>,
+    /// The Logging emulator WebSocket, when its port could be bound. Best effort like the Hub
+    /// and UI: it is not a `--only` service, so it is attempted on every run unless disabled.
+    logging: Option<tokio::net::TcpListener>,
 }
 
 async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
@@ -1068,6 +1091,14 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         None
     };
     let hub = hub::bind(&cfg.hub_addr, cfg.hub_addr_explicit).await?;
+    // The Logging emulator is not a `--only` service (the official suite configures it through
+    // `emulators.logging`), so it is bound on every run unless it was turned off. Best effort
+    // like the Hub and UI: a busy default port only disables it, a busy explicit one is an error.
+    let logging = if cfg.logging_enabled {
+        bind_best_effort(&cfg.logging_addr, cfg.logging_addr_explicit).await?
+    } else {
+        None
+    };
     Ok(Listeners {
         firestore,
         control,
@@ -1076,13 +1107,33 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         functions,
         pubsub,
         hub,
+        logging,
     })
+}
+
+/// Binds a best-effort loopback listener: `port 0` is off, a busy default only disables the
+/// service, and a busy explicit port is an error. Mirrors `hub::bind`.
+async fn bind_best_effort(
+    addr: &str,
+    explicit: bool,
+) -> Result<Option<tokio::net::TcpListener>, String> {
+    let port = addr
+        .rsplit_once(':')
+        .and_then(|(_, p)| p.parse::<u16>().ok());
+    if port == Some(0) {
+        return Ok(None);
+    }
+    match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => Ok(Some(listener)),
+        Err(e) if explicit => Err(format!("bind {addr}: {e}")),
+        Err(_) => Ok(None),
+    }
 }
 
 /// The entries `GET /emulators` publishes: every service that actually bound a listener,
 /// plus the Hub and the UI, under their official names. An unselected service is absent, so
 /// a discovery client is told the truth about what is running.
-fn hub_emulators(addrs: BoundAddrs) -> Vec<hub::EmulatorInfo> {
+fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
     let pid = std::process::id();
     [
         ("firestore", addrs.firestore),
@@ -1092,13 +1143,48 @@ fn hub_emulators(addrs: BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("pubsub", addrs.pubsub),
         ("hub", addrs.hub),
         ("ui", addrs.ui),
+        ("logging", addrs.logging),
     ]
     .into_iter()
     .filter_map(|(name, addr)| addr.map(|addr| hub::EmulatorInfo { name, addr, pid }))
     .collect()
 }
 
-fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: BoundAddrs) {
+/// Milliseconds since the Unix epoch on the daemon's virtual clock, for `EmulatorLog`
+/// timestamps. Using the virtual clock (not the wall clock) keeps the log frames deterministic
+/// under a pinned `daemon.clockStart`, so tests over the stream are stable.
+fn clock_millis(clock: &Arc<Mutex<VirtualClock>>) -> i64 {
+    use fireemu_core_types::determinism::Clock as _;
+    let nanos = clock.lock().map_or(0, |c| c.now().as_nanos());
+    i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
+}
+
+/// The lines of `current` that are new since `previous`, tolerating the runner's front-trim of
+/// its bounded log buffer. Mirrors the UI SSE stream's `new_lines`; duplicated here so the
+/// logging pump does not depend on the UI crate.
+fn logging_new_lines<'a>(previous: &[String], current: &'a [String]) -> &'a [String] {
+    if previous.is_empty() {
+        return current;
+    }
+    if current.len() >= previous.len() && current[..previous.len()] == *previous {
+        return &current[previous.len()..];
+    }
+    for window in (1..=previous.len().min(8)).rev() {
+        let needle = &previous[previous.len() - window..];
+        if current.len() < window {
+            continue;
+        }
+        if let Some(start) = (0..=current.len() - window)
+            .rev()
+            .find(|&start| current[start..start + window] == *needle)
+        {
+            return &current[start + window..];
+        }
+    }
+    current
+}
+
+fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: &BoundAddrs) {
     println!("fireemu {verb}");
     match addrs.firestore {
         Some(a) => println!("  firestore (gRPC + REST): {a}   FIRESTORE_EMULATOR_HOST={a}"),
@@ -1137,6 +1223,18 @@ fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: BoundAddrs) {
         None => println!(
             "  emulator hub:     disabled (cannot bind {}; choose one with --hub-port <n>)",
             cfg.hub_addr
+        ),
+    }
+    match addrs.logging {
+        Some(a) => println!(
+            "  logging (WS):     {a}   FIREBASE_LOGGING_EMULATOR_HOST={a}   (EmulatorLog stream)"
+        ),
+        None if !cfg.logging_enabled => println!(
+            "  logging:          disabled (emulators.logging / daemon.loggingPort / --logging-port set to 0)"
+        ),
+        None => println!(
+            "  logging:          disabled (cannot bind {}; choose one with --logging-port <n>)",
+            cfg.logging_addr
         ),
     }
     println!(
@@ -1496,6 +1594,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             functions: functions_listener,
             pubsub: pubsub_listener,
             hub: hub_listener,
+            logging: logging_listener,
         } = bind_listeners(&cfg, &only).await?;
         let grpc_addr = match grpc_listener.as_ref() {
             Some(l) => Some(l.local_addr().map_err(|e| e.to_string())?),
@@ -1511,6 +1610,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             .and_then(|l| l.local_addr().ok());
         let pubsub_addr = pubsub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let hub_addr = hub_listener.as_ref().and_then(|l| l.local_addr().ok());
+        let logging_addr = logging_listener.as_ref().and_then(|l| l.local_addr().ok());
         let (ui_listener, ui_note) = match ui::bind().await? {
             ui::Ui::Bound(listener) => (Some(listener), None),
             ui::Ui::Disabled => (None, None),
@@ -1525,6 +1625,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             pubsub: pubsub_addr,
             hub: hub_addr,
             ui: ui_addr,
+            logging: logging_addr,
             control: http_addr,
         };
         // Random secrets: the control token browsers must present, and the secret that ties
@@ -1564,6 +1665,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         auth: addrs.auth.map(|a| a.to_string()),
                         storage: storage_addr.map(|a| a.to_string()),
                         functions: functions_addr.map(|a| a.to_string()),
+                        logging: logging_addr.map(|a| a.to_string()),
                     },
                     &runner_secret,
                     callable_trusted_protocol,
@@ -1721,7 +1823,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let hub_state = Arc::new(hub::HubState {
             project: cfg.auth_project.clone(),
             addr: hub_addr.unwrap_or(http_addr),
-            emulators: hub_emulators(addrs),
+            emulators: hub_emulators(&addrs),
             functions: functions_runtime.clone(),
             export: Some(exporter.clone() as Arc<dyn hub::ExportRunner>),
         });
@@ -1733,7 +1835,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             locator
         });
         if !quiet {
-            print_banner(&cfg, if exec.is_some() { "exec" } else { "up" }, addrs);
+            print_banner(&cfg, if exec.is_some() { "exec" } else { "up" }, &addrs);
             println!("  control token:    FIREEMU_CONTROL_TOKEN={control_token}   (browser requests to privileged control routes must send Authorization: Bearer <token>)");
             if let Some(state) = &app_check {
                 println!(
@@ -1833,6 +1935,64 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             }
             None => tokio::spawn(std::future::pending()),
         };
+        // The Logging emulator: an `EmulatorLog` WebSocket the official UI's Logs page reads.
+        // One bounded bus carries the lines; the daemon feeds it the functions runner's output
+        // and the emulators' lifecycle notes. What is and is not fed is recorded as a precision
+        // on the `logging` surface in the compatibility contract.
+        let log_bus = fireemu_adapter_logging::LogBus::new();
+        for (name, addr) in [
+            ("firestore", addrs.firestore),
+            ("auth", addrs.auth),
+            ("storage", addrs.storage),
+            ("functions", addrs.functions),
+            ("pubsub", addrs.pubsub),
+        ] {
+            if let Some(addr) = addr {
+                log_bus.publish(
+                    &fireemu_adapter_logging::LogInput::plain(
+                        "info",
+                        format!("{name} emulator started on {addr}"),
+                        clock_millis(&clock),
+                    )
+                    .for_emulator(name),
+                );
+            }
+        }
+        // Feed the functions runner's lines into the bus, tagged emulator=functions, by polling
+        // its log accessor (the UI's SSE stream reads the same accessor). Function-name tagging
+        // is best effort and currently absent: a runner line carries an invocation id, not a
+        // function name, and only the first codebase's runner is polled (recorded as a
+        // precision on the `logging` surface).
+        let functions_log_pump = functions_runtime.clone().map(|runtime| {
+            let bus = log_bus.clone();
+            let clock = clock.clone();
+            tokio::spawn(async move {
+                let mut seen: Vec<String> = Vec::new();
+                let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
+                loop {
+                    poll.tick().await;
+                    let current = runtime.runner().logs();
+                    for line in logging_new_lines(&seen, &current) {
+                        bus.publish(
+                            &fireemu_adapter_logging::LogInput::plain(
+                                "info",
+                                line.clone(),
+                                clock_millis(&clock),
+                            )
+                            .for_emulator("functions"),
+                        );
+                    }
+                    seen = current;
+                }
+            })
+        });
+        let logging_server = match logging_listener {
+            Some(listener) => tokio::spawn(fireemu_adapter_logging::serve_logging(
+                listener,
+                log_bus.clone(),
+            )),
+            None => tokio::spawn(std::future::pending()),
+        };
         let ui_server = match (ui_listener, ui_addr) {
             (Some(listener), Some(addr)) => {
                 let state = ui::state(ui::Parts {
@@ -1861,7 +2021,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // Every listener is bound and served: the command may start.
         let mut child = match &exec {
             Some(plan) => {
-                let env = child_environment(&cfg, &only, addrs, &control_token);
+                let env = child_environment(&cfg, &only, &addrs, &control_token);
                 if !quiet {
                     println!("  running: {}", plan.command.join(" "));
                 }
@@ -1879,6 +2039,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             r = pubsub_server => Err(format!("Pub/Sub server stopped: {r:?}")),
             r = ui_server => Err(format!("UI server stopped: {r:?}")),
             r = hub_server => Err(format!("Emulator Hub stopped: {r:?}")),
+            r = logging_server => Err(format!("Logging emulator stopped: {r:?}")),
             status = wait_child(child.as_mut()) => match status {
                 Ok(status) => Ok(Some(exit_code(status))),
                 Err(e) => Err(format!("waiting for the command: {e}")),
@@ -1897,6 +2058,11 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 Ok::<Option<i32>, String>(None)
             }
         };
+        // The functions log pump is a background poller with no shutdown signal of its own;
+        // stop it explicitly so it does not outlive the run.
+        if let Some(pump) = &functions_log_pump {
+            pump.abort();
+        }
         // The command stops before the services it uses. When it exited by itself its
         // group is still swept (a background job it left behind must not keep running).
         let code = match (&outcome, child.as_mut(), child_pid) {

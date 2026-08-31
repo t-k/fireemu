@@ -375,18 +375,41 @@ pub struct CodebaseSpec {
 struct Codebase {
     name: String,
     manifest: FunctionManifest,
-    runner: std::sync::RwLock<Arc<Runner>>,
-    spawn: std::sync::RwLock<Option<SpawnSpec>>,
-    cleanup_dir: std::sync::RwLock<Option<std::path::PathBuf>>,
+    generation: std::sync::RwLock<CodebaseGeneration>,
 }
 
-impl Drop for Codebase {
+struct CodebaseGeneration {
+    revision: u64,
+    runner: Arc<Runner>,
+    spawn: Option<SpawnSpec>,
+    cleanup_dir: Option<Arc<CleanupDir>>,
+}
+
+struct CleanupDir(std::path::PathBuf);
+
+impl Drop for CleanupDir {
     fn drop(&mut self) {
-        if let Ok(path) = self.cleanup_dir.get_mut() {
-            if let Some(path) = path.take() {
-                let _ = std::fs::remove_dir_all(path);
-            }
-        }
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Codebase {
+    fn generation(&self) -> std::sync::RwLockReadGuard<'_, CodebaseGeneration> {
+        self.generation
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn generation_mut(&self) -> std::sync::RwLockWriteGuard<'_, CodebaseGeneration> {
+        self.generation
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl CodebaseGeneration {
+    fn cleanup(path: Option<std::path::PathBuf>) -> Option<Arc<CleanupDir>> {
+        path.map(|path| Arc::new(CleanupDir(path)))
     }
 }
 
@@ -545,9 +568,12 @@ impl FunctionsRuntime {
                 .map(|c| Codebase {
                     name: c.name,
                     manifest: c.manifest,
-                    runner: std::sync::RwLock::new(c.runner),
-                    spawn: std::sync::RwLock::new(c.spawn),
-                    cleanup_dir: std::sync::RwLock::new(c.cleanup_dir),
+                    generation: std::sync::RwLock::new(CodebaseGeneration {
+                        revision: 0,
+                        runner: c.runner,
+                        spawn: c.spawn,
+                        cleanup_dir: CodebaseGeneration::cleanup(c.cleanup_dir),
+                    }),
                 })
                 .collect(),
             owner,
@@ -604,11 +630,10 @@ impl FunctionsRuntime {
     }
 
     fn runner_at(&self, index: usize) -> Arc<Runner> {
-        let slot = &self.codebases[index.min(self.codebases.len().saturating_sub(1))].runner;
-        match slot.read() {
-            Ok(r) => r.clone(),
-            Err(e) => e.into_inner().clone(),
-        }
+        self.codebases[index.min(self.codebases.len().saturating_sub(1))]
+            .generation()
+            .runner
+            .clone()
     }
 
     /// The runner of the codebase that exported `function`.
@@ -660,25 +685,17 @@ impl FunctionsRuntime {
             ));
         }
         let old = {
-            let mut slot = codebase
-                .runner
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::replace(&mut *slot, spec.runner)
-        };
-        {
-            let mut spawn = codebase
-                .spawn
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *spawn = spec.spawn;
-        }
-        let old_cleanup = {
-            let mut cleanup = codebase
-                .cleanup_dir
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::replace(&mut *cleanup, spec.cleanup_dir)
+            let mut generation = codebase.generation_mut();
+            let revision = generation.revision.saturating_add(1);
+            std::mem::replace(
+                &mut *generation,
+                CodebaseGeneration {
+                    revision,
+                    runner: spec.runner,
+                    spawn: spec.spawn,
+                    cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
+                },
+            )
         };
         let generation = self
             .trigger_generation
@@ -686,10 +703,8 @@ impl FunctionsRuntime {
             .saturating_add(1);
         // In-flight invocations retain their `Arc`; killing after publication prevents any
         // new dispatch from reaching the old generation and reaps it promptly.
-        old.kill_now();
-        if let Some(path) = old_cleanup {
-            let _ = std::fs::remove_dir_all(path);
-        }
+        old.runner.kill_now();
+        drop(old);
         Ok(generation)
     }
 
@@ -1556,17 +1571,23 @@ impl FunctionsRuntime {
 
     /// Restarts the runner of one codebase.
     fn respawn_one(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
-        let Some(spec) = self.codebases.get(index).and_then(|codebase| {
-            codebase
-                .spawn
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-        }) else {
+        let Some((spec, codebase_revision, source_generation)) =
+            self.codebases.get(index).and_then(|codebase| {
+                let current = codebase.generation();
+                Some((
+                    current.spawn.clone()?,
+                    current.revision,
+                    current.cleanup_dir.clone(),
+                ))
+            })
+        else {
             return;
         };
         let runtime = self.clone();
         tokio::spawn(async move {
+            // Retain the immutable source until this spawn either installs or is rejected as
+            // stale. A concurrent reload can otherwise drop its last live owner mid-import.
+            let _source_generation = source_generation;
             match Runner::spawn_spec(&spec).await {
                 Ok(runner) => {
                     // A later reset supersedes this restart: its own replacement is
@@ -1575,10 +1596,16 @@ impl FunctionsRuntime {
                     // bumps the epoch and kills under), so the two cannot interleave.
                     let installed = match runtime.inner.lock() {
                         Ok(inner) if Some(inner.epoch) == generation => {
-                            if let Ok(mut slot) = runtime.codebases[index].runner.write() {
-                                *slot = Arc::new(runner);
+                            let mut current = runtime.codebases[index].generation_mut();
+                            if current.revision == codebase_revision {
+                                let old = std::mem::replace(&mut current.runner, Arc::new(runner));
+                                drop(current);
+                                old.kill_now();
+                                true
+                            } else {
+                                runner.kill_now();
+                                false
                             }
-                            true
                         }
                         _ => {
                             runner.kill_now();

@@ -8,7 +8,7 @@ use fireemu_adapter_functions::events::{firestore_event, storage_event};
 use fireemu_adapter_functions::http::parse_response;
 use fireemu_adapter_functions::manifest_json::{manifest_to_json, parse_manifest};
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
-use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
 use fireemu_adapter_grpc::local::CommitEvent;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
@@ -229,6 +229,59 @@ async fn reset_discards_in_flight_work() {
         .iter()
         .any(|r| r.function == "ok" && r.outcome == "ok" && r.event_id > 1));
     runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn reload_generation_wins_over_an_older_reset_respawn() {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let fast = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let mut slow = fast.clone();
+    slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
+    let initial = Runner::spawn_spec(&fast).await.unwrap();
+    let manifest = parse_manifest(initial.hello().manifest.as_ref().unwrap()).unwrap();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = FunctionsRuntime::new(
+        manifest.clone(),
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: SessionId::new(7),
+            max_running: 4,
+            retry_attempts: 4,
+            max_catch_up_runs: 1000,
+            runner_secret: "s".into(),
+            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: None,
+        },
+        clock,
+        Arc::new(initial),
+        Some(slow),
+    );
+
+    runtime.reset();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let replacement = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
+    let expected = replacement.clone();
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest,
+            runner: replacement,
+            spawn: Some(fast),
+            cleanup_dir: None,
+        })
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(Arc::ptr_eq(&runtime.runner(), &expected));
+    assert!(runtime.runner_alive());
 }
 
 #[tokio::test]

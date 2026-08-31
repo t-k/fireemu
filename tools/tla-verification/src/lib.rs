@@ -1,5 +1,7 @@
 //! Contracts and tooling for repository-owned TLA+ verification evidence.
 
+pub mod event_trace;
+
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};

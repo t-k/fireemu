@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "scenario": "cancel",
+  "initial": { "state": "Pending", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false },
+  "steps": [
+    { "operation": "Lease", "target": "e1", "expected": { "state": "Leased", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
+    { "operation": "Cancel", "target": "e1", "expected": { "state": "Cancelled", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": true, "cancelled": true, "stale": false } }
+  ]
+}

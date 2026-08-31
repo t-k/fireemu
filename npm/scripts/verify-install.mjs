@@ -33,7 +33,14 @@ const distIndex = args.indexOf("--dist");
 let tarballs;
 if (distIndex >= 0) {
   const dist = resolve(args[distIndex + 1] ?? "npm/dist");
-  const found = readdirSync(dist).filter((f) => f.endsWith(".tgz"));
+  let found;
+  try {
+    found = readdirSync(dist).filter((f) => f.endsWith(".tgz"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : error;
+    console.error(`verify-install: ${escapeForLog(message)}`);
+    process.exit(2);
+  }
   const launcher = found.find((f) => /^fireemu-\d/.test(f));
   const platform = found.find((f) => f !== launcher);
   if (!launcher || !platform) {

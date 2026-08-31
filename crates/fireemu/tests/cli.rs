@@ -292,6 +292,51 @@ fn config_accepts_a_firebase_json_as_well_as_the_canonical_configuration() {
 }
 
 #[test]
+fn a_canonical_config_live_loads_its_relative_firebase_json_reference() {
+    let dir = scratch("embedded-firebase-json");
+    let alternate = dir.join("alternate");
+    std::fs::create_dir_all(&alternate).unwrap();
+    let canonical = write(
+        &dir,
+        "fireemu.json",
+        r#"{
+  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firebaseJson": "firebase.json",
+  "firestore": { "edition": "standard", "apiMode": "native" }
+}
+"#,
+    );
+    write(&dir, "firebase.json", r#"{"emulators": {}}"#);
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-embedded"}}"#,
+    );
+    let alternate_firebase = write(&alternate, "firebase.json", r#"{"emulators": {}}"#);
+    write(
+        &alternate,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-explicit"}}"#,
+    );
+
+    let env = env_of(&dir, &["--config", canonical.to_str().unwrap()]);
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-embedded");
+
+    let env = env_of(
+        &dir,
+        &[
+            "--config",
+            canonical.to_str().unwrap(),
+            "--firebase-json",
+            alternate_firebase.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-explicit");
+}
+
+#[test]
 fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
     let dir = scratch("deferred");
     let firebase = write(

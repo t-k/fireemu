@@ -516,6 +516,18 @@ fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> 
     Ok((json, canonical))
 }
 
+/// Reads a Firebase project configuration and refuses a canonical fireemu document.
+fn read_firebase_json(path: &Path) -> Result<(serde_json::Value, PathBuf), CliError> {
+    let (json, canonical) = read_config_file(path)?;
+    if canonical {
+        return Err(CliError::refused(format!(
+            "{}: this is a fireemu canonical configuration (it has schemaVersion), not a firebase.json; pass it with --config",
+            path.display()
+        )));
+    }
+    Ok((json, path.to_path_buf()))
+}
+
 /// The directory paths inside a `firebase.json` are relative to.
 fn project_dir(path: &Path) -> PathBuf {
     path.parent()
@@ -577,7 +589,11 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         Some(p) => {
             let (json, canonical) = read_config_file(p)?;
             if canonical {
-                (RuntimeConfig::from_json(&json)?, None)
+                let firebase = config::firebase_json_reference(&json)?
+                    .map(|reference| project_dir(p).join(reference))
+                    .map(|path| read_firebase_json(&path))
+                    .transpose()?;
+                (RuntimeConfig::from_json(&json)?, firebase)
             } else {
                 (RuntimeConfig::default(), Some((json, p.clone())))
             }
@@ -586,16 +602,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
     };
     // A firebase.json from `--firebase-json` wins over one that reached `--config`.
     let firebase = match &raw.firebase_json {
-        Some(p) => {
-            let (json, canonical) = read_config_file(p)?;
-            if canonical {
-                return Err(CliError::refused(format!(
-                    "{}: this is a fireemu canonical configuration (it has schemaVersion), not a firebase.json; pass it with --config",
-                    p.display()
-                )));
-            }
-            Some((json, p.clone()))
-        }
+        Some(p) => Some(read_firebase_json(p)?),
         None => firebase_from_config,
     };
     let mut project_root = PathBuf::from(".");

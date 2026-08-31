@@ -133,8 +133,14 @@ impl Endpoints<'_> {
 /// The documents of every database, keyed by `(project, database)`.
 type PreparedDatabases = BTreeMap<(String, String), Vec<ImportedDocument>>;
 
-/// The accounts and the project configuration of the Auth section.
-type PreparedAuth = (Vec<ImportedUser>, ProjectAuthConfig);
+/// The default accounts, project configuration and isolated tenant accounts of the Auth
+/// section.
+#[derive(Debug, Default)]
+struct PreparedAuth {
+    users: Vec<ImportedUser>,
+    config: ProjectAuthConfig,
+    tenants: BTreeMap<String, Vec<ImportedUser>>,
+}
 
 /// The objects with their bytes, and the buckets the Storage section listed.
 type PreparedStorage = (Vec<(ImportedObject, Vec<u8>)>, Vec<String>);
@@ -164,8 +170,20 @@ impl Prepared {
                 databases.len()
             ));
         }
-        if let Some((users, _)) = &self.auth {
-            parts.push(format!("auth: {} account(s)", users.len()));
+        if let Some(auth) = &self.auth {
+            let accounts = auth
+                .tenants
+                .values()
+                .map(Vec::len)
+                .fold(auth.users.len(), usize::saturating_add);
+            if auth.tenants.is_empty() {
+                parts.push(format!("auth: {accounts} account(s)"));
+            } else {
+                parts.push(format!(
+                    "auth: {accounts} account(s) in {} tenant(s)",
+                    auth.tenants.len()
+                ));
+            }
         }
         if let Some((objects, buckets)) = &self.storage {
             parts.push(format!(
@@ -315,29 +333,8 @@ pub fn apply(prepared: &Prepared, endpoints: &Endpoints) -> Result<(), ArtifactE
         endpoints.backend.restore_databases(snapshot.databases);
     }
 
-    if let Some((users, config)) = &prepared.auth {
-        let store = endpoints.auth.default_store();
-        let mut store = store.lock().map_err(|_| {
-            ArtifactError::new(
-                "auth",
-                PathBuf::from(AUTH_PATH),
-                "the Auth store is poisoned",
-            )
-        })?;
-        store.clear();
-        store.set_config(*config);
-        for user in users {
-            let id = user.local_id.clone();
-            store.import_user(user.clone()).map_err(|e| {
-                ArtifactError::new(
-                    "auth",
-                    PathBuf::from(AUTH_PATH).join(ACCOUNTS_FILE),
-                    format!("account {id}: {e}"),
-                )
-            })?;
-        }
-        // An import restores accounts that already existed; no Auth trigger fires for them.
-        let _ = store.take_user_events();
+    if let Some(auth) = &prepared.auth {
+        apply_auth(auth, endpoints)?;
     }
 
     if let Some((objects, _)) = &prepared.storage {
@@ -362,6 +359,69 @@ pub fn apply(prepared: &Prepared, endpoints: &Endpoints) -> Result<(), ArtifactE
                 })?;
         }
         let _ = store.drain_events();
+    }
+    Ok(())
+}
+
+fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+    let store = endpoints.auth.default_store();
+    let mut store = store.lock().map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            PathBuf::from(AUTH_PATH),
+            "the Auth store is poisoned",
+        )
+    })?;
+    store.clear();
+    store.set_config(auth.config);
+    for user in &auth.users {
+        let id = user.local_id.clone();
+        store.import_user(user.clone()).map_err(|e| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH).join(ACCOUNTS_FILE),
+                format!("account {id}: {e}"),
+            )
+        })?;
+    }
+    // An import restores accounts that already existed; no Auth trigger fires for them.
+    let _ = store.take_user_events();
+    drop(store);
+
+    for tenant in endpoints.auth.tenants(endpoints.project) {
+        endpoints.auth.delete_tenant(endpoints.project, &tenant);
+    }
+    for (tenant, users) in &auth.tenants {
+        let tenant_store = endpoints
+            .auth
+            .ensure_tenant(endpoints.project, tenant)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    PathBuf::from(AUTH_PATH),
+                    format!("cannot create tenant {tenant:?}"),
+                )
+            })?;
+        let mut tenant_store = tenant_store.lock().map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                format!("tenant {tenant:?} store is poisoned"),
+            )
+        })?;
+        tenant_store.clear();
+        tenant_store.set_config(auth.config);
+        for user in users {
+            let id = user.local_id.clone();
+            tenant_store.import_user(user.clone()).map_err(|e| {
+                ArtifactError::new(
+                    "auth",
+                    PathBuf::from(AUTH_PATH).join(format!("accounts-{tenant}.json")),
+                    format!("account {id}: {e}"),
+                )
+            })?;
+        }
+        let _ = tenant_store.take_user_events();
     }
     Ok(())
 }
@@ -529,19 +589,46 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         Err(_) => ProjectAuthConfig::default(),
     };
 
-    // Reject a tenant accounts file explicitly: fireemu serves no Identity Platform tenants,
-    // and importing only the default one would drop accounts without saying so.
+    let mut tenants = BTreeMap::new();
     let entries = std::fs::read_dir(&section_dir)
         .map_err(|e| ArtifactError::new("auth", &section_dir, format!("cannot read it: {e}")))?;
     for entry in entries.flatten() {
         refuse_symlink("auth", &entry)?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with("accounts-") && name.to_ascii_lowercase().ends_with(".json") {
-            return Err(ArtifactError::new(
-                "auth",
-                entry.path(),
-                "the export carries the accounts of an Identity Platform tenant, and fireemu serves no tenants; importing only the default tenant would drop those accounts",
-            ));
+        if let Some(tenant) = name
+            .strip_prefix("accounts-")
+            .and_then(|name| name.strip_suffix(".json"))
+        {
+            if tenant.is_empty() || tenant.contains('/') || tenant.contains('\\') {
+                return Err(ArtifactError::new(
+                    "auth",
+                    entry.path(),
+                    "the tenant accounts filename has an invalid tenant id",
+                ));
+            }
+            let text = read_text_inside(dir, &entry.path())
+                .map_err(|e| ArtifactError::new("auth", entry.path(), e))?;
+            let accounts = AccountsFile::parse(&text)
+                .map_err(|e| ArtifactError::new("auth", entry.path(), e.to_string()))?;
+            let mut users = Vec::with_capacity(accounts.users.len());
+            for record in &accounts.users {
+                if record
+                    .tenant_id
+                    .as_deref()
+                    .is_some_and(|recorded| recorded != tenant)
+                {
+                    return Err(ArtifactError::new(
+                        "auth",
+                        entry.path(),
+                        format!(
+                            "account {:?} names tenant {:?}, not the filename tenant {tenant:?}",
+                            record.local_id, record.tenant_id
+                        ),
+                    ));
+                }
+                users.push(imported_user(record, &entry.path())?);
+            }
+            tenants.insert(tenant.to_owned(), users);
         }
     }
 
@@ -554,7 +641,11 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     for record in &accounts.users {
         users.push(imported_user(record, &accounts_path)?);
     }
-    Ok((users, config))
+    Ok(PreparedAuth {
+        users,
+        config,
+        tenants,
+    })
 }
 
 fn millis_instant(text: Option<&str>) -> Option<LogicalInstant> {
@@ -1105,7 +1196,7 @@ fn export_auth(
         .map_err(|_| ArtifactError::new("auth", &section_dir, "the Auth store is poisoned"))?;
     let mut file = AccountsFile::default();
     for user in store.users_by_creation() {
-        file.users.push(exported_account(&store, user));
+        file.users.push(exported_account(&store, user, None));
     }
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
     write_private_file(&accounts_path, file.to_json().as_bytes())
@@ -1119,6 +1210,35 @@ fn export_auth(
     };
     write_private_file(&config_path, document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
+    drop(store);
+
+    for tenant in endpoints.auth.tenants(endpoints.project) {
+        let tenant_store = endpoints
+            .auth
+            .tenant_store(endpoints.project, &tenant)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    &section_dir,
+                    format!("tenant {tenant:?} disappeared during export"),
+                )
+            })?;
+        let tenant_store = tenant_store.lock().map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                &section_dir,
+                format!("tenant {tenant:?} store is poisoned"),
+            )
+        })?;
+        let mut file = AccountsFile::default();
+        for user in tenant_store.users_by_creation() {
+            file.users
+                .push(exported_account(&tenant_store, user, Some(&tenant)));
+        }
+        let path = section_dir.join(format!("accounts-{tenant}.json"));
+        write_private_file(&path, file.to_json().as_bytes())
+            .map_err(|e| ArtifactError::new("auth", &path, e))?;
+    }
 
     manifest.set(
         Product::Auth,
@@ -1135,6 +1255,7 @@ fn export_auth(
 fn exported_account(
     store: &fireemu_core_auth::store::AuthStore,
     user: &fireemu_core_auth::store::UserRecord,
+    tenant_id: Option<&str>,
 ) -> UserRecord {
     {
         let (password_hash, salt) = match store
@@ -1226,7 +1347,7 @@ fn exported_account(
                 .map(|t| (t.as_nanos() / 1_000_000).to_string()),
             last_refresh_at: None,
             custom_attributes: (claims != "{}").then_some(claims),
-            tenant_id: None,
+            tenant_id: tenant_id.map(str::to_owned),
             provider_user_info: providers,
             mfa_info,
             extra: Vec::new(),

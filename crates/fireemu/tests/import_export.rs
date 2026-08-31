@@ -544,6 +544,36 @@ fn an_export_on_exit_reimports_into_the_same_state() {
 }
 
 #[test]
+fn tenant_accounts_import_and_export_in_isolated_files() {
+    let dir = scratch("tenant-auth-round-trip");
+    let source = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(
+        source.join("auth_export/accounts-customer-a.json"),
+        r#"{"kind":"identitytoolkit#DownloadAccountResponse","users":[{"localId":"tenant-user","email":"tenant@example.com","emailVerified":true,"createdAt":"1788105513122"}]}"#,
+    )
+    .unwrap();
+    let out = dir.join("out");
+    let output = exec()
+        .args(["--import"])
+        .arg(&source)
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("auth: 6 account(s) in 1 tenant(s)"), "{log}");
+    let tenant = std::fs::read_to_string(out.join("auth_export/accounts-customer-a.json"))
+        .expect("the tenant has its own export file");
+    let tenant: serde_json::Value = serde_json::from_str(&tenant).unwrap();
+    assert_eq!(tenant["users"][0]["localId"], "tenant-user");
+    assert_eq!(tenant["users"][0]["tenantId"], "customer-a");
+    let default = std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap();
+    assert!(!default.contains("tenant-user"));
+}
+
+#[test]
 fn an_export_covers_exactly_the_products_only_selected() {
     let dir = scratch("only-export");
     let out = dir.join("out");

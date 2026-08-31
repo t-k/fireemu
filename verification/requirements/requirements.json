@@ -1520,6 +1520,10 @@
       "owner": "fireemu",
       "status": "implemented",
       "artifacts": {
+        "tla": "RulesetActivation.tla::AtomicRulesetActivation",
+        "mutation": [
+          "M-TLA-RULES-ATOMIC-001"
+        ],
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rules.rs",
           "crates/fireemu/src/main.rs"

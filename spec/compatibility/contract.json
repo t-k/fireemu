@@ -1204,7 +1204,7 @@
         },
         {
           "id": "FN-CLAIM-ENV",
-          "statement": "A codebase's .env chain, .secret.local and .runtimeconfig.json are read in the official order and dialect, and the runtime is started with the variables the official emulator sets, so defineString and its siblings resolve to the same values.",
+          "statement": "A codebase's .env chain, .secret.local and .runtimeconfig.json are read in the official order and dialect; ordinary parameters resolve from the runtime environment, while each local secret is exposed only to a function that declared it.",
           "capabilities": [
             {
               "id": "FN-ENV-1",

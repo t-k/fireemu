@@ -739,13 +739,13 @@
       "the pinned firebase-export-metadata.json manifest of firebase-tools 15.28.2: the version, the per-product sections with their version, path and (Firestore) metadata_file, in the official product order",
       "the Firestore managed export the emulator jar writes: the LevelDB log framing with its masked CRC-32C, and the apphosting.datastore.v3 EntityProto encoding of a document, covering null, boolean, integer (two's complement), double (exact bits, so NaN and negative zero survive), string, bytes, microsecond timestamps, geo points, references, maps, arrays, the empty array as an indexed EMPTY_LIST property, the empty map as a nested EntityProto, and paths of any subcollection depth",
       "auth_export/accounts.json as the identitytoolkit#DownloadAccountResponse the CLI streams to disk, with providers, custom claims, phone second factors, the reversible fakeHash:salt=<salt>:password=<plaintext> convention and auth_export/config.json",
+      "Identity Platform tenant accounts in auth_export/accounts-<tenant>.json, imported and exported in isolated namespaces without mixing them into accounts.json",
       "storage_export/buckets.json, blobs/<id> and metadata/<id>.json, with the object bytes byte for byte and the recorded generation, metageneration, times, hashes, download tokens and custom metadata",
       "a member the model does not know is carried through an import and written out again unchanged, so a newer emulator's field is never silently dropped",
       "a malformed section is refused with the byte offset or the member that caused it, never read short"
     ],
     "unimplemented": [
       "database_export (Realtime Database) and dataconnect_export (SQL Connect) are detected and refused with their deferred status; fireemu serves neither product",
-      "accounts-<tenant>.json is refused: fireemu serves no Identity Platform tenants, and importing only the default tenant would drop accounts",
       "a passwordHash that is not the emulator's own reversible form (a real scrypt hash from a production export) is refused rather than installed as a credential nothing can sign in with"
     ],
     "notes": [
@@ -783,11 +783,11 @@
       "export order is the codebase's, not the ES module namespace's alphabetical order, so the emulator lists functions the way the official one does",
       "every codebase declared in a firebase.json `functions` array is loaded, one runner process per codebase, behind one runtime and one functions port; --only functions:<codebase> selects one",
       "a function name two codebases both export is refused, naming both",
-      "`source`, `codebase`, `runtime` and `ignore` are read; a codebase whose runtime is not nodejs* is refused with the language named"
+      "`source`, `codebase`, `runtime` and `ignore` are read; a codebase whose runtime is not nodejs* is refused with the language named",
+      "source, compiled output, dotenv, local-secret and runtime-config changes start a fresh discovery runner and atomically replace the old generation only when its trigger manifest is unchanged"
     ],
     "unimplemented": [
-      "Python (functions-framework) and Dart loader paths: refused by name, never handed to node",
-      "hot reload of a codebase's source: a change needs a restart, and `ignore` is recorded rather than driving a watcher"
+      "Python (functions-framework) and Dart loader paths: refused by name, never handed to node"
     ],
     "notes": [
       "a trigger family belonging to a product fireemu does not serve fails discovery by default, naming every such function; functions.unservedTriggers = \"report\" asks for the official emulator's carry-on instead, which prints the line and starts anyway",
@@ -800,7 +800,7 @@
       "the dotenv chain in the official order and dialect (firebase-tools lib/functions/env.js): .env, .env.<projectId>, .env.<alias>, and emulator-only .env.local, later files overriding earlier ones",
       "the official refusals, with their sentences: both a projectId and an alias file present, a line that is not an assignment, a reserved key, a key that is not SCREAMING_SNAKE, a key under a reserved prefix",
       "the official quoting: single-quoted literal, double-quoted expanding \\n \\r \\t \\v \\\\ \\' \\\", unquoted ending at the first #, and a quoted value allowed to cross lines",
-      ".secret.local for defineSecret parameters, parsed the same way and merged over the chain",
+      ".secret.local for defineSecret parameters, parsed by the same dotenv rules and exposed only during an invocation of a function that declared the corresponding secret",
       ".runtimeconfig.json passed through as CLOUD_RUNTIME_CONFIG; a malformed one is reported and treated as absent",
       "the variables the official emulator gives a runtime: FIREBASE_CONFIG (storageBucket, databaseURL, projectId), GCLOUD_PROJECT, GOOGLE_CLOUD_QUOTA_PROJECT, FUNCTIONS_EMULATOR, K_REVISION, PORT, TZ=UTC, METADATA_SERVER_DETECTION, plus per-invocation FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE and K_SERVICE",
       "defineString / defineInt / defineBoolean / defineList / defineSecret resolve from that environment with the official missing-parameter behaviour, which is the SDK's: the emulator resolves no parameters and prompts for nothing"
@@ -811,6 +811,7 @@
     "notes": [
       "the pinned firebase-functions@7.3.2 has removed functions.config(); CLOUD_RUNTIME_CONFIG is still set, as the official emulator sets it, and no supported SDK surface reads it",
       "FUNCTION_TARGET, FUNCTION_SIGNATURE_TYPE and K_SERVICE name the most recently started invocation: the official emulator runs one runtime process per trigger and can set them once, and one fireemu runner serves a whole codebase",
+      "a codebase with local secrets serializes handler environment setup because process.env is shared; this prevents one function from observing another function's declared secret",
       "fireemu also sets GOOGLE_CLOUD_PROJECT, which the official emulator does not; the Google client libraries read either name"
     ]
   }

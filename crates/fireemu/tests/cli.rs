@@ -31,6 +31,30 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+fn run_in(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    command
+        .current_dir(dir)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match input {
+        None => command.stdin(Stdio::null()).output().unwrap(),
+        Some(input) => {
+            use std::io::Write as _;
+
+            let mut child = command.stdin(Stdio::piped()).spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            child.wait_with_output().unwrap()
+        }
+    }
+}
+
 /// The port arguments every successful scenario needs.
 const PORTS: [&str; 14] = [
     "--firestore-port",
@@ -87,6 +111,36 @@ fn the_official_command_names_are_aliases_of_the_short_ones() {
     let out = run(&["emulators:frobnicate"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("usage: fireemu"));
+}
+
+#[test]
+fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
+    let dir = scratch("init-default");
+    write(&dir, "firebase.json", "{}\n");
+
+    let out = run_in(&dir, &["init", "--yes"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let path = dir.join("fireemu.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.ends_with('\n'));
+    let generated: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(generated["$schema"], config_schema_url());
+    assert_eq!(generated["schemaVersion"], 1);
+    assert_eq!(generated["profile"], "strict");
+    assert_eq!(generated["firebaseJson"], "firebase.json");
+    assert_eq!(generated["firestore"]["edition"], "standard");
+    assert_eq!(generated["firestore"]["apiMode"], "native");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("fireemu up --config fireemu.json"));
+
+    let before = std::fs::read(&path).unwrap();
+    let out = run_in(&dir, &["init", "--yes"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("already exists"));
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
+
+fn config_schema_url() -> &'static str {
+    "https://fireemu.dev/spec/config/fireemu.schema.json"
 }
 
 #[test]

@@ -41,6 +41,7 @@ mod doctor;
 mod functions;
 mod hub;
 mod import_export;
+mod init;
 mod sessions;
 mod snapshots;
 mod ui;
@@ -71,7 +72,7 @@ use crate::config::{RuntimeConfig, Selection};
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
+    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
     ExitCode::from(2)
 }
 
@@ -155,6 +156,14 @@ struct Options {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("init") => match init::run(&args[1..]) {
+            Ok(path) => {
+                println!("created {}", path.display());
+                println!("next: fireemu up --config fireemu.json");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e),
+        },
         Some("up" | "emulators:start") => match parse_options(&args[1..]) {
             Ok(options) => run(options, None),
             Err(e) => fail(&e),

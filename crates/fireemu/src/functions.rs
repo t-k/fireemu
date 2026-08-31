@@ -71,6 +71,81 @@ fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, St
     Ok(hash)
 }
 
+fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf, String> {
+    fn copy_tree(
+        root: &Path,
+        source: &Path,
+        destination: &Path,
+        ignores: &[String],
+    ) -> Result<(), String> {
+        let mut entries = std::fs::read_dir(source)
+            .map_err(|e| format!("snapshot {}: {e}", source.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("snapshot {}: {e}", source.display()))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            if ignored_reload_path(relative, ignores) {
+                continue;
+            }
+            let kind = entry
+                .file_type()
+                .map_err(|e| format!("snapshot {}: {e}", path.display()))?;
+            let target = destination.join(relative);
+            if kind.is_dir() {
+                std::fs::create_dir_all(&target)
+                    .map_err(|e| format!("snapshot {}: {e}", target.display()))?;
+                copy_tree(root, &path, destination, ignores)?;
+            } else if kind.is_file() {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("snapshot {}: {e}", parent.display()))?;
+                }
+                std::fs::copy(&path, &target)
+                    .map_err(|e| format!("snapshot {}: {e}", path.display()))?;
+            }
+        }
+        Ok(())
+    }
+
+    static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let destination = std::env::temp_dir().join(format!(
+        "fireemu-functions-{}-{sequence}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&destination)
+        .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
+    let result = copy_tree(root, root, &destination, ignores).and_then(|()| {
+        let dependencies = root
+            .ancestors()
+            .map(|ancestor| ancestor.join("node_modules"))
+            .find(|candidate| candidate.is_dir());
+        if let Some(dependencies) = dependencies {
+            link_dependency_directory(&dependencies, &destination.join("node_modules"))?;
+        }
+        Ok(())
+    });
+    if let Err(reason) = result {
+        let _ = std::fs::remove_dir_all(&destination);
+        return Err(reason);
+    }
+    Ok(destination)
+}
+
+#[cfg(unix)]
+fn link_dependency_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    std::os::unix::fs::symlink(source, destination)
+        .map_err(|e| format!("snapshot {}: {e}", destination.display()))
+}
+
+#[cfg(windows)]
+fn link_dependency_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    std::os::windows::fs::symlink_dir(source, destination)
+        .map_err(|e| format!("snapshot {}: {e}", destination.display()))
+}
+
 fn start_reload_supervisors(
     runtime: &Arc<FunctionsRuntime>,
     cfg: &RuntimeConfig,
@@ -108,30 +183,53 @@ fn start_reload_supervisors(
                 // interval and use the newest complete content signature as the candidate.
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 let stable = functions_source_signature(&root, &codebase.ignore).unwrap_or(next);
-                observed = Some(stable);
-                match start_codebase(
-                    &cfg,
-                    &codebase,
-                    &hosts,
-                    &secret,
-                    callable_trusted_protocol,
-                )
-                .await
+                let snapshot = match snapshot_functions_source(&root, &codebase.ignore) {
+                    Ok(snapshot) => snapshot,
+                    Err(reason) => {
+                        eprintln!(
+                            "warning: functions[{}] reload snapshot failed: {reason}",
+                            codebase.codebase
+                        );
+                        continue;
+                    }
+                };
+                let snapshot_signature = functions_source_signature(&snapshot, &codebase.ignore);
+                let current_signature = functions_source_signature(&root, &codebase.ignore);
+                if snapshot_signature.as_ref() != Ok(&stable)
+                    || current_signature.as_ref() != Ok(&stable)
                 {
-                    Ok(spec) => match runtime.reload_codebase(spec) {
-                        Ok(generation) => eprintln!(
-                            "note: functions[{}]: reloaded generation {generation}",
+                    let _ = std::fs::remove_dir_all(&snapshot);
+                    continue;
+                }
+                // The runner reads only this immutable generation. If the live source changes
+                // again while Node starts, the next scan necessarily differs from `observed`
+                // and schedules a corrective generation instead of hiding an A-to-B-to-A race.
+                observed = Some(stable);
+                let mut staged = codebase.clone();
+                staged.source = snapshot.to_string_lossy().into_owned();
+                match start_codebase(&cfg, &staged, &hosts, &secret, callable_trusted_protocol)
+                    .await
+                {
+                    Ok(mut spec) => {
+                        spec.cleanup_dir = Some(snapshot);
+                        match runtime.reload_codebase(spec) {
+                            Ok(generation) => eprintln!(
+                                "note: functions[{}]: reloaded generation {generation}",
+                                codebase.codebase
+                            ),
+                            Err(reason) => eprintln!(
+                                "warning: functions[{}]: reload rejected: {reason}",
+                                codebase.codebase
+                            ),
+                        }
+                    }
+                    Err(reason) => {
+                        let _ = std::fs::remove_dir_all(snapshot);
+                        eprintln!(
+                            "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
                             codebase.codebase
-                        ),
-                        Err(reason) => eprintln!(
-                            "warning: functions[{}]: reload rejected: {reason}",
-                            codebase.codebase
-                        ),
-                    },
-                    Err(reason) => eprintln!(
-                        "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
-                        codebase.codebase
-                    ),
+                        );
+                    }
                 }
             }
         });
@@ -764,6 +862,7 @@ async fn start_codebase(
         manifest,
         runner: Arc::new(runner),
         spawn: Some(spec),
+        cleanup_dir: None,
     })
 }
 
@@ -1167,7 +1266,7 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_callable_app_check, functions_source_signature};
+    use super::{check_callable_app_check, functions_source_signature, snapshot_functions_source};
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use serde_json::json;
 
@@ -1194,6 +1293,35 @@ mod tests {
             build_changed
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_snapshot_keeps_one_exact_source_generation() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-snapshot-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("lib/index.js"), "export const value = 'before';").unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), "dependency").unwrap();
+        let expected = functions_source_signature(&root, &[]).unwrap();
+
+        let snapshot = snapshot_functions_source(&root, &[]).unwrap();
+        assert_eq!(
+            functions_source_signature(&snapshot, &[]).unwrap(),
+            expected
+        );
+        std::fs::write(root.join("lib/index.js"), "export const value = 'after';").unwrap();
+        assert_eq!(
+            functions_source_signature(&snapshot, &[]).unwrap(),
+            expected
+        );
+        assert_ne!(functions_source_signature(&root, &[]).unwrap(), expected);
+
+        std::fs::remove_dir_all(snapshot).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 

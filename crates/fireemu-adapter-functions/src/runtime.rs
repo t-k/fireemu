@@ -367,6 +367,8 @@ pub struct CodebaseSpec {
     pub runner: Arc<Runner>,
     /// How to restart it after a reset; without it a reset only kills it.
     pub spawn: Option<SpawnSpec>,
+    /// Immutable source snapshot retained for this runner generation, if hot-reloaded.
+    pub cleanup_dir: Option<std::path::PathBuf>,
 }
 
 /// A loaded codebase and its live runner.
@@ -375,6 +377,17 @@ struct Codebase {
     manifest: FunctionManifest,
     runner: std::sync::RwLock<Arc<Runner>>,
     spawn: std::sync::RwLock<Option<SpawnSpec>>,
+    cleanup_dir: std::sync::RwLock<Option<std::path::PathBuf>>,
+}
+
+impl Drop for Codebase {
+    fn drop(&mut self) {
+        if let Ok(path) = self.cleanup_dir.get_mut() {
+            if let Some(path) = path.take() {
+                let _ = std::fs::remove_dir_all(path);
+            }
+        }
+    }
 }
 
 /// Wall-clock milliseconds, for the one header that carries them.
@@ -442,6 +455,7 @@ impl FunctionsRuntime {
                 manifest,
                 runner,
                 spawn,
+                cleanup_dir: None,
             }],
             config,
             clock,
@@ -533,6 +547,7 @@ impl FunctionsRuntime {
                     manifest: c.manifest,
                     runner: std::sync::RwLock::new(c.runner),
                     spawn: std::sync::RwLock::new(c.spawn),
+                    cleanup_dir: std::sync::RwLock::new(c.cleanup_dir),
                 })
                 .collect(),
             owner,
@@ -629,10 +644,16 @@ impl FunctionsRuntime {
             .find(|codebase| codebase.name == spec.name)
         else {
             spec.runner.kill_now();
+            if let Some(path) = spec.cleanup_dir {
+                let _ = std::fs::remove_dir_all(path);
+            }
             return Err(format!("unknown Functions codebase {:?}", spec.name));
         };
         if codebase.manifest != spec.manifest {
             spec.runner.kill_now();
+            if let Some(path) = spec.cleanup_dir {
+                let _ = std::fs::remove_dir_all(path);
+            }
             return Err(format!(
                 "Functions codebase {:?} changed its trigger manifest; the last-known-good generation remains active",
                 spec.name
@@ -652,6 +673,13 @@ impl FunctionsRuntime {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *spawn = spec.spawn;
         }
+        let old_cleanup = {
+            let mut cleanup = codebase
+                .cleanup_dir
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::replace(&mut *cleanup, spec.cleanup_dir)
+        };
         let generation = self
             .trigger_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -659,6 +687,9 @@ impl FunctionsRuntime {
         // In-flight invocations retain their `Arc`; killing after publication prevents any
         // new dispatch from reaching the old generation and reaps it promptly.
         old.kill_now();
+        if let Some(path) = old_cleanup {
+            let _ = std::fs::remove_dir_all(path);
+        }
         Ok(generation)
     }
 

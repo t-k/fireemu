@@ -1021,6 +1021,98 @@ fn a_registered_project_has_its_own_users_behind_the_project_scoped_routes() {
     assert!(!registry.remove("demo-b"));
 }
 
+#[test]
+fn tenant_admin_routes_use_an_isolated_namespace_and_issue_tenant_tokens() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    s.registry = Some(registry.clone());
+    let tenant = format!("{V1}/projects/demo-app/tenants/customer-a");
+
+    let (status, created) = admin(
+        &s,
+        &format!("{tenant}/accounts"),
+        &json!({"localId": "same-uid", "email": "tenant@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, default_created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"localId": "same-uid", "email": "default@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{default_created}");
+
+    let (_, tenant_users) = admin(
+        &s,
+        &format!("{tenant}/accounts:lookup"),
+        &json!({"localId": ["same-uid"]}),
+    );
+    assert_eq!(tenant_users["users"][0]["email"], "tenant@example.com");
+    let (_, default_users) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"localId": ["same-uid"]}),
+    );
+    assert_eq!(default_users["users"][0]["email"], "default@example.com");
+
+    let tenant_store = registry.tenant_store("demo-app", "customer-a").unwrap();
+    let tenant_store = tenant_store.lock().unwrap();
+    let uid = tenant_store
+        .user_by_id("same-uid")
+        .unwrap()
+        .local_id
+        .clone();
+    let token = tenant_store
+        .id_token_claims(&uid, None, LogicalInstant::from_unix_seconds(1_788_004_860))
+        .unwrap();
+    assert_eq!(token.firebase.tenant.as_deref(), Some("customer-a"));
+}
+
+#[test]
+fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
+    let collection = format!("{V2}/projects/demo-app/tenants");
+    let created = handle_with(
+        &s,
+        "POST",
+        &collection,
+        &owner(),
+        &json!({"displayName": "Customer A", "allowPasswordSignup": true}),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    let name = created.body["name"].as_str().unwrap();
+    let tenant_id = name.rsplit('/').next().unwrap();
+
+    let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert_eq!(listed.body["tenants"][0]["name"], name);
+    assert_eq!(listed.body["tenants"][0]["displayName"], "Customer A");
+
+    let item = format!("{collection}/{tenant_id}");
+    let updated = handle_with(
+        &s,
+        "PATCH",
+        &item,
+        &owner(),
+        &json!({"displayName": "Customer B", "enableAnonymousUser": true}),
+    );
+    assert_eq!(updated.status, 200, "{}", updated.body);
+    assert_eq!(updated.body["displayName"], "Customer B");
+    assert_eq!(updated.body["enableAnonymousUser"], true);
+
+    let deleted = handle_with(&s, "DELETE", &item, &owner(), &json!({}));
+    assert_eq!(deleted.status, 200, "{}", deleted.body);
+    let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
+    assert_eq!(listed.body["tenants"].as_array().unwrap().len(), 0);
+    let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
+    assert_eq!(implicit.status, 200, "{}", implicit.body);
+    assert_eq!(implicit.body["allowPasswordSignup"], true);
+}
+
 // ---- SAML / OIDC federated sign-in and the identity-provider widget pages ---------------------
 
 /// A `postBody`-only request URI (the Node SDK's `signInWithCredential` sends a dummy one).

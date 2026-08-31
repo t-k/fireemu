@@ -48,6 +48,13 @@ pub(crate) enum Pattern {
         /// Everything after it, including its leading `/` or `:`.
         suffix: &'static str,
     },
+    /// `{prefix}{project}/tenants/{tenant}{suffix}`.
+    Tenant {
+        /// Everything before the project segment.
+        prefix: &'static str,
+        /// Everything after the tenant segment.
+        suffix: &'static str,
+    },
 }
 
 /// How a path matched a pattern.
@@ -59,6 +66,8 @@ enum Match<'a> {
     Exact,
     /// A project pattern matched with this project segment.
     Project(&'a str),
+    /// A project and tenant pattern matched.
+    Tenant(&'a str, &'a str),
 }
 
 impl Match<'_> {
@@ -89,6 +98,26 @@ impl Pattern {
                     Match::No
                 } else {
                     Match::Project(project)
+                }
+            }
+            Self::Tenant { prefix, suffix } => {
+                let Some(rest) = path.strip_prefix(prefix) else {
+                    return Match::No;
+                };
+                let Some((project, rest)) = rest.split_once("/tenants/") else {
+                    return Match::No;
+                };
+                let Some(tenant) = rest.strip_suffix(suffix) else {
+                    return Match::No;
+                };
+                if project.is_empty()
+                    || project.contains('/')
+                    || tenant.is_empty()
+                    || tenant.contains('/')
+                {
+                    Match::No
+                } else {
+                    Match::Tenant(project, tenant)
                 }
             }
         }
@@ -131,6 +160,11 @@ pub(crate) enum Handler {
     AdminQuery,
     AdminSendOobCode,
     AdminCreateSessionCookie,
+    TenantCreate,
+    TenantList,
+    TenantGet,
+    TenantUpdate,
+    TenantDelete,
     EmulatorOobCodes,
     EmulatorVerificationCodes,
     EmulatorClearAccounts,
@@ -174,6 +208,11 @@ impl Handler {
         Self::AdminQuery,
         Self::AdminSendOobCode,
         Self::AdminCreateSessionCookie,
+        Self::TenantCreate,
+        Self::TenantList,
+        Self::TenantGet,
+        Self::TenantUpdate,
+        Self::TenantDelete,
         Self::EmulatorOobCodes,
         Self::EmulatorVerificationCodes,
         Self::EmulatorClearAccounts,
@@ -198,6 +237,7 @@ pub(crate) struct Route {
 }
 
 const ADMIN: &str = "/identitytoolkit.googleapis.com/v1/projects/";
+const ADMIN_V2: &str = "/identitytoolkit.googleapis.com/v2/projects/";
 const EMULATOR: &str = "/emulator/v1/projects/";
 
 /// The label bucket of a path this runtime does not serve.
@@ -228,6 +268,60 @@ const fn admin(
         method,
         pattern: Pattern::Project {
             prefix: ADMIN,
+            suffix,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn tenant_admin(
+    method: &'static str,
+    suffix: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::Tenant {
+            prefix: ADMIN,
+            suffix,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn admin_v2(
+    method: &'static str,
+    suffix: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::Project {
+            prefix: ADMIN_V2,
+            suffix,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn tenant_v2(
+    method: &'static str,
+    suffix: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::Tenant {
+            prefix: ADMIN_V2,
             suffix,
         },
         class: RouteClass::Admin,
@@ -446,6 +540,66 @@ pub(crate) const ROUTES: &[Route] = &[
         "admin/createSessionCookie",
         Handler::AdminCreateSessionCookie,
     ),
+    tenant_admin("POST", "/accounts", "tenant/accounts", Handler::AdminCreate),
+    tenant_admin(
+        "POST",
+        "/accounts:lookup",
+        "tenant/accounts:lookup",
+        Handler::AdminLookup,
+    ),
+    tenant_admin(
+        "POST",
+        "/accounts:update",
+        "tenant/accounts:update",
+        Handler::AdminUpdate,
+    ),
+    tenant_admin(
+        "POST",
+        "/accounts:delete",
+        "tenant/accounts:delete",
+        Handler::AdminDelete,
+    ),
+    tenant_admin(
+        "GET",
+        "/accounts:batchGet",
+        "tenant/accounts:batchGet",
+        Handler::AdminBatchGet,
+    ),
+    tenant_admin(
+        "POST",
+        "/accounts:batchCreate",
+        "tenant/accounts:batchCreate",
+        Handler::AdminBatchCreate,
+    ),
+    tenant_admin(
+        "POST",
+        "/accounts:batchDelete",
+        "tenant/accounts:batchDelete",
+        Handler::AdminBatchDelete,
+    ),
+    tenant_admin(
+        "POST",
+        "/accounts:query",
+        "tenant/accounts:query",
+        Handler::AdminQuery,
+    ),
+    tenant_admin(
+        "POST",
+        "/accounts:sendOobCode",
+        "tenant/accounts:sendOobCode",
+        Handler::AdminSendOobCode,
+    ),
+    tenant_admin(
+        "POST",
+        ":createSessionCookie",
+        "tenant/createSessionCookie",
+        Handler::AdminCreateSessionCookie,
+    ),
+    admin_v2("POST", "/tenants", "tenants:create", Handler::TenantCreate),
+    admin_v2("GET", "/tenants", "tenants:list", Handler::TenantList),
+    tenant_v2("GET", "", "tenants:get", Handler::TenantGet),
+    tenant_v2("PATCH", "", "tenants:update", Handler::TenantUpdate),
+    tenant_v2("DELETE", "", "tenants:delete", Handler::TenantDelete),
     // Emulator inspection routes.
     emulator(
         "GET",
@@ -488,6 +642,8 @@ pub(crate) enum Resolution<'a> {
         route: &'static Route,
         /// The project segment.
         project: Option<&'a str>,
+        /// Tenant segment for a tenant-scoped route.
+        tenant: Option<&'a str>,
     },
     /// The path is known but not with this method.
     MethodNotAllowed {
@@ -495,6 +651,8 @@ pub(crate) enum Resolution<'a> {
         class: RouteClass,
         /// The project segment.
         project: Option<&'a str>,
+        /// Tenant segment for a tenant-scoped route.
+        tenant: Option<&'a str>,
     },
     /// No row matches the path.
     NotFound,
@@ -502,22 +660,31 @@ pub(crate) enum Resolution<'a> {
 
 /// Resolves `method` and `path` (without its query) against the table.
 pub(crate) fn resolve<'a>(method: &str, path: &'a str) -> Resolution<'a> {
-    let mut known: Option<(RouteClass, Option<&'a str>)> = None;
+    let mut known: Option<(RouteClass, Option<&'a str>, Option<&'a str>)> = None;
     for route in ROUTES {
         let hit = route.pattern.matches(path);
         if hit.is_hit() {
-            let project = match hit {
-                Match::Project(p) => Some(p),
-                Match::No | Match::Exact => None,
+            let (project, tenant) = match hit {
+                Match::Project(p) => (Some(p), None),
+                Match::Tenant(p, t) => (Some(p), Some(t)),
+                Match::No | Match::Exact => (None, None),
             };
             if route.method == method {
-                return Resolution::Matched { route, project };
+                return Resolution::Matched {
+                    route,
+                    project,
+                    tenant,
+                };
             }
-            known.get_or_insert((route.class, project));
+            known.get_or_insert((route.class, project, tenant));
         }
     }
     match known {
-        Some((class, project)) => Resolution::MethodNotAllowed { class, project },
+        Some((class, project, tenant)) => Resolution::MethodNotAllowed {
+            class,
+            project,
+            tenant,
+        },
         None => Resolution::NotFound,
     }
 }
@@ -530,6 +697,7 @@ pub(crate) fn class_of(path: &str) -> Option<(RouteClass, Option<&str>)> {
         Match::No => None,
         Match::Exact => Some((r.class, None)),
         Match::Project(p) => Some((r.class, Some(p))),
+        Match::Tenant(p, _) => Some((r.class, Some(p))),
     })
 }
 
@@ -542,10 +710,11 @@ pub(crate) fn operation_of(path: &str) -> &'static str {
         .map_or(UNKNOWN_OPERATION, |r| r.operation)
 }
 
-/// Whether `path` names a project scope (an Admin or emulator route), and which project.
-pub(crate) fn scoped_project(path: &str) -> Option<&str> {
+/// Project and optional tenant named by a scoped route.
+pub(crate) fn scoped_target(path: &str) -> Option<(&str, Option<&str>)> {
     ROUTES.iter().find_map(|r| match r.pattern.matches(path) {
-        Match::Project(p) => Some(p),
+        Match::Project(project) => Some((project, None)),
+        Match::Tenant(project, tenant) => Some((project, Some(tenant))),
         Match::No | Match::Exact => None,
     })
 }
@@ -565,20 +734,11 @@ mod tests {
     };
 
     #[test]
-    fn every_handler_is_dispatched_by_exactly_one_row() {
+    fn every_handler_is_dispatched_by_at_least_one_row() {
         for handler in Handler::ALL {
             let rows = ROUTES.iter().filter(|r| r.handler == *handler).count();
-            let expected = if *handler == Handler::Jwks { 2 } else { 1 };
-            assert_eq!(
-                rows, expected,
-                "{handler:?} must have exactly {expected} route row(s)"
-            );
+            assert!(rows > 0, "{handler:?} must have a route row");
         }
-        assert_eq!(
-            ROUTES.len(),
-            Handler::ALL.len() + 1,
-            "the JWKS handler has two paths; every other handler has one"
-        );
     }
 
     #[test]
@@ -595,8 +755,12 @@ mod tests {
                 seen.insert((route.method, route.pattern)),
                 "duplicate row {route:?}"
             );
-            if let Pattern::Project { prefix, suffix } = route.pattern {
-                assert!(prefix.ends_with('/') && !suffix.is_empty(), "{route:?}");
+            match route.pattern {
+                Pattern::Project { prefix, suffix } => {
+                    assert!(prefix.ends_with('/') && !suffix.is_empty(), "{route:?}");
+                }
+                Pattern::Tenant { prefix, .. } => assert!(prefix.ends_with('/'), "{route:?}"),
+                Pattern::Exact(_) => {}
             }
         }
     }
@@ -637,7 +801,8 @@ mod tests {
             resolve("GET", "/identitytoolkit.googleapis.com/v1/accounts:signUp"),
             Resolution::MethodNotAllowed {
                 class: RouteClass::EndUser,
-                project: None
+                project: None,
+                tenant: None
             }
         ));
         assert!(matches!(
@@ -647,16 +812,28 @@ mod tests {
             ),
             Resolution::MethodNotAllowed {
                 class: RouteClass::Admin,
-                project: Some("demo-app")
+                project: Some("demo-app"),
+                tenant: None
             }
         ));
         assert!(matches!(
             resolve("POST", "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie"),
-            Resolution::Matched { route, project: Some("demo-app") } if route.handler == Handler::AdminCreateSessionCookie
+            Resolution::Matched { route, project: Some("demo-app"), tenant: None } if route.handler == Handler::AdminCreateSessionCookie
         ));
         assert!(matches!(
             resolve("PATCH", "/emulator/v1/projects/demo-app/config"),
-            Resolution::Matched { route, project: Some("demo-app") } if route.handler == Handler::EmulatorPatchConfig
+            Resolution::Matched { route, project: Some("demo-app"), tenant: None } if route.handler == Handler::EmulatorPatchConfig
+        ));
+        assert!(matches!(
+            resolve(
+                "POST",
+                "/identitytoolkit.googleapis.com/v1/projects/demo-app/tenants/customer-a/accounts:lookup"
+            ),
+            Resolution::Matched {
+                route,
+                project: Some("demo-app"),
+                tenant: Some("customer-a")
+            } if route.handler == Handler::AdminLookup
         ));
         // A project segment is exactly one segment.
         assert_eq!(

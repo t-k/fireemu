@@ -561,9 +561,13 @@ pub fn handle_with(
     // The privilege class is decided by the path alone, so a wrong-method request to a
     // privileged path is refused for its missing credential before it is refused for its
     // method: the class check cannot be sidestepped by the method.
-    let (route, project) = match routes::resolve(method, path) {
-        routes::Resolution::Matched { route, project } => (route, project),
-        routes::Resolution::MethodNotAllowed { class, project } => {
+    let (route, project, tenant) = match routes::resolve(method, path) {
+        routes::Resolution::Matched {
+            route,
+            project,
+            tenant,
+        } => (route, project, tenant),
+        routes::Resolution::MethodNotAllowed { class, project, .. } => {
             if let Err(r) = privilege_check(state, class, project, headers, method, &store) {
                 return r;
             }
@@ -573,6 +577,20 @@ pub fn handle_with(
     };
     if let Err(r) = privilege_check(state, route.class, project, headers, method, &store) {
         return r;
+    }
+    if matches!(
+        route.handler,
+        routes::Handler::TenantCreate
+            | routes::Handler::TenantList
+            | routes::Handler::TenantGet
+            | routes::Handler::TenantUpdate
+            | routes::Handler::TenantDelete
+    ) {
+        // Tenant management mutates the registry and may initialize a tenant from the parent
+        // project's configuration. Release the request's selected store before that registry
+        // operation so initialization never attempts to reacquire the same non-reentrant lock.
+        drop(store);
+        return tenant_management(state, route.handler, project, tenant, query, body);
     }
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
@@ -678,6 +696,11 @@ fn dispatch(
             send_oob_code(store, &with_link, at, headers)
         }
         Handler::AdminCreateSessionCookie => create_session_cookie(store, body, at),
+        Handler::TenantCreate
+        | Handler::TenantList
+        | Handler::TenantGet
+        | Handler::TenantUpdate
+        | Handler::TenantDelete => error(500, "INTERNAL"),
         Handler::EmulatorOobCodes => emulator_route(store, "GET", "oobCodes", headers, body),
         Handler::EmulatorVerificationCodes => {
             emulator_route(store, "GET", "verificationCodes", headers, body)
@@ -687,6 +710,140 @@ fn dispatch(
         }
         Handler::EmulatorGetConfig => emulator_route(store, "GET", "config", headers, body),
         Handler::EmulatorPatchConfig => emulator_route(store, "PATCH", "config", headers, body),
+    }
+}
+
+fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {
+    fireemu_core_auth::store::TenantMetadata {
+        display_name: str_field(body, "displayName").map(str::to_owned),
+        allow_password_signup: body
+            .get("allowPasswordSignup")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        enable_email_link_signin: body
+            .get("enableEmailLinkSignin")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        enable_anonymous_user: body
+            .get("enableAnonymousUser")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        disable_auth: body
+            .get("disableAuth")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
+fn tenant_json(
+    project: &str,
+    tenant: &str,
+    metadata: &fireemu_core_auth::store::TenantMetadata,
+) -> Value {
+    json!({
+        "name": format!("projects/{project}/tenants/{tenant}"),
+        "displayName": metadata.display_name,
+        "allowPasswordSignup": metadata.allow_password_signup,
+        "enableEmailLinkSignin": metadata.enable_email_link_signin,
+        "enableAnonymousUser": metadata.enable_anonymous_user,
+        "disableAuth": metadata.disable_auth,
+        "mfaConfig": {"state": "DISABLED", "enabledProviders": []},
+    })
+}
+
+fn tenant_management(
+    state: &AuthState,
+    handler: routes::Handler,
+    project: Option<&str>,
+    tenant: Option<&str>,
+    query: Option<&str>,
+    body: &Value,
+) -> JsonResponse {
+    use routes::Handler;
+    let Some(registry) = &state.registry else {
+        return error(400, "INVALID_PROJECT_ID");
+    };
+    let Some(project) = project else {
+        return error(400, "INVALID_PROJECT_ID");
+    };
+    match handler {
+        Handler::TenantCreate => {
+            let metadata = tenant_metadata(body);
+            let Some(tenant) = registry.create_tenant(project, metadata.clone()) else {
+                return error(400, "INVALID_PROJECT_ID");
+            };
+            JsonResponse {
+                status: 200,
+                body: tenant_json(project, &tenant, &metadata),
+            }
+        }
+        Handler::TenantList => {
+            let params = query_params(query);
+            let page_size = params
+                .get("pageSize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20)
+                .min(1_000);
+            let page_token = params.get("pageToken").map(String::as_str);
+            let mut ids: Vec<String> = registry
+                .tenants(project)
+                .into_iter()
+                .filter(|id| page_token.is_none_or(|token| id.as_str() > token))
+                .collect();
+            let has_more = ids.len() > page_size;
+            ids.truncate(page_size);
+            let tenants: Vec<Value> = ids
+                .iter()
+                .filter_map(|id| {
+                    registry
+                        .tenant_metadata(project, id)
+                        .map(|metadata| tenant_json(project, id, &metadata))
+                })
+                .collect();
+            let next = has_more.then(|| ids.last().cloned()).flatten();
+            JsonResponse {
+                status: 200,
+                body: json!({"tenants": tenants, "nextPageToken": next}),
+            }
+        }
+        Handler::TenantGet => {
+            let Some(tenant) = tenant else {
+                return error(400, "INVALID_TENANT_ID");
+            };
+            let Some(metadata) = registry.tenant_metadata(project, tenant) else {
+                return error(404, "TENANT_NOT_FOUND");
+            };
+            JsonResponse {
+                status: 200,
+                body: tenant_json(project, tenant, &metadata),
+            }
+        }
+        Handler::TenantUpdate => {
+            let Some(tenant) = tenant else {
+                return error(400, "INVALID_TENANT_ID");
+            };
+            let metadata = tenant_metadata(body);
+            if !registry.update_tenant(project, tenant, metadata.clone()) {
+                return error(404, "TENANT_NOT_FOUND");
+            }
+            JsonResponse {
+                status: 200,
+                body: tenant_json(project, tenant, &metadata),
+            }
+        }
+        Handler::TenantDelete => {
+            let Some(tenant) = tenant else {
+                return error(400, "INVALID_TENANT_ID");
+            };
+            if !registry.delete_tenant(project, tenant) {
+                return error(404, "TENANT_NOT_FOUND");
+            }
+            JsonResponse {
+                status: 200,
+                body: json!({}),
+            }
+        }
+        _ => error(500, "INTERNAL"),
     }
 }
 
@@ -703,9 +860,10 @@ fn select_store(
     let Some(registry) = &state.registry else {
         return state.store.clone();
     };
-    if let Some(project) = routes::scoped_project(path) {
-        return registry
-            .store_for(project)
+    if let Some((project, tenant)) = routes::scoped_target(path) {
+        return tenant
+            .and_then(|tenant| registry.ensure_tenant(project, tenant))
+            .or_else(|| registry.store_for(project))
             .unwrap_or_else(|| state.store.clone());
     }
     // Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode them.
@@ -718,26 +876,51 @@ fn select_store(
             .as_ref()
             .and_then(|t| t.read().ok())
             .and_then(|t| t.project_of_api_key(key).map(str::to_owned));
-        if let Some(store) = project.and_then(|p| registry.store_for(&p)) {
-            return store;
+        if let Some(project) = project {
+            let tenant = str_field(body, "tenantId");
+            if let Some(store) = tenant
+                .and_then(|tenant| registry.ensure_tenant(&project, tenant))
+                .or_else(|| registry.store_for(&project))
+            {
+                return store;
+            }
         }
     }
     if let Some(token) = str_field(body, "idToken") {
         let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        let aud = fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
+        let target = fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
             .ok()
             .and_then(|d| {
-                d.payload
+                let audience = d
+                    .payload
                     .get("aud")
                     .and_then(fireemu_core_types::json::JsonValue::as_str)
-                    .map(str::to_owned)
+                    .map(str::to_owned)?;
+                let tenant = d
+                    .payload
+                    .get("firebase")
+                    .and_then(|firebase| firebase.get("tenant"))
+                    .and_then(fireemu_core_types::json::JsonValue::as_str)
+                    .map(str::to_owned);
+                Some((audience, tenant))
             });
-        if let Some(store) = aud.and_then(|a| registry.store_for(&a)) {
-            return store;
+        if let Some((project, tenant)) = target {
+            if let Some(store) = tenant
+                .as_deref()
+                .and_then(|tenant| registry.ensure_tenant(&project, tenant))
+                .or_else(|| registry.store_for(&project))
+            {
+                return store;
+            }
         }
     }
     if let Some(token) = str_field(body, "refresh_token") {
         if let Some(store) = registry.find(|s| s.refresh_session(token).is_ok()) {
+            return store;
+        }
+    }
+    if let Some(tenant) = str_field(body, "tenantId") {
+        if let Some(store) = registry.ensure_tenant(registry.default_project(), tenant) {
             return store;
         }
     }

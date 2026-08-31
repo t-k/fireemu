@@ -2,6 +2,7 @@
 
 use core::fmt;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_limits::catalogs::FIREBASE_AUTH_2026_08_30;
@@ -2330,6 +2331,23 @@ pub struct AuthRegistry {
     default: Arc<Mutex<AuthStore>>,
     others: Mutex<BTreeMap<String, Arc<Mutex<AuthStore>>>>,
     tenants: Mutex<BTreeMap<(String, String), Arc<Mutex<AuthStore>>>>,
+    tenant_metadata: Mutex<BTreeMap<(String, String), TenantMetadata>>,
+    next_tenant_id: AtomicU64,
+}
+
+/// Mutable Identity Platform tenant settings represented by the Admin v2 surface.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TenantMetadata {
+    /// Human-readable tenant name.
+    pub display_name: Option<String>,
+    /// Whether password account creation and sign-in are enabled.
+    pub allow_password_signup: bool,
+    /// Whether email-link sign-in is enabled.
+    pub enable_email_link_signin: bool,
+    /// Whether anonymous sign-in is enabled.
+    pub enable_anonymous_user: bool,
+    /// Whether all authentication is disabled.
+    pub disable_auth: bool,
 }
 
 impl AuthRegistry {
@@ -2341,6 +2359,8 @@ impl AuthRegistry {
             default,
             others: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
+            tenant_metadata: Mutex::new(BTreeMap::new()),
+            next_tenant_id: AtomicU64::new(1),
         }
     }
 
@@ -2391,6 +2411,9 @@ impl AuthRegistry {
             if let Ok(mut tenants) = self.tenants.lock() {
                 tenants.retain(|(candidate, _), _| candidate != project);
             }
+            if let Ok(mut metadata) = self.tenant_metadata.lock() {
+                metadata.retain(|(candidate, _), _| candidate != project);
+            }
         }
         removed
     }
@@ -2435,12 +2458,86 @@ impl AuthRegistry {
         }
         let store = Arc::new(Mutex::new(store));
         let mut tenants = self.tenants.lock().ok()?;
-        Some(
-            tenants
+        let selected = tenants
+            .entry((project.to_owned(), tenant.to_owned()))
+            .or_insert_with(|| store.clone())
+            .clone();
+        drop(tenants);
+        if let Ok(mut metadata) = self.tenant_metadata.lock() {
+            metadata
                 .entry((project.to_owned(), tenant.to_owned()))
-                .or_insert_with(|| store.clone())
-                .clone(),
-        )
+                .or_insert_with(|| TenantMetadata {
+                    allow_password_signup: true,
+                    enable_email_link_signin: true,
+                    enable_anonymous_user: true,
+                    ..TenantMetadata::default()
+                });
+        }
+        Some(selected)
+    }
+
+    /// Creates an explicitly configured tenant and returns its generated ID.
+    pub fn create_tenant(&self, project: &str, metadata: TenantMetadata) -> Option<String> {
+        self.store_for(project)?;
+        let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
+        let tenant = format!("fireemu-{sequence:020}");
+        self.ensure_tenant(project, &tenant)?;
+        self.tenant_metadata
+            .lock()
+            .ok()?
+            .insert((project.to_owned(), tenant.clone()), metadata);
+        Some(tenant)
+    }
+
+    /// Tenant metadata when the tenant exists.
+    #[must_use]
+    pub fn tenant_metadata(&self, project: &str, tenant: &str) -> Option<TenantMetadata> {
+        self.tenant_metadata
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .cloned()
+    }
+
+    /// Replaces tenant metadata; `false` when the tenant is unknown.
+    pub fn update_tenant(&self, project: &str, tenant: &str, metadata: TenantMetadata) -> bool {
+        let Ok(mut values) = self.tenant_metadata.lock() else {
+            return false;
+        };
+        let Some(value) = values.get_mut(&(project.to_owned(), tenant.to_owned())) else {
+            return false;
+        };
+        *value = metadata;
+        true
+    }
+
+    /// Lists tenant IDs in stable lexical order.
+    #[must_use]
+    pub fn tenants(&self, project: &str) -> Vec<String> {
+        self.tenant_metadata
+            .lock()
+            .map(|values| {
+                values
+                    .keys()
+                    .filter(|(candidate, _)| candidate == project)
+                    .map(|(_, tenant)| tenant.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Deletes a tenant namespace and its metadata.
+    pub fn delete_tenant(&self, project: &str, tenant: &str) -> bool {
+        let key = (project.to_owned(), tenant.to_owned());
+        let removed = self
+            .tenants
+            .lock()
+            .ok()
+            .is_some_and(|mut stores| stores.remove(&key).is_some());
+        if let Ok(mut metadata) = self.tenant_metadata.lock() {
+            metadata.remove(&key);
+        }
+        removed
     }
 
     /// The first store (the default first, then the registered ones in name order) that

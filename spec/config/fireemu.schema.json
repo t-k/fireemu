@@ -207,6 +207,7 @@
         "storagePort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "functionsPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "pubsubPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "loggingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "clockStart": { "type": "string", "format": "date-time" },
         "seed": { "type": "integer", "minimum": 0 },
         "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" }

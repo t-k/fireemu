@@ -1201,6 +1201,59 @@ fn admin_v2_config_toggles_email_enumeration_protection_and_propagates_to_tenant
     assert_eq!(revealed["error"]["message"], "EMAIL_NOT_FOUND");
 }
 
+#[test]
+fn email_enumeration_protection_requires_verified_email_changes_but_keeps_signup_linking() {
+    let s = state();
+    let enabled = handle_with(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig",
+        &owner(),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+    let signed = sign_up(&s, "before@example.com");
+    let id_token = signed["idToken"].as_str().unwrap();
+    let local_id = signed["localId"].as_str().unwrap();
+
+    let (status, rejected) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": id_token, "email": "direct@example.com"}),
+    );
+    assert_eq!(status, 400, "{rejected}");
+    assert_eq!(rejected["error"]["message"], "OPERATION_NOT_ALLOWED");
+    assert_eq!(
+        s.store
+            .lock()
+            .unwrap()
+            .user_by_id(local_id)
+            .and_then(|user| user.email.as_deref()),
+        Some("before@example.com")
+    );
+
+    let anonymous = post(&s, &format!("{V1}/accounts:signUp"), &json!({})).1;
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "idToken": anonymous["idToken"],
+            "email": "linked@example.com",
+            "password": "hunter22"
+        }),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["email"], "linked@example.com");
+
+    let (status, admin_update) = admin(
+        &s,
+        "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:update",
+        &json!({"localId": local_id, "email": "admin@example.com"}),
+    );
+    assert_eq!(status, 200, "{admin_update}");
+    assert_eq!(admin_update["email"], "admin@example.com");
+}
+
 // ---- SAML / OIDC federated sign-in and the identity-provider widget pages ---------------------
 
 /// A `postBody`-only request URI (the Node SDK's `signInWithCredential` sends a dummy one).

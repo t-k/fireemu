@@ -1876,6 +1876,16 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
         Ok(p) => p,
         Err(r) => return r,
     };
+    // Improved email privacy requires a proof-of-ownership OOB flow for address changes.
+    // It also removes the legacy setAccountInfo email/password linking path; clients link
+    // through accounts:signUp with the current ID token instead. Privileged Admin updates
+    // remain available for account administration.
+    if local_id.is_none()
+        && store.config().enable_improved_email_privacy
+        && (plan.email.is_some() || plan.clear_email)
+    {
+        return error(400, "OPERATION_NOT_ALLOWED");
+    }
     if let Some(email) = &plan.email {
         if store
             .user_by_email(email)

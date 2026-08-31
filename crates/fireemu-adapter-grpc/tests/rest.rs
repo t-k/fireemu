@@ -253,21 +253,26 @@ fn commit_query_aggregation_and_transactions_over_rest() {
     assert_eq!(status, 200, "{got}");
     assert!(got[0]["found"].is_object());
     assert!(got[1]["missing"].as_str().unwrap().ends_with("/n/none"));
-    // Concurrent write, then the transaction's commit aborts.
-    call(
+    // Pessimistic concurrency: the batchGet locked n/1, so an out-of-band write to it is
+    // refused with ABORTED "Transaction lock timeout." -- nothing changes behind the
+    // transaction.
+    let (status, blocked) = call(
         &s,
         "POST",
         &format!("{DOCS}:commit"),
         json!({"writes": [{"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "99"}}}}]}),
     );
-    let (status, err) = call(
+    assert_eq!(status, 409, "{blocked}");
+    assert_eq!(blocked["error"]["status"], "ABORTED");
+    assert_eq!(blocked["error"]["message"], "Transaction lock timeout.");
+    // The transaction commits: it writes n/2, which nobody else has locked.
+    let (status, ok) = call(
         &s,
         "POST",
         &format!("{DOCS}:commit"),
         json!({"transaction": txn, "writes": [{"delete": format!("projects/demo-app/databases/(default)/documents/n/2")}]}),
     );
-    assert_eq!(status, 409, "{err}");
-    assert_eq!(err["error"]["status"], "ABORTED");
+    assert_eq!(status, 200, "{ok}");
 
     let (status, ids) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
     assert_eq!(status, 200);

@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { compareScenario, deepEqual } from "./diff.mjs";
+import { normalizeError } from "./normalize.mjs";
 
 const fixture = {
   id: "example/scenario",
@@ -102,4 +103,33 @@ test("a scenario that faulted mid-run fails the gate", () => {
   const result = compareScenario({ fixture, testdScenario: faulted });
   assert.ok(result.isErr());
   assert.match(result._unsafeUnwrapErr().failures[0], /faulted during the run/);
+});
+
+test("gRPC error trailers preserve duplicate ASCII values and binary bytes line by line", () => {
+  const metadata = {
+    getMap() {
+      return {
+        "fireemu-reason": "first",
+        "grpc-status-details-bin": Buffer.from([0, 255]),
+      };
+    },
+    get(key) {
+      if (key === "fireemu-reason") return ["first", "second"];
+      if (key === "grpc-status-details-bin") return [Buffer.from([0, 255]), Buffer.alloc(0)];
+      return [];
+    },
+  };
+
+  assert.deepEqual(normalizeError({ code: 7, details: "denied", metadata }), {
+    thrown: true,
+    code: "7",
+    message: null,
+    details: "denied",
+    trailers: [
+      { key: "fireemu-reason", kind: "ascii", value: "first" },
+      { key: "fireemu-reason", kind: "ascii", value: "second" },
+      { key: "grpc-status-details-bin", kind: "binary", valueBase64: "AP8=" },
+      { key: "grpc-status-details-bin", kind: "binary", valueBase64: "" },
+    ],
+  });
 });

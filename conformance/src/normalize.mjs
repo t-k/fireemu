@@ -86,6 +86,24 @@ export function normalizeError(error) {
     message: raw.message === undefined ? null : normalizeText(String(raw.message)),
   };
   if (raw.status !== undefined) out.status = normalizeText(String(raw.status));
+  // grpc-js exposes the decoded status text separately from Error.message. Keep both: the
+  // wire trailer comparison must not accidentally treat a changed `details` value as noise.
+  if (raw.details !== undefined) out.details = normalizeText(String(raw.details));
+  if (raw.metadata?.getMap && raw.metadata?.get) {
+    const trailers = [];
+    for (const key of Object.keys(raw.metadata.getMap()).toSorted()) {
+      const lower = key.toLowerCase();
+      for (const value of raw.metadata.get(key)) {
+        if (lower.endsWith("-bin")) {
+          const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          trailers.push({ key: lower, kind: "binary", valueBase64: bytes.toString("base64") });
+        } else {
+          trailers.push({ key: lower, kind: "ascii", value: normalizeText(String(value)) });
+        }
+      }
+    }
+    out.trailers = trailers;
+  }
   if (raw.customData?.serverResponse !== undefined) {
     out.serverResponse = normalizeText(String(raw.customData.serverResponse));
   }

@@ -117,6 +117,7 @@ fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf,
     ));
     std::fs::create_dir(&destination)
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
+    secure_snapshot_directory(&destination)?;
     let result = copy_tree(root, root, &destination, ignores).and_then(|()| {
         let dependencies = root
             .ancestors()
@@ -132,6 +133,19 @@ fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf,
         return Err(reason);
     }
     Ok(destination)
+}
+
+#[cfg(unix)]
+fn secure_snapshot_directory(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("snapshot {}: {e}", path.display()))
+}
+
+#[cfg(windows)]
+fn secure_snapshot_directory(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1310,6 +1324,14 @@ mod tests {
         let expected = functions_source_signature(&root, &[]).unwrap();
 
         let snapshot = snapshot_functions_source(&root, &[]).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&snapshot).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
         assert_eq!(
             functions_source_signature(&snapshot, &[]).unwrap(),
             expected
@@ -1322,6 +1344,7 @@ mod tests {
         assert_ne!(functions_source_signature(&root, &[]).unwrap(), expected);
 
         std::fs::remove_dir_all(snapshot).unwrap();
+        assert!(root.join("node_modules/pkg/index.js").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
 

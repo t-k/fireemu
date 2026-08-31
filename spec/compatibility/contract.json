@@ -780,7 +780,7 @@
       "notes": [],
       "gaps": [
         "blocking identity functions (beforeUserCreated / beforeUserSignedIn)",
-        "tenants, SAML / OIDC provider configuration and the IdP widget pages (/emulator/auth/*); the official emulator has no Game Center sign-in route and Firebase Auth has no passkey provider, so neither is a gap",
+        "multi-tenancy (tenant-scoped projects and the tenant admin forms); the official emulator has no Game Center sign-in route and Firebase Auth has no passkey provider, so neither is a gap. SAML / OIDC sign-in (accounts:signInWithIdp) and the identity-provider widget pages (/emulator/auth/handler and /emulator/auth/iframe) are served; the official emulator stores no SAML / OIDC provider configuration, so there is none to round-trip.",
         "signIn.allowDuplicateEmails is recorded and exported but does not yet admit duplicate accounts"
       ],
       "prohibitedClaimTerms": [],

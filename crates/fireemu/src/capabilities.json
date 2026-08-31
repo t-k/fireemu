@@ -205,10 +205,28 @@
     "status": "implemented"
   },
   "AUTH-OAUTH-0": {
-    "notes": [
-      "accounts:signInWithIdp trusts the id_token of postBody (a JWT payload or a bare JSON object with sub / email / name / picture) as the provider's assertion, like the Emulator; no OAuth round trip",
-      "an identity whose email belongs to an existing user is linked to it; otherwise a new user is created with a verified email",
+    "implemented": [
+      "accounts:signInWithIdp (verifyAssertion): the credential is read from requestUri and/or postBody (the official getNormalizedUri merges the request URI query, the post body and the URI fragment); providerId is lowercased; the id_token (a fake JWT or strict JSON) or a JSON access_token carries the claims; no OAuth round trip",
+      "per-provider assertion shaping (fakeFetchUserInfoFromIdp): google.com reports federatedId https://accounts.google.com/<sub>, firstName / lastName and a granted-scopes rawUserInfo; saml.<name> reads the email from the SAML assertion subject nameId, forces emailVerified true and uses the attributeStatements as rawUserInfo; oidc.<name> and every other provider keep the JSON claims as rawUserInfo",
+      "SAMLResponse (a JSON blob, not real XML) is validated for assertion / subject / nameId with the official INVALID_IDP_RESPONSE messages",
+      "create-or-link semantics: match by (providerId, rawId), then by a verified assertion email (linking, recycling an unverified-email account by clearing its password, phone and providers and bumping validSince, and reporting emailRecycled), else needConfirmation for an unverified assertion email owned by an existing account, else a new account; linking to a session idToken with FEDERATED_USER_ID_ALREADY_LINKED and returnIdpCredential errorMessage handling",
+      "the id_token vs access_token NotImplementedError reproduction (google.com / apple.com and any other provider), and accounts:createAuthUri answering NotImplementedError for a providerId",
+      "the identity-provider login widget pages /emulator/auth/handler (the sign-in-via-popup / redirect handoff, listing the accounts already linked at the provider) and /emulator/auth/iframe (the gapi relay page), reproduced from the pinned widget_ui.js",
       "ID tokens carry firebase.identities[providerId] and sign_in_provider = providerId"
+    ],
+    "notes": [
+      "the official emulator stores no SAML / OIDC provider configuration (defaultSupportedIdpConfigs / inboundSamlConfigs are in its OpenAPI spec but not served), so a saml.* / oidc.* provider needs no registration and there is none to round-trip",
+      "conformance: measured by crates/fireemu-adapter-http/tests/auth_flows.rs and crates/fireemu-core-auth/tests/store.rs against the pinned firebase-tools operations.js / widget_ui.js; no gated corpus scenario was added in this pass"
+    ],
+    "fireemuOnly": [
+      {
+        "behaviour": "the widget /emulator/auth/handler HTML-escapes the account display name, email and photo URL it injects into the reuse-account list; the official page injects them unescaped. Both serve the same page to a loopback caller and mint no credential (that is accounts:signInWithIdp, guarded on its own), so escaping only removes a stored-XSS footgun in a page the developer opens in their own browser.",
+        "precision": "strictly-safer"
+      },
+      {
+        "behaviour": "a providerId containing a NUL or other control character, or longer than 256 bytes, is refused with INVALID_CREDENTIAL_OR_PROVIDER_ID before it reaches the store; the official emulator does not validate the providerId. A malformed provider id is never used as a store key, a token claim or widget HTML.",
+        "precision": "strictly-safer"
+      }
     ],
     "precision": "fixture-idp",
     "status": "implemented"

@@ -58,6 +58,37 @@ async fn respond(
         .uri()
         .path_and_query()
         .map_or_else(|| req.uri().path().to_owned(), |pq| pq.as_str().to_owned());
+    // The IdP login widget pages are HTML, served on GET, outside the JSON pipeline. The
+    // loopback origin guard above still applies; the pages carry no secret and mint no
+    // credential (that is `signInWithIdp`, guarded on its own).
+    {
+        let (widget_path, widget_query) = match path.split_once('?') {
+            Some((p, q)) => (p, Some(q)),
+            None => (path.as_str(), None),
+        };
+        if crate::identity_toolkit::widget::is_widget_path(widget_path) {
+            if method != "GET" {
+                return Ok(finish(
+                    405,
+                    &serde_json::json!({"error": {"code": 405, "message": "METHOD_NOT_ALLOWED"}}),
+                    origin.as_deref(),
+                    false,
+                ));
+            }
+            let rendered =
+                crate::identity_toolkit::widget::render(&state, widget_path, widget_query);
+            let builder = with_cors(
+                Response::builder()
+                    .status(StatusCode::from_u16(rendered.status).unwrap_or(StatusCode::OK)),
+                origin.as_deref(),
+            )
+            .header("content-type", rendered.content_type)
+            .header("cache-control", "no-store");
+            return Ok(builder
+                .body(Full::new(Bytes::from(rendered.body)))
+                .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+        }
+    }
     let header = |name: &str| {
         req.headers()
             .get(name)

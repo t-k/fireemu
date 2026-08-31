@@ -19,6 +19,7 @@ import {
   signInWithEmailLink,
   signInWithCredential,
   GoogleAuthProvider,
+  OAuthProvider,
   fetchSignInMethodsForEmail,
   getMultiFactorResolver,
   signOut,
@@ -131,6 +132,79 @@ await check("fixture identity provider sign-in and admin lookup", async () => {
   const linked = await adminAuth.getUser(cred.user.uid);
   await signOut(auth);
   return { providers: linked.providerData.map((p) => p.providerId) };
+});
+
+await check("OIDC provider sign-in through OAuthProvider.credential", async () => {
+  const provider = new OAuthProvider("oidc.corp");
+  const cred = await signInWithCredential(
+    auth,
+    provider.credential({
+      idToken: JSON.stringify({ sub: "oidc-7", email: "oidc@example.com", email_verified: true, name: "O" }),
+    }),
+  );
+  assert(cred.user.providerData.some((p) => p.providerId === "oidc.corp"), "oidc provider data");
+  const info = cred.user.providerData.find((p) => p.providerId === "oidc.corp");
+  assert(info.uid === "oidc-7", "oidc raw id");
+  await signOut(auth);
+  return { uid: cred.user.uid, email: cred.user.email };
+});
+
+await check("SAML sign-in carries the assertion attributes (raw signInWithIdp)", async () => {
+  const saml = {
+    assertion: {
+      subject: { nameId: "saml-person@example.com" },
+      attributeStatements: { department: ["eng"] },
+    },
+  };
+  const postBody =
+    `providerId=saml.myidp` +
+    `&id_token=${encodeURIComponent(JSON.stringify({ sub: "saml-1" }))}` +
+    `&SAMLResponse=${encodeURIComponent(JSON.stringify(saml))}`;
+  const res = await rest("v1/accounts:signInWithIdp", { postBody, requestUri: "http://localhost" });
+  assert(res.providerId === "saml.myidp", "saml providerId");
+  assert(res.email === "saml-person@example.com", "email from nameId");
+  assert(res.emailVerified === true, "saml email verified");
+  assert(JSON.parse(res.rawUserInfo).department[0] === "eng", "attributeStatements as rawUserInfo");
+  assert(typeof res.idToken === "string" && res.idToken.length > 0, "id token issued");
+  return { localId: res.localId, federatedId: res.federatedId };
+});
+
+await check("access_token credential and createAuthUri(providerId) are NotImplemented (501)", async () => {
+  const notImpl = async (path, body) => {
+    const r = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/${path}?key=fake-api-key`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.status;
+  };
+  const access = await notImpl("v1/accounts:signInWithIdp", {
+    postBody: "providerId=google.com&access_token=opaque",
+    requestUri: "http://localhost",
+  });
+  assert(access === 501, `access_token status ${access}`);
+  const authUri = await notImpl("v1/accounts:createAuthUri", {
+    providerId: "google.com",
+    identifier: "a@b.com",
+    continueUri: "http://localhost",
+  });
+  assert(authUri === 501, `createAuthUri(providerId) status ${authUri}`);
+  return { access, authUri };
+});
+
+await check("identity-provider widget pages are served as HTML", async () => {
+  const handler = await fetch(
+    `http://${authHost}/emulator/auth/handler?apiKey=fake-api-key&providerId=oidc.corp`,
+  );
+  const handlerBody = await handler.text();
+  assert(handler.headers.get("content-type").startsWith("text/html"), "handler content-type");
+  assert(handlerBody.includes("Sign-in with"), "handler page title");
+  const iframe = await fetch(`http://${authHost}/emulator/auth/iframe?apiKey=fake-api-key&appName=x`);
+  const iframeBody = await iframe.text();
+  assert(iframeBody.includes("Auth Emulator Helper Iframe"), "iframe page");
+  const bad = await fetch(`http://${authHost}/emulator/auth/handler?providerId=oidc.corp`);
+  assert(bad.status === 400, "missing apiKey is 400");
+  return { handlerStatus: handler.status, iframeStatus: iframe.status };
 });
 
 await check("phone second factor: enrol, then sign in through the resolver", async () => {

@@ -35,6 +35,8 @@ use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
 mod routes;
+pub mod widget;
+mod widget_templates;
 
 /// Observer of user lifecycle events (Auth triggers), called after each request while
 /// the store is locked, in the order the events happened.
@@ -2902,101 +2904,466 @@ fn parse_idp_token(token: &str) -> Option<Value> {
     serde_json::from_str(&payload).ok()
 }
 
-/// `accounts:signInWithIdp`: `postBody` carries `id_token=...&providerId=google.com`
-/// (an `access_token` alone is not an identity); with an `idToken` the identity is linked
-/// to that user.
-fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
-    let Some(post_body) = str_field(body, "postBody") else {
-        return error(400, "MISSING_POST_BODY");
-    };
-    let params = query_params(Some(post_body));
-    let Some(provider_id) = params.get("providerId").filter(|p| !p.is_empty()) else {
-        return error(400, "INVALID_IDP_RESPONSE : providerId is required");
-    };
-    let Some(token) = params.get("id_token") else {
-        return error(
-            400,
-            "INVALID_IDP_RESPONSE : id_token is required (access_token flows are not modelled)",
-        );
-    };
-    let Some(payload) = parse_idp_token(token) else {
-        return error(
-            400,
-            "INVALID_IDP_RESPONSE : id_token is neither a JWT nor JSON",
-        );
-    };
-    let Some(sub) = str_field(&payload, "sub").filter(|s| !s.is_empty()) else {
-        return error(400, "INVALID_IDP_RESPONSE : id_token has no sub");
-    };
-    let identity = FederatedIdentity {
-        provider_id: provider_id.clone(),
-        raw_id: sub.to_owned(),
-        email: str_field(&payload, "email").map(str::to_owned),
-        display_name: str_field(&payload, "name").map(str::to_owned),
-        photo_url: str_field(&payload, "picture").map(str::to_owned),
-    };
-    // Only an email the provider marks verified may match an existing account.
-    let email_verified = payload
+/// A federated identity as the fake identity provider would report it, per the official emulator's
+/// `fakeFetchUserInfoFromIdp`: the raw id, the profile fields, the `federatedId` shape the
+/// provider uses, and the JSON `rawUserInfo` blob the SDKs read back.
+struct IdpUserInfo {
+    raw_id: String,
+    email: Option<String>,
+    email_verified: bool,
+    display_name: Option<String>,
+    photo_url: Option<String>,
+    screen_name: Option<String>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    federated_id: String,
+    raw_user_info: String,
+}
+
+/// `/^[^@]+@[^@]+$/`: the official `isValidEmailAddress`.
+fn is_valid_email(email: &str) -> bool {
+    let mut parts = email.split('@');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(l), Some(r), None) if !l.is_empty() && !r.is_empty())
+}
+
+/// `email.toLowerCase()`: the official `canonicalizeEmailAddress`.
+fn canonicalize_email(email: &str) -> String {
+    email.to_lowercase()
+}
+
+/// A providerId is rejected before it is used as a map key, a token claim and (for the widget)
+/// HTML if it carries a NUL or another control character or runs past a sane length. The
+/// official emulator does not validate the providerId; this stricter check is recorded as the
+/// `auth.idpProviderIdValidation` divergence (a malformed provider id cannot reach the store).
+fn provider_id_is_wellformed(provider_id: &str) -> bool {
+    !provider_id.is_empty()
+        && provider_id.len() <= 256
+        && !provider_id.chars().any(char::is_control)
+}
+
+/// The provider-reported identity the fake identity provider builds from the (JSON or JWT) claims and, for a
+/// SAML provider, the parsed `SAMLResponse` (`fakeFetchUserInfoFromIdp`).
+fn fake_fetch_user_info(provider_id: &str, claims: &Value, saml: Option<&Value>) -> IdpUserInfo {
+    let raw_id = str_field(claims, "sub").unwrap_or_default().to_owned();
+    let email = str_field(claims, "email").map(canonicalize_email);
+    let email_verified = claims
         .get("email_verified")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let display_name = str_field(claims, "name").map(str::to_owned);
+    let photo_url = str_field(claims, "picture").map(str::to_owned);
+    let screen_name = str_field(claims, "screen_name").map(str::to_owned);
+    let mut info = IdpUserInfo {
+        federated_id: raw_id.clone(),
+        raw_id,
+        email,
+        email_verified,
+        display_name,
+        photo_url,
+        screen_name,
+        first_name: None,
+        last_name: None,
+        raw_user_info: claims.to_string(),
+    };
+    if provider_id == "google.com" {
+        info.federated_id = format!("https://accounts.google.com/{}", info.raw_id);
+        let mut granted = "openid https://www.googleapis.com/auth/userinfo.profile".to_owned();
+        if info.email.is_some() {
+            granted.push_str(" https://www.googleapis.com/auth/userinfo.email");
+        }
+        info.first_name = str_field(claims, "given_name").map(str::to_owned);
+        info.last_name = str_field(claims, "family_name").map(str::to_owned);
+        info.raw_user_info = json!({
+            "granted_scopes": granted,
+            "id": info.raw_id,
+            "name": info.display_name,
+            "given_name": claims.get("given_name"),
+            "family_name": claims.get("family_name"),
+            "verified_email": info.email_verified,
+            "locale": "en",
+            "email": info.email,
+            "picture": info.photo_url,
+        })
+        .to_string();
+    } else if provider_id.starts_with("saml.") {
+        // The SAML subject's nameId becomes the email when it is one; the assertion is always
+        // trusted for the email (the fake IdP does not verify it), and the attribute
+        // statements are the rawUserInfo.
+        let name_id = saml
+            .and_then(|s| s.get("assertion"))
+            .and_then(|a| a.get("subject"))
+            .and_then(|s| s.get("nameId"))
+            .and_then(Value::as_str);
+        if let Some(name_id) = name_id.filter(|n| is_valid_email(n)) {
+            info.email = Some(name_id.to_owned());
+        }
+        info.email_verified = true;
+        let attributes = saml
+            .and_then(|s| s.get("assertion"))
+            .and_then(|a| a.get("attributeStatements"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        info.raw_user_info = attributes.to_string();
+    }
+    // oidc.* and every other provider keep the JSON claims as rawUserInfo (the default).
+    info
+}
+
+/// The response fields threaded from a resolved credential to the final response, as ordered
+/// `(key, value)` pairs (a field with a `Null` value is dropped by `without_nulls`).
+type IdpBase = Vec<(&'static str, Value)>;
+
+/// A resolved `signInWithIdp` credential: the lowercased provider id, the provider-reported
+/// identity and the base `VerifyAssertionResponse` fields.
+struct ResolvedIdp {
+    provider_id: String,
+    info: IdpUserInfo,
+    base: IdpBase,
+}
+
+/// The base `VerifyAssertionResponse` fields the fake identity provider always returns.
+fn idp_response_base(
+    provider_id: &str,
+    info: &IdpUserInfo,
+    oauth_id_token: Option<&String>,
+    oauth_access_token_out: &str,
+) -> IdpBase {
+    vec![
+        ("kind", json!("identitytoolkit#VerifyAssertionResponse")),
+        ("context", json!("")),
+        ("providerId", json!(provider_id)),
+        ("federatedId", json!(info.federated_id)),
+        ("rawId", json!(info.raw_id)),
+        ("oauthAccessToken", json!(oauth_access_token_out)),
+        ("oauthIdToken", json!(oauth_id_token.cloned())),
+        ("displayName", json!(info.display_name)),
+        ("fullName", json!(info.display_name)),
+        ("firstName", json!(info.first_name)),
+        ("lastName", json!(info.last_name)),
+        ("screenName", json!(info.screen_name)),
+        ("email", json!(info.email)),
+        ("emailVerified", json!(info.email_verified)),
+        ("photoUrl", json!(info.photo_url)),
+        ("rawUserInfo", json!(info.raw_user_info)),
+    ]
+}
+
+/// The error the official emulator raises when no claims can be parsed from the credential.
+fn idp_missing_claims_error(
+    provider_id: &str,
+    oauth_id_token: Option<&String>,
+    oauth_access_token: Option<&String>,
+) -> JsonResponse {
+    match (oauth_id_token, oauth_access_token) {
+        (Some(t), _) => error(
+            400,
+            &format!(
+                "INVALID_IDP_RESPONSE : Unable to parse id_token: {t} ((Auth Emulator only accepts strict JSON or JWTs as fake id_tokens.))"
+            ),
+        ),
+        (None, Some(_)) if provider_id == "google.com" || provider_id == "apple.com" => {
+            not_implemented(&format!(
+                "The Auth Emulator only support sign-in with {provider_id} using id_token, not access_token. Please update your code to use id_token."
+            ))
+        }
+        (None, Some(_)) => not_implemented(&format!(
+            "The Auth Emulator does not support {provider_id} sign-in with credentials."
+        )),
+        (None, None) => not_implemented(
+            "The Auth Emulator only supports sign-in with credentials (id_token required).",
+        ),
+    }
+}
+
+/// Parses and validates a `SAMLResponse` (a JSON blob, not real XML): it must carry an
+/// assertion with a subject nameId. `Ok(None)` when no `SAMLResponse` is present.
+fn validate_saml_response(raw: Option<&String>) -> Result<Option<Value>, JsonResponse> {
+    let Some(raw) = raw else { return Ok(None) };
+    let parsed: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    let present = |v: Option<&Value>| v.is_some() && v != Some(&Value::Null);
+    let assertion = parsed.get("assertion");
+    if !present(assertion) {
+        return Err(error(
+            400,
+            "INVALID_IDP_RESPONSE ((Missing assertion in SAMLResponse.))",
+        ));
+    }
+    let subject = assertion.and_then(|a| a.get("subject"));
+    if !present(subject) {
+        return Err(error(
+            400,
+            "INVALID_IDP_RESPONSE ((Missing assertion.subject in SAMLResponse.))",
+        ));
+    }
+    if !present(subject.and_then(|s| s.get("nameId"))) {
+        return Err(error(
+            400,
+            "INVALID_IDP_RESPONSE ((Missing assertion.subject.nameId in SAMLResponse.))",
+        ));
+    }
+    Ok(Some(parsed))
+}
+
+/// Parses and validates a `signInWithIdp` credential, or the error the official emulator raises.
+fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
+    if body.get("returnRefreshToken").is_some_and(|v| !v.is_null()) {
+        return Err(not_implemented(
+            "returnRefreshToken is not implemented yet.",
+        ));
+    }
+    if body.get("pendingIdToken").is_some_and(|v| !v.is_null()) {
+        return Err(not_implemented("pendingIdToken is not implemented yet."));
+    }
+    let Some(request_uri) = str_field(body, "requestUri") else {
+        return Err(error(400, "MISSING_REQUEST_URI"));
+    };
+    if !uri_is_absolute(request_uri) {
+        return Err(error(400, "INVALID_REQUEST_URI"));
+    }
+    let params = normalized_idp_params(request_uri, str_field(body, "postBody"));
+    let Some(provider_id) = params
+        .get("providerId")
+        .filter(|p| !p.is_empty())
+        .map(|p| p.to_lowercase())
+    else {
+        return Err(error(
+            400,
+            &format!(
+                "INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: {request_uri}"
+            ),
+        ));
+    };
+    if !provider_id_is_wellformed(&provider_id) {
+        return Err(error(
+            400,
+            "INVALID_CREDENTIAL_OR_PROVIDER_ID : providerId contains control characters or is too long",
+        ));
+    }
+    let oauth_id_token = params.get("id_token").filter(|t| !t.is_empty());
+    let oauth_access_token = params.get("access_token").filter(|t| !t.is_empty());
+    let claims = oauth_id_token
+        .and_then(|t| parse_idp_claims(t))
+        .or_else(|| oauth_access_token.and_then(|t| parse_idp_claims(t)));
+    let Some(claims) = claims else {
+        return Err(idp_missing_claims_error(
+            &provider_id,
+            oauth_id_token,
+            oauth_access_token,
+        ));
+    };
+    let saml = validate_saml_response(params.get("SAMLResponse"))?;
+    let info = fake_fetch_user_info(&provider_id, &claims, saml.as_ref());
+    let oauth_access_token_out = oauth_access_token.map_or_else(
+        || format!("FirebaseAuthEmulatorFakeAccessToken_{provider_id}"),
+        String::clone,
+    );
+    let base = idp_response_base(&provider_id, &info, oauth_id_token, &oauth_access_token_out);
+    Ok(ResolvedIdp {
+        provider_id,
+        info,
+        base,
+    })
+}
+
+/// `accounts:signInWithIdp` (`verifyAssertion`): the generic identity-provider assertion flow.
+///
+/// The credential arrives in `requestUri` and/or `postBody` (the official `getNormalizedUri`
+/// merges the request URI's query, the post body and the URI fragment). The `id_token` (a fake
+/// JWT or strict JSON) or a JSON `access_token` carries the claims; a `SAMLResponse` carries
+/// the SAML assertion. With an `idToken` on the request the identity is linked to that user.
+fn sign_in_with_idp(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    let ResolvedIdp {
+        provider_id,
+        info,
+        mut base,
+    } = match resolve_idp_credential(body) {
+        Ok(resolved) => resolved,
+        Err(r) => return r,
+    };
+    let identity = FederatedIdentity {
+        provider_id: provider_id.clone(),
+        raw_id: info.raw_id.clone(),
+        email: info.email.clone(),
+        display_name: info.display_name.clone(),
+        photo_url: info.photo_url.clone(),
+    };
+
+    // Linking to the session's user (`idToken` present) or a create-or-link sign-in.
     let (uid, is_new) = if body.get("idToken").is_some_and(|t| !t.is_null()) {
         let uid = match verify(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
-        if let Err(e) = store.link_federated(&uid, identity.clone()) {
+        // The identity may not already be linked to a different account.
+        if store
+            .user_by_federated(&provider_id, &info.raw_id)
+            .is_some_and(|u| u.local_id != uid)
+        {
+            return maybe_idp_credential_error(body, &base, "FEDERATED_USER_ID_ALREADY_LINKED");
+        }
+        if let Err(e) = store.link_federated(&uid, identity) {
             return auth_error(&e);
         }
         (uid, false)
     } else {
-        match store.sign_in_with_idp(identity.clone(), email_verified, at) {
-            Ok(r) => r,
+        match store.sign_in_with_idp(identity, info.email_verified, at) {
+            Ok(fireemu_core_auth::store::IdpSignIn::SignedIn {
+                uid,
+                is_new,
+                email_recycled,
+            }) => {
+                if email_recycled {
+                    base.push(("emailRecycled", json!(true)));
+                }
+                (uid, is_new)
+            }
+            Ok(fireemu_core_auth::store::IdpSignIn::NeedConfirmation {
+                uid,
+                verified_providers,
+            }) => {
+                // No tokens and no state change: the client must confirm the account.
+                base.push(("localId", json!(uid.as_str())));
+                base.push(("needConfirmation", json!(true)));
+                base.push(("verifiedProvider", json!(verified_providers)));
+                let mut obj = serde_json::Map::new();
+                for (k, v) in base {
+                    obj.insert((*k).to_owned(), v);
+                }
+                return JsonResponse {
+                    status: 200,
+                    body: without_nulls(Value::Object(obj)),
+                };
+            }
             Err(e) => return auth_error(&e),
         }
     };
-    let verified = store.user(&uid).is_some_and(|u| u.email_verified);
+    base.push(("isNewUser", json!(is_new)));
+
+    // The stored account decides the final emailVerified when its email is the assertion's.
+    if let Some(u) = store.user(&uid) {
+        if u.email == info.email {
+            for entry in &mut base {
+                if entry.0 == "emailVerified" {
+                    entry.1 = json!(u.email_verified);
+                }
+            }
+        }
+    }
+
     finish_sign_in(
         store,
         &uid,
         at,
-        Some(fireemu_core_auth::store::Provider::Federated(
-            provider_id.clone(),
-        )),
-        &[
-            ("kind", json!("identitytoolkit#VerifyAssertionResponse")),
-            ("providerId", json!(provider_id)),
-            ("federatedId", json!(sub)),
-            ("rawId", json!(sub)),
-            ("oauthIdToken", json!(token)),
-            ("isNewUser", json!(is_new)),
-            ("emailVerified", json!(verified)),
-            ("displayName", json!(identity.display_name)),
-            ("fullName", json!(identity.display_name)),
-            ("photoUrl", json!(identity.photo_url)),
-            ("rawUserInfo", json!(payload.to_string())),
-        ],
+        Some(fireemu_core_auth::store::Provider::Federated(provider_id)),
+        &base,
     )
 }
 
+/// When `returnIdpCredential` is set the client wants the credential and the error together, so
+/// a bad-request during linking becomes a 200 carrying `errorMessage` rather than a 400
+/// (the JS SDK reads `errorMessage` to surface a linking conflict). Otherwise it is a 400.
+fn maybe_idp_credential_error(
+    body: &Value,
+    base: &[(&'static str, Value)],
+    message: &str,
+) -> JsonResponse {
+    if body.get("returnIdpCredential").and_then(Value::as_bool) == Some(true) {
+        let mut obj = serde_json::Map::new();
+        for (k, v) in base {
+            obj.insert((*k).to_owned(), v.clone());
+        }
+        obj.insert("errorMessage".to_owned(), json!(message));
+        return JsonResponse {
+            status: 200,
+            body: Value::Object(obj),
+        };
+    }
+    error(400, message)
+}
+
+/// The identity-provider claims: strict JSON when the token starts with `{`, else the JWT payload. `sub`
+/// must be present and a string (the official `parseClaims`). `None` when neither parses or
+/// `sub` is missing/non-string.
+fn parse_idp_claims(token: &str) -> Option<Value> {
+    let payload = parse_idp_token(token)?;
+    let sub = payload.get("sub")?;
+    if !sub.is_string() || sub.as_str() == Some("") {
+        return None;
+    }
+    Some(payload)
+}
+
+/// Whether `uri` is an absolute URI (has a scheme), the official `parseAbsoluteUri` guard.
+fn uri_is_absolute(uri: &str) -> bool {
+    match uri.find(':') {
+        Some(i) if i > 0 => {
+            let scheme = &uri[..i];
+            scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        }
+        _ => false,
+    }
+}
+
+/// The credential parameters of a `signInWithIdp` request: the request URI's query, then the
+/// post body's parameters, then the URI fragment, each overriding the last (the official
+/// `getNormalizedUri`).
+fn normalized_idp_params(request_uri: &str, post_body: Option<&str>) -> BTreeMap<String, String> {
+    let (before_fragment, fragment) = match request_uri.split_once('#') {
+        Some((head, frag)) => (head, Some(frag)),
+        None => (request_uri, None),
+    };
+    let uri_query = before_fragment.split_once('?').map(|(_, q)| q);
+    let mut params = query_params(uri_query);
+    for (k, v) in query_params(post_body) {
+        params.insert(k, v);
+    }
+    for (k, v) in query_params(fragment) {
+        params.insert(k, v);
+    }
+    params
+}
+
 /// `accounts:createAuthUri` (`fetchSignInMethodsForEmail`): whether the email is
-/// registered and how it can sign in.
+/// registered and how it can sign in. A `providerId` (a sign-in-with-identity-provider request) is not
+/// implemented by the official emulator, and neither is it here.
 fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
-    let Some(email) = str_field(body, "identifier") else {
+    let session_id = str_field(body, "sessionId")
+        .filter(|s| !s.is_empty())
+        .unwrap_or("fireemu-session")
+        .to_owned();
+    // The official emulator does not implement createAuthUri for a provider (it is a legacy
+    // redirect helper the SDKs no longer use); it answers NotImplementedError.
+    if body.get("providerId").is_some_and(|v| !v.is_null()) {
+        return not_implemented("Sign-in with IDP is not yet supported.");
+    }
+    let Some(identifier) = str_field(body, "identifier") else {
         return error(400, "MISSING_IDENTIFIER");
     };
-    if !email.contains('@') {
+    if str_field(body, "continueUri").is_none_or(str::is_empty) {
+        return error(400, "MISSING_CONTINUE_URI");
+    }
+    if !is_valid_email(identifier) {
         return error(400, "INVALID_IDENTIFIER");
     }
+    if !uri_is_absolute(str_field(body, "continueUri").unwrap_or("")) {
+        return error(400, "INVALID_CONTINUE_URI");
+    }
+    let email = canonicalize_email(identifier);
     // Under improved email privacy the response reveals nothing about the address.
     if store.config().enable_improved_email_privacy {
         return JsonResponse {
             status: 200,
-            body: json!({"kind": "identitytoolkit#CreateAuthUriResponse", "sessionId": "fireemu-session"}),
+            body: json!({"kind": "identitytoolkit#CreateAuthUriResponse", "sessionId": session_id}),
         };
     }
     let mut methods: Vec<String> = Vec::new();
-    let registered = match store.user_by_email(email) {
+    let registered = match store.user_by_email(&email) {
         Some(u) => {
             if store.has_password(&u.local_id) {
                 methods.push("password".to_owned());
@@ -3015,7 +3382,7 @@ fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
             "registered": registered,
             "signinMethods": methods,
             "allProviders": methods,
-            "sessionId": "fireemu-session",
+            "sessionId": session_id,
         }),
     }
 }

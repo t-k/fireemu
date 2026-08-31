@@ -291,3 +291,144 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
         assert!(!e.to_string().is_empty());
     }
 }
+
+fn federated(
+    provider: &str,
+    raw: &str,
+    email: Option<&str>,
+) -> fireemu_core_auth::store::FederatedIdentity {
+    fireemu_core_auth::store::FederatedIdentity {
+        provider_id: provider.to_owned(),
+        raw_id: raw.to_owned(),
+        email: email.map(str::to_owned),
+        display_name: Some("Name".to_owned()),
+        photo_url: None,
+    }
+}
+
+#[test]
+fn federated_sign_in_creates_then_reuses_by_raw_id() {
+    use fireemu_core_auth::store::IdpSignIn;
+    let mut s = store();
+    let first = s
+        .sign_in_with_idp(
+            federated("oidc.x", "u1", Some("u1@example.com")),
+            true,
+            t0(),
+        )
+        .unwrap();
+    let IdpSignIn::SignedIn { uid, is_new, .. } = first else {
+        panic!("expected sign-in");
+    };
+    assert!(is_new);
+    // The same raw id signs the same user back in.
+    let again = s
+        .sign_in_with_idp(
+            federated("oidc.x", "u1", Some("u1@example.com")),
+            true,
+            t(1),
+        )
+        .unwrap();
+    let IdpSignIn::SignedIn {
+        uid: uid2,
+        is_new: new2,
+        ..
+    } = again
+    else {
+        panic!("expected sign-in");
+    };
+    assert_eq!(uid, uid2);
+    assert!(!new2);
+}
+
+#[test]
+fn a_verified_provider_email_links_to_the_owning_account() {
+    use fireemu_core_auth::store::IdpSignIn;
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("owner@example.com"), t0())
+        .unwrap();
+    let outcome = s
+        .sign_in_with_idp(
+            federated("oidc.x", "u9", Some("owner@example.com")),
+            true,
+            t(1),
+        )
+        .unwrap();
+    let IdpSignIn::SignedIn {
+        uid: signed,
+        is_new,
+        ..
+    } = outcome
+    else {
+        panic!("expected sign-in");
+    };
+    assert_eq!(signed, uid);
+    assert!(!is_new);
+    assert!(s
+        .user(&uid)
+        .unwrap()
+        .federated
+        .iter()
+        .any(|f| f.raw_id == "u9"));
+}
+
+#[test]
+fn an_unverified_provider_email_needs_confirmation_and_changes_nothing() {
+    use fireemu_core_auth::store::IdpSignIn;
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("owner@example.com"), t0())
+        .unwrap();
+    let outcome = s
+        .sign_in_with_idp(
+            federated("oidc.x", "attacker", Some("owner@example.com")),
+            false,
+            t(1),
+        )
+        .unwrap();
+    let IdpSignIn::NeedConfirmation {
+        uid: named,
+        verified_providers,
+    } = outcome
+    else {
+        panic!("expected needConfirmation");
+    };
+    assert_eq!(named, uid);
+    assert!(verified_providers.is_empty());
+    // Nothing linked, no second account created.
+    assert!(s.user(&uid).unwrap().federated.is_empty());
+    assert_eq!(s.users_by_creation().len(), 1);
+}
+
+#[test]
+fn a_verified_email_recycles_an_unverified_account() {
+    use fireemu_core_auth::store::IdpSignIn;
+    let mut s = store();
+    // An unverified password account owns the email.
+    let uid = s
+        .create_user(NewUser::email("shared@example.com"), t0())
+        .unwrap();
+    s.set_password(&uid, "hunter22").unwrap();
+    assert!(s.has_password(&uid));
+    let outcome = s
+        .sign_in_with_idp(
+            federated("oidc.x", "verified", Some("shared@example.com")),
+            true,
+            t(1),
+        )
+        .unwrap();
+    let IdpSignIn::SignedIn {
+        uid: signed,
+        is_new,
+        ..
+    } = outcome
+    else {
+        panic!("expected sign-in");
+    };
+    assert_eq!(signed, uid);
+    assert!(!is_new);
+    // The verified IdP email took over: the password is gone and the email is verified.
+    assert!(!s.has_password(&uid));
+    assert!(s.user(&uid).unwrap().email_verified);
+}

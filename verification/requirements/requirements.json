@@ -1292,15 +1292,18 @@
     },
     {
       "id": "REQ-SNAP-MEM-01",
-      "statement": "A named snapshot retains the visible state, not the running session: Firestore parts hold one version per live document and Storage parts share object data with the live store by allocation, while capture and restore stay exact and isolated.",
+      "statement": "A named snapshot retains the visible state, not the running session: Firestore parts hold one version per live document, Storage parts share object data with the live store by allocation, and Auth parts share every unchanged user record by allocation (copy-on-write on mutation); capture and restore stay exact and isolated, and a per-session retained-byte budget gates capture admission in addition to the name cap.",
       "criticality": "important",
       "owner": "fireemu",
-      "status": "partial",
-      "note": "Firestore snapshots copy the newest version of every live document and refuse older read_times and resume tokens exactly as after a compaction; Storage blobs are Arc-shared between the live store, every capture and the restore, measured through retained_blob_bytes / blob_bytes_shared_with. The Auth part still clones its whole store eagerly (owned by the Auth workstream), and no byte budget gates capture admission yet.",
+      "status": "implemented",
+      "note": "Firestore snapshots copy the newest version of every live document and refuse older read_times and resume tokens exactly as after a compaction; Storage blobs are Arc-shared between the live store, every capture and the restore, measured through retained_blob_bytes / blob_bytes_shared_with. Auth user records are now Arc<UserRecord> shared copy-on-write (SNAP-MEM-03): a capture shares every user with no TOTP secret and clones-then-detaches only the ones that hold one (INV-AUTH-003 preserved), measured through retained_user_bytes / users_shared_with. The SnapshotHook trait gained retained_bytes(part) and control.rs enforces MAX_SNAPSHOT_BYTES_PER_SESSION (1 GiB, conservative per-snapshot accounting) with RESOURCE_EXHAUSTED, reporting retained/limit/remaining bytes on GET, POST and DELETE.",
       "artifacts": {
         "integration": [
           "crates/fireemu-core-firestore/tests/snapshot.rs",
-          "crates/fireemu-core-storage/tests/snapshot.rs"
+          "crates/fireemu-core-storage/tests/snapshot.rs",
+          "crates/fireemu-core-auth/src/store.rs",
+          "crates/fireemu/src/snapshots.rs",
+          "crates/fireemu-adapter-http/tests/control.rs"
         ]
       }
     },

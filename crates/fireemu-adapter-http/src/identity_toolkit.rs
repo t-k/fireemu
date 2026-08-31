@@ -979,8 +979,10 @@ pub fn handle_with(
     if tenant.is_some() && store.tenant_id() != tenant {
         return error(404, "TENANT_NOT_FOUND");
     }
-    if let Some(denial) = tenant_policy_denial(state, route.handler, &store, body) {
-        return denial;
+    if route.class == routes::RouteClass::EndUser {
+        if let Some(denial) = tenant_policy_denial(state, route.handler, &store, body) {
+            return denial;
+        }
     }
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).

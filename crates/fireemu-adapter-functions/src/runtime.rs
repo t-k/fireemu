@@ -390,7 +390,7 @@ struct CodebaseGeneration {
 /// generation between a crash and its replacement being selected.
 struct RespawnGeneration {
     runner: Arc<Runner>,
-    spawn: SpawnSpec,
+    spawn: Option<SpawnSpec>,
     revision: u64,
     cleanup_dir: Option<Arc<CleanupDir>>,
 }
@@ -416,14 +416,14 @@ impl Codebase {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn capture_respawn(&self) -> Option<RespawnGeneration> {
+    fn capture_respawn(&self) -> RespawnGeneration {
         let current = self.generation();
-        Some(RespawnGeneration {
+        RespawnGeneration {
             runner: current.runner.clone(),
-            spawn: current.spawn.clone()?,
+            spawn: current.spawn.clone(),
             revision: current.revision,
             cleanup_dir: current.cleanup_dir.clone(),
-        })
+        }
     }
 }
 
@@ -1591,11 +1591,7 @@ impl FunctionsRuntime {
 
     /// Restarts the runner of one codebase.
     fn respawn_one(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
-        let Some(respawn) = self
-            .codebases
-            .get(index)
-            .and_then(Codebase::capture_respawn)
-        else {
+        let Some(respawn) = self.codebases.get(index).map(Codebase::capture_respawn) else {
             return;
         };
         self.spawn_captured(index, generation, respawn);
@@ -1604,11 +1600,7 @@ impl FunctionsRuntime {
     /// Crashes and replaces one atomic codebase generation. A reload that wins after the
     /// capture increments the revision, so this older replacement can no longer displace it.
     fn crash_and_respawn(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
-        let Some(respawn) = self
-            .codebases
-            .get(index)
-            .and_then(Codebase::capture_respawn)
-        else {
+        let Some(respawn) = self.codebases.get(index).map(Codebase::capture_respawn) else {
             return;
         };
         respawn.runner.kill_now();
@@ -1627,6 +1619,9 @@ impl FunctionsRuntime {
             revision: codebase_revision,
             cleanup_dir: source_generation,
         } = respawn;
+        let Some(spawn) = spawn else {
+            return;
+        };
         let runtime = self.clone();
         tokio::spawn(async move {
             // Retain the immutable source until this spawn either installs or is rejected as

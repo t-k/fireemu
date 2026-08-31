@@ -285,6 +285,67 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
 }
 
 #[tokio::test]
+async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
+    use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: SessionId::new(7),
+            max_running: 4,
+            retry_attempts: 4,
+            max_catch_up_runs: 1000,
+            runner_secret: "s".into(),
+            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: None,
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        Arc::new(runner),
+        None,
+    );
+    let faults = Arc::new(Mutex::new(FaultState::default()));
+    faults.lock().unwrap().install(FaultPlan {
+        seed: 1,
+        rules: vec![FaultRule {
+            matches: FaultMatch {
+                operation: "functions.invoke".into(),
+                nth: None,
+                function: Some("echo".into()),
+                event_type: None,
+            },
+            action: FaultAction::CrashRunner,
+        }],
+    });
+    runtime.set_faults(faults);
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+
+    let error = runtime
+        .invoke_http(&target, "GET", "/", &[], &[])
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("runner crashed"),
+        "unexpected error: {error}"
+    );
+    assert!(!runtime.runner_alive());
+}
+
+#[tokio::test]
 async fn schedule_retry_options_control_attempts_and_logical_backoff() {
     let (runtime, clock) = start().await;
     runtime.run_schedule("failSchedule").unwrap();

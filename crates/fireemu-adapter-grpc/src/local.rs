@@ -174,6 +174,19 @@ pub struct FirestoreSnapshot {
     pub ids: Option<SplitMix64>,
 }
 
+impl FirestoreSnapshot {
+    /// A cheap, saturating estimate of the bytes this snapshot retains: the visible documents
+    /// of every database it holds (`SNAP-MEM-01`). Additive; no capture or restore semantics
+    /// depend on it.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.databases
+            .values()
+            .map(FirestoreState::visible_bytes)
+            .fold(0u64, u64::saturating_add)
+    }
+}
+
 /// Published after every successful commit (drives `Listen` streams).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommitEvent {

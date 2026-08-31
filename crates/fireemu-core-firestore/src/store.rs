@@ -440,6 +440,18 @@ impl FirestoreState {
         self.live_documents(None).cloned().collect()
     }
 
+    /// A cheap, saturating estimate of the bytes the visible documents hold (`SNAP-MEM-01`):
+    /// the newest version of every live document, sized by the same `document_size` model the
+    /// limits use. A document whose size overflows the model contributes zero rather than
+    /// aborting the estimate; saturating throughout, so no database can overflow the estimate
+    /// into a small number and slip past a byte budget. This is what a named snapshot retains.
+    #[must_use]
+    pub fn visible_bytes(&self) -> u64 {
+        self.live_documents(None)
+            .map(|d| document_size(&d.path, &d.fields).map_or(0, |b| b.total))
+            .fold(0u64, u64::saturating_add)
+    }
+
     /// The visible state of this database as an independent copy: the newest version of
     /// every live document, and nothing of the running session.
     ///

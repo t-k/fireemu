@@ -122,6 +122,13 @@ pub trait SnapshotHook: Send + Sync {
     fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
     /// Puts a captured part back for `scope`.
     fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure>;
+    /// A cheap, saturating estimate of the heap bytes `part` retains, for the per-session
+    /// byte budget (`SNAP-MEM-01`). The default is zero: a hook whose part is negligible
+    /// (the clock, the ruleset slot, the functions marker) need not implement it. A part
+    /// that is not this hook's shape contributes zero rather than being counted wrong.
+    fn retained_bytes(&self, _part: &SnapshotPart) -> u64 {
+        0
+    }
 }
 
 /// How many named snapshots one session may retain (`SNAP-MEM-01`). Each one holds a full
@@ -131,6 +138,21 @@ pub trait SnapshotHook: Send + Sync {
 /// with `RESOURCE_EXHAUSTED` (429) and changes nothing; replacing a name that is already
 /// retained is always allowed and releases what that name held.
 pub const MAX_SNAPSHOTS_PER_SESSION: usize = 16;
+
+/// The estimated retained bytes one session's named snapshots may hold together
+/// (`SNAP-MEM-01`), enforced in addition to [`MAX_SNAPSHOTS_PER_SESSION`]. The name cap alone
+/// bounds the *number* of snapshots, not their size; with visible-state Firestore parts and
+/// `Arc`-shared Storage blobs a single snapshot can no longer exceed the live data, but a
+/// session could still pin a large live dataset under sixteen names. One gibibyte leaves room
+/// for realistic datasets -- thousands of documents, or a few of the largest permitted objects
+/// -- while bounding a session's estimated snapshot memory. The estimate counts each
+/// snapshot's parts independently (a blob shared across snapshots is counted once per
+/// snapshot), so it over-counts the real, `Arc`-shared footprint: the budget errs toward
+/// refusing, the safe side for a resource-admission guard. A new name whose parts would take
+/// the session past this budget is refused with `RESOURCE_EXHAUSTED` (429) and changes
+/// nothing; replacing a name the session already holds is always admitted, exactly as for the
+/// name cap.
+pub const MAX_SNAPSHOT_BYTES_PER_SESSION: u64 = 1 << 30;
 
 /// A named snapshot.
 pub struct Snapshot {
@@ -1553,15 +1575,19 @@ fn snapshot_route(
                 .get(session)
                 .into_iter()
                 .flatten()
-                .map(|(name, s)| json!({"name": name, "clock": s.clock, "parts": s.parts.iter().flatten().count()}))
+                .map(|(name, s)| json!({"name": name, "clock": s.clock, "parts": s.parts.iter().flatten().count(), "bytes": parts_bytes(&state.snapshot_hooks, &s.parts)}))
                 .collect();
             let retained = list.len();
+            let retained_bytes = session_snapshot_bytes(&state.snapshot_hooks, &snapshots, session);
             ok(json!({
                 "session": session,
                 "snapshots": list,
                 "retained": retained,
                 "limit": MAX_SNAPSHOTS_PER_SESSION,
                 "remaining": MAX_SNAPSHOTS_PER_SESSION.saturating_sub(retained),
+                "retainedBytes": retained_bytes,
+                "byteLimit": MAX_SNAPSHOT_BYTES_PER_SESSION,
+                "remainingBytes": MAX_SNAPSHOT_BYTES_PER_SESSION.saturating_sub(retained_bytes),
             }))
         }
         ("POST", "") => {
@@ -1635,6 +1661,16 @@ fn snapshot_route(
             if let Some(refusal) = over_budget(&snapshots, session, name) {
                 return refusal;
             }
+            // The byte budget is checked once the parts are sized: a new name whose parts
+            // would take the session past the budget is refused and nothing is retained, so
+            // the captured parts are dropped and the session is unchanged (`SNAP-MEM-01`).
+            // Replacing a retained name is always admitted, so it is never refused here.
+            let new_bytes = parts_bytes(&state.snapshot_hooks, &parts);
+            if let Some(refusal) =
+                over_byte_budget(&state.snapshot_hooks, &snapshots, session, name, new_bytes)
+            {
+                return refusal;
+            }
             // The replaced entry is dropped here: what only it held is released.
             let replaced = snapshots
                 .entry(session.to_owned())
@@ -1650,8 +1686,9 @@ fn snapshot_route(
             let retained = snapshots
                 .get(session)
                 .map_or(0, std::collections::BTreeMap::len);
+            let retained_bytes = session_snapshot_bytes(&state.snapshot_hooks, &snapshots, session);
             ok(
-                json!({"session": session, "name": name, "clock": clock, "replaced": replaced, "parts": names, "retained": retained, "limit": MAX_SNAPSHOTS_PER_SESSION}),
+                json!({"session": session, "name": name, "clock": clock, "replaced": replaced, "parts": names, "retained": retained, "limit": MAX_SNAPSHOTS_PER_SESSION, "bytes": new_bytes, "retainedBytes": retained_bytes, "byteLimit": MAX_SNAPSHOT_BYTES_PER_SESSION}),
             )
         }
         ("POST", r) => {
@@ -1695,8 +1732,10 @@ fn snapshot_route(
                     let retained = snapshots
                         .get(session)
                         .map_or(0, std::collections::BTreeMap::len);
+                    let retained_bytes =
+                        session_snapshot_bytes(&state.snapshot_hooks, &snapshots, session);
                     ok(
-                        json!({"session": session, "name": name, "deleted": true, "retained": retained, "limit": MAX_SNAPSHOTS_PER_SESSION}),
+                        json!({"session": session, "name": name, "deleted": true, "retained": retained, "limit": MAX_SNAPSHOTS_PER_SESSION, "retainedBytes": retained_bytes, "byteLimit": MAX_SNAPSHOT_BYTES_PER_SESSION}),
                     )
                 }
                 None => error(404, &format!("NOT_FOUND : no snapshot {name:?}")),
@@ -1718,6 +1757,59 @@ fn over_budget(snapshots: &SnapshotStore, session: &str, name: &str) -> Option<J
         &format!(
             "RESOURCE_EXHAUSTED : session {session:?} already retains {} snapshots (the per-session budget); delete one or capture over a name it already holds",
             held.len()
+        ),
+    ))
+}
+
+/// Estimated retained bytes of one snapshot's parts, summed across the hooks that own them
+/// (saturating, so the estimate can never wrap; `SNAP-MEM-01`).
+fn parts_bytes(hooks: &[Arc<dyn SnapshotHook>], parts: &[Option<SnapshotPart>]) -> u64 {
+    hooks
+        .iter()
+        .zip(parts)
+        .filter_map(|(hook, part)| part.as_ref().map(|part| hook.retained_bytes(part)))
+        .fold(0u64, u64::saturating_add)
+}
+
+/// Estimated retained bytes of every snapshot a session currently holds (saturating).
+fn session_snapshot_bytes(
+    hooks: &[Arc<dyn SnapshotHook>],
+    snapshots: &SnapshotStore,
+    session: &str,
+) -> u64 {
+    snapshots
+        .get(session)
+        .into_iter()
+        .flatten()
+        .map(|(_, snapshot)| parts_bytes(hooks, &snapshot.parts))
+        .fold(0u64, u64::saturating_add)
+}
+
+/// The refusal for a capture of a *new* name whose parts (`new_bytes`) would take the
+/// session's estimated retained snapshot bytes past [`MAX_SNAPSHOT_BYTES_PER_SESSION`], if it
+/// would. Replacing a name the session already holds is always admitted -- exactly as for the
+/// name cap -- so it is never refused here.
+fn over_byte_budget(
+    hooks: &[Arc<dyn SnapshotHook>],
+    snapshots: &SnapshotStore,
+    session: &str,
+    name: &str,
+    new_bytes: u64,
+) -> Option<JsonResponse> {
+    let is_replacement = snapshots
+        .get(session)
+        .is_some_and(|held| held.contains_key(name));
+    if is_replacement {
+        return None;
+    }
+    let projected = session_snapshot_bytes(hooks, snapshots, session).saturating_add(new_bytes);
+    if projected <= MAX_SNAPSHOT_BYTES_PER_SESSION {
+        return None;
+    }
+    Some(error(
+        429,
+        &format!(
+            "RESOURCE_EXHAUSTED : session {session:?} would retain about {projected} bytes across its snapshots (the per-session byte budget is {MAX_SNAPSHOT_BYTES_PER_SESSION} bytes); delete one or capture over a name it already holds"
         ),
     ))
 }

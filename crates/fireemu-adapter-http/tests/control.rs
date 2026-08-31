@@ -262,6 +262,106 @@ fn snapshots_capture_every_part_and_restore_them_atomically() {
     );
 }
 
+/// A hook whose captured part is a byte weight: `retained_bytes` returns whatever the store
+/// held at capture time, so a test can steer a session's estimated retained bytes.
+struct Weighed(Mutex<u64>);
+
+impl SnapshotHook for Weighed {
+    fn name(&self) -> &'static str {
+        "weighed"
+    }
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        Ok(Arc::new(*self.0.lock().unwrap()))
+    }
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<u64>()
+            .map(|_| ())
+            .ok_or_else(|| TransitionFailure::new("weighed", "not a u64"))
+    }
+    fn restore(&self, _: &Scope, _: &SnapshotPart) -> Result<(), TransitionFailure> {
+        Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<u64>().copied().unwrap_or(0)
+    }
+}
+
+/// `SNAP-MEM-01`: the per-session byte budget refuses a new name whose parts would exceed it
+/// and changes nothing, while a capture that fits reports its bytes; replacing a retained name
+/// is always admitted even over budget, and the reported bytes drop when a snapshot is
+/// deleted.
+#[test]
+fn the_snapshot_byte_budget_gates_new_names_admits_replacements_and_tracks_deletions() {
+    use fireemu_adapter_http::control::MAX_SNAPSHOT_BYTES_PER_SESSION as LIMIT;
+
+    let weighed = Arc::new(Weighed(Mutex::new(0)));
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.snapshot_hooks = vec![weighed.clone()];
+
+    let capture = |s: &ControlState, name: &str| {
+        handle(
+            s,
+            "POST",
+            "/v1/sessions/default/snapshots",
+            &json!({ "name": name }),
+        )
+    };
+
+    // A capture that fits reports its bytes and the session total.
+    *weighed.0.lock().unwrap() = 1_000;
+    let r = capture(&s, "small");
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["bytes"], 1_000);
+    assert_eq!(r.body["retainedBytes"], 1_000);
+    assert_eq!(r.body["byteLimit"], LIMIT);
+
+    let listing = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(listing.body["retainedBytes"], 1_000);
+    assert_eq!(listing.body["remainingBytes"], LIMIT - 1_000);
+    assert_eq!(listing.body["snapshots"][0]["bytes"], 1_000);
+
+    // A new name whose parts would blow the budget is refused and changes nothing.
+    *weighed.0.lock().unwrap() = LIMIT + 1;
+    let r = capture(&s, "huge");
+    assert_eq!(r.status, 429, "{}", r.body);
+    let listing = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(
+        listing.body["retained"], 1,
+        "the refused capture retained nothing"
+    );
+    assert_eq!(
+        listing.body["retainedBytes"], 1_000,
+        "the session is unchanged"
+    );
+
+    // Replacing a name the session already holds is admitted even over the budget.
+    let r = capture(&s, "small");
+    assert_eq!(
+        r.status, 200,
+        "a replacement is always admitted: {}",
+        r.body
+    );
+    assert_eq!(r.body["replaced"], true);
+    assert_eq!(r.body["bytes"], LIMIT + 1);
+    // Now the session is over budget through that one replaced snapshot; a fresh name is
+    // still refused.
+    *weighed.0.lock().unwrap() = 1;
+    assert_eq!(capture(&s, "another").status, 429);
+
+    // Deleting the snapshot releases its bytes: the reported total drops back to zero.
+    let del = handle(
+        &s,
+        "DELETE",
+        "/v1/sessions/default/snapshots/small",
+        &json!({}),
+    );
+    assert_eq!(del.status, 200, "{}", del.body);
+    assert_eq!(del.body["retainedBytes"], 0);
+    let listing = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(listing.body["retainedBytes"], 0);
+    assert_eq!(listing.body["remainingBytes"], LIMIT);
+}
+
 #[test]
 fn fault_plans_are_validated_installed_reported_and_removed() {
     let s = state(Arc::new(AtomicUsize::new(0)));

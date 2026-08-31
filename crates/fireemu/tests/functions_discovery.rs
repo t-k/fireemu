@@ -223,10 +223,9 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
     stream.read_to_end(&mut raw).unwrap();
     let response = fireemu_adapter_functions::http::parse_response(&raw, "POST").unwrap();
     assert_eq!(response.status, 200);
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&response.body).unwrap()["displayName"],
-        "created"
-    );
+    let response = serde_json::from_slice::<serde_json::Value>(&response.body).unwrap();
+    assert_eq!(response["userRecord"]["displayName"], "created");
+    assert_eq!(response["userRecord"]["updateMask"], "displayName");
     runner.shutdown().await;
 }
 

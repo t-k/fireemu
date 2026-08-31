@@ -21,6 +21,37 @@ struct RecordingBlockingHook {
     reject: Option<BlockingAuthEvent>,
 }
 
+struct UpdatingBlockingHook;
+
+impl AuthBlockingHook for UpdatingBlockingHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        match event {
+            BlockingAuthEvent::BeforeCreate => Ok(json!({
+                "userRecord": {
+                    "updateMask": "displayName,photoUrl,emailVerified,customClaims",
+                    "displayName": "Created by hook",
+                    "photoUrl": "https://example.test/avatar.png",
+                    "emailVerified": true,
+                    "customClaims": {"plan": "pro"}
+                }
+            })),
+            BlockingAuthEvent::BeforeSignIn => {
+                assert_eq!(user.display_name.as_deref(), Some("Created by hook"));
+                Ok(json!({
+                    "userRecord": {
+                        "updateMask": "sessionClaims",
+                        "sessionClaims": {"risk": "low"}
+                    }
+                }))
+            }
+        }
+    }
+}
+
 impl AuthBlockingHook for RecordingBlockingHook {
     fn invoke(
         &self,
@@ -124,6 +155,63 @@ fn blocking_auth_runs_before_create_then_before_sign_in() {
         .unwrap()
         .user_by_email("allowed@example.com")
         .is_some());
+}
+
+#[test]
+fn blocking_auth_applies_user_and_session_claim_updates_before_issuing_tokens() {
+    let mut s = state();
+    s.blocking = Some(Arc::new(UpdatingBlockingHook));
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "updated@example.com", "password": "hunter22"}),
+    );
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["displayName"], "Created by hook");
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(
+        claims
+            .get("name")
+            .and_then(fireemu_core_types::json::JsonValue::as_str),
+        Some("Created by hook")
+    );
+    assert_eq!(
+        claims
+            .get("email_verified")
+            .and_then(fireemu_core_types::json::JsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        claims
+            .get("plan")
+            .and_then(fireemu_core_types::json::JsonValue::as_str),
+        Some("pro")
+    );
+    assert_eq!(
+        claims
+            .get("risk")
+            .and_then(fireemu_core_types::json::JsonValue::as_str),
+        Some("low")
+    );
+    let store = s.store.lock().unwrap();
+    let user = store.user_by_email("updated@example.com").unwrap();
+    assert_eq!(user.display_name.as_deref(), Some("Created by hook"));
+    assert_eq!(
+        user.photo_url.as_deref(),
+        Some("https://example.test/avatar.png")
+    );
+    assert!(user.email_verified);
+    assert_eq!(
+        user.custom_claims.get("plan"),
+        Some(&fireemu_core_auth::claims::ClaimValue::String(
+            "pro".to_owned()
+        ))
+    );
+    assert!(user.custom_claims.get("risk").is_none());
 }
 
 fn advance(state: &AuthState, seconds: i64) -> LogicalInstant {

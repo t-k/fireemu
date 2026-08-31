@@ -281,6 +281,8 @@ fn verify(store: &AuthStore, body: &Value, at: LogicalInstant) -> Result<LocalId
 struct Session {
     uid: LocalId,
     provider: String,
+    second_factor: Option<SecondFactorAssertion>,
+    extra_claims: CustomClaims,
 }
 
 fn verify_session(
@@ -302,11 +304,30 @@ fn verify_session(
         .and_then(JsonValue::as_str)
         .unwrap_or("")
         .to_owned();
+    let second_factor = decoded.payload.get("firebase").and_then(|firebase| {
+        let sign_in_second_factor = firebase.get("sign_in_second_factor")?.as_str()?;
+        let second_factor_identifier = firebase.get("second_factor_identifier")?.as_str()?;
+        Some(SecondFactorAssertion {
+            sign_in_second_factor: sign_in_second_factor.to_owned(),
+            second_factor_identifier: second_factor_identifier.to_owned(),
+            verified_at: at,
+        })
+    });
+    let mut extra_claims = CustomClaims::default();
+    if let JsonValue::Object(values) = &decoded.payload {
+        for (name, value) in values {
+            // Reserved token fields are rejected by insert; everything else is a developer,
+            // user or blocking-function session claim that a replacement token must retain.
+            let _ = extra_claims.insert(name, ClaimValue::from_json(value));
+        }
+    }
     store
         .user_by_id(&v.uid)
         .map(|u| Session {
             uid: u.local_id.clone(),
             provider,
+            second_factor,
+            extra_claims,
         })
         .ok_or_else(|| error(400, "USER_NOT_FOUND"))
 }
@@ -536,9 +557,100 @@ fn emulator_guard(state: &AuthState, headers: &RequestHeaders) -> Result<(), Jso
     Ok(())
 }
 
+fn blocking_string(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(Value::Number(value)) => Some(value.to_string()),
+        Some(Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn blocking_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null | Value::Bool(false)) => false,
+        Some(Value::Number(value)) => value.as_f64().is_some_and(|number| number != 0.0),
+        Some(Value::String(value)) => !value.is_empty(),
+        Some(Value::Array(_) | Value::Object(_) | Value::Bool(true)) => true,
+    }
+}
+
+fn blocking_claims(value: Option<&Value>, field: &str) -> Result<CustomClaims, String> {
+    let Some(value @ Value::Object(_)) = value else {
+        return Err(format!(
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : ((Response has malformed {field}.))"
+        ));
+    };
+    CustomClaims::parse_attributes(&value.to_string()).map_err(|error| {
+        format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid {field}: {error}.))")
+    })
+}
+
+fn apply_blocking_response(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    response: &Value,
+) -> Result<Option<CustomClaims>, String> {
+    let Some(record) = response.get("userRecord") else {
+        return Ok(None);
+    };
+    let Some(record) = record.as_object() else {
+        return Err(
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : ((Response userRecord must be an object.))"
+                .to_owned(),
+        );
+    };
+    let Some(mask) = record.get("updateMask").and_then(Value::as_str) else {
+        return Err(
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : ((Response UserRecord is missing updateMask.))"
+                .to_owned(),
+        );
+    };
+    let mut custom_claims = None;
+    let mut session_claims = None;
+    for field in mask.split(',').map(str::trim) {
+        match field {
+            "displayName" => {
+                if let Some(user) = store.user_mut(uid) {
+                    user.display_name = blocking_string(record.get(field));
+                }
+            }
+            "photoUrl" => {
+                if let Some(user) = store.user_mut(uid) {
+                    user.photo_url = blocking_string(record.get(field));
+                }
+            }
+            "disabled" => {
+                if let Some(user) = store.user_mut(uid) {
+                    user.disabled = blocking_truthy(record.get(field));
+                }
+            }
+            "emailVerified" => {
+                if let Some(user) = store.user_mut(uid) {
+                    user.email_verified = blocking_truthy(record.get(field));
+                }
+            }
+            "customClaims" => custom_claims = Some(blocking_claims(record.get(field), field)?),
+            "sessionClaims"
+                if event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn =>
+            {
+                session_claims = Some(blocking_claims(record.get(field), field)?);
+            }
+            _ => {}
+        }
+    }
+    if let Some(claims) = custom_claims {
+        store.set_custom_claims(uid, claims).map_err(|error| {
+            format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid customClaims: {error}.))")
+        })?;
+    }
+    Ok(session_claims)
+}
+
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
 // route behavior; grouping them in a second request type would duplicate that boundary.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn dispatch_with_blocking_hook(
     blocking: &dyn AuthBlockingHook,
     handler: routes::Handler,
@@ -550,7 +662,7 @@ fn dispatch_with_blocking_hook(
     at: LogicalInstant,
 ) -> JsonResponse {
     let mut candidate = store.clone();
-    let response = dispatch(handler, &mut candidate, query, body, headers, at);
+    let mut response = dispatch(handler, &mut candidate, query, body, headers, at);
     let is_authentication = matches!(
         handler,
         routes::Handler::SignUp
@@ -561,35 +673,104 @@ fn dispatch_with_blocking_hook(
             | routes::Handler::SignInWithIdp
             | routes::Handler::MfaSignInFinalize
     );
-    let uid = response
+    let uid_text = response
         .body
         .get("localId")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let uid = uid_text
+        .as_deref()
+        .and_then(|uid| candidate.user_by_id(uid))
+        .map(|user| user.local_id.clone());
     let is_new = is_authentication
-        && uid.as_deref().is_some_and(|uid| {
+        && uid_text.as_deref().is_some_and(|uid| {
             store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
         });
     let signed_in = is_authentication
         && response.status == 200
         && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
+    let issued_session = signed_in
+        .then(|| verify_session(&candidate, &response.body, at).ok())
+        .flatten();
     drop(store);
+    let mut session_claims = None;
     if response.status == 200 {
-        if let Some(user) = uid.as_deref().and_then(|uid| candidate.user_by_id(uid)) {
+        if let Some(uid) = uid {
             if is_new {
-                if let Err(reason) = blocking.invoke(
+                let value = {
+                    let user = candidate
+                        .user(&uid)
+                        .unwrap_or_else(|| unreachable!("the successful response named its user"));
+                    match blocking.invoke(
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                        user,
+                    ) {
+                        Ok(value) => value,
+                        Err(reason) => return error(400, &reason),
+                    }
+                };
+                if let Err(reason) = apply_blocking_response(
+                    &mut candidate,
+                    &uid,
                     fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                    user,
+                    &value,
                 ) {
                     return error(400, &reason);
                 }
             }
             if signed_in {
-                if let Err(reason) = blocking.invoke(
+                let value = {
+                    let user = candidate
+                        .user(&uid)
+                        .unwrap_or_else(|| unreachable!("the successful response named its user"));
+                    match blocking.invoke(
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                        user,
+                    ) {
+                        Ok(value) => value,
+                        Err(reason) => return error(400, &reason),
+                    }
+                };
+                match apply_blocking_response(
+                    &mut candidate,
+                    &uid,
                     fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                    user,
+                    &value,
                 ) {
-                    return error(400, &reason);
+                    Ok(claims) => session_claims = claims,
+                    Err(reason) => return error(400, &reason),
+                }
+            }
+            if let Some(mut session) = issued_session {
+                if let Some(claims) = session_claims {
+                    for (name, value) in claims.entries() {
+                        if let Err(reason) = session.extra_claims.insert(name, value.clone()) {
+                            return error(
+                                400,
+                                &format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {reason}"),
+                            );
+                        }
+                    }
+                }
+                let provider = provider_from_id(&session.provider);
+                let tokens = match issue_tokens_with(
+                    &mut candidate,
+                    &uid,
+                    session.second_factor.as_ref(),
+                    at,
+                    Some(&session.extra_claims),
+                    Some(provider),
+                ) {
+                    Ok(tokens) => tokens,
+                    Err(refusal) => return refusal,
+                };
+                for field in ["idToken", "refreshToken", "expiresIn", "email"] {
+                    response.body[field] = tokens[field].clone();
+                }
+                if let Some(user) = candidate.user(&uid) {
+                    response.body["displayName"] = json!(user.display_name);
+                    response.body["photoUrl"] = json!(user.photo_url);
+                    response.body["emailVerified"] = json!(user.email_verified);
                 }
             }
         }

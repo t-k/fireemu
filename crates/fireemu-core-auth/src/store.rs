@@ -2174,6 +2174,8 @@ impl AuthStore {
             email: user.email.clone(),
             email_verified: user.email_verified,
             phone_number: user.phone_number.clone(),
+            display_name: user.display_name.clone(),
+            photo_url: user.photo_url.clone(),
             firebase: FirebaseClaims {
                 identities,
                 sign_in_provider: user.provider.id().to_owned(),

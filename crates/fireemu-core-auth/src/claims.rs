@@ -276,6 +276,10 @@ pub struct IdTokenClaims {
     pub email_verified: bool,
     /// Phone number, if any.
     pub phone_number: Option<String>,
+    /// Display name (`name` in the JWT).
+    pub display_name: Option<String>,
+    /// Profile photo URL (`picture` in the JWT).
+    pub photo_url: Option<String>,
     /// Firebase block.
     pub firebase: FirebaseClaims,
     /// Custom claims (merged at the top level when serialized).
@@ -303,6 +307,12 @@ impl IdTokenClaims {
         }
         if let Some(phone) = &self.phone_number {
             entries.insert("phone_number".into(), ClaimValue::String(phone.clone()));
+        }
+        if let Some(name) = &self.display_name {
+            entries.insert("name".into(), ClaimValue::String(name.clone()));
+        }
+        if let Some(photo) = &self.photo_url {
+            entries.insert("picture".into(), ClaimValue::String(photo.clone()));
         }
         let mut firebase = BTreeMap::new();
         let identities: BTreeMap<String, ClaimValue> = self

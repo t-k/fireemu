@@ -278,6 +278,27 @@ function callableAppCheck(instrumentation, fn) {
   };
 }
 
+function blockingResult(value) {
+  if (!value || typeof value !== "object") return {};
+  if (value.userRecord) return value;
+  const userRecord = {};
+  const updateMask = [];
+  for (const [publicName, wireName] of [
+    ["displayName", "displayName"],
+    ["photoURL", "photoUrl"],
+    ["disabled", "disabled"],
+    ["emailVerified", "emailVerified"],
+    ["customClaims", "customClaims"],
+    ["sessionClaims", "sessionClaims"],
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(value, publicName)) {
+      userRecord[wireName] = value[publicName];
+      updateMask.push(wireName);
+    }
+  }
+  return updateMask.length > 0 ? { userRecord: { ...userRecord, updateMask: updateMask.join(",") } } : {};
+}
+
 function describe(name, fn, instrumentation) {
   const callable = () => ({ type: "http", callable: true, ...callableAppCheck(instrumentation, fn) });
   const ep = fn.__endpoint;
@@ -574,7 +595,7 @@ function makeHttpServer(functions, manifest) {
       const context = req.body?.data?.context || {};
       Promise.resolve()
         .then(() => (isV1(fn) ? fn.run(user, context) : fn.run({ ...context, data: user })))
-        .then((value) => res.status(200).json(value || {}))
+        .then((value) => res.status(200).json(blockingResult(value)))
         .catch((e) => {
           log("error", `${spec.name}: ${e?.stack || e}`);
           const code = e?.code || "internal";

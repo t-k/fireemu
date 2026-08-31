@@ -273,6 +273,7 @@ async fn global_and_schedule_options_reach_the_runtime_manifest() {
     assert_eq!(callable["platformOptions"]["cpu"], "1");
     assert_eq!(callable["platformOptions"]["minInstances"], 1);
     assert_eq!(callable["platformOptions"]["maxInstances"], 4);
+    assert_eq!(callable["platformOptions"]["preserveExternalChanges"], true);
     assert_eq!(
         callable["platformOptions"]["ingressSettings"],
         "ALLOW_INTERNAL_ONLY"

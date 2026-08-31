@@ -151,6 +151,15 @@ fn parse_platform_options(
             })
             .collect()
     };
+    let bool_value = |key: &str| -> Result<Option<bool>, String> {
+        match object.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Bool(value)) => Ok(Some(*value)),
+            Some(_) => Err(format!(
+                "manifest: function {function:?}: platformOptions.{key} must be a boolean"
+            )),
+        }
+    };
     let mut labels = std::collections::BTreeMap::new();
     if let Some(value) = object.get("labels") {
         let values = value.as_object().ok_or_else(|| {
@@ -178,6 +187,7 @@ fn parse_platform_options(
                 .map(|values| values.iter().map(Value::to_string).collect())
         })?;
     Ok(PlatformOptions {
+        preserve_external_changes: bool_value("preserveExternalChanges")?,
         available_memory_mb: u32_value("availableMemoryMb")?,
         min_instances: u32_value("minInstances")?,
         max_instances: u32_value("maxInstances")?,
@@ -426,6 +436,7 @@ fn platform_options_to_json(options: &PlatformOptions) -> Option<Value> {
         .map(|value| serde_json::from_str(value).unwrap_or_else(|_| json!(value)))
         .collect();
     Some(json!({
+        "preserveExternalChanges": options.preserve_external_changes,
         "availableMemoryMb": options.available_memory_mb,
         "minInstances": options.min_instances,
         "maxInstances": options.max_instances,

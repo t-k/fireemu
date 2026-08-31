@@ -44,31 +44,43 @@ fn write(dir: &Path, name: &str, body: &str) {
     std::fs::write(dir.join(name), body).unwrap();
 }
 
+fn fireemu_exec(source: &Path, project: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    command.args([
+        "exec",
+        "--firestore-port",
+        "0",
+        "--http-port",
+        "0",
+        "--storage-port",
+        "0",
+        "--functions-port",
+        "0",
+        "--logging-port",
+        "0",
+        "--ui-port",
+        "0",
+        "--hub-port",
+        "0",
+        "--project",
+        project,
+        "--functions",
+        &source.display().to_string(),
+    ]);
+    command
+}
+
 fn exec(source: &Path, project: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_fireemu"))
-        .args([
-            "exec",
-            "--firestore-port",
-            "0",
-            "--http-port",
-            "0",
-            "--storage-port",
-            "0",
-            "--functions-port",
-            "0",
-            "--logging-port",
-            "0",
-            "--ui-port",
-            "0",
-            "--hub-port",
-            "0",
-            "--project",
-            project,
-            "--functions",
-            &source.display().to_string(),
-            "--",
-            "true",
-        ])
+    fireemu_exec(source, project)
+        .args(["--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+fn exec_script(source: &Path, project: &str, script: &str) -> Output {
+    fireemu_exec(source, project)
+        .args(["--", "sh", "-c", script])
         .stdin(Stdio::null())
         .output()
         .unwrap()
@@ -104,7 +116,8 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
          FX_QUOTED=\"first\\nsecond\"\n\
          FX_INT=41\n\
          FX_BOOL=false\n\
-         FX_LIST=[\"a\",\"b\"]\n",
+         FX_LIST=[\"a\",\"b\"]\n\
+         FX_SECRET=must not bypass the secret binding\n",
     );
     write(
         &dir,
@@ -145,7 +158,7 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
     // deploy-time value the runtime never sees. Neither prompts and neither fails.
     assert_eq!(seen["paramMissing"], "");
     assert_eq!(seen["paramMissingWithDefault"], "");
-    assert_eq!(seen["paramSecret"], "a local secret value");
+    assert_eq!(seen["paramSecret"], "");
     // Legacy functions.config(), through CLOUD_RUNTIME_CONFIG.
     assert_eq!(seen["legacyConfig"], serde_json::json!({"key": "legacy"}));
 
@@ -163,6 +176,26 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
         err.contains("loaded environment variables from .env, .env.demo-envchain, .env.local"),
         "{err}"
     );
+
+    let invoked = exec_script(
+        &dir,
+        "demo-envchain",
+        "curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-envchain/us-central1/fxEnvEcho; printf '\\n'; curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-envchain/us-central1/fxEnvNoSecret",
+    );
+    let invoked_err = String::from_utf8_lossy(&invoked.stderr);
+    assert_eq!(invoked.status.code(), Some(0), "{invoked_err}");
+    let responses: Vec<serde_json::Value> = String::from_utf8_lossy(&invoked.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert_eq!(
+        responses.len(),
+        2,
+        "{}",
+        String::from_utf8_lossy(&invoked.stdout)
+    );
+    assert_eq!(responses[0]["paramSecret"], "a local secret value");
+    assert_eq!(responses[1]["paramSecret"], serde_json::Value::Null);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

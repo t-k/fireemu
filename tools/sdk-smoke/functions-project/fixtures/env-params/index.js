@@ -9,6 +9,7 @@
 // `crates/fireemu/tests/functions_environment.rs` asserts on.
 const { onRequest } = require("firebase-functions/v2/https");
 const params = require("firebase-functions/params");
+const secret = params.defineSecret("FX_SECRET");
 
 const observed = {
   // The chain: .env, .env.<projectId> and .env.local in that order of precedence.
@@ -25,8 +26,9 @@ const observed = {
   // default is a deploy-time value the runtime never sees.
   paramMissing: params.defineString("FX_ABSENT").value(),
   paramMissingWithDefault: params.defineString("FX_ABSENT_2", { default: "unused" }).value(),
-  // A secret, from .secret.local.
-  paramSecret: params.defineSecret("FX_SECRET").value(),
+  // Secrets are intentionally absent while the shared codebase is discovered. The declared
+  // function receives its value only for the duration of its invocation.
+  paramSecret: secret.value(),
   // The Cloud Run identity the emulator sets process-wide.
   kRevision: process.env.K_REVISION ?? null,
   tz: process.env.TZ ?? null,
@@ -42,4 +44,9 @@ const observed = {
 
 console.error(`FIXTURE_ENV ${JSON.stringify(observed)}`);
 
-exports.fxEnvEcho = onRequest((_req, res) => res.status(200).json(observed));
+exports.fxEnvEcho = onRequest({ secrets: [secret] }, (_req, res) =>
+  res.status(200).json({ ...observed, paramSecret: secret.value() }),
+);
+exports.fxEnvNoSecret = onRequest((_req, res) =>
+  res.status(200).json({ paramSecret: process.env.FX_SECRET ?? null }),
+);

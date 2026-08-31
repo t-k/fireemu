@@ -19,6 +19,8 @@ pub const DEFAULT_CONCURRENCY: u32 = 1;
 /// capability/status output never silently loses configuration that matters at deployment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformOptions {
+    /// Whether deployment should preserve settings changed outside the Functions SDK.
+    pub preserve_external_changes: Option<bool>,
     /// Configured memory allocation in MiB.
     pub available_memory_mb: Option<u32>,
     /// Minimum warm instances requested from the managed platform.

@@ -19,6 +19,35 @@ import { instrumentCallables } from "./callable-app-check.mjs";
 const frameWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
 
+const localSecrets = (() => {
+  const encoded = process.env.FIREEMU_LOCAL_SECRETS_JSON;
+  delete process.env.FIREEMU_LOCAL_SECRETS_JSON;
+  if (!encoded) return new Map();
+  const parsed = JSON.parse(encoded);
+  return new Map(Object.entries(parsed).filter(([, value]) => typeof value === "string"));
+})();
+let functionEnvironmentQueue = Promise.resolve();
+let discoveredGlobalOptions = {};
+
+function esmExportTarget(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const selected = esmExportTarget(candidate);
+      if (selected) return selected;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  for (const [condition, candidate] of Object.entries(value)) {
+    if (condition === "node" || condition === "import" || condition === "default") {
+      const selected = esmExportTarget(candidate);
+      if (selected) return selected;
+    }
+  }
+  return undefined;
+}
+
 function send(msg) {
   const payload = Buffer.from(JSON.stringify(msg), "utf8");
   frameWrite(`${payload.length}\n`);
@@ -63,6 +92,35 @@ function setFunctionIdentity(spec) {
   process.env.FUNCTION_TARGET = spec?.entryPoint ?? "";
   process.env.FUNCTION_SIGNATURE_TYPE = spec ? signatureType(spec) : "";
   process.env.K_SERVICE = spec?.name ?? "";
+}
+
+function withFunctionEnvironment(spec, task) {
+  const run = async () => {
+    setFunctionIdentity(spec);
+    const saved = new Map();
+    for (const [name] of localSecrets) {
+      saved.set(
+        name,
+        Object.prototype.hasOwnProperty.call(process.env, name) ? process.env[name] : undefined,
+      );
+      delete process.env[name];
+    }
+    for (const name of spec?.platformOptions?.secrets || []) {
+      if (localSecrets.has(name)) process.env[name] = localSecrets.get(name);
+    }
+    try {
+      return await task();
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  };
+  if (localSecrets.size === 0) return run();
+  const result = functionEnvironmentQueue.then(run);
+  functionEnvironmentQueue = result.catch(() => {});
+  return result;
 }
 
 async function loadCodebase() {
@@ -131,6 +189,10 @@ function firstRegion(ep) {
 function platformOptions(ep) {
   if (!ep || ep.platform !== "gcfv2") return undefined;
   const options = {};
+  const preserveExternalChanges =
+    ep.preserveExternalChanges ?? discoveredGlobalOptions.preserveExternalChanges;
+  if (preserveExternalChanges != null)
+    options.preserveExternalChanges = Boolean(preserveExternalChanges);
   if (ep.availableMemoryMb != null) options.availableMemoryMb = ep.availableMemoryMb;
   if (ep.minInstances != null) options.minInstances = ep.minInstances;
   if (ep.maxInstances != null) options.maxInstances = ep.maxInstances;
@@ -140,7 +202,8 @@ function platformOptions(ep) {
   if (ep.serviceAccountEmail != null) options.serviceAccountEmail = ep.serviceAccountEmail;
   if (ep.vpc?.connector != null) options.vpcConnector = ep.vpc.connector;
   if (ep.vpc?.egressSettings != null) options.vpcEgressSettings = ep.vpc.egressSettings;
-  if (Array.isArray(ep.vpc?.networkInterfaces)) options.networkInterfaces = ep.vpc.networkInterfaces;
+  if (Array.isArray(ep.vpc?.networkInterfaces))
+    options.networkInterfaces = ep.vpc.networkInterfaces;
   if (ep.labels && Object.keys(ep.labels).length > 0) options.labels = ep.labels;
   if (Array.isArray(ep.secretEnvironmentVariables)) {
     options.secrets = ep.secretEnvironmentVariables.map((secret) => secret.key).filter(Boolean);
@@ -162,7 +225,8 @@ function ignored(base, triggerType, scope, reason) {
 // The event-type substring is matched the way `getServiceFromEventType` matches it.
 const DEFERRED_TRIGGER_PRODUCTS = [
   {
-    match: (type) => type.includes("firebase.database") || type.includes("google.firebase.database"),
+    match: (type) =>
+      type.includes("firebase.database") || type.includes("google.firebase.database"),
     triggerType: "database",
     scope: "deferred",
     reason: "deferred: the Realtime Database emulator is not in the active supported surface",
@@ -196,7 +260,9 @@ function deferredProduct(type) {
 // firebase-functions v1 triggers: legacy event types and a resource pattern.
 function describeV1Event(base, type, resource, schedule, retry) {
   const v1 = { v1: true };
-  const fsMatch = type.match(/^providers\/cloud\.firestore\/eventTypes\/document\.(create|update|delete|write)$/);
+  const fsMatch = type.match(
+    /^providers\/cloud\.firestore\/eventTypes\/document\.(create|update|delete|write)$/,
+  );
   if (fsMatch) {
     const docIndex = resource.indexOf("/documents/");
     const dbMatch = resource.match(/\/databases\/([^/]+)\//);
@@ -245,10 +311,16 @@ function describeV1Event(base, type, resource, schedule, retry) {
       ...base,
       ...v1,
       retry,
-      trigger: { type: "auth", eventType: `google.firebase.auth.user.v1.${{ create: "created", delete: "deleted" }[authMatch[1]]}` },
+      trigger: {
+        type: "auth",
+        eventType: `google.firebase.auth.user.v1.${{ create: "created", delete: "deleted" }[authMatch[1]]}`,
+      },
     };
   }
-  if (type === "providers/cloud.pubsub/eventTypes/topic.publish" || type === "google.pubsub.topic.publish") {
+  if (
+    type === "providers/cloud.pubsub/eventTypes/topic.publish" ||
+    type === "google.pubsub.topic.publish"
+  ) {
     const topicMatch = resource.match(/\/topics\/([^/]+)$/);
     return {
       ...base,
@@ -265,7 +337,10 @@ function describeV1Event(base, type, resource, schedule, retry) {
 }
 
 function isV1(fn) {
-  return fn.__endpoint?.platform === "gcfv1" || (!(fn.__endpoint && Object.keys(fn.__endpoint).length > 0) && !!fn.__trigger);
+  return (
+    fn.__endpoint?.platform === "gcfv1" ||
+    (!(fn.__endpoint && Object.keys(fn.__endpoint).length > 0) && !!fn.__trigger)
+  );
 }
 
 // The callable App Check options of one function, as the loader instrumentation observed
@@ -296,11 +371,17 @@ function blockingResult(value) {
       updateMask.push(wireName);
     }
   }
-  return updateMask.length > 0 ? { userRecord: { ...userRecord, updateMask: updateMask.join(",") } } : {};
+  return updateMask.length > 0
+    ? { userRecord: { ...userRecord, updateMask: updateMask.join(",") } }
+    : {};
 }
 
 function describe(name, fn, instrumentation) {
-  const callable = () => ({ type: "http", callable: true, ...callableAppCheck(instrumentation, fn) });
+  const callable = () => ({
+    type: "http",
+    callable: true,
+    ...callableAppCheck(instrumentation, fn),
+  });
   const ep = fn.__endpoint;
   const base = { name, entryPoint: name };
   if (ep?.omit === true) return { ...base, omitted: true };
@@ -311,7 +392,13 @@ function describe(name, fn, instrumentation) {
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     const et = ep.eventTrigger || {};
-    return describeV1Event(base, String(et.eventType || ""), String(et.eventFilters?.resource || ""), ep.scheduleTrigger, !!et.retry);
+    return describeV1Event(
+      base,
+      String(et.eventType || ""),
+      String(et.eventFilters?.resource || ""),
+      ep.scheduleTrigger,
+      !!et.retry,
+    );
   }
   if (ep && Object.keys(ep).length > 0) {
     const deployment = platformOptions(ep);
@@ -355,7 +442,11 @@ function describe(name, fn, instrumentation) {
       if (type.startsWith("google.cloud.storage.")) {
         return {
           ...base,
-          trigger: { type: "storage", eventType: type, bucket: (et.eventFilters || {}).bucket || undefined },
+          trigger: {
+            type: "storage",
+            eventType: type,
+            bucket: (et.eventFilters || {}).bucket || undefined,
+          },
         };
       }
       if (type === "google.cloud.pubsub.topic.v1.messagePublished") {
@@ -401,7 +492,12 @@ function describe(name, fn, instrumentation) {
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
         return { ...base, trigger: { type: "blockingAuth", eventType } };
       }
-      return ignored(base, "blocking", "unsupported", `blocking identity event ${eventType} is not served`);
+      return ignored(
+        base,
+        "blocking",
+        "unsupported",
+        `blocking identity event ${eventType} is not served`,
+      );
     }
     if (ep.taskQueueTrigger) {
       // An `onTaskDispatched` function is an HTTP function that only its queue calls: the
@@ -418,7 +514,12 @@ function describe(name, fn, instrumentation) {
         },
       };
     }
-    return ignored(base, "unknown", "unsupported", "the endpoint declares no trigger this runner recognises");
+    return ignored(
+      base,
+      "unknown",
+      "unsupported",
+      "the endpoint declares no trigger this runner recognises",
+    );
   }
   const t = fn.__trigger;
   if (t) {
@@ -431,15 +532,32 @@ function describe(name, fn, instrumentation) {
       };
     }
     const et = t.eventTrigger;
-    if (et) return describeV1Event(base, String(et.eventType || ""), String(et.resource || ""), t.schedule, !!et.failurePolicy || !!t.failurePolicy);
+    if (et)
+      return describeV1Event(
+        base,
+        String(et.eventType || ""),
+        String(et.resource || ""),
+        t.schedule,
+        !!et.failurePolicy || !!t.failurePolicy,
+      );
     if (t.blockingTrigger) {
       const eventType = String(t.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
         return { ...base, trigger: { type: "blockingAuth", eventType } };
       }
-      return ignored(base, "blocking", "unsupported", `blocking identity event ${eventType} is not served`);
+      return ignored(
+        base,
+        "blocking",
+        "unsupported",
+        `blocking identity event ${eventType} is not served`,
+      );
     }
-    return ignored(base, "unknown", "unsupported", "the v1 trigger declares no shape this runner recognises");
+    return ignored(
+      base,
+      "unknown",
+      "unsupported",
+      "the v1 trigger declares no shape this runner recognises",
+    );
   }
   // The official emulator's `Unsupported function type on <name>. Expected either an
   // httpsTrigger, eventTrigger, or blockingTrigger.` (functionsEmulator.js:497).
@@ -458,10 +576,14 @@ function v1Context(msg) {
   switch (msg.trigger) {
     case "firestore": {
       const legacy = {
-        "google.cloud.firestore.document.v1.created": "providers/cloud.firestore/eventTypes/document.create",
-        "google.cloud.firestore.document.v1.updated": "providers/cloud.firestore/eventTypes/document.update",
-        "google.cloud.firestore.document.v1.deleted": "providers/cloud.firestore/eventTypes/document.delete",
-        "google.cloud.firestore.document.v1.written": "providers/cloud.firestore/eventTypes/document.write",
+        "google.cloud.firestore.document.v1.created":
+          "providers/cloud.firestore/eventTypes/document.create",
+        "google.cloud.firestore.document.v1.updated":
+          "providers/cloud.firestore/eventTypes/document.update",
+        "google.cloud.firestore.document.v1.deleted":
+          "providers/cloud.firestore/eventTypes/document.delete",
+        "google.cloud.firestore.document.v1.written":
+          "providers/cloud.firestore/eventTypes/document.write",
       }[event.type];
       return {
         eventId: event.id,
@@ -515,17 +637,29 @@ function v1Context(msg) {
     case "auth": {
       // A string resource: the SDK rewrites a legacy event type's resource into
       // { service, name } itself.
-      const project = String(event.source || "").replace(/^\/\/firebaseauth\.googleapis\.com\//, "");
+      const project = String(event.source || "").replace(
+        /^\/\/firebaseauth\.googleapis\.com\//,
+        "",
+      );
       return {
         eventId: event.id,
         timestamp: event.time,
-        eventType: event.type === "google.firebase.auth.user.v1.deleted" ? "providers/firebase.auth/eventTypes/user.delete" : "providers/firebase.auth/eventTypes/user.create",
+        eventType:
+          event.type === "google.firebase.auth.user.v1.deleted"
+            ? "providers/firebase.auth/eventTypes/user.delete"
+            : "providers/firebase.auth/eventTypes/user.create",
         resource: project,
         params: {},
       };
     }
     default:
-      return { eventId: event.id, timestamp: event.time, eventType: event.type, resource: event.source, params: {} };
+      return {
+        eventId: event.id,
+        timestamp: event.time,
+        eventType: event.type,
+        resource: event.source,
+        params: {},
+      };
   }
 }
 
@@ -547,10 +681,40 @@ function makeHttpServer(functions, manifest) {
     return null;
   }
   const app = express();
-  app.use(express.json({ limit: "32mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
-  app.use(express.text({ limit: "32mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
-  app.use(express.urlencoded({ extended: true, limit: "32mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
-  app.use(express.raw({ type: () => true, limit: "32mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
+  app.use(
+    express.json({
+      limit: "32mb",
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
+  app.use(
+    express.text({
+      limit: "32mb",
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
+  app.use(
+    express.urlencoded({
+      extended: true,
+      limit: "32mb",
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
+  app.use(
+    express.raw({
+      type: () => true,
+      limit: "32mb",
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
   const major = Number.parseInt(String(require("express/package.json").version).split(".")[0], 10);
   // Express 5 (path-to-regexp 8) and Express 4 spell the optional rest differently.
   const route = major >= 5 ? "/:project/:region/:name{/*rest}" : "/:project/:region/:name*";
@@ -574,12 +738,18 @@ function makeHttpServer(functions, manifest) {
     // The secret is not part of the request the function sees.
     delete req.headers["x-fireemu-runner-secret"];
     const spec = manifest.functions.find(
-      (f) => f.name === req.params.name && (f.trigger?.type === "http" || f.trigger?.type === "tasks" || f.trigger?.type === "blockingAuth"),
+      (f) =>
+        f.name === req.params.name &&
+        (f.trigger?.type === "http" ||
+          f.trigger?.type === "tasks" ||
+          f.trigger?.type === "blockingAuth"),
     );
     const fn = spec && functions.get(spec.entryPoint);
     const region = spec?.region || "us-central1";
     if (!fn || (project && req.params.project !== project) || req.params.region !== region) {
-      res.status(404).send(`no HTTP function ${req.params.project}/${req.params.region}/${req.params.name}`);
+      res
+        .status(404)
+        .send(`no HTTP function ${req.params.project}/${req.params.region}/${req.params.name}`);
       return;
     }
     // The function sees the path relative to its mount point: drop the three route segments.
@@ -589,12 +759,12 @@ function makeHttpServer(functions, manifest) {
     const query = queryAt >= 0 ? original.slice(queryAt) : "";
     const rest = pathPart.split("/").slice(4).join("/");
     req.url = `/${rest}${query}`;
-    setFunctionIdentity(spec);
     if (spec.trigger?.type === "blockingAuth") {
-      const user = req.body?.data?.user;
-      const context = req.body?.data?.context || {};
-      Promise.resolve()
-        .then(() => (isV1(fn) ? fn.run(user, context) : fn.run({ ...context, data: user })))
+      withFunctionEnvironment(spec, () => {
+        const user = req.body?.data?.user;
+        const context = req.body?.data?.context || {};
+        return isV1(fn) ? fn.run(user, context) : fn.run({ ...context, data: user });
+      })
         .then((value) => res.status(200).json(blockingResult(value)))
         .catch((e) => {
           log("error", `${spec.name}: ${e?.stack || e}`);
@@ -603,13 +773,19 @@ function makeHttpServer(functions, manifest) {
         });
       return;
     }
-    Promise.resolve()
-      .then(() => fn(req, res))
-      .catch((e) => {
-        log("error", `${spec.name}: ${e?.stack || e}`);
-        if (!res.headersSent) res.status(500).send("internal error");
-        next();
-      });
+    withFunctionEnvironment(spec, async () => {
+      await fn(req, res);
+      if (!res.writableEnded) {
+        await new Promise((resolve) => {
+          res.once("finish", resolve);
+          res.once("close", resolve);
+        });
+      }
+    }).catch((e) => {
+      log("error", `${spec.name}: ${e?.stack || e}`);
+      if (!res.headersSent) res.status(500).send("internal error");
+      next();
+    });
   });
   const server = createServer(app);
   return new Promise((resolveServer, reject) => {
@@ -621,35 +797,37 @@ function makeHttpServer(functions, manifest) {
 async function invoke(functions, manifest, msg) {
   const fn = functions.get(msg.entryPoint) || functions.get(msg.function);
   if (!fn) throw new Error(`unknown function ${msg.function}`);
-  setFunctionIdentity(manifest.functions.find((f) => f.name === msg.function));
-  if (isV1(fn)) {
-    const context = v1Context(msg);
-    let data = msg.event.data;
-    if (msg.trigger === "schedule") data = {};
-    // v1 `topic().onPublish(message, context)`: the message itself is the data.
-    if (msg.trigger === "pubsub") data = msg.event.data.message;
-    await fn(data, context);
-    return;
-  }
-  switch (msg.trigger) {
-    case "schedule": {
-      const run = fn.run || fn;
-      await run(msg.event.data);
+  const spec = manifest.functions.find((f) => f.name === msg.function);
+  await withFunctionEnvironment(spec, async () => {
+    if (isV1(fn)) {
+      const context = v1Context(msg);
+      let data = msg.event.data;
+      if (msg.trigger === "schedule") data = {};
+      // v1 `topic().onPublish(message, context)`: the message itself is the data.
+      if (msg.trigger === "pubsub") data = msg.event.data.message;
+      await fn(data, context);
       return;
     }
-    case "firestore":
-    case "storage":
-    case "pubsub":
-    // A custom event reaches the handler as the CloudEvent itself, exactly as the official
-    // Eventarc emulator POSTs it to the functions emulator.
-    case "eventarc":
-      await fn(msg.event);
-      return;
-    case "auth":
-      throw new Error("Auth user events are delivered to v1 auth.user() handlers only");
-    default:
-      throw new Error(`unsupported trigger ${msg.trigger}`);
-  }
+    switch (msg.trigger) {
+      case "schedule": {
+        const run = fn.run || fn;
+        await run(msg.event.data);
+        return;
+      }
+      case "firestore":
+      case "storage":
+      case "pubsub":
+      // A custom event reaches the handler as the CloudEvent itself, exactly as the official
+      // Eventarc emulator POSTs it to the functions emulator.
+      case "eventarc":
+        await fn(msg.event);
+        return;
+      case "auth":
+        throw new Error("Auth user events are delivered to v1 auth.user() handlers only");
+      default:
+        throw new Error(`unsupported trigger ${msg.trigger}`);
+    }
+  });
 }
 
 function readFrames(onFrame, onEnd) {
@@ -688,6 +866,37 @@ async function main() {
     log("error", `cannot load functions from ${sourceDir}: ${e?.stack || e}`);
     process.exit(1);
   }
+  try {
+    const require = createRequire(join(sourceDir, "package.json"));
+    const cjsOptions = require("firebase-functions/v2/options").getGlobalOptions();
+    let sdkRoot = dirname(require.resolve("firebase-functions"));
+    let sdkPackage;
+    for (;;) {
+      const candidate = join(sdkRoot, "package.json");
+      if (existsSync(candidate)) {
+        const parsed = JSON.parse(readFileSync(candidate, "utf8"));
+        if (parsed.name === "firebase-functions") {
+          sdkPackage = parsed;
+          break;
+        }
+      }
+      const parent = dirname(sdkRoot);
+      if (parent === sdkRoot) throw new Error("cannot locate the firebase-functions package root");
+      sdkRoot = parent;
+    }
+    const optionsExport = sdkPackage.exports?.["./v2/options"];
+    const esmTarget = esmExportTarget(optionsExport);
+    if (typeof esmTarget !== "string" || !esmTarget.startsWith("./")) {
+      throw new Error("firebase-functions does not export ESM v2/options");
+    }
+    const esmOptions = await import(pathToFileURL(resolve(sdkRoot, esmTarget)).href);
+    discoveredGlobalOptions = {
+      ...cjsOptions,
+      ...esmOptions.getGlobalOptions(),
+    };
+  } catch (e) {
+    log("warn", `cannot inspect firebase-functions global options: ${e?.message || e}`);
+  }
   const broken = new Map();
   const functions = collectFunctions(ns, "", new Map(), broken);
   const described = [...functions.entries()].map(([name, fn]) => {
@@ -704,7 +913,12 @@ async function main() {
   });
   for (const [name, reason] of broken) {
     described.push(
-      ignored({ name, entryPoint: name }, "unknown", "unsupported", `the export could not be described: ${reason}`),
+      ignored(
+        { name, entryPoint: name },
+        "unknown",
+        "unsupported",
+        `the export could not be described: ${reason}`,
+      ),
     );
   }
   // Nothing is dropped: an export this runner cannot serve travels in the manifest's
@@ -723,11 +937,22 @@ async function main() {
       })),
   };
   let httpPort;
-  if (manifest.functions.some((f) => f.trigger.type === "http" || f.trigger.type === "tasks" || f.trigger.type === "blockingAuth")) {
+  if (
+    manifest.functions.some(
+      (f) =>
+        f.trigger.type === "http" ||
+        f.trigger.type === "tasks" ||
+        f.trigger.type === "blockingAuth",
+    )
+  ) {
     try {
       const server = await makeHttpServer(functions, manifest);
       if (server) httpPort = server.address().port;
-      else log("warn", "express is not installed in the functions codebase; HTTP functions are unavailable");
+      else
+        log(
+          "warn",
+          "express is not installed in the functions codebase; HTTP functions are unavailable",
+        );
     } catch (e) {
       log("error", `cannot start the HTTP server: ${e?.stack || e}`);
     }
@@ -755,7 +980,12 @@ async function main() {
         .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
         .catch((e) => {
           log("error", `${msg.function}: ${e?.stack || e}`, msg.invocationId);
-          send({ type: "result", invocationId: msg.invocationId, ok: false, error: String(e?.message || e) });
+          send({
+            type: "result",
+            invocationId: msg.invocationId,
+            ok: false,
+            error: String(e?.message || e),
+          });
         });
     },
     () => process.exit(0),

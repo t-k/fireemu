@@ -169,14 +169,14 @@ pub fn firebase_config(project: &str) -> String {
     .to_string()
 }
 
-/// The user environment of one codebase: the dotenv chain, the local secret overrides and
-/// the legacy runtime configuration, with the files each came from.
+/// The user environment of one codebase: the dotenv chain, invocation-scoped local secrets
+/// and the legacy runtime configuration, with the files each came from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UserEnvironment {
     /// `.env` chain values, later files having overridden earlier ones.
     pub values: Vec<(String, String)>,
-    /// `.secret.local` values. They override the chain, as `startRuntime` merges them
-    /// (`functionsEmulator.js:1195`).
+    /// `.secret.local` values. The runner withholds them during discovery and exposes each
+    /// value only while a function that declared the corresponding secret is running.
     pub secrets: Vec<(String, String)>,
     /// `CLOUD_RUNTIME_CONFIG`, when the codebase carries a `.runtimeconfig.json`.
     pub runtime_config: Option<String>,
@@ -185,11 +185,10 @@ pub struct UserEnvironment {
 }
 
 impl UserEnvironment {
-    /// Every value, in the order the runner must apply them: the chain, then the secrets.
+    /// Non-secret values applied while the codebase is loaded.
     #[must_use]
     pub fn applied(&self) -> Vec<(String, String)> {
         let mut out = self.values.clone();
-        out.extend(self.secrets.iter().cloned());
         if let Some(config) = &self.runtime_config {
             out.push(("CLOUD_RUNTIME_CONFIG".to_owned(), config.clone()));
         }
@@ -202,8 +201,8 @@ impl UserEnvironment {
 /// The chain and its refusals are the official ones (`fireemu_core_functions::env`); the two
 /// files that are not dotenv chains follow `functionsEmulator.js`:
 ///
-/// - `.secret.local` is parsed strictly and merged over the chain, and is the *only* source of
-///   `defineSecret` values here. The official emulator falls back to Google Cloud Secret
+/// - `.secret.local` is parsed strictly and is the *only* source of `defineSecret` values here.
+///   The official emulator falls back to Google Cloud Secret
 ///   Manager for a secret the file does not carry; fireemu has no credentials and never
 ///   reaches the network, so a missing secret stays missing and the parameter resolves the way
 ///   an unset environment variable resolves.
@@ -258,6 +257,8 @@ pub fn load_user_environment(
             })?
             .into_iter()
             .collect();
+        out.values
+            .retain(|(name, _)| !out.secrets.iter().any(|(secret, _)| secret == name));
     }
     let runtime_config = dir.join(env::RUNTIME_CONFIG_FILE);
     if runtime_config.is_file() {
@@ -614,6 +615,17 @@ async fn start_codebase(
         );
     }
     let mut env = user_env.applied();
+    if !user_env.secrets.is_empty() {
+        let secrets: serde_json::Map<String, serde_json::Value> = user_env
+            .secrets
+            .iter()
+            .map(|(name, value)| (name.clone(), serde_json::Value::String(value.clone())))
+            .collect();
+        env.push((
+            "FIREEMU_LOCAL_SECRETS_JSON".to_owned(),
+            serde_json::Value::Object(secrets).to_string(),
+        ));
+    }
     env.extend([
         // A runner must never reach a metadata server: the official emulator sets this on the
         // child too (`functionsEmulator.js:1117`).

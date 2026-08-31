@@ -18,7 +18,7 @@ deterministic state machine that:
 
 ## Compatibility
 
-fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting and App Hosting are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Eventarc, Cloud Tasks and Data Connect remain open gaps.
+fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Eventarc and Cloud Tasks remain open gaps.
 
 `spec/compatibility/contract.json` is that sentence in machine-readable form: it pins the baseline (`firebase-tools@15.28.2`, its lockfile integrity, its bundled emulator versions and the 2026-08-30 audit date), enumerates every emulator the pinned release ships, and binds each parity claim to the capability manifest entries it depends on and the tests and conformance fixtures that execute it. `cargo run -p compat-check` fails when the manifest, this README and the contract disagree; `docs/compatibility-contract.md` explains the rules.
 
@@ -34,7 +34,7 @@ fireemu is compatible with the listed Local Emulator Suite products as shipped b
 | Cloud Pub/Sub | `pubsub` | active | parity claimed for the documented gRPC subset |
 | Eventarc | `eventarc` | active | open gap |
 | Cloud Tasks | `tasks` | active | open gap |
-| Firebase Data Connect | `dataconnect` | active | open gap |
+| Firebase Data Connect | `dataconnect` | deferred | nothing is served; depends on a Google-distributed GraphQL+Postgres toolkit binary the no-download policy will not ship, and the product is preview |
 | Firebase App Check | -- | active | a fireemu addition; the official suite ships no App Check surface |
 | fireemu control API | -- | active | a fireemu addition; sessions, virtual clock, snapshots, fault plans |
 | Firebase Realtime Database | `database` | deferred | nothing is served; low expected near-term demand |

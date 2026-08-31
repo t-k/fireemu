@@ -630,7 +630,7 @@
       "--only decides the lifecycle: an unselected Firestore, Storage or Functions binds no listener at all and its port stays free for whatever else wants it",
       "the child environment carries exactly the canonical variables of the selected services, in the firebase-tools@15.28.2 env.ts formats: FIRESTORE_EMULATOR_HOST and FIREBASE_FIRESTORE_EMULATOR_ADDRESS as host:port, FIREBASE_AUTH_EMULATOR_HOST as host:port, FIREBASE_STORAGE_EMULATOR_HOST as host:port next to STORAGE_EMULATOR_HOST as http://host:port, FIREBASE_EMULATOR_HUB as host:port, and a synthesised FIREBASE_CONFIG",
       "the variables of unselected services are removed from the command environment, so a stale value in the shell cannot point a suite at a service this run is not serving",
-      "an official service fireemu does not serve (database, hosting, apphosting, pubsub, eventarc, tasks, dataconnect, extensions) is refused by --only with its scope status before anything binds",
+      "an official service fireemu does not serve (database, hosting, apphosting, eventarc, tasks, dataconnect, extensions) is refused by --only with its scope status before anything binds",
       "--only functions:<codebase> selects one codebase, as the official CLI spells it",
       "the functions runner sees the same selection: an unselected product leaves its variable unset there too"
     ],

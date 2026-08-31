@@ -134,7 +134,7 @@
     "upgradePolicy": "Bumping the pin in conformance/package.json and re-recording turns every newly detected difference into a debt row in conformance/DEBT.md, because a row can only become a documented divergence once a human writes it into conformance/divergences.json. Any surface the new baseline adds is absent from this contract, so compat-check fails until it is enumerated with a scope; until then the claim sentence names the old version and is therefore false, which is the intended fail-closed behaviour."
   },
   "claim": {
-    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting and App Hosting are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Eventarc, Cloud Tasks and Data Connect remain open gaps.",
+    "sentence": "fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 -- Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions and Cloud Pub/Sub, with Security Rules on the Firestore and Storage surfaces -- under the `firebase` compatibility profile and the evidence recorded in `spec/compatibility/contract.json`; it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred, Firebase Extensions is not planned, and the Emulator UI, the Emulator Hub, Logging, Eventarc and Cloud Tasks remain open gaps.",
     "documents": [
       "README.md"
     ],
@@ -1855,7 +1855,7 @@
     {
       "id": "dataconnect",
       "title": "Firebase Data Connect",
-      "scope": "active",
+      "scope": "deferred",
       "official": true,
       "officialEmulator": "dataconnect",
       "officialDefaultPort": 9399,
@@ -1864,19 +1864,22 @@
         "downloadable",
         "importExport"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: no Data Connect surface is served.",
+      "state": "none",
+      "decision": "Deferred. The official Data Connect emulator is not a wire protocol fireemu can reimplement: it delegates to a Google-distributed toolkit binary that embeds a GraphQL engine over PostgreSQL/PGLite and generates SDKs. Reproducing that locally would mean either redistributing or downloading that Google binary -- which fireemu's distribution policy does not do -- or reimplementing a GraphQL-over-Postgres engine from scratch. Data Connect is also still a preview product. It is therefore deferred like Realtime Database, Hosting and App Hosting: nothing is served, --only dataconnect is refused with its deferred status, and a dataconnect_export section is refused on import.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_data_connect"
       ],
       "issues": [
         "docs.local/issues/open/implement-data-connect-emulator-compatibility.md"
       ],
-      "notes": [],
-      "gaps": [
-        "the GraphQL surface, the local PostgreSQL requirement and the generated SDKs"
+      "notes": [
+        "deferred by decision on 2026-08-31: depends on a Google-distributed GraphQL+Postgres toolkit binary that the no-download distribution policy will not ship, and the product is preview"
       ],
-      "prohibitedClaimTerms": [],
+      "gaps": [],
+      "prohibitedClaimTerms": [
+        "Data Connect",
+        "SQL Connect"
+      ],
       "claims": []
     },
     {

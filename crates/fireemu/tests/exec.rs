@@ -568,7 +568,7 @@ fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
         ("apphosting", "deferred"),
         ("eventarc", "planned"),
         ("tasks", "planned"),
-        ("dataconnect", "planned"),
+        ("dataconnect", "deferred"),
         ("extensions", "not planned"),
     ] {
         let dir = scratch(&format!("unsupported-{service}"));

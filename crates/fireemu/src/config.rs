@@ -425,7 +425,7 @@ pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 7] = [
     ),
     (
         "dataconnect",
-        "planned: the Data Connect emulator is not implemented yet",
+        "deferred: the Data Connect emulator is not in the active supported surface",
     ),
     (
         "extensions",

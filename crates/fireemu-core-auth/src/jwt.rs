@@ -135,6 +135,13 @@ pub enum JwtError {
         /// Found.
         actual: String,
     },
+    /// `firebase.tenant` does not match the selected Auth namespace.
+    WrongTenant {
+        /// Expected tenant (`None` is the parent project namespace).
+        expected: Option<String>,
+        /// Tenant carried by the token.
+        actual: Option<String>,
+    },
     /// `sub` is not a known user.
     UnknownUser,
     /// Tokens for this user were revoked after `auth_time`, or the user is disabled.
@@ -156,6 +163,9 @@ impl fmt::Display for JwtError {
             Self::WrongIssuer { expected, actual } => write!(f, "issuer {actual} != {expected}"),
             Self::WrongAudience { expected, actual } => {
                 write!(f, "audience {actual} != {expected}")
+            }
+            Self::WrongTenant { expected, actual } => {
+                write!(f, "tenant {actual:?} != {expected:?}")
             }
             Self::UnknownUser => f.write_str("token subject is not a known user"),
             Self::Revoked => f.write_str("token revoked"),
@@ -407,6 +417,19 @@ pub fn verify_id_token_decoded(
         return Err(JwtError::WrongAudience {
             expected: store.project_id().to_owned(),
             actual: aud.to_owned(),
+        });
+    }
+    let actual_tenant = decoded
+        .payload
+        .get("firebase")
+        .and_then(|firebase| firebase.get("tenant"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned);
+    let expected_tenant = store.tenant_id().map(str::to_owned);
+    if actual_tenant != expected_tenant {
+        return Err(JwtError::WrongTenant {
+            expected: expected_tenant,
+            actual: actual_tenant,
         });
     }
     let exp = decoded.exp().ok_or(JwtError::Malformed)?;

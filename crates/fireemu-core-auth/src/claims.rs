@@ -249,6 +249,8 @@ pub struct FirebaseClaims {
     pub sign_in_second_factor: Option<String>,
     /// Enrollment ID of the second factor, if any.
     pub second_factor_identifier: Option<String>,
+    /// Identity Platform tenant ID, absent for the parent project namespace.
+    pub tenant: Option<String>,
 }
 
 /// ID token claims (unsigned; signing is an adapter concern).
@@ -330,6 +332,9 @@ impl IdTokenClaims {
                 "second_factor_identifier".to_owned(),
                 ClaimValue::String(id.clone()),
             );
+        }
+        if let Some(tenant) = &self.firebase.tenant {
+            firebase.insert("tenant".to_owned(), ClaimValue::String(tenant.clone()));
         }
         entries.insert("firebase".into(), ClaimValue::Map(firebase));
         let mut out = String::new();

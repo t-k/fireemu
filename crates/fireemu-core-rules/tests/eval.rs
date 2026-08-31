@@ -338,6 +338,7 @@ fn auth_context_is_built_from_id_token_claims() {
             sign_in_provider: "password".into(),
             sign_in_second_factor: Some("totp".into()),
             second_factor_identifier: Some("mfa-1".into()),
+            tenant: None,
         },
         custom,
     };

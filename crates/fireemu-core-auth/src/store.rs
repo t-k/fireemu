@@ -543,6 +543,7 @@ impl PendingSignInId {
 #[derive(Debug, Clone)]
 pub struct AuthStore {
     project_id: String,
+    tenant_id: Option<String>,
     rng: SplitMix64,
     policy: TotpPolicy,
     /// User records, each behind an `Arc` so an unchanged user is shared by reference between
@@ -643,6 +644,7 @@ impl AuthStore {
     pub fn new(project_id: &str, rng: SplitMix64, policy: TotpPolicy) -> Self {
         Self {
             project_id: project_id.to_owned(),
+            tenant_id: None,
             rng,
             policy,
             users: BTreeMap::new(),
@@ -659,6 +661,25 @@ impl AuthStore {
             deleted_users: Vec::new(),
             config: ProjectAuthConfig::default(),
         }
+    }
+
+    /// Creates an isolated Identity Platform tenant store under `project_id`.
+    #[must_use]
+    pub fn new_tenant(
+        project_id: &str,
+        tenant_id: &str,
+        rng: SplitMix64,
+        policy: TotpPolicy,
+    ) -> Self {
+        let mut store = Self::new(project_id, rng, policy);
+        store.tenant_id = Some(tenant_id.to_owned());
+        store
+    }
+
+    /// Identity Platform tenant ID, absent for the parent project namespace.
+    #[must_use]
+    pub fn tenant_id(&self) -> Option<&str> {
+        self.tenant_id.as_deref()
     }
 
     /// User lifecycle events recorded since the last call (Auth triggers). A created user
@@ -2157,6 +2178,7 @@ impl AuthStore {
                 sign_in_provider: user.provider.id().to_owned(),
                 sign_in_second_factor: second.map(|a| a.sign_in_second_factor.clone()),
                 second_factor_identifier: second.map(|a| a.second_factor_identifier.clone()),
+                tenant: self.tenant_id.clone(),
             },
             custom: user.custom_claims.clone(),
         })
@@ -2307,6 +2329,7 @@ pub struct AuthRegistry {
     default_project: String,
     default: Arc<Mutex<AuthStore>>,
     others: Mutex<BTreeMap<String, Arc<Mutex<AuthStore>>>>,
+    tenants: Mutex<BTreeMap<(String, String), Arc<Mutex<AuthStore>>>>,
 }
 
 impl AuthRegistry {
@@ -2317,6 +2340,7 @@ impl AuthRegistry {
             default_project: default_project.to_owned(),
             default,
             others: Mutex::new(BTreeMap::new()),
+            tenants: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -2358,10 +2382,65 @@ impl AuthRegistry {
 
     /// Removes a registered project; `false` when it was not registered.
     pub fn remove(&self, project: &str) -> bool {
-        self.others
+        let removed = self
+            .others
             .lock()
             .ok()
-            .is_some_and(|mut o| o.remove(project).is_some())
+            .is_some_and(|mut o| o.remove(project).is_some());
+        if removed {
+            if let Ok(mut tenants) = self.tenants.lock() {
+                tenants.retain(|(candidate, _), _| candidate != project);
+            }
+        }
+        removed
+    }
+
+    /// Returns an existing tenant store.
+    #[must_use]
+    pub fn tenant_store(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        self.tenants
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .cloned()
+    }
+
+    /// Returns a tenant store, creating its isolated namespace on first use.
+    pub fn ensure_tenant(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        if tenant.is_empty() || tenant.contains('/') {
+            return None;
+        }
+        if let Some(store) = self.tenant_store(project, tenant) {
+            return Some(store);
+        }
+        let parent = self.store_for(project)?;
+        let (policy, config, signer) = {
+            let parent = parent.lock().ok()?;
+            (
+                parent.policy().clone(),
+                parent.config(),
+                parent.signer_arc(),
+            )
+        };
+        let seed = project
+            .bytes()
+            .chain(tenant.bytes())
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
+            });
+        let mut store = AuthStore::new_tenant(project, tenant, SplitMix64::new(seed), policy);
+        store.set_config(config);
+        if let Some(signer) = signer {
+            store.set_signer(signer);
+        }
+        let store = Arc::new(Mutex::new(store));
+        let mut tenants = self.tenants.lock().ok()?;
+        Some(
+            tenants
+                .entry((project.to_owned(), tenant.to_owned()))
+                .or_insert_with(|| store.clone())
+                .clone(),
+        )
     }
 
     /// The first store (the default first, then the registered ones in name order) that
@@ -2371,7 +2450,17 @@ impl AuthRegistry {
             return Some(self.default.clone());
         }
         let others = self.others.lock().ok()?;
-        others
+        if let Some(found) = others
+            .values()
+            .find(|s| s.lock().is_ok_and(|s| pred(&s)))
+            .cloned()
+        {
+            return Some(found);
+        }
+        drop(others);
+        self.tenants
+            .lock()
+            .ok()?
             .values()
             .find(|s| s.lock().is_ok_and(|s| pred(&s)))
             .cloned()

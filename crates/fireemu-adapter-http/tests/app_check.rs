@@ -108,6 +108,8 @@ fn auth_state(app_check: Option<Arc<AppCheckState>>) -> Arc<AuthState> {
         clock: clock(),
         barrier: None,
         events: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(CONTROL_TOKEN.to_owned()),
         registry: None,
         app_check_policy: None,

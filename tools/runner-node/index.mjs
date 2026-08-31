@@ -345,12 +345,11 @@ function describe(name, fn, instrumentation) {
       return ignored(base, "unknown", "unsupported", `event type ${type} is not recognised`);
     }
     if (ep.blockingTrigger) {
-      return ignored(
-        base,
-        "blocking",
-        "planned",
-        `planned: blocking identity functions (${ep.blockingTrigger.eventType}) are not served yet`,
-      );
+      const eventType = String(ep.blockingTrigger.eventType || "");
+      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+        return { ...base, trigger: { type: "blockingAuth", eventType } };
+      }
+      return ignored(base, "blocking", "unsupported", `blocking identity event ${eventType} is not served`);
     }
     if (ep.taskQueueTrigger) {
       // An `onTaskDispatched` function is an HTTP function that only its queue calls: the
@@ -382,12 +381,11 @@ function describe(name, fn, instrumentation) {
     const et = t.eventTrigger;
     if (et) return describeV1Event(base, String(et.eventType || ""), String(et.resource || ""), t.schedule, !!et.failurePolicy || !!t.failurePolicy);
     if (t.blockingTrigger) {
-      return ignored(
-        base,
-        "blocking",
-        "planned",
-        `planned: blocking identity functions (${t.blockingTrigger.eventType}) are not served yet`,
-      );
+      const eventType = String(t.blockingTrigger.eventType || "");
+      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+        return { ...base, trigger: { type: "blockingAuth", eventType } };
+      }
+      return ignored(base, "blocking", "unsupported", `blocking identity event ${eventType} is not served`);
     }
     return ignored(base, "unknown", "unsupported", "the v1 trigger declares no shape this runner recognises");
   }
@@ -524,7 +522,7 @@ function makeHttpServer(functions, manifest) {
     // The secret is not part of the request the function sees.
     delete req.headers["x-fireemu-runner-secret"];
     const spec = manifest.functions.find(
-      (f) => f.name === req.params.name && (f.trigger?.type === "http" || f.trigger?.type === "tasks"),
+      (f) => f.name === req.params.name && (f.trigger?.type === "http" || f.trigger?.type === "tasks" || f.trigger?.type === "blockingAuth"),
     );
     const fn = spec && functions.get(spec.entryPoint);
     const region = spec?.region || "us-central1";
@@ -540,6 +538,19 @@ function makeHttpServer(functions, manifest) {
     const rest = pathPart.split("/").slice(4).join("/");
     req.url = `/${rest}${query}`;
     setFunctionIdentity(spec);
+    if (spec.trigger?.type === "blockingAuth") {
+      const user = req.body?.data?.user;
+      const context = req.body?.data?.context || {};
+      Promise.resolve()
+        .then(() => (isV1(fn) ? fn.run(user, context) : fn.run({ ...context, data: user })))
+        .then((value) => res.status(200).json(value || {}))
+        .catch((e) => {
+          log("error", `${spec.name}: ${e?.stack || e}`);
+          const code = e?.code || "internal";
+          res.status(400).json({ error: { status: code, message: String(e?.message || e) } });
+        });
+      return;
+    }
     Promise.resolve()
       .then(() => fn(req, res))
       .catch((e) => {

@@ -17,6 +17,7 @@ fireemu-core-limits = { path = "../fireemu-core-limits" }
 fireemu-core-rules = { path = "../fireemu-core-rules" }
 fireemu-core-storage = { path = "../fireemu-core-storage" }
 fireemu-core-firestore = { path = "../fireemu-core-firestore" }
+fireemu-core-functions = { path = "../fireemu-core-functions" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util"] }
 hyper = { version = "1", features = ["http1", "server"] }

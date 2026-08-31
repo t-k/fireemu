@@ -158,6 +158,17 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 with_auth_context: event_type.ends_with(".withAuthContext"),
             }
         }
+        "blockingAuth" => {
+            let event_type = s(trigger, "eventType")
+                .ok_or_else(|| format!("manifest: function {name:?}: eventType is required"))?;
+            let event = fireemu_core_functions::manifest::BlockingAuthEvent::parse(&event_type)
+                .ok_or_else(|| {
+                    format!(
+                        "manifest: function {name:?}: unknown blocking Auth event {event_type:?}"
+                    )
+                })?;
+            Trigger::BlockingAuth { event }
+        }
         "pubsub" => {
             let topic = s(trigger, "topic")
                 .ok_or_else(|| format!("manifest: function {name:?}: topic is required"))?;
@@ -332,6 +343,9 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                 }),
                 Trigger::Auth { event } => {
                     json!({"type": "auth", "eventType": event.event_type()})
+                }
+                Trigger::BlockingAuth { event } => {
+                    json!({"type": "blockingAuth", "eventType": event.as_str()})
                 }
                 Trigger::Storage { event, bucket } => {
                     json!({"type": "storage", "eventType": event.event_type(), "bucket": bucket})

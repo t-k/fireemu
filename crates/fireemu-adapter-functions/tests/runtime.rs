@@ -237,14 +237,16 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
         {"name": "a", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.updated", "document": "x/{id}"}, "timeoutSeconds": 5, "retry": true},
         {"name": "b", "trigger": {"type": "callable"}},
         {"name": "c", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo"}, "region": "asia-northeast1"},
-        {"name": "d", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "b"}}
+        {"name": "d", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "b"}},
+        {"name": "e", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn"}}
     ]});
     let m = parse_manifest(&v).unwrap();
-    assert_eq!(m.functions.len(), 4);
+    assert_eq!(m.functions.len(), 5);
     assert_eq!(m.functions[2].region, "asia-northeast1");
     let back = manifest_to_json(&m);
     assert_eq!(back["functions"][0]["retry"], true);
     assert_eq!(back["functions"][1]["trigger"]["callable"], true);
+    assert_eq!(back["functions"][4]["trigger"]["eventType"], "beforeSignIn");
     for bad in [
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "nope", "document": "a/{b}"}}]}),
         json!({"functions": [{"name": "x", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "a"}}]}),

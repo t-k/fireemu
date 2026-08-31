@@ -430,6 +430,7 @@ dependencies = [
  "fireemu-core-app-check",
  "fireemu-core-auth",
  "fireemu-core-firestore",
+ "fireemu-core-functions",
  "fireemu-core-limits",
  "fireemu-core-rules",
  "fireemu-core-session",

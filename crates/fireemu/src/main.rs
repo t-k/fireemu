@@ -1712,6 +1712,11 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             clock: clock.clone(),
             barrier: Some(barrier.clone()),
             events: functions_runtime.as_ref().map(functions::auth_sink),
+            blocking: functions_runtime.as_ref().map(|runtime| {
+                Arc::new(functions::BlockingAuthBridge(runtime.clone()))
+                    as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
+            }),
+            operation_gate: Arc::new(Mutex::new(())),
             control_token: Some(control_token.clone()),
             registry: Some(registry.clone()),
             tenancy: Some(tenancy.clone()),

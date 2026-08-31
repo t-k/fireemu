@@ -310,6 +310,9 @@ pub fn trigger_json(trigger: &Trigger) -> Value {
             "filters": filters,
         }),
         Trigger::Auth { event } => json!({"kind": "auth", "event": event.event_type()}),
+        Trigger::BlockingAuth { event } => {
+            json!({"kind": "blockingAuth", "event": event.as_str()})
+        }
         Trigger::Storage { event, bucket } => {
             json!({"kind": "storage", "event": event.event_type(), "bucket": bucket})
         }

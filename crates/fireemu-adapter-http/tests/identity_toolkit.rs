@@ -2,11 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use fireemu_adapter_http::identity_toolkit::{handle, AuthState};
+use fireemu_adapter_http::identity_toolkit::{handle, AuthBlockingHook, AuthState};
 use fireemu_core_auth::base32;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_auth::totp::{totp_at, TotpParams};
+use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -14,6 +15,26 @@ use serde_json::{json, Value};
 
 const V1: &str = "/identitytoolkit.googleapis.com/v1";
 const V2: &str = "/identitytoolkit.googleapis.com/v2";
+
+struct RecordingBlockingHook {
+    events: Arc<Mutex<Vec<BlockingAuthEvent>>>,
+    reject: Option<BlockingAuthEvent>,
+}
+
+impl AuthBlockingHook for RecordingBlockingHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        self.events.lock().unwrap().push(event);
+        if self.reject == Some(event) {
+            Err("BLOCKING_FUNCTION_ERROR_RESPONSE : denied by test".to_owned())
+        } else {
+            Ok(json!({}))
+        }
+    }
+}
 
 fn state() -> AuthState {
     AuthState {
@@ -27,6 +48,8 @@ fn state() -> AuthState {
         ))),
         barrier: None,
         events: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
         control_token: None,
         registry: None,
         app_check: None,
@@ -38,6 +61,69 @@ fn state() -> AuthState {
 fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
     let r = handle(state, "POST", path, body);
     (r.status, r.body)
+}
+
+#[test]
+fn blocking_auth_rejection_rolls_back_user_creation() {
+    let mut s = state();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    s.blocking = Some(Arc::new(RecordingBlockingHook {
+        events: events.clone(),
+        reject: Some(BlockingAuthEvent::BeforeCreate),
+    }));
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "blocked@example.com", "password": "hunter22"}),
+    );
+
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_ERROR_RESPONSE : denied by test"
+    );
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![BlockingAuthEvent::BeforeCreate]
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("blocked@example.com")
+        .is_none());
+}
+
+#[test]
+fn blocking_auth_runs_before_create_then_before_sign_in() {
+    let mut s = state();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    s.blocking = Some(Arc::new(RecordingBlockingHook {
+        events: events.clone(),
+        reject: None,
+    }));
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "allowed@example.com", "password": "hunter22"}),
+    );
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![
+            BlockingAuthEvent::BeforeCreate,
+            BlockingAuthEvent::BeforeSignIn
+        ]
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("allowed@example.com")
+        .is_some());
 }
 
 fn advance(state: &AuthState, seconds: i64) -> LogicalInstant {

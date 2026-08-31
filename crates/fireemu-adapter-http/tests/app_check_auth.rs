@@ -45,6 +45,8 @@ fn harness(mode: BaselineMode) -> Harness {
         clock,
         barrier: None,
         events: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(fixture::CONTROL_TOKEN.to_owned()),
         registry: None,
         app_check: Some(app_check.clone()),

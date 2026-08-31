@@ -42,6 +42,18 @@ mod widget_templates;
 /// the store is locked, in the order the events happened.
 pub type AuthEventSink = Arc<dyn Fn(&fireemu_core_auth::store::UserEvent) + Send + Sync>;
 
+/// Synchronous bridge to Identity Platform blocking functions. Implementations must perform
+/// no Auth store access; the adapter releases the store before calling it.
+pub trait AuthBlockingHook: Send + Sync {
+    /// Runs one before-create or before-sign-in function. An error rejects and rolls back the
+    /// Auth request; the value is the validated blocking response for future field updates.
+    fn invoke(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String>;
+}
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
@@ -52,6 +64,10 @@ pub struct AuthState {
     pub barrier: Option<Arc<fireemu_core_session::barrier::AdmissionBarrier>>,
     /// User lifecycle observer; `None` drops the events.
     pub events: Option<AuthEventSink>,
+    /// Identity Platform blocking-function bridge, when Functions registered one.
+    pub blocking: Option<Arc<dyn AuthBlockingHook>>,
+    /// Serializes Auth operations while a blocking hook runs without the store lock.
+    pub operation_gate: Arc<Mutex<()>>,
     /// The control token browser pages must present (`Authorization: Bearer`) to reach the
     /// emulator inspection routes (they expose action codes, SMS codes and account wipes).
     /// `None` refuses every browser-origin request there.
@@ -520,6 +536,71 @@ fn emulator_guard(state: &AuthState, headers: &RequestHeaders) -> Result<(), Jso
     Ok(())
 }
 
+// The request parts stay separate here so the ordinary dispatcher remains the one source of
+// route behavior; grouping them in a second request type would duplicate that boundary.
+#[allow(clippy::too_many_arguments)]
+fn dispatch_with_blocking_hook(
+    blocking: &dyn AuthBlockingHook,
+    handler: routes::Handler,
+    store_arc: &Arc<Mutex<AuthStore>>,
+    store: std::sync::MutexGuard<'_, AuthStore>,
+    query: Option<&str>,
+    body: &Value,
+    headers: &RequestHeaders,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let mut candidate = store.clone();
+    let response = dispatch(handler, &mut candidate, query, body, headers, at);
+    let is_authentication = matches!(
+        handler,
+        routes::Handler::SignUp
+            | routes::Handler::SignInWithPassword
+            | routes::Handler::SignInWithCustomToken
+            | routes::Handler::SignInWithEmailLink
+            | routes::Handler::SignInWithPhoneNumber
+            | routes::Handler::SignInWithIdp
+            | routes::Handler::MfaSignInFinalize
+    );
+    let uid = response
+        .body
+        .get("localId")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let is_new = is_authentication
+        && uid.as_deref().is_some_and(|uid| {
+            store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
+        });
+    let signed_in = is_authentication
+        && response.status == 200
+        && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some());
+    drop(store);
+    if response.status == 200 {
+        if let Some(user) = uid.as_deref().and_then(|uid| candidate.user_by_id(uid)) {
+            if is_new {
+                if let Err(reason) = blocking.invoke(
+                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                    user,
+                ) {
+                    return error(400, &reason);
+                }
+            }
+            if signed_in {
+                if let Err(reason) = blocking.invoke(
+                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                    user,
+                ) {
+                    return error(400, &reason);
+                }
+            }
+        }
+    }
+    let Ok(mut live) = store_arc.lock() else {
+        return error(500, "INTERNAL");
+    };
+    *live = candidate;
+    response
+}
+
 /// Routes one request with its headers (privileged routes check them).
 ///
 /// The order is fixed: the store of the target project is selected, App Check decides, the
@@ -540,6 +621,9 @@ pub fn handle_with(
     };
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    let Ok(_operation) = state.operation_gate.lock() else {
+        return error(500, "INTERNAL");
+    };
     let store_arc = select_store(state, path, query, body);
     // The functions runtime belongs to the default session: only its users' lifecycle
     // events reach the Auth triggers.
@@ -607,7 +691,20 @@ pub fn handle_with(
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
-    let response = dispatch(route.handler, &mut store, query, body, headers, at);
+    let response = if let Some(blocking) = &state.blocking {
+        dispatch_with_blocking_hook(
+            blocking.as_ref(),
+            route.handler,
+            &store_arc,
+            store,
+            query,
+            body,
+            headers,
+            at,
+        )
+    } else {
+        dispatch(route.handler, &mut store, query, body, headers, at)
+    };
     if response.status == 200 {
         JsonResponse {
             status: 200,

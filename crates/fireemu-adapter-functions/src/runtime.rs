@@ -60,6 +60,19 @@ pub struct HttpTarget {
     pub addr: String,
 }
 
+/// Internal loopback target for an Identity Platform blocking function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingAuthTarget {
+    /// Exported function name.
+    pub function: String,
+    /// Function region used by the runner route.
+    pub region: String,
+    /// Runner HTTP address.
+    pub addr: String,
+    /// Per-runner proxy secret.
+    pub secret: String,
+}
+
 /// Static runtime configuration.
 #[derive(Debug, Clone)]
 pub struct FunctionsConfig {
@@ -359,8 +372,9 @@ pub struct CodebaseSpec {
 /// A loaded codebase and its live runner.
 struct Codebase {
     name: String,
+    manifest: FunctionManifest,
     runner: std::sync::RwLock<Arc<Runner>>,
-    spawn: Option<SpawnSpec>,
+    spawn: std::sync::RwLock<Option<SpawnSpec>>,
 }
 
 /// Wall-clock milliseconds, for the one header that carries them.
@@ -516,8 +530,9 @@ impl FunctionsRuntime {
                 .into_iter()
                 .map(|c| Codebase {
                     name: c.name,
+                    manifest: c.manifest,
                     runner: std::sync::RwLock::new(c.runner),
-                    spawn: c.spawn,
+                    spawn: std::sync::RwLock::new(c.spawn),
                 })
                 .collect(),
             owner,
@@ -599,6 +614,52 @@ impl FunctionsRuntime {
         self.owner
             .get(function)
             .map(|i| self.codebases[*i].name.as_str())
+    }
+
+    /// Replaces one codebase's runner after a successful discovery handshake.
+    ///
+    /// This first hot-reload boundary intentionally requires the discovered trigger manifest
+    /// to stay identical. Handler code and environment change atomically with the runner;
+    /// adding or removing triggers keeps the last-known-good generation rather than exposing
+    /// a new Node export behind stale Rust routing.
+    pub fn reload_codebase(&self, spec: CodebaseSpec) -> Result<u64, String> {
+        let Some(codebase) = self
+            .codebases
+            .iter()
+            .find(|codebase| codebase.name == spec.name)
+        else {
+            spec.runner.kill_now();
+            return Err(format!("unknown Functions codebase {:?}", spec.name));
+        };
+        if codebase.manifest != spec.manifest {
+            spec.runner.kill_now();
+            return Err(format!(
+                "Functions codebase {:?} changed its trigger manifest; the last-known-good generation remains active",
+                spec.name
+            ));
+        }
+        let old = {
+            let mut slot = codebase
+                .runner
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::replace(&mut *slot, spec.runner)
+        };
+        {
+            let mut spawn = codebase
+                .spawn
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *spawn = spec.spawn;
+        }
+        let generation = self
+            .trigger_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1);
+        // In-flight invocations retain their `Arc`; killing after publication prevents any
+        // new dispatch from reaching the old generation and reaps it promptly.
+        old.kill_now();
+        Ok(generation)
     }
 
     /// The virtual-clock instant a request is decided at.
@@ -1464,7 +1525,13 @@ impl FunctionsRuntime {
 
     /// Restarts the runner of one codebase.
     fn respawn_one(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
-        let Some(spec) = self.codebases.get(index).and_then(|c| c.spawn.clone()) else {
+        let Some(spec) = self.codebases.get(index).and_then(|codebase| {
+            codebase
+                .spawn
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }) else {
             return;
         };
         let runtime = self.clone();
@@ -1751,6 +1818,24 @@ impl FunctionsRuntime {
         Some(HttpTarget {
             function: function.to_owned(),
             addr: format!("127.0.0.1:{port}"),
+        })
+    }
+
+    /// The blocking function registered for `event`, when one was discovered.
+    #[must_use]
+    pub fn blocking_auth_target(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> Option<BlockingAuthTarget> {
+        let function = self.manifest.functions.iter().find(|function| {
+            matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
+        })?;
+        let port = self.runner_for(&function.name).hello().http_port?;
+        Some(BlockingAuthTarget {
+            function: function.name.clone(),
+            region: function.region.clone(),
+            addr: format!("127.0.0.1:{port}"),
+            secret: self.config.runner_secret.clone(),
         })
     }
 
@@ -2077,6 +2162,7 @@ impl FunctionsRuntime {
             Trigger::Http { .. } => "http",
             Trigger::PubSub { .. } => "pubsub",
             Trigger::Auth { .. } => "auth",
+            Trigger::BlockingAuth { .. } => "blockingAuth",
             Trigger::Eventarc { .. } => "eventarc",
             Trigger::TaskQueue { .. } => "tasks",
         };

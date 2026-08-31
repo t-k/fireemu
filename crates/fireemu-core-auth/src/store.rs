@@ -1126,7 +1126,7 @@ impl AuthStore {
         self.create_user_with_email_policy(new, now, true)
     }
 
-    /// Creates the provider-scoped account used by IdP sign-in when email uniqueness is off.
+    /// Creates the provider-scoped account used by `IdP` sign-in when email uniqueness is off.
     fn create_idp_user(&mut self, new: NewUser, now: LogicalInstant) -> Result<LocalId, AuthError> {
         self.create_user_with_email_policy(new, now, false)
     }
@@ -2322,21 +2322,25 @@ impl AuthSnapshot {
     }
 }
 
+type SharedAuthStore = Arc<Mutex<AuthStore>>;
+type TenantKey = (String, String);
+
 /// The Auth stores of every project a daemon serves: the configured (default) project plus
 /// the projects created as sessions through the control API. Tokens name their project in
 /// `aud`, so a verifier picks the store by audience.
 #[derive(Debug)]
 pub struct AuthRegistry {
     default_project: String,
-    default: Arc<Mutex<AuthStore>>,
-    others: Mutex<BTreeMap<String, Arc<Mutex<AuthStore>>>>,
-    tenants: Mutex<BTreeMap<(String, String), Arc<Mutex<AuthStore>>>>,
-    tenant_metadata: Mutex<BTreeMap<(String, String), TenantMetadata>>,
+    default: SharedAuthStore,
+    others: Mutex<BTreeMap<String, SharedAuthStore>>,
+    tenants: Mutex<BTreeMap<TenantKey, SharedAuthStore>>,
+    tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
     next_tenant_id: AtomicU64,
 }
 
 /// Mutable Identity Platform tenant settings represented by the Admin v2 surface.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct TenantMetadata {
     /// Human-readable tenant name.
     pub display_name: Option<String>,
@@ -2439,11 +2443,7 @@ impl AuthRegistry {
         let parent = self.store_for(project)?;
         let (policy, config, signer) = {
             let parent = parent.lock().ok()?;
-            (
-                parent.policy().clone(),
-                parent.config(),
-                parent.signer_arc(),
-            )
+            (*parent.policy(), parent.config(), parent.signer_arc())
         };
         let seed = project
             .bytes()

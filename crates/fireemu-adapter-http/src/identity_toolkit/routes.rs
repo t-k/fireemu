@@ -716,8 +716,7 @@ pub(crate) fn class_of(path: &str) -> Option<(RouteClass, Option<&str>)> {
     ROUTES.iter().find_map(|r| match r.pattern.matches(path) {
         Match::No => None,
         Match::Exact => Some((r.class, None)),
-        Match::Project(p) => Some((r.class, Some(p))),
-        Match::Tenant(p, _) => Some((r.class, Some(p))),
+        Match::Project(p) | Match::Tenant(p, _) => Some((r.class, Some(p))),
     })
 }
 

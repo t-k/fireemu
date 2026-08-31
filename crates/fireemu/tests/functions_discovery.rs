@@ -155,3 +155,17 @@ fn an_export_that_cannot_describe_itself_is_reported_rather_than_killing_the_run
     assert!(err.contains("could not be described"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// beforeUserCreated and beforeUserSignedIn are served synchronous triggers, not ignored
+/// inventory entries.
+#[test]
+fn blocking_identity_exports_are_discovered_as_served_triggers() {
+    if !have_sdk() {
+        return;
+    }
+    let out = exec(&fixture("blocking-auth"), None);
+    let err = stderr(&out);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(!err.contains("function ignored"), "{err}");
+    assert!(!err.contains("blocking identity event"), "{err}");
+}

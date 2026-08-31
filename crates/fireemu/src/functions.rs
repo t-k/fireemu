@@ -1,5 +1,7 @@
 //! Functions runtime wiring: runner process, event subscriptions, control hooks.
 
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,6 +15,128 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
 
 use crate::config::RuntimeConfig;
+
+fn ignored_reload_path(relative: &Path, configured: &[String]) -> bool {
+    let text = relative.to_string_lossy().replace('\\', "/");
+    if relative
+        .components()
+        .any(|part| matches!(part.as_os_str().to_str(), Some("node_modules" | ".git")))
+    {
+        return true;
+    }
+    configured.iter().any(|pattern| {
+        let pattern = pattern.trim_start_matches("./").trim_start_matches("**/");
+        if let Some(suffix) = pattern.strip_prefix('*') {
+            text.ends_with(suffix)
+        } else {
+            text == pattern || text.starts_with(&format!("{pattern}/"))
+        }
+    })
+}
+
+fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, String> {
+    fn visit(root: &Path, path: &Path, ignores: &[String], hash: &mut u64) -> Result<(), String> {
+        let mut entries = std::fs::read_dir(path)
+            .map_err(|e| format!("watch {}: {e}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("watch {}: {e}", path.display()))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let child = entry.path();
+            let relative = child.strip_prefix(root).unwrap_or(&child);
+            if ignored_reload_path(relative, ignores) {
+                continue;
+            }
+            let kind = entry
+                .file_type()
+                .map_err(|e| format!("watch {}: {e}", child.display()))?;
+            if kind.is_dir() {
+                visit(root, &child, ignores, hash)?;
+            } else if kind.is_file() {
+                for byte in relative.to_string_lossy().bytes().chain([0]) {
+                    *hash = hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte);
+                }
+                let bytes =
+                    std::fs::read(&child).map_err(|e| format!("watch {}: {e}", child.display()))?;
+                for byte in bytes {
+                    *hash = hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    visit(root, root, ignores, &mut hash)?;
+    Ok(hash)
+}
+
+fn start_reload_supervisors(
+    runtime: &Arc<FunctionsRuntime>,
+    cfg: &RuntimeConfig,
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+) {
+    for codebase in cfg.functions_to_load() {
+        let root = PathBuf::from(&codebase.source);
+        let mut observed = functions_source_signature(&root, &codebase.ignore).ok();
+        let weak_runtime = Arc::downgrade(runtime);
+        let cfg = cfg.clone();
+        let hosts = hosts.clone();
+        let secret = runner_secret.to_owned();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(750)).await;
+                let Some(runtime) = weak_runtime.upgrade() else {
+                    return;
+                };
+                let next = match functions_source_signature(&root, &codebase.ignore) {
+                    Ok(signature) => signature,
+                    Err(reason) => {
+                        eprintln!(
+                            "warning: functions[{}] reload scan failed: {reason}",
+                            codebase.codebase
+                        );
+                        continue;
+                    }
+                };
+                if observed == Some(next) {
+                    continue;
+                }
+                // Build tools commonly replace several files in one burst. Wait for one quiet
+                // interval and use the newest complete content signature as the candidate.
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let stable = functions_source_signature(&root, &codebase.ignore).unwrap_or(next);
+                observed = Some(stable);
+                match start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    &secret,
+                    callable_trusted_protocol,
+                )
+                .await
+                {
+                    Ok(spec) => match runtime.reload_codebase(spec) {
+                        Ok(generation) => eprintln!(
+                            "note: functions[{}]: reloaded generation {generation}",
+                            codebase.codebase
+                        ),
+                        Err(reason) => eprintln!(
+                            "warning: functions[{}]: reload rejected: {reason}",
+                            codebase.codebase
+                        ),
+                    },
+                    Err(reason) => eprintln!(
+                        "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
+                        codebase.codebase
+                    ),
+                }
+            }
+        });
+    }
+}
 
 /// The debug feature the callable trusted protocol turns on, and nothing else.
 ///
@@ -222,6 +346,7 @@ pub fn check_ignored(
 /// Addresses the runner's functions need to reach the daemon. `None` means the service was
 /// not selected by `--only`: its variable is then left unset in the runner, so a handler
 /// cannot reach a product this run is not serving.
+#[derive(Debug, Clone)]
 pub struct EmulatorHosts {
     /// Firestore gRPC / REST.
     pub firestore: Option<String>,
@@ -435,6 +560,13 @@ pub async fn start(
     // dropped, and enqueued before the write returns to its caller.
     let sink_runtime = runtime.clone();
     backend.set_change_sink(Arc::new(move |event| sink_runtime.on_commit(event)));
+    start_reload_supervisors(
+        &runtime,
+        cfg,
+        hosts,
+        runner_secret,
+        callable_trusted_protocol,
+    );
     Ok(runtime)
 }
 
@@ -840,6 +972,90 @@ pub fn auth_sink(
     Arc::new(move |event| runtime.on_user_event(event))
 }
 
+/// Identity Platform's synchronous bridge to before-create and before-sign-in functions.
+pub struct BlockingAuthBridge(pub Arc<FunctionsRuntime>);
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBridge {
+    fn invoke(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<serde_json::Value, String> {
+        let Some(target) = self.0.blocking_auth_target(event) else {
+            return Ok(serde_json::json!({}));
+        };
+        let project = self.0.project();
+        let user_json = serde_json::json!({
+            "uid": user.local_id.as_str(),
+            "email": user.email,
+            "email_verified": user.email_verified,
+            "display_name": user.display_name,
+            "photo_url": user.photo_url,
+            "phone_number": user.phone_number,
+            "disabled": user.disabled,
+            "custom_claims": serde_json::from_str::<serde_json::Value>(&user.custom_claims.canonical_json()).unwrap_or_else(|_| serde_json::json!({})),
+            "metadata": {
+                "creation_time": fireemu_core_types::time::LogicalInstant::to_rfc3339(user.created_at).unwrap_or_default(),
+                "last_sign_in_time": user.last_sign_in_at.and_then(|instant| instant.to_rfc3339().ok()),
+            },
+            "provider_data": [],
+        });
+        let body = serde_json::json!({
+            "data": {
+                "user": user_json,
+                "context": {
+                    "eventId": format!("fireemu-blocking-{}", self.0.trigger_generation()),
+                    "eventType": event.as_str(),
+                    "resource": {"service": "identitytoolkit.googleapis.com", "name": format!("projects/{project}")},
+                    "timestamp": fireemu_core_types::time::LogicalInstant::to_rfc3339(self.0.now()).unwrap_or_default(),
+                    "params": {},
+                }
+            }
+        })
+        .to_string();
+        let path = format!(
+            "/{}/{}/{}",
+            self.0.project(),
+            target.region,
+            target.function
+        );
+        let mut stream = TcpStream::connect(&target.addr)
+            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : connect failed: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : timeout setup failed: {e}"))?;
+        write!(
+            stream,
+            "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+            target.addr,
+            target.secret,
+            body.len(),
+            body
+        )
+        .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : write failed: {e}"))?;
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : read failed: {e}"))?;
+        let response = fireemu_adapter_functions::http::parse_response(&response, "POST")
+            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {e}"))?;
+        let value: serde_json::Value = serde_json::from_slice(&response.body)
+            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : invalid JSON: {e}"))?;
+        if response.status >= 300 {
+            let message = value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("blocking function rejected the request");
+            return Err(format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {message}"));
+        }
+        if !value.is_object() {
+            return Err("BLOCKING_FUNCTION_ERROR_RESPONSE : response must be an object".to_owned());
+        }
+        Ok(value)
+    }
+}
+
 /// The runtime as the control API's hook.
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
@@ -939,9 +1155,35 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::check_callable_app_check;
+    use super::{check_callable_app_check, functions_source_signature};
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use serde_json::json;
+
+    #[test]
+    fn reload_signature_tracks_build_and_env_files_but_ignores_configured_paths() {
+        let root =
+            std::env::temp_dir().join(format!("fireemu-functions-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("lib/index.js"), "export const value = 1;").unwrap();
+        std::fs::write(root.join(".env"), "VALUE=one\n").unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), "ignored").unwrap();
+        let first = functions_source_signature(&root, &[]).unwrap();
+
+        std::fs::write(root.join("node_modules/pkg/index.js"), "still ignored").unwrap();
+        assert_eq!(functions_source_signature(&root, &[]).unwrap(), first);
+        std::fs::write(root.join("lib/index.js"), "export const value = 2;").unwrap();
+        let build_changed = functions_source_signature(&root, &[]).unwrap();
+        assert_ne!(build_changed, first);
+        std::fs::write(root.join(".env"), "VALUE=two\n").unwrap();
+        assert_ne!(
+            functions_source_signature(&root, &[]).unwrap(),
+            build_changed
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// One callable with the given `consumeAppCheckToken` spelling, or none at all when
     /// `consume` is `None` (an older manifest that does not mention the field).

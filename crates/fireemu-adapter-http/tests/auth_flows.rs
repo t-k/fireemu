@@ -28,6 +28,8 @@ fn state() -> AuthState {
         ))),
         barrier: None,
         events: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
         control_token: None,
         registry: None,
         app_check: None,

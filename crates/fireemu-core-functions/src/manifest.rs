@@ -106,6 +106,38 @@ pub enum AuthEvent {
     Deleted,
 }
 
+/// Synchronous Identity Platform blocking events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlockingAuthEvent {
+    /// Before a new user is committed.
+    BeforeCreate,
+    /// Before a successful sign-in is committed.
+    BeforeSignIn,
+}
+
+impl BlockingAuthEvent {
+    /// Short event spelling used by firebase-functions.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BeforeCreate => "beforeCreate",
+            Self::BeforeSignIn => "beforeSignIn",
+        }
+    }
+
+    /// Parses either the short or legacy provider event type.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        if value.ends_with("beforeCreate") {
+            Some(Self::BeforeCreate)
+        } else if value.ends_with("beforeSignIn") {
+            Some(Self::BeforeSignIn)
+        } else {
+            None
+        }
+    }
+}
+
 impl AuthEvent {
     /// Canonical event type.
     #[must_use]
@@ -319,6 +351,11 @@ pub enum Trigger {
     Auth {
         /// Event kind.
         event: AuthEvent,
+    },
+    /// Identity Platform request-blocking function.
+    BlockingAuth {
+        /// Before-create or before-sign-in.
+        event: BlockingAuthEvent,
     },
     /// Cloud Storage object change.
     Storage {

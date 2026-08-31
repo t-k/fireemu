@@ -133,6 +133,8 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             clock,
             barrier: None,
             events: None,
+            blocking: None,
+            operation_gate: Arc::new(Mutex::new(())),
             control_token: Some(TOKEN.to_owned()),
             registry: None,
             app_check: None,

@@ -1070,6 +1070,30 @@ fn tenant_admin_routes_use_an_isolated_namespace_and_issue_tenant_tokens() {
 }
 
 #[test]
+fn client_tenant_id_selects_the_namespace_and_must_match_the_id_token() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "customer-a", "email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let token = created["idToken"].as_str().unwrap();
+    assert_eq!(claims(token)["firebase"]["tenant"], "customer-a");
+
+    let (status, mismatch) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"tenantId": "customer-b", "idToken": token}),
+    );
+    assert_eq!(status, 400, "{mismatch}");
+    assert_eq!(mismatch["error"]["message"], "TENANT_ID_MISMATCH");
+}
+
+#[test]
 fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     use fireemu_core_auth::store::AuthRegistry;
 
@@ -1111,6 +1135,68 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
     assert_eq!(implicit.status, 200, "{}", implicit.body);
     assert_eq!(implicit.body["allowPasswordSignup"], true);
+}
+
+#[test]
+fn admin_v2_config_toggles_email_enumeration_protection_and_propagates_to_tenants() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    s.registry = Some(registry.clone());
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig";
+    let enabled = handle_with(
+        &s,
+        "PATCH",
+        path,
+        &owner(),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+    assert_eq!(
+        enabled.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+        true
+    );
+    assert!(
+        registry
+            .tenant_store("demo-app", "customer-a")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config()
+            .enable_improved_email_privacy
+    );
+
+    let (status, hidden) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "missing@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(hidden["error"]["message"], "INVALID_LOGIN_CREDENTIALS");
+    let (status, reset) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "missing@example.com"}),
+    );
+    assert_eq!(status, 200, "{reset}");
+
+    let disabled = handle_with(
+        &s,
+        "PATCH",
+        path,
+        &owner(),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+    );
+    assert_eq!(disabled.status, 200, "{}", disabled.body);
+    let (status, revealed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "missing@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(revealed["error"]["message"], "EMAIL_NOT_FOUND");
 }
 
 // ---- SAML / OIDC federated sign-in and the identity-provider widget pages ---------------------

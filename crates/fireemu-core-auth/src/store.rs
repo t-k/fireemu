@@ -2526,6 +2526,28 @@ impl AuthRegistry {
             .unwrap_or_default()
     }
 
+    /// Applies project-level Auth configuration and propagates inherited switches to tenants.
+    pub fn set_project_config(&self, project: &str, config: ProjectAuthConfig) -> bool {
+        let Some(parent) = self.store_for(project) else {
+            return false;
+        };
+        let Ok(mut parent) = parent.lock() else {
+            return false;
+        };
+        parent.set_config(config);
+        drop(parent);
+        if let Ok(tenants) = self.tenants.lock() {
+            for ((candidate, _), store) in tenants.iter() {
+                if candidate == project {
+                    if let Ok(mut store) = store.lock() {
+                        store.set_config(config);
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// Deletes a tenant namespace and its metadata.
     pub fn delete_tenant(&self, project: &str, tenant: &str) -> bool {
         let key = (project.to_owned(), tenant.to_owned());

@@ -165,6 +165,8 @@ pub(crate) enum Handler {
     TenantGet,
     TenantUpdate,
     TenantDelete,
+    AdminGetProjectConfig,
+    AdminUpdateProjectConfig,
     EmulatorOobCodes,
     EmulatorVerificationCodes,
     EmulatorClearAccounts,
@@ -213,6 +215,8 @@ impl Handler {
         Self::TenantGet,
         Self::TenantUpdate,
         Self::TenantDelete,
+        Self::AdminGetProjectConfig,
+        Self::AdminUpdateProjectConfig,
         Self::EmulatorOobCodes,
         Self::EmulatorVerificationCodes,
         Self::EmulatorClearAccounts,
@@ -238,6 +242,7 @@ pub(crate) struct Route {
 
 const ADMIN: &str = "/identitytoolkit.googleapis.com/v1/projects/";
 const ADMIN_V2: &str = "/identitytoolkit.googleapis.com/v2/projects/";
+const ADMIN_CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/";
 const EMULATOR: &str = "/emulator/v1/projects/";
 
 /// The label bucket of a path this runtime does not serve.
@@ -305,6 +310,19 @@ const fn admin_v2(
         pattern: Pattern::Project {
             prefix: ADMIN_V2,
             suffix,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn admin_config(method: &'static str, operation: &'static str, handler: Handler) -> Route {
+    Route {
+        method,
+        pattern: Pattern::Project {
+            prefix: ADMIN_CONFIG,
+            suffix: "/config",
         },
         class: RouteClass::Admin,
         operation,
@@ -600,6 +618,8 @@ pub(crate) const ROUTES: &[Route] = &[
     tenant_v2("GET", "", "tenants:get", Handler::TenantGet),
     tenant_v2("PATCH", "", "tenants:update", Handler::TenantUpdate),
     tenant_v2("DELETE", "", "tenants:delete", Handler::TenantDelete),
+    admin_config("GET", "config:get", Handler::AdminGetProjectConfig),
+    admin_config("PATCH", "config:update", Handler::AdminUpdateProjectConfig),
     // Emulator inspection routes.
     emulator(
         "GET",

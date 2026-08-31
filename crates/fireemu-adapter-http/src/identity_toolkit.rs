@@ -551,6 +551,11 @@ pub fn handle_with(
     let Ok(mut store) = store_arc.lock() else {
         return error(500, "INTERNAL");
     };
+    if let Some(request_tenant) = str_field(body, "tenantId") {
+        if store.tenant_id() != Some(request_tenant) {
+            return error(400, "TENANT_ID_MISMATCH");
+        }
+    }
     // App Check, once the route and the target project are known and before any Auth work
     // (spec 7.4 and 13.3). Locking the store is not a state transition, so a denial here
     // still leaves no user, no issued or rotated credential, no consumed OOB or phone code,
@@ -577,6 +582,13 @@ pub fn handle_with(
     };
     if let Err(r) = privilege_check(state, route.class, project, headers, method, &store) {
         return r;
+    }
+    if matches!(
+        route.handler,
+        routes::Handler::AdminGetProjectConfig | routes::Handler::AdminUpdateProjectConfig
+    ) {
+        drop(store);
+        return project_config_management(state, route.handler, project, body);
     }
     if matches!(
         route.handler,
@@ -700,7 +712,9 @@ fn dispatch(
         | Handler::TenantList
         | Handler::TenantGet
         | Handler::TenantUpdate
-        | Handler::TenantDelete => error(500, "INTERNAL"),
+        | Handler::TenantDelete
+        | Handler::AdminGetProjectConfig
+        | Handler::AdminUpdateProjectConfig => error(500, "INTERNAL"),
         Handler::EmulatorOobCodes => emulator_route(store, "GET", "oobCodes", headers, body),
         Handler::EmulatorVerificationCodes => {
             emulator_route(store, "GET", "verificationCodes", headers, body)
@@ -710,6 +724,66 @@ fn dispatch(
         }
         Handler::EmulatorGetConfig => emulator_route(store, "GET", "config", headers, body),
         Handler::EmulatorPatchConfig => emulator_route(store, "PATCH", "config", headers, body),
+    }
+}
+
+fn project_config_management(
+    state: &AuthState,
+    handler: routes::Handler,
+    project: Option<&str>,
+    body: &Value,
+) -> JsonResponse {
+    use routes::Handler;
+    let Some(project) = project else {
+        return error(400, "INVALID_PROJECT_ID");
+    };
+    let store = state
+        .registry
+        .as_ref()
+        .and_then(|registry| registry.store_for(project))
+        .or_else(|| {
+            (project == state.store.lock().ok()?.project_id()).then(|| state.store.clone())
+        });
+    let Some(store) = store else {
+        return error(400, "INVALID_PROJECT_ID");
+    };
+    let Ok(store) = store.lock() else {
+        return error(500, "INTERNAL");
+    };
+    let mut config = store.config();
+    if handler == Handler::AdminGetProjectConfig {
+        return JsonResponse {
+            status: 200,
+            body: project_config_json(config),
+        };
+    }
+    if let Some(value) = body
+        .get("signIn")
+        .and_then(|sign_in| sign_in.get("allowDuplicateEmails"))
+        .and_then(Value::as_bool)
+    {
+        config.allow_duplicate_emails = value;
+    }
+    if let Some(value) = body
+        .get("emailPrivacyConfig")
+        .and_then(|privacy| privacy.get("enableImprovedEmailPrivacy"))
+        .and_then(Value::as_bool)
+    {
+        config.enable_improved_email_privacy = value;
+    }
+    drop(store);
+    if let Some(registry) = &state.registry {
+        if !registry.set_project_config(project, config) {
+            return error(500, "INTERNAL");
+        }
+    } else if let Ok(mut store) = state.store.lock() {
+        store.set_config(config);
+    } else {
+        return error(500, "INTERNAL");
+    }
+    JsonResponse {
+        status: 200,
+        body: project_config_json(config),
     }
 }
 

@@ -251,6 +251,12 @@ fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
 fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
     let dir = scratch("init-force-validation");
     let destination = write(&dir, "fireemu.json", "keep this exact content\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     write(&dir, "malformed.json", "{ nope\n");
 
     let out = run_in(
@@ -281,6 +287,19 @@ fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
     let generated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(destination).unwrap()).unwrap();
     assert_eq!(generated["firebaseJson"], "valid.json");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            std::fs::metadata(dir.join("fireemu.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
 
     let absent = scratch("init-force-absent-destination");
     write(&absent, "valid.json", "{}\n");
@@ -314,6 +333,13 @@ fn init_force_refuses_missing_canonical_and_directory_sources_or_destinations() 
         assert!(stderr(&out).contains(fragment), "{label}: {}", stderr(&out));
         assert!(!dir.join("fireemu.json").exists());
     }
+
+    let dir = scratch("init-control-character-source");
+    let source = "missing-\u{1b}[31m.json";
+    let out = run_in(&dir, &["init", "--yes", "--firebase-json", source], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!stderr(&out).contains('\u{1b}'), "{}", stderr(&out));
+    assert!(stderr(&out).contains("\\u{1b}"), "{}", stderr(&out));
 
     let dir = scratch("init-directory-destination");
     std::fs::create_dir(dir.join("fireemu.json")).unwrap();
@@ -593,6 +619,27 @@ fn a_canonical_config_live_loads_its_relative_firebase_json_reference() {
         ],
     );
     assert_eq!(env["GCLOUD_PROJECT"], "demo-explicit");
+
+    let invalid = write(
+        &dir,
+        "invalid-fireemu.json",
+        r#"{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firebaseJson": "missing.json",
+  "unknown": true,
+  "firestore": { "edition": "standard", "apiMode": "native" }
+}
+"#,
+    );
+    let out = exec_with(&["--config", invalid.to_str().unwrap()], &["true"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("unknown config key"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stderr(&out).contains("cannot read"), "{}", stderr(&out));
 }
 
 #[test]

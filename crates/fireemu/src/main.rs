@@ -77,6 +77,23 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
+struct DiagnosticPath<'a>(&'a Path);
+
+impl std::fmt::Display for DiagnosticPath<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for character in self.0.to_string_lossy().chars() {
+            for escaped in character.escape_debug() {
+                write!(formatter, "{escaped}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+const fn diagnostic_path(path: &Path) -> DiagnosticPath<'_> {
+    DiagnosticPath(path)
+}
+
 /// A command-line or configuration failure and the exit code it produces: 2 for usage, 1 for
 /// a configuration the daemon refuses or a feature it does not support yet. Both are decided
 /// before anything binds, so neither can leave a partially started suite behind.
@@ -159,7 +176,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("init") => match init::run(&args[1..]) {
             Ok(path) => {
-                println!("created {}", path.display());
+                println!("created {}", diagnostic_path(&path));
                 println!("next: fireemu up --config fireemu.json");
                 ExitCode::SUCCESS
             }
@@ -519,9 +536,9 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
 /// firebase.json` works verbatim while every existing `--config fireemu.json` keeps working.
 fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| CliError::refused(format!("cannot read {}: {e}", path.display())))?;
+        .map_err(|e| CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path))))?;
     let json: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", path.display())))?;
+        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", diagnostic_path(path))))?;
     let canonical = json.get("schemaVersion").is_some();
     Ok((json, canonical))
 }
@@ -532,13 +549,13 @@ fn read_firebase_json(path: &Path) -> Result<(serde_json::Value, PathBuf), CliEr
     if canonical {
         return Err(CliError::refused(format!(
             "{}: this is a fireemu canonical configuration (it has schemaVersion), not a firebase.json; pass it with --config",
-            path.display()
+            diagnostic_path(path)
         )));
     }
     if !json.is_object() {
         return Err(CliError::refused(format!(
             "{}: firebase.json must be an object",
-            path.display()
+            diagnostic_path(path)
         )));
     }
     Ok((json, path.to_path_buf()))
@@ -605,6 +622,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         Some(p) => {
             let (json, canonical) = read_config_file(p)?;
             if canonical {
+                let config = RuntimeConfig::from_json(&json)?;
                 let firebase = if raw.firebase_json.is_none() {
                     config::firebase_json_reference(&json)?
                         .map(|reference| project_dir(p).join(reference))
@@ -613,7 +631,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
                 } else {
                     None
                 };
-                (RuntimeConfig::from_json(&json)?, firebase)
+                (config, firebase)
             } else {
                 (RuntimeConfig::default(), Some((json, p.clone())))
             }
@@ -631,7 +649,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         let report = cfg.apply_firebase_json(json, &project_root, &only)?;
         if raw.verbosity > Verbosity::Quiet {
             for notice in &report.notices {
-                eprintln!("note: {}: {notice}", path.display());
+                eprintln!("note: {}: {notice}", diagnostic_path(path));
             }
         }
     }

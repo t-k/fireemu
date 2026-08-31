@@ -25,7 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const args = process.argv.slice(2);
 const keep = args.includes("--keep");
@@ -80,6 +80,13 @@ writeFileSync(join(project, "package.json"), JSON.stringify({ name: "try", priva
 const exe = process.platform === "win32" ? "fireemu.cmd" : "fireemu";
 const bin = join(project, "node_modules", ".bin", exe);
 const shell = process.platform === "win32";
+const nodeDirectory = dirname(process.execPath);
+const npmCli = [
+  process.env.npm_execpath,
+  join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+  join(nodeDirectory, "..", "node_modules", "npm", "bin", "npm-cli.js"),
+  join(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+].find((candidate) => candidate && existsSync(candidate));
 const emptyPorts = [
   "--firestore-port",
   "0",
@@ -96,10 +103,12 @@ const emptyPorts = [
 ];
 
 step("installs offline, without scripts, from the two tarballs", () => {
-  run("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs], {
-    cwd: project,
-    shell,
-  });
+  if (!npmCli) throw new Error("cannot locate npm-cli.js beside the current Node installation");
+  run(
+    process.execPath,
+    [npmCli, "install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs],
+    { cwd: project },
+  );
   if (!existsSync(bin)) throw new Error(`${bin} was not linked`);
 });
 

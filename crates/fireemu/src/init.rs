@@ -256,35 +256,43 @@ fn write_config(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> 
         } else {
             e.to_string()
         };
-        CliError::refused(format!("cannot create {}: {detail}", path.display()))
+        CliError::refused(format!(
+            "cannot create {}: {detail}",
+            crate::diagnostic_path(path)
+        ))
     })?;
-    file.write_all(bytes)
-        .map_err(|e| CliError::refused(format!("cannot write {}: {e}", path.display())))
+    file.write_all(bytes).map_err(|e| {
+        CliError::refused(format!(
+            "cannot write {}: {e}",
+            crate::diagnostic_path(path)
+        ))
+    })
 }
 
 fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    let existing = match std::fs::symlink_metadata(path) {
+    let existing_permissions = match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(CliError::refused(format!(
                 "{} is a symbolic link and will not be replaced",
-                path.display()
+                crate::diagnostic_path(path)
             )))
         }
-        Ok(metadata) if metadata.is_file() => true,
+        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
         Ok(_) => {
             return Err(CliError::refused(format!(
                 "{} is not a regular file",
-                path.display()
+                crate::diagnostic_path(path)
             )))
         }
-        Err(error) if destination_is_missing(error.kind()) => false,
+        Err(error) if destination_is_missing(error.kind()) => None,
         Err(error) => {
             return Err(CliError::refused(format!(
                 "cannot inspect {}: {error}",
-                path.display()
+                crate::diagnostic_path(path)
             )))
         }
     };
+    let existing = existing_permissions.is_some();
     let sequence = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let name = path
         .file_name()
@@ -297,14 +305,31 @@ fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
             .create_new(true)
             .open(&temporary)
             .map_err(|e| {
-                CliError::refused(format!("cannot create {}: {e}", temporary.display()))
+                CliError::refused(format!(
+                    "cannot create {}: {e}",
+                    crate::diagnostic_path(&temporary)
+                ))
             })?;
-        temporary_file
-            .write_all(bytes)
-            .map_err(|e| CliError::refused(format!("cannot write {}: {e}", temporary.display())))?;
-        temporary_file
-            .sync_all()
-            .map_err(|e| CliError::refused(format!("cannot sync {}: {e}", temporary.display())))?;
+        temporary_file.write_all(bytes).map_err(|e| {
+            CliError::refused(format!(
+                "cannot write {}: {e}",
+                crate::diagnostic_path(&temporary)
+            ))
+        })?;
+        if let Some(permissions) = existing_permissions {
+            temporary_file.set_permissions(permissions).map_err(|e| {
+                CliError::refused(format!(
+                    "cannot preserve permissions on {}: {e}",
+                    crate::diagnostic_path(&temporary)
+                ))
+            })?;
+        }
+        temporary_file.sync_all().map_err(|e| {
+            CliError::refused(format!(
+                "cannot sync {}: {e}",
+                crate::diagnostic_path(&temporary)
+            ))
+        })?;
         drop(temporary_file);
         replace_path(&temporary, path, existing)
     })();
@@ -323,8 +348,8 @@ fn replace_path(temporary: &Path, destination: &Path, _existing: bool) -> Result
     std::fs::rename(temporary, destination).map_err(|e| {
         CliError::refused(format!(
             "cannot replace {} with {}: {e}",
-            destination.display(),
-            temporary.display()
+            crate::diagnostic_path(destination),
+            crate::diagnostic_path(temporary)
         ))
     })
 }
@@ -335,30 +360,37 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
         return std::fs::rename(temporary, destination).map_err(|e| {
             CliError::refused(format!(
                 "cannot install {} as {}: {e}",
-                temporary.display(),
-                destination.display()
+                crate::diagnostic_path(temporary),
+                crate::diagnostic_path(destination)
             ))
         });
     }
-    let backup = destination.with_extension(format!("json.{}.bak", std::process::id()));
+    let backup = temporary.with_extension("bak");
     std::fs::rename(destination, &backup).map_err(|e| {
         CliError::refused(format!(
             "cannot prepare {} for replacement: {e}",
-            destination.display()
+            crate::diagnostic_path(destination)
         ))
     })?;
     match std::fs::rename(temporary, destination) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(backup);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = std::fs::rename(&backup, destination);
-            Err(CliError::refused(format!(
-                "cannot replace {}: {error}",
-                destination.display()
-            )))
-        }
+        Ok(()) => std::fs::remove_file(&backup).map_err(|error| {
+            CliError::refused(format!(
+                "replaced {}, but cannot remove the old configuration at {}: {error}",
+                crate::diagnostic_path(destination),
+                crate::diagnostic_path(&backup)
+            ))
+        }),
+        Err(replace_error) => match std::fs::rename(&backup, destination) {
+            Ok(()) => Err(CliError::refused(format!(
+                "cannot replace {}: {replace_error}; the original was restored",
+                crate::diagnostic_path(destination)
+            ))),
+            Err(restore_error) => Err(CliError::refused(format!(
+                "cannot replace {}: {replace_error}; cannot restore it: {restore_error}; the original remains at {}",
+                crate::diagnostic_path(destination),
+                crate::diagnostic_path(&backup)
+            ))),
+        },
     }
 }
 

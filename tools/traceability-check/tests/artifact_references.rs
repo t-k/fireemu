@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
+use tla_verification::sha256_file;
 use traceability_check::check;
 
 /// A throw-away repository root that removes itself when dropped.
@@ -30,6 +31,32 @@ impl Fixture {
     }
 
     fn write_ledger(&self, requirement: &Value) {
+        self.write_ledger_only(requirement);
+        if let Some(tla) = requirement["artifacts"]["tla"].as_str() {
+            if !tla.starts_with("pending:") {
+                let (module, property) = tla.split_once("::").expect("fixture TLA reference");
+                if self.root.join("verification/tla").join(module).is_file()
+                    && self
+                        .root
+                        .join("verification/tla")
+                        .join(Path::new(module).with_extension("cfg"))
+                        .is_file()
+                {
+                    self.write_tla_evidence(
+                        Path::new(module)
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .expect("fixture model"),
+                        property,
+                        "M-TLA-001",
+                        "killed_safety",
+                    );
+                }
+            }
+        }
+    }
+
+    fn write_ledger_only(&self, requirement: &Value) {
         self.write(
             "verification/mutants/catalog.json",
             &json!({
@@ -54,6 +81,50 @@ impl Fixture {
             .to_string(),
         );
     }
+
+    fn write_tla_manifest(&self, model: &str, property: &str, mutation_id: &str) {
+        self.write(
+            &format!("verification/tla/mutations/{model}.json"),
+            &json!({
+                "schemaVersion": 1,
+                "model": model,
+                "mutations": [{
+                    "id": mutation_id,
+                    "property": property,
+                    "operator": "fixture-semantic-defect",
+                    "from": "====",
+                    "to": "\\* mutated\n====",
+                }],
+            })
+            .to_string(),
+        );
+        self.write(".tools/tla2tools-1.8.0.jar", "fixture jar");
+    }
+
+    fn write_tla_evidence(&self, model: &str, property: &str, mutation_id: &str, outcome: &str) {
+        self.write_tla_manifest(model, property, mutation_id);
+        let tla_root = self.root.join("verification/tla");
+        let evidence = json!({
+            "schemaVersion": 1,
+            "model": model,
+            "generatedAt": "2026-08-31T00:00:00Z",
+            "tlcVersion": "TLC fixture",
+            "moduleSha256": sha256_file(&tla_root.join(format!("{model}.tla"))).unwrap(),
+            "configSha256": sha256_file(&tla_root.join(format!("{model}.cfg"))).unwrap(),
+            "manifestSha256": sha256_file(&tla_root.join("mutations").join(format!("{model}.json"))).unwrap(),
+            "jarSha256": sha256_file(&self.root.join(".tools/tla2tools-1.8.0.jar")).unwrap(),
+            "results": [{
+                "id": mutation_id,
+                "property": property,
+                "outcome": outcome,
+                "detail": "fixture outcome",
+            }],
+        });
+        self.write(
+            &format!("verification/tla/evidence/{model}.json"),
+            &evidence.to_string(),
+        );
+    }
 }
 
 impl Drop for Fixture {
@@ -65,8 +136,17 @@ impl Drop for Fixture {
 /// A requirement with the evidence every critical implemented requirement needs, so that a case
 /// only has to add the artifact it is about.
 fn requirement(status: &str, artifacts: &Value) -> Value {
+    let mutations = if matches!(status, "implemented" | "partial")
+        && artifacts["tla"]
+            .as_str()
+            .is_some_and(|tla| !tla.starts_with("pending:"))
+    {
+        json!(["M-FIX-001", "M-TLA-001"])
+    } else {
+        json!(["M-FIX-001"])
+    };
     let mut merged = json!({
-        "mutation": ["M-FIX-001"],
+        "mutation": mutations,
         "integration": ["crates/fixture/tests/it.rs"],
     });
     let base = merged.as_object_mut().unwrap();
@@ -425,4 +505,118 @@ fn the_repository_ledger_matches_the_repository() {
         "the repository ledger does not match the repository: {:?}",
         report.problems
     );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn tla_backed_requirements_need_fresh_killed_property_mutations() {
+    struct EvidenceCase {
+        name: &'static str,
+        mutation_ids: &'static [&'static str],
+        evidence_property: &'static str,
+        outcome: Option<&'static str>,
+        stale_config: bool,
+        expected: Option<&'static str>,
+    }
+
+    let cases = [
+        EvidenceCase {
+            name: "tla-evidence-valid",
+            mutation_ids: &["M-FIX-001", "M-TLA-001"],
+            evidence_property: "Safe",
+            outcome: Some("killed_safety"),
+            stale_config: false,
+            expected: None,
+        },
+        EvidenceCase {
+            name: "tla-evidence-missing",
+            mutation_ids: &["M-FIX-001", "M-TLA-001"],
+            evidence_property: "Safe",
+            outcome: None,
+            stale_config: false,
+            expected: Some("mutation evidence"),
+        },
+        EvidenceCase {
+            name: "tla-evidence-stale",
+            mutation_ids: &["M-FIX-001", "M-TLA-001"],
+            evidence_property: "Safe",
+            outcome: Some("killed_safety"),
+            stale_config: true,
+            expected: Some("config digest mismatch"),
+        },
+        EvidenceCase {
+            name: "tla-evidence-unreferenced",
+            mutation_ids: &["M-FIX-001"],
+            evidence_property: "Safe",
+            outcome: Some("killed_safety"),
+            stale_config: false,
+            expected: Some("no referenced killed TLA mutation for property Safe"),
+        },
+        EvidenceCase {
+            name: "tla-evidence-property-mismatch",
+            mutation_ids: &["M-FIX-001", "M-TLA-001"],
+            evidence_property: "OtherSafe",
+            outcome: Some("killed_safety"),
+            stale_config: false,
+            expected: Some("no referenced killed TLA mutation for property Safe"),
+        },
+        EvidenceCase {
+            name: "tla-evidence-survived",
+            mutation_ids: &["M-FIX-001", "M-TLA-001"],
+            evidence_property: "Safe",
+            outcome: Some("survived"),
+            stale_config: false,
+            expected: Some("was not killed"),
+        },
+    ];
+
+    for case in cases {
+        let fixture = Fixture::new(case.name);
+        fixture.write("crates/fixture/tests/it.rs", "#[test] fn it() {}");
+        fixture.write("verification/tla/Model.tla", TLA_SOURCE);
+        fixture.write("verification/tla/Model.cfg", "INVARIANT Safe\n");
+        let requirement = json!({
+            "id": "FIX-001",
+            "statement": "fixture statement",
+            "criticality": "critical",
+            "owner": "fixtures",
+            "status": "implemented",
+            "artifacts": {
+                "tla": "Model.tla::Safe",
+                "mutation": case.mutation_ids,
+                "integration": ["crates/fixture/tests/it.rs"],
+            },
+        });
+        fixture.write_ledger_only(&requirement);
+        if let Some(outcome) = case.outcome {
+            fixture.write_tla_evidence("Model", case.evidence_property, "M-TLA-001", outcome);
+        } else {
+            fixture.write_tla_manifest("Model", case.evidence_property, "M-TLA-001");
+        }
+        if case.stale_config {
+            fixture.write(
+                "verification/tla/Model.cfg",
+                "INVARIANT Safe\n\\* changed\n",
+            );
+        }
+
+        let report = check(&fixture.root);
+        match case.expected {
+            None => assert!(
+                report.problems.is_empty(),
+                "case {}: {:?}",
+                case.name,
+                report.problems
+            ),
+            Some(expected) => assert!(
+                report
+                    .problems
+                    .iter()
+                    .any(|problem| problem.contains(expected)),
+                "case {}: expected {expected:?}, got {:?}",
+                case.name,
+                report.problems
+            ),
+        }
+    }
 }

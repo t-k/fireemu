@@ -16,6 +16,10 @@ use sha2::{Digest, Sha256};
 /// Current persisted manifest and evidence schema version.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// SHA-256 of the repository-pinned TLA+ tools 1.8.0 JAR.
+pub const TLA2TOOLS_1_8_0_SHA256: &str =
+    "eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a";
+
 static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
 /// A strict list of semantic mutations for one TLA+ module.
@@ -235,6 +239,21 @@ pub fn verify_evidence(
     jar: &Path,
     evidence: &Path,
 ) -> Result<MutationEvidence, String> {
+    let jar_digest = sha256_file(jar).map_err(|error| error.to_string())?;
+    verify_evidence_with_jar_digest(module, config, manifest, evidence, &jar_digest)
+}
+
+/// Verifies evidence when the trusted JAR digest is supplied out of band.
+pub fn verify_evidence_with_jar_digest(
+    module: &Path,
+    config: &Path,
+    manifest: &Path,
+    evidence: &Path,
+    expected_jar_digest: &str,
+) -> Result<MutationEvidence, String> {
+    if !is_sha256(expected_jar_digest) {
+        return Err("expected JAR digest must be lowercase SHA-256".to_owned());
+    }
     let evidence_value = parse_evidence(
         &fs::read_to_string(evidence)
             .map_err(|error| format!("read {}: {error}", evidence.display()))?,
@@ -257,7 +276,7 @@ pub fn verify_evidence(
         ),
         (
             "jar",
-            sha256_file(jar).map_err(|error| error.to_string())?,
+            expected_jar_digest.to_owned(),
             evidence_value.jar_sha256.as_str(),
         ),
     ] {
@@ -615,7 +634,9 @@ fn classify_execution(execution: Execution) -> (MutationOutcome, String) {
                 String::from_utf8_lossy(&stdout),
                 String::from_utf8_lossy(&stderr)
             );
-            let outcome = if text.contains("Temporal properties were violated") {
+            let temporal_violation = text.contains("Temporal properties were violated")
+                || text.contains("Temporal property") && text.contains("was violated");
+            let outcome = if temporal_violation {
                 MutationOutcome::KilledTemporal
             } else if text.contains("Invariant") && text.contains("is violated")
                 || text.contains("Action property") && text.contains("is violated")

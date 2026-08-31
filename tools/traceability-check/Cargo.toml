@@ -11,6 +11,7 @@ description = "development tool; never linked into the release binary"
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+tla-verification = { path = "../tla-verification" }
 
 [lints]
 workspace = true

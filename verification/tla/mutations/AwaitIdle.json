@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "model": "AwaitIdle",
+  "mutations": [
+    {
+      "id": "M-TLA-IDLE-SAFETY-001",
+      "property": "NoFalseIdle",
+      "operator": "return-before-blocking-work-drains",
+      "from": "/\\ Blocking = {}\n    /\\ fenceState' = \"returned\"",
+      "to": "/\\ TRUE\n    /\\ fenceState' = \"returned\""
+    },
+    {
+      "id": "M-TLA-IDLE-LIVENESS-001",
+      "property": "AwaitIdleEventuallyReturns",
+      "operator": "remove-return-idle-fairness",
+      "from": "/\\ WF_vars(ReturnIdle)",
+      "to": "/\\ TRUE"
+    }
+  ]
+}

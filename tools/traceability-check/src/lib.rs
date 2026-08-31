@@ -24,6 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use tla_verification::{sha256_file, verify_evidence_with_jar_digest, TLA2TOOLS_1_8_0_SHA256};
 
 /// Prefix that marks an artifact as declared but not written yet.
 pub const PENDING_PREFIX: &str = "pending:";
@@ -549,12 +550,14 @@ pub fn check(root: &Path) -> Report {
         let resolve = matches!(r.status.as_str(), "implemented" | "partial");
         let a = &r.artifacts;
         let mut have = Evidence::default();
+        let mut unresolved_mutants = Vec::new();
+        let mut resolved_tla = None;
 
         for m in &a.mutation {
             if mutant_ids.contains_key(m) {
                 have.mutation = true;
             } else {
-                problems.push(format!("requirement {id}: references undefined mutant {m}"));
+                unresolved_mutants.push(m.as_str());
             }
             referenced_mutants.insert(m.clone());
         }
@@ -602,6 +605,7 @@ pub fn check(root: &Path) -> Report {
                                                 .contains(property) =>
                                         {
                                             have.tla = true;
+                                            resolved_tla = Some((module, property));
                                         }
                                         Ok(_) => problems.push(format!(
                                             "requirement {id}: TLA+ config {} does not register {property}",
@@ -628,6 +632,63 @@ pub fn check(root: &Path) -> Report {
                         "requirement {id}: tla artifact must be Module.tla::Property"
                     )),
                 },
+            }
+        }
+
+        let mut tla_mutant_ids = BTreeSet::new();
+        if resolve {
+            if let Some((module, property)) = resolved_tla {
+                let model = Path::new(module)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .expect("safe TLA reference has a UTF-8 stem");
+                let tla_root = root.join("verification/tla");
+                let manifest = tla_root.join("mutations").join(format!("{model}.json"));
+                let evidence = tla_root.join("evidence").join(format!("{model}.json"));
+                let jar = root.join(".tools/tla2tools-1.8.0.jar");
+                let jar_digest = if jar.is_file() {
+                    sha256_file(&jar)
+                        .map_err(|error| error.to_string())
+                        .unwrap_or_else(|_| TLA2TOOLS_1_8_0_SHA256.to_owned())
+                } else {
+                    TLA2TOOLS_1_8_0_SHA256.to_owned()
+                };
+                match verify_evidence_with_jar_digest(
+                    &tla_root.join(module),
+                    &tla_root.join(format!("{model}.cfg")),
+                    &manifest,
+                    &evidence,
+                    &jar_digest,
+                ) {
+                    Ok(verified) => {
+                        let mut matching_property_mutation = false;
+                        for result in verified.results {
+                            tla_mutant_ids.insert(result.id.clone());
+                            if a.mutation.contains(&result.id)
+                                && result.property == property
+                                && result.outcome.is_killed()
+                            {
+                                matching_property_mutation = true;
+                                have.mutation = true;
+                            }
+                        }
+                        if !matching_property_mutation {
+                            problems.push(format!(
+                                "requirement {id}: no referenced killed TLA mutation for property {property}"
+                            ));
+                        }
+                    }
+                    Err(error) => problems.push(format!(
+                        "requirement {id}: TLA+ mutation evidence for {model} is invalid: {error}"
+                    )),
+                }
+            }
+        }
+        for mutation in unresolved_mutants {
+            if !tla_mutant_ids.contains(mutation) {
+                problems.push(format!(
+                    "requirement {id}: references undefined mutant {mutation}"
+                ));
             }
         }
 

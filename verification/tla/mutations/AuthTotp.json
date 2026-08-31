@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "model": "AuthTotp",
+  "mutations": [
+    {
+      "id": "M-TLA-AUTH-REUSE-001",
+      "property": "NoTotpCodeReuse",
+      "operator": "remove-replay-guard",
+      "from": "/\\ (lastAccepted = NoStep \\/ step > lastAccepted)",
+      "to": "/\\ TRUE"
+    },
+    {
+      "id": "M-TLA-AUTH-ENROLLMENT-001",
+      "property": "NoSecondFactorWithoutEnrollment",
+      "operator": "issue-second-factor-token-after-expiry",
+      "from": "/\\ tokenSecond' = TRUE\n    /\\ UNCHANGED <<clock, state, sessionEnd>>",
+      "to": "/\\ tokenSecond' = TRUE\n    /\\ state' = \"Expired\"\n    /\\ UNCHANGED <<clock, sessionEnd>>"
+    },
+    {
+      "id": "M-TLA-AUTH-LIVENESS-001",
+      "property": "EnrollmentEventuallyFinalizesOrExpires",
+      "operator": "remove-enrollment-fairness",
+      "from": "Fairness ==\n    /\\ WF_vars(Tick)\n    /\\ WF_vars(ExpireEnrollment)\n    /\\ \\A s \\in Steps: WF_vars(FinalizeEnrollment(s))",
+      "to": "Fairness == TRUE"
+    }
+  ]
+}

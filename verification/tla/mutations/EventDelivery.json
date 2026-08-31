@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "model": "EventDelivery",
+  "mutations": [
+    {
+      "id": "M-TLA-EVENT-TERMINAL-001",
+      "property": "NoTerminalRegression",
+      "operator": "allow-cancel-from-terminal-state",
+      "from": "/\\ state[e] \\in NonTerminal\n    /\\ state' = [state EXCEPT ![e] = \"Cancelled\"]",
+      "to": "/\\ state[e] \\in States\n    /\\ state' = [state EXCEPT ![e] = \"Cancelled\"]"
+    },
+    {
+      "id": "M-TLA-EVENT-LIVENESS-001",
+      "property": "EventEventuallyTerminates",
+      "operator": "remove-worker-fairness",
+      "from": "Fairness == \\A e \\in Events: WF_vars(Progress(e))",
+      "to": "Fairness == TRUE"
+    }
+  ]
+}

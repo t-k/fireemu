@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tla_verification::{sha256_file, verify_evidence};
+use tla_verification::{sha256_file, verify_evidence, verify_evidence_with_jar_digest};
 
 struct Fixture {
     root: PathBuf,
@@ -94,6 +94,31 @@ fn fresh_complete_killed_evidence_verifies() {
     let [module, config, manifest, jar, evidence] = paths(&fixture);
 
     verify_evidence(&module, &config, &manifest, &jar, &evidence).expect("fresh evidence");
+}
+
+#[test]
+fn a_known_jar_digest_can_be_verified_without_the_jar_file() {
+    let fixture = prepare("digest-only");
+    fixture.write(
+        "evidence.json",
+        &fixture.evidence_json(
+            r#"[
+                {"id":"M-MODEL-001","property":"Safe","outcome":"killed_safety","detail":"counterexample"},
+                {"id":"M-MODEL-002","property":"Safe","outcome":"killed_temporal","detail":"temporal counterexample"}
+            ]"#,
+        ),
+    );
+    let expected_jar_digest = sha256_file(&fixture.root.join("tla2tools.jar")).expect("digest");
+    fs::remove_file(fixture.root.join("tla2tools.jar")).expect("remove local jar");
+
+    verify_evidence_with_jar_digest(
+        &fixture.root.join("Model.tla"),
+        &fixture.root.join("Model.cfg"),
+        &fixture.root.join("Model.json"),
+        &fixture.root.join("evidence.json"),
+        &expected_jar_digest,
+    )
+    .expect("digest-only verification");
 }
 
 #[test]

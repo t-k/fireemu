@@ -136,6 +136,20 @@ fn temporal_counterexamples_and_clean_runs_are_classified_distinctly() {
 }
 
 #[test]
+fn a_named_temporal_property_violation_is_a_temporal_kill() {
+    let fixture = prepare("named-temporal");
+    let java = fixture.executable(
+        "fake-java",
+        "#!/bin/sh\nprintf '%s\\n' 'Error: Temporal property Safe was violated.'\nexit 13\n",
+    );
+
+    let evidence = run_mutations(&fixture.options(java, Duration::from_secs(2)))
+        .expect("named temporal execution");
+
+    assert_eq!(evidence.results[0].outcome, MutationOutcome::KilledTemporal);
+}
+
+#[test]
 fn timeout_and_launch_failure_never_count_as_killed() {
     let timeout = prepare("timeout");
     let slow_java = timeout.executable("fake-java", "#!/bin/sh\nwhile :; do :; done\n");

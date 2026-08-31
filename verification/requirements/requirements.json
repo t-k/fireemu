@@ -17,7 +17,8 @@
         "kani": "epoch_guard_rejects_every_other_epoch",
         "property": "prop_epoch_guard_rejects_non_current",
         "mutation": [
-          "M-EPOCH-001"
+          "M-EPOCH-001",
+          "M-TLA-EPOCH-ISOLATION-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/session.rs",
@@ -36,7 +37,8 @@
         "kani": "virtual_clock_never_moves_backwards",
         "property": "prop_clock_advance_is_monotonic",
         "mutation": [
-          "M-SCHED-001"
+          "M-SCHED-001",
+          "M-TLA-EPOCH-MONOTONIC-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/clock.rs"
@@ -58,7 +60,8 @@
         "property": "prop_terminal_states_are_absorbing",
         "mutation": [
           "M-RETRY-001",
-          "M-RETRY-002"
+          "M-RETRY-002",
+          "M-TLA-EVENT-TERMINAL-001"
         ],
         "integration": [
           "crates/fireemu-core-events/tests/state_machine.rs"
@@ -84,7 +87,8 @@
         "mutation": [
           "M-IDLE-001",
           "M-IDLE-002",
-          "M-IDLE-003"
+          "M-IDLE-003",
+          "M-TLA-IDLE-SAFETY-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -100,7 +104,8 @@
       "artifacts": {
         "tla": "SessionEpoch.tla::ResetEventuallyActivatesNewEpoch",
         "mutation": [
-          "M-EPOCH-001"
+          "M-EPOCH-001",
+          "M-TLA-RESET-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/session.rs"
@@ -117,7 +122,8 @@
         "tla": "EventDelivery.tla::EventEventuallyTerminates",
         "mutation": [
           "M-RETRY-001",
-          "M-RETRY-002"
+          "M-RETRY-002",
+          "M-TLA-EVENT-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-events/tests/state_machine.rs"
@@ -133,7 +139,8 @@
       "artifacts": {
         "tla": "AwaitIdle.tla::AwaitIdleEventuallyReturns",
         "mutation": [
-          "M-IDLE-002"
+          "M-IDLE-002",
+          "M-TLA-IDLE-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -461,7 +468,8 @@
         "property": "prop_same_step_same_code",
         "mutation": [
           "M-AUTH-001",
-          "M-AUTH-002"
+          "M-AUTH-002",
+          "M-TLA-AUTH-REUSE-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs",
@@ -483,7 +491,8 @@
           "token_revocation_races_with_sign_in"
         ],
         "mutation": [
-          "M-AUTH-003"
+          "M-AUTH-003",
+          "M-TLA-AUTH-ENROLLMENT-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs"
@@ -517,7 +526,8 @@
       "artifacts": {
         "tla": "AuthTotp.tla::EnrollmentEventuallyFinalizesOrExpires",
         "mutation": [
-          "M-AUTH-001"
+          "M-AUTH-001",
+          "M-TLA-AUTH-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs"

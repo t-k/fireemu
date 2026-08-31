@@ -4,8 +4,8 @@ use fireemu_core_functions::cron::{
     fixed_offset_seconds, Civil, FixedOffset, RunCount, Schedule, ScheduleError, ZoneRules,
 };
 use fireemu_core_functions::manifest::{
-    DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent, Trigger, DEFAULT_CONCURRENCY,
-    DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent, PlatformOptions, Trigger,
+    DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::{PathPattern, PatternError};
 use fireemu_core_types::time::LogicalInstant;
@@ -53,6 +53,7 @@ fn function(name: &str, trigger: Trigger) -> FunctionSpec {
         timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
         retry: false,
         concurrency: DEFAULT_CONCURRENCY,
+        platform_options: PlatformOptions::default(),
     }
 }
 

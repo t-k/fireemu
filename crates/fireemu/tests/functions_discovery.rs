@@ -270,6 +270,42 @@ async fn global_and_schedule_options_reach_the_runtime_manifest() {
     assert_eq!(callable["timeoutSeconds"], 17);
     assert_eq!(callable["concurrency"], 3);
     assert_eq!(callable["trigger"]["enforceAppCheck"], true);
+    assert_eq!(callable["platformOptions"]["availableMemoryMb"], 512);
+    assert_eq!(callable["platformOptions"]["cpu"], "1");
+    assert_eq!(callable["platformOptions"]["minInstances"], 1);
+    assert_eq!(callable["platformOptions"]["maxInstances"], 4);
+    assert_eq!(
+        callable["platformOptions"]["ingressSettings"],
+        "ALLOW_INTERNAL_ONLY"
+    );
+    assert_eq!(
+        callable["platformOptions"]["serviceAccountEmail"],
+        "runner@example.iam.gserviceaccount.com"
+    );
+    assert_eq!(
+        callable["platformOptions"]["vpcConnector"],
+        "projects/demo-options/locations/us-central1/connectors/default"
+    );
+    assert_eq!(
+        callable["platformOptions"]["vpcEgressSettings"],
+        "PRIVATE_RANGES_ONLY"
+    );
+    assert_eq!(
+        callable["platformOptions"]["labels"],
+        serde_json::json!({"fixture": "options"})
+    );
+    assert_eq!(
+        callable["platformOptions"]["secrets"],
+        serde_json::json!(["API_KEY"])
+    );
+    let http = functions
+        .iter()
+        .find(|function| function["name"] == "fxHttp")
+        .unwrap();
+    assert_eq!(
+        http["platformOptions"]["invoker"],
+        serde_json::json!(["public"])
+    );
     let schedule = functions
         .iter()
         .find(|function| function["name"] == "fxSchedule")

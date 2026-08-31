@@ -13,6 +13,39 @@ pub const DEFAULT_TIMEOUT_SECONDS: u32 = 60;
 /// Default per-function concurrency.
 pub const DEFAULT_CONCURRENCY: u32 = 1;
 
+/// Deployment-oriented 2nd-gen options discovered from the Firebase Functions SDK.
+///
+/// These values do not change local scheduling or IAM. They are retained in the manifest so
+/// capability/status output never silently loses configuration that matters at deployment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlatformOptions {
+    /// Configured memory allocation in MiB.
+    pub available_memory_mb: Option<u32>,
+    /// Minimum warm instances requested from the managed platform.
+    pub min_instances: Option<u32>,
+    /// Maximum managed instances.
+    pub max_instances: Option<u32>,
+    /// CPU setting, including the `gcf_gen1` sentinel.
+    pub cpu: Option<String>,
+    /// Managed-platform ingress policy.
+    pub ingress_settings: Option<String>,
+    /// HTTPS IAM invokers.
+    pub invokers: Vec<String>,
+    /// Runtime service account.
+    pub service_account_email: Option<String>,
+    /// Serverless VPC Access connector.
+    pub vpc_connector: Option<String>,
+    /// VPC egress policy.
+    pub vpc_egress_settings: Option<String>,
+    /// Direct VPC network interfaces, kept as stable JSON strings because the SDK permits
+    /// parameter expressions as well as literal interface objects.
+    pub network_interfaces: Vec<String>,
+    /// Deployment labels.
+    pub labels: BTreeMap<String, String>,
+    /// Secret environment variable names bound to this function.
+    pub secrets: Vec<String>,
+}
+
 /// Firestore document event kinds (`google.cloud.firestore.document.v1.*`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DocumentEvent {
@@ -441,6 +474,8 @@ pub struct FunctionSpec {
     pub retry: bool,
     /// Maximum concurrent invocations.
     pub concurrency: u32,
+    /// Deployment-only options retained for faithful discovery and diagnostics.
+    pub platform_options: PlatformOptions,
 }
 
 /// Why an exported function is not served, in the daemon's product-scope vocabulary.

@@ -286,7 +286,7 @@ async fn schedule_retry_options_control_attempts_and_logical_backoff() {
 fn manifest_json_round_trips_and_rejects_bad_input() {
     let v = json!({"functions": [
         {"name": "a", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.updated", "document": "x/{id}"}, "timeoutSeconds": 5, "retry": true},
-        {"name": "b", "trigger": {"type": "callable"}},
+        {"name": "b", "trigger": {"type": "callable"}, "platformOptions": {"availableMemoryMb": 1024, "minInstances": 1, "maxInstances": 5, "cpu": "gcf_gen1", "ingressSettings": "ALLOW_INTERNAL_ONLY", "invoker": ["public"], "serviceAccountEmail": "runner@example.test", "vpcConnector": "connector", "vpcEgressSettings": "PRIVATE_RANGES_ONLY", "networkInterfaces": [{"network": "default", "tags": ["local"]}], "labels": {"team": "emulator"}, "secrets": ["API_KEY"]}},
         {"name": "c", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo", "retryConfig": {"retryCount": 4, "maxRetrySeconds": 90, "maxBackoffSeconds": 30, "maxDoublings": 2, "minBackoffSeconds": 3}}, "region": "asia-northeast1", "retry": true},
         {"name": "d", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "b"}},
         {"name": "e", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn"}}
@@ -297,6 +297,10 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
     let back = manifest_to_json(&m);
     assert_eq!(back["functions"][0]["retry"], true);
     assert_eq!(back["functions"][1]["trigger"]["callable"], true);
+    assert_eq!(
+        back["functions"][1]["platformOptions"],
+        v["functions"][1]["platformOptions"]
+    );
     assert_eq!(
         back["functions"][2]["trigger"]["retryConfig"],
         json!({

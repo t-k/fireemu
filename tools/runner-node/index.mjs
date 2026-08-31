@@ -126,6 +126,28 @@ function firstRegion(ep) {
   return r || undefined;
 }
 
+// Options that control the managed deployment platform have no local scheduling or IAM
+// effect, but discovery must retain them so diagnostics never imply that they disappeared.
+function platformOptions(ep) {
+  if (!ep || ep.platform !== "gcfv2") return undefined;
+  const options = {};
+  if (ep.availableMemoryMb != null) options.availableMemoryMb = ep.availableMemoryMb;
+  if (ep.minInstances != null) options.minInstances = ep.minInstances;
+  if (ep.maxInstances != null) options.maxInstances = ep.maxInstances;
+  if (ep.cpu != null) options.cpu = String(ep.cpu);
+  if (ep.ingressSettings != null) options.ingressSettings = ep.ingressSettings;
+  if (ep.httpsTrigger?.invoker?.length) options.invoker = ep.httpsTrigger.invoker;
+  if (ep.serviceAccountEmail != null) options.serviceAccountEmail = ep.serviceAccountEmail;
+  if (ep.vpc?.connector != null) options.vpcConnector = ep.vpc.connector;
+  if (ep.vpc?.egressSettings != null) options.vpcEgressSettings = ep.vpc.egressSettings;
+  if (Array.isArray(ep.vpc?.networkInterfaces)) options.networkInterfaces = ep.vpc.networkInterfaces;
+  if (ep.labels && Object.keys(ep.labels).length > 0) options.labels = ep.labels;
+  if (Array.isArray(ep.secretEnvironmentVariables)) {
+    options.secrets = ep.secretEnvironmentVariables.map((secret) => secret.key).filter(Boolean);
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
 // Every export the runner cannot serve is reported, never dropped. `scope` says why, in the
 // daemon's product-scope vocabulary: a product decision (`deferred`, `planned`, `notPlanned`)
 // is fatal to discovery, while `unsupported` -- a shape neither the official emulator nor
@@ -271,6 +293,8 @@ function describe(name, fn, instrumentation) {
     return describeV1Event(base, String(et.eventType || ""), String(et.eventFilters?.resource || ""), ep.scheduleTrigger, !!et.retry);
   }
   if (ep && Object.keys(ep).length > 0) {
+    const deployment = platformOptions(ep);
+    if (deployment) base.platformOptions = deployment;
     const region = firstRegion(ep);
     if (region) base.region = region;
     if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;

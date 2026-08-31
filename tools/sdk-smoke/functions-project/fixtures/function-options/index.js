@@ -1,6 +1,9 @@
 const { setGlobalOptions } = require("firebase-functions/v2");
-const { onCall } = require("firebase-functions/v2/https");
+const { onCall, onRequest } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { defineSecret } = require("firebase-functions/params");
+
+const apiKey = defineSecret("API_KEY");
 
 setGlobalOptions({
   region: "asia-northeast1",
@@ -12,9 +15,17 @@ setGlobalOptions({
   minInstances: 1,
   maxInstances: 4,
   labels: { fixture: "options" },
+  ingressSettings: "ALLOW_INTERNAL_ONLY",
+  invoker: ["public"],
+  serviceAccount: "runner@example.iam.gserviceaccount.com",
+  vpcConnector: "projects/demo-options/locations/us-central1/connectors/default",
+  vpcEgress: "PRIVATE_RANGES_ONLY",
+  secrets: [apiKey],
+  preserveExternalChanges: true,
 });
 
 exports.fxCallable = onCall(() => ({ ok: true }));
+exports.fxHttp = onRequest((_request, response) => response.send("ok"));
 exports.fxSchedule = onSchedule(
   {
     schedule: "30 2 * * *",

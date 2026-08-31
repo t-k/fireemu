@@ -19,8 +19,9 @@
 use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
     AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec,
-    IgnoredFunction, IgnoredScope, ObjectEvent, ScheduleRetryConfig, TaskRateLimits,
-    TaskRetryConfig, Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    IgnoredFunction, IgnoredScope, ObjectEvent, PlatformOptions, ScheduleRetryConfig,
+    TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION,
+    DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::PathPattern;
 use serde_json::{json, Value};
@@ -96,6 +97,99 @@ fn parse_ignored(v: &Value) -> Result<IgnoredFunction, String> {
             .ok_or_else(|| format!("manifest: ignored function {name:?}: reason is required"))?,
         scope,
         name,
+    })
+}
+
+fn parse_platform_options(
+    function: &str,
+    value: Option<&Value>,
+) -> Result<PlatformOptions, String> {
+    let Some(value) = value else {
+        return Ok(PlatformOptions::default());
+    };
+    let object = value.as_object().ok_or_else(|| {
+        format!("manifest: function {function:?}: platformOptions must be an object")
+    })?;
+    let u32_value = |key: &str| -> Result<Option<u32>, String> {
+        match object.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => value
+                .as_u64()
+                .and_then(|number| u32::try_from(number).ok())
+                .map(Some)
+                .ok_or_else(|| {
+                    format!(
+                        "manifest: function {function:?}: platformOptions.{key} must be an integer"
+                    )
+                }),
+        }
+    };
+    let string_value = |key: &str| -> Result<Option<String>, String> {
+        match object.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => Err(format!(
+                "manifest: function {function:?}: platformOptions.{key} must be a string"
+            )),
+        }
+    };
+    let string_array = |key: &str| -> Result<Vec<String>, String> {
+        let Some(value) = object.get(key) else {
+            return Ok(Vec::new());
+        };
+        let values = value.as_array().ok_or_else(|| {
+            format!("manifest: function {function:?}: platformOptions.{key} must be an array")
+        })?;
+        values
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    format!(
+                        "manifest: function {function:?}: platformOptions.{key} entries must be strings"
+                    )
+                })
+            })
+            .collect()
+    };
+    let mut labels = std::collections::BTreeMap::new();
+    if let Some(value) = object.get("labels") {
+        let values = value.as_object().ok_or_else(|| {
+            format!("manifest: function {function:?}: platformOptions.labels must be an object")
+        })?;
+        for (key, value) in values {
+            let value = value.as_str().ok_or_else(|| {
+                format!(
+                    "manifest: function {function:?}: platformOptions.labels.{key} must be a string"
+                )
+            })?;
+            labels.insert(key.clone(), value.to_owned());
+        }
+    }
+    let network_interfaces = object
+        .get("networkInterfaces")
+        .map_or(Ok(Vec::new()), |value| {
+            value
+                .as_array()
+                .ok_or_else(|| {
+                    format!(
+                        "manifest: function {function:?}: platformOptions.networkInterfaces must be an array"
+                    )
+                })
+                .map(|values| values.iter().map(Value::to_string).collect())
+        })?;
+    Ok(PlatformOptions {
+        available_memory_mb: u32_value("availableMemoryMb")?,
+        min_instances: u32_value("minInstances")?,
+        max_instances: u32_value("maxInstances")?,
+        cpu: string_value("cpu")?,
+        ingress_settings: string_value("ingressSettings")?,
+        invokers: string_array("invoker")?,
+        service_account_email: string_value("serviceAccountEmail")?,
+        vpc_connector: string_value("vpcConnector")?,
+        vpc_egress_settings: string_value("vpcEgressSettings")?,
+        network_interfaces,
+        labels,
+        secrets: string_array("secrets")?,
     })
 }
 
@@ -309,14 +403,51 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 .ok_or_else(|| format!("manifest: function {name:?}: {k} must be an integer")),
         }
     };
+    let platform_options = parse_platform_options(&name, f.get("platformOptions"))?;
     Ok(FunctionSpec {
         region: s(f, "region").unwrap_or_else(|| DEFAULT_REGION.to_owned()),
         entry_point: s(f, "entryPoint").unwrap_or_else(|| name.clone()),
         timeout_seconds: u32_field("timeoutSeconds", DEFAULT_TIMEOUT_SECONDS)?,
         retry: f.get("retry").and_then(Value::as_bool).unwrap_or(false),
         concurrency: u32_field("concurrency", DEFAULT_CONCURRENCY)?,
+        platform_options,
         name,
         trigger,
+    })
+}
+
+fn platform_options_to_json(options: &PlatformOptions) -> Option<Value> {
+    if options == &PlatformOptions::default() {
+        return None;
+    }
+    let network_interfaces: Vec<Value> = options
+        .network_interfaces
+        .iter()
+        .map(|value| serde_json::from_str(value).unwrap_or_else(|_| json!(value)))
+        .collect();
+    Some(json!({
+        "availableMemoryMb": options.available_memory_mb,
+        "minInstances": options.min_instances,
+        "maxInstances": options.max_instances,
+        "cpu": options.cpu,
+        "ingressSettings": options.ingress_settings,
+        "invoker": options.invokers,
+        "serviceAccountEmail": options.service_account_email,
+        "vpcConnector": options.vpc_connector,
+        "vpcEgressSettings": options.vpc_egress_settings,
+        "networkInterfaces": network_interfaces,
+        "labels": options.labels,
+        "secrets": options.secrets,
+    }))
+}
+
+fn ignored_to_json(ignored: &IgnoredFunction) -> Value {
+    json!({
+        "name": ignored.name,
+        "region": ignored.region,
+        "triggerType": ignored.trigger_type,
+        "scope": ignored.scope.as_str(),
+        "reason": ignored.reason,
     })
 }
 
@@ -395,7 +526,7 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                     },
                 }),
             };
-            json!({
+            let mut function = json!({
                 "name": f.name,
                 "region": f.region,
                 "entryPoint": f.entry_point,
@@ -403,21 +534,13 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                 "timeoutSeconds": f.timeout_seconds,
                 "retry": f.retry,
                 "concurrency": f.concurrency,
-            })
+            });
+            if let Some(options) = platform_options_to_json(&f.platform_options) {
+                function["platformOptions"] = options;
+            }
+            function
         })
         .collect();
-    let ignored: Vec<Value> = m
-        .ignored
-        .iter()
-        .map(|i| {
-            json!({
-                "name": i.name,
-                "region": i.region,
-                "triggerType": i.trigger_type,
-                "scope": i.scope.as_str(),
-                "reason": i.reason,
-            })
-        })
-        .collect();
+    let ignored: Vec<Value> = m.ignored.iter().map(ignored_to_json).collect();
     json!({"functions": functions, "ignored": ignored})
 }

@@ -81,17 +81,33 @@ struct DiagnosticPath<'a>(&'a Path);
 
 impl std::fmt::Display for DiagnosticPath<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for character in self.0.to_string_lossy().chars() {
-            for escaped in character.escape_debug() {
-                write!(formatter, "{escaped}")?;
-            }
-        }
-        Ok(())
+        write_diagnostic_text(formatter, &self.0.to_string_lossy())
     }
 }
 
 const fn diagnostic_path(path: &Path) -> DiagnosticPath<'_> {
     DiagnosticPath(path)
+}
+
+struct DiagnosticText<'a>(&'a str);
+
+impl std::fmt::Display for DiagnosticText<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_diagnostic_text(formatter, self.0)
+    }
+}
+
+const fn diagnostic_text(text: &str) -> DiagnosticText<'_> {
+    DiagnosticText(text)
+}
+
+fn write_diagnostic_text(formatter: &mut std::fmt::Formatter<'_>, text: &str) -> std::fmt::Result {
+    for character in text.chars() {
+        for escaped in character.escape_debug() {
+            write!(formatter, "{escaped}")?;
+        }
+    }
+    Ok(())
 }
 
 /// A command-line or configuration failure and the exit code it produces: 2 for usage, 1 for
@@ -574,8 +590,9 @@ fn resolve_project(dir: &Path, requested: Option<&str>) -> Result<Option<String>
     let Ok(text) = std::fs::read_to_string(&rc_path) else {
         return Ok(requested.map(str::to_owned));
     };
-    let rc: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", rc_path.display())))?;
+    let rc: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        CliError::refused(format!("{} does not parse: {e}", diagnostic_path(&rc_path)))
+    })?;
     Ok(config::resolve_project_alias(&rc, requested)?)
 }
 

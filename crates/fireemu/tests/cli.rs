@@ -245,6 +245,12 @@ fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
         assert_eq!(out.status.code(), Some(2), "{label}: {}", stderr(&out));
         assert!(!dir.join("fireemu.json").exists(), "{label}");
     }
+
+    let dir = scratch("init-usage-control-character");
+    let out = run_in(&dir, &["init", "--bad-\u{1b}[31m"], None);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!stderr(&out).contains('\u{1b}'), "{}", stderr(&out));
+    assert!(stderr(&out).contains("\\u{1b}"), "{}", stderr(&out));
 }
 
 #[test]

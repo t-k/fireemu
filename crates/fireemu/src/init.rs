@@ -144,7 +144,12 @@ fn parse_args(args: &[String]) -> Result<InitArgs, CliError> {
                 force = true;
                 index += 1;
             }
-            other => return Err(CliError::usage(format!("unknown init argument {other}"))),
+            other => {
+                return Err(CliError::usage(format!(
+                    "unknown init argument {}",
+                    crate::diagnostic_text(other)
+                )))
+            }
         }
     }
     Ok(InitArgs {

@@ -38,7 +38,9 @@ if (distIndex >= 0) {
   const platform = found.find((f) => f !== launcher);
   if (!launcher || !platform) {
     console.error(
-      `verify-install: expected a launcher and a platform tarball in ${dist}, found ${found}`,
+      escapeForLog(
+        `verify-install: expected a launcher and a platform tarball in ${dist}, found ${found}`,
+      ),
     );
     process.exit(2);
   }
@@ -54,20 +56,29 @@ if (tarballs.length !== 2) {
 }
 
 const failures = [];
+function escapeForLog(value) {
+  return Array.from(String(value), (character) => {
+    const code = character.codePointAt(0);
+    const control = code <= 8 || (code >= 11 && code <= 31) || (code >= 127 && code <= 159);
+    return control ? `\\u{${code.toString(16)}}` : character;
+  }).join("");
+}
 function step(name, fn) {
   try {
     fn();
     console.log(`ok   ${name}`);
   } catch (e) {
     failures.push(name);
-    console.log(`FAIL ${name}\n${String(e.message).replace(/^/gm, "     ")}`);
+    console.log(`FAIL ${name}\n${escapeForLog(e.message).replace(/^/gm, "     ")}`);
   }
 }
 function run(cmd, cmdArgs, opts = {}) {
   const r = spawnSync(cmd, cmdArgs, { encoding: "utf8", ...opts });
   if (r.error) throw r.error;
   if (r.status !== 0) {
-    throw new Error(`${cmd} ${cmdArgs.join(" ")} exited ${r.status}\n${r.stdout}${r.stderr}`);
+    throw new Error(
+      escapeForLog(`${cmd} ${cmdArgs.join(" ")} exited ${r.status}\n${r.stdout}${r.stderr}`),
+    );
   }
   return r;
 }
@@ -79,7 +90,7 @@ mkdirSync(project);
 writeFileSync(join(project, "package.json"), JSON.stringify({ name: "try", private: true }));
 const exe = process.platform === "win32" ? "fireemu.cmd" : "fireemu";
 const bin = join(project, "node_modules", ".bin", exe);
-const shell = process.platform === "win32";
+const launcher = join(project, "node_modules", "fireemu", "bin", "fireemu.mjs");
 const nodeDirectory = dirname(process.execPath);
 const npmCli = [
   process.env.npm_execpath,
@@ -113,7 +124,7 @@ step("installs offline, without scripts, from the two tarballs", () => {
 });
 
 step("doctor exits 0 through node_modules/.bin and found the bundled runner", () => {
-  const r = run(bin, ["doctor"], { cwd: project, shell });
+  const r = run(process.execPath, [launcher, "doctor"], { cwd: project });
   if (!/runner/.test(r.stdout))
     throw new Error(`doctor said nothing about the runner:\n${r.stdout}`);
 });
@@ -121,7 +132,7 @@ step("doctor exits 0 through node_modules/.bin and found the bundled runner", ()
 step("init creates a strict canonical configuration through the packaged launcher", () => {
   const initialized = join(base, "initialized project");
   mkdirSync(initialized);
-  run(bin, ["init", "--yes"], { cwd: initialized, shell });
+  run(process.execPath, [launcher, "init", "--yes"], { cwd: initialized });
   const generated = JSON.parse(readFileSync(join(initialized, "fireemu.json"), "utf8"));
   if (generated.profile !== "strict") {
     throw new Error(`init selected ${JSON.stringify(generated.profile)} instead of strict`);
@@ -132,12 +143,14 @@ step("init creates a strict canonical configuration through the packaged launche
 });
 
 step("exec serves on ephemeral ports, runs the command and exits with its status", () => {
-  run(bin, ["exec", ...emptyPorts, "--", "node", "-e", "process.exit(0)"], { cwd: project, shell });
-  const r = spawnSync(bin, ["exec", ...emptyPorts, "--", "node", "-e", "process.exit(3)"], {
+  run(process.execPath, [launcher, "exec", ...emptyPorts, "--", "node", "-e", "process.exit(0)"], {
     cwd: project,
-    shell,
-    encoding: "utf8",
   });
+  const r = spawnSync(
+    process.execPath,
+    [launcher, "exec", ...emptyPorts, "--", "node", "-e", "process.exit(3)"],
+    { cwd: project, encoding: "utf8" },
+  );
   if (r.status !== 3)
     throw new Error(`expected the command's exit code 3, got ${r.status}\n${r.stderr}`);
 });
@@ -145,7 +158,8 @@ step("exec serves on ephemeral ports, runs the command and exits with its status
 step("the same installation works through a symlink to the project", () => {
   const link = join(base, "link");
   symlinkSync(project, link, "dir");
-  run(join(link, "node_modules", ".bin", exe), ["doctor"], { cwd: link, shell });
+  const linkedLauncher = join(link, "node_modules", "fireemu", "bin", "fireemu.mjs");
+  run(process.execPath, [linkedLauncher, "doctor"], { cwd: link });
 });
 
 if (process.platform !== "win32" && userInfo().uid !== 0) {
@@ -154,8 +168,12 @@ if (process.platform !== "win32" && userInfo().uid !== 0) {
     mkdirSync(ro);
     chmodSync(ro, 0o555);
     try {
-      run(bin, ["doctor"], { cwd: ro, shell });
-      run(bin, ["exec", ...emptyPorts, "--", "node", "-e", "process.exit(0)"], { cwd: ro, shell });
+      run(process.execPath, [launcher, "doctor"], { cwd: ro });
+      run(
+        process.execPath,
+        [launcher, "exec", ...emptyPorts, "--", "node", "-e", "process.exit(0)"],
+        { cwd: ro },
+      );
     } finally {
       chmodSync(ro, 0o755);
     }
@@ -170,7 +188,7 @@ if (process.platform !== "win32" && userInfo().uid !== 0) {
 }
 
 if (keep) {
-  console.log(`install=${project}`);
+  console.log(`install=${escapeForLog(project)}`);
 } else {
   rmSync(base, { recursive: true, force: true });
 }

@@ -428,15 +428,16 @@
       "statement": "A ruleset becomes active only after parse, compile and limit checks; each request observes one immutable version.",
       "criticality": "critical",
       "owner": "core-rules",
-      "status": "planned",
+      "status": "implemented",
       "artifacts": {
         "tla": "RulesetActivation.tla::AtomicRulesetActivation",
-        "loom": [
-          "ruleset_reload_never_exposes_partial_compile",
-          "inflight_request_keeps_single_ruleset_version"
-        ],
         "mutation": [
-          "M-RULES-010"
+          "M-RULES-010",
+          "M-TLA-RULES-ATOMIC-001"
+        ],
+        "integration": [
+          "crates/fireemu-adapter-http/tests/control.rs",
+          "crates/fireemu-core-rules/tests/lint.rs"
         ]
       }
     },

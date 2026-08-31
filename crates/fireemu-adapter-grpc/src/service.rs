@@ -264,12 +264,15 @@ impl GatewayService {
                 "RunQuery requires a structured_query",
             ));
         };
-        let query =
-            decode_structured_query(&parent, sq).map_err(|e| Rejection::Decode(e).to_status())?;
-        let accepted = self
-            .gateway
-            .validate_query(&query)
-            .map_err(|r| r.to_status())?;
+        let accepted = if let Some(local) = self.local_backend() {
+            local.accepted_query(&parent, sq)?
+        } else {
+            let query = decode_structured_query(&parent, sq)
+                .map_err(|e| Rejection::Decode(e).to_status())?;
+            self.gateway
+                .validate_query(&query)
+                .map_err(|r| r.to_status())?
+        };
         Ok(accepted.warnings)
     }
 }
@@ -297,12 +300,15 @@ impl GatewayService {
                 "structured_aggregation_query requires a structured_query",
             ));
         };
-        let query =
-            decode_structured_query(&parent, sq).map_err(|e| Rejection::Decode(e).to_status())?;
-        let accepted = self
-            .gateway
-            .validate_query(&query)
-            .map_err(|r| r.to_status())?;
+        let accepted = if let Some(local) = self.local_backend() {
+            local.accepted_query(&parent, sq)?
+        } else {
+            let query = decode_structured_query(&parent, sq)
+                .map_err(|e| Rejection::Decode(e).to_status())?;
+            self.gateway
+                .validate_query(&query)
+                .map_err(|r| r.to_status())?
+        };
         Ok(accepted.warnings)
     }
 }

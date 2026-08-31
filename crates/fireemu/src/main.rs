@@ -986,6 +986,134 @@ fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
     }
 }
 
+fn watched_file_signature(path: &str) -> Result<u64, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    Ok(bytes
+        .into_iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
+        }))
+}
+
+fn start_rules_reload_supervisor(
+    path: String,
+    label: &'static str,
+    rules: &Arc<RwLock<LoadedRules>>,
+) {
+    let weak = Arc::downgrade(rules);
+    let mut observed = watched_file_signature(&path).ok();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            let Some(rules) = weak.upgrade() else {
+                return;
+            };
+            let signature = match watched_file_signature(&path) {
+                Ok(signature) if observed != Some(signature) => signature,
+                Ok(_) => continue,
+                Err(reason) => {
+                    eprintln!("warning: {label} reload scan failed: {reason}");
+                    continue;
+                }
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let source = match std::fs::read_to_string(&path) {
+                Ok(source) => source,
+                Err(error) => {
+                    observed = Some(signature);
+                    eprintln!(
+                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
+                    );
+                    continue;
+                }
+            };
+            observed = Some(watched_file_signature(&path).unwrap_or(signature));
+            match LoadedRules::from_source(&source) {
+                Ok(candidate) => {
+                    if let Ok(mut current) = rules.write() {
+                        *current = candidate;
+                        eprintln!("note: reloaded {label} from {path}");
+                    }
+                }
+                Err(error) => eprintln!(
+                    "warning: {label} reload failed; keeping the last-known-good rules: {error}"
+                ),
+            }
+        }
+    });
+}
+
+fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<LocalBackend>) {
+    let weak = Arc::downgrade(backend);
+    let mut observed = watched_file_signature(&path).ok();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            let Some(backend) = weak.upgrade() else {
+                return;
+            };
+            let signature = match watched_file_signature(&path) {
+                Ok(signature) if observed != Some(signature) => signature,
+                Ok(_) => continue,
+                Err(reason) => {
+                    eprintln!("warning: Firestore index reload scan failed: {reason}");
+                    continue;
+                }
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            observed = Some(watched_file_signature(&path).unwrap_or(signature));
+            match control::load_indexes(&path) {
+                Ok(indexes) => {
+                    backend.replace_database_indexes(&database, indexes);
+                    eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                }
+                Err(error) => eprintln!(
+                    "warning: Firestore index reload failed; keeping the last-known-good indexes: {error}"
+                ),
+            }
+        }
+    });
+}
+
+fn start_firestore_config_reload_supervisors(
+    cfg: &RuntimeConfig,
+    backend: &Arc<LocalBackend>,
+    rules: &Arc<RwLock<LoadedRules>>,
+    database_rules: &std::collections::BTreeMap<String, Arc<RwLock<LoadedRules>>>,
+    storage_rules: &Arc<RwLock<LoadedRules>>,
+) {
+    for (database, files) in &cfg.firestore_databases {
+        if let Some(path) = &files.rules {
+            let slot = if database == "(default)" {
+                Some(rules)
+            } else {
+                database_rules.get(database)
+            };
+            if let Some(slot) = slot {
+                start_rules_reload_supervisor(path.clone(), "Firestore rules", slot);
+            }
+        }
+    }
+    if cfg.firestore_databases.is_empty() {
+        if let Some(path) = &cfg.rules_file {
+            start_rules_reload_supervisor(path.clone(), "Firestore rules", rules);
+        }
+    }
+    if let Some(path) = &cfg.storage_rules_file {
+        start_rules_reload_supervisor(path.clone(), "Storage rules", storage_rules);
+    }
+    for (database, files) in &cfg.firestore_databases {
+        if let Some(path) = &files.indexes {
+            start_index_reload_supervisor(path.clone(), database.clone(), backend);
+        }
+    }
+    if cfg.firestore_databases.is_empty() {
+        if let Some(path) = &cfg.index_file {
+            start_index_reload_supervisor(path.clone(), "(default)".to_owned(), backend);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn storage_state(
     cfg: &RuntimeConfig,
@@ -1525,6 +1653,13 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             },
         };
         let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed));
+        for (database, files) in &cfg.firestore_databases {
+            if database != "(default)" {
+                if let Some(path) = &files.indexes {
+                    backend.replace_database_indexes(database, control::load_indexes(path)?);
+                }
+            }
+        }
         // Text Index definitions (FS-TEXT-VAL-1): validated at start, never executed.
         let text_indexes = Arc::new(Mutex::new(control::load_text_indexes(&cfg)?));
         // The sessions' fault plans (spec 18), shared by every adapter; empty until PUT.
@@ -1585,7 +1720,30 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth_store.clone(),
         ));
         let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
+        let mut database_rules = std::collections::BTreeMap::new();
+        for (database, files) in &cfg.firestore_databases {
+            if database == "(default)" {
+                continue;
+            }
+            let loaded = match &files.rules {
+                Some(path) => {
+                    let source = std::fs::read_to_string(path)
+                        .map_err(|error| format!("rules source {path}: {error}"))?;
+                    LoadedRules::from_source(&source)
+                        .map_err(|error| format!("rules source {path} does not parse: {error}"))?
+                }
+                None => LoadedRules::default(),
+            };
+            database_rules.insert(database.clone(), Arc::new(RwLock::new(loaded)));
+        }
         let storage_rules = Arc::new(RwLock::new(load_storage_rules(&cfg)?));
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &rules,
+            &database_rules,
+            &storage_rules,
+        );
         let Listeners {
             firestore: grpc_listener,
             control: http_listener,
@@ -1886,6 +2044,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             Arc::new(
                 RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
                     .with_registry(registry.clone())
+                    .with_database_rules(database_rules.clone())
                     .with_token_acceptance(cfg.token_acceptance),
             )
         });
@@ -2107,5 +2266,87 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod config_reload_tests {
+    use super::*;
+    use fireemu_core_firestore::index::IndexValidationPolicy;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+
+    const RULES_ONE: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
+    const RULES_TWO: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow write: if false; } } }";
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-reload-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn rules_reload_publishes_only_a_valid_complete_generation() {
+        let dir = scratch("rules");
+        let path = dir.join("firestore.rules");
+        std::fs::write(&path, RULES_ONE).unwrap();
+        let rules = Arc::new(RwLock::new(LoadedRules::from_source(RULES_ONE).unwrap()));
+        start_rules_reload_supervisor(path.display().to_string(), "Firestore rules", &rules);
+
+        std::fs::write(&path, "not a rules program").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(rules.read().unwrap().source.as_deref(), Some(RULES_ONE));
+
+        std::fs::write(&path, RULES_TWO).unwrap();
+        for _ in 0..30 {
+            if rules.read().unwrap().source.as_deref() == Some(RULES_TWO) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(rules.read().unwrap().source.as_deref(), Some(RULES_TWO));
+        drop(rules);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn index_reload_replaces_the_query_planners_catalog() {
+        let dir = scratch("indexes");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, r#"{"indexes":[],"fieldOverrides":[]}"#).unwrap();
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        std::fs::write(
+            &path,
+            r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#,
+        )
+        .unwrap();
+        for _ in 0..30 {
+            if backend.indexes_for_database("staging").composites().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(backend.indexes().composites().is_empty());
+        assert_eq!(
+            backend.indexes_for_database("staging").composites().len(),
+            1
+        );
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

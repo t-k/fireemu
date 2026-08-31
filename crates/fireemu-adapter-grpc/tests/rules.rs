@@ -1,20 +1,24 @@
 //! Security Rules enforcement on the gRPC surface: owner bypass, ID token verification,
 //! per-method evaluation with `resource` / `request.resource`, and the list approximation.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+use fireemu_adapter_grpc::decode::Parent;
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{LatestReader, Principal, RulesEnforcer};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::jwt::{base64url_encode, encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_rules::runtime::LoadedRules;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+use fireemu_core_types::ids::{DatabaseId, ProjectId};
 use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
@@ -61,6 +65,56 @@ service cloud.firestore {
   }
 }
 ";
+
+#[test]
+fn named_databases_select_their_own_ruleset() {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let backend = Arc::new(LocalBackend::new(gateway, clock.clone(), 7));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let deny = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
+    let allow = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
+    let enforcer = RulesEnforcer::new(
+        Arc::new(RwLock::new(LoadedRules::from_source(deny).unwrap())),
+        auth,
+        clock,
+    )
+    .with_database_rules(BTreeMap::from([(
+        "staging".to_owned(),
+        Arc::new(RwLock::new(LoadedRules::from_source(allow).unwrap())),
+    )]));
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let default_database = DatabaseId::default_database();
+    let staging_database = DatabaseId::try_new("staging").unwrap();
+    let default_path = DocumentPath::parse(&project, &default_database, "items/a").unwrap();
+    let staging_path = DocumentPath::parse(&project, &staging_database, "items/a").unwrap();
+    let reader = LatestReader {
+        backend,
+        parent: Parent {
+            project,
+            database: staging_database,
+            document: None,
+        },
+    };
+    assert!(enforcer
+        .authorize_get(&Principal::Anonymous, &default_path, None, &reader)
+        .is_err());
+    assert!(enforcer
+        .authorize_get(&Principal::Anonymous, &staging_path, None, &reader)
+        .is_ok());
+}
 
 struct Harness {
     client: FirestoreClient<tonic::transport::Channel>,

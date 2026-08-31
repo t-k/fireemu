@@ -17,7 +17,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
@@ -151,6 +151,8 @@ impl DatabaseHandle {
 /// Local backend state.
 pub struct LocalBackend {
     gateway: Gateway,
+    /// Reloadable index catalog used for every new query plan.
+    indexes: RwLock<BTreeMap<String, fireemu_core_firestore::index::IndexSet>>,
     clock: Arc<Mutex<VirtualClock>>,
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
@@ -398,8 +400,13 @@ impl LocalBackend {
     /// Creates a backend with the strict gateway and a shared clock.
     #[must_use]
     pub fn new(gateway: Gateway, clock: Arc<Mutex<VirtualClock>>, seed: u64) -> Self {
+        let indexes = RwLock::new(BTreeMap::from([(
+            "(default)".to_owned(),
+            gateway.indexes.clone(),
+        )]));
         Self {
             gateway,
+            indexes,
             clock,
             databases: Mutex::new(BTreeMap::new()),
             faults: Mutex::new(None),
@@ -857,9 +864,52 @@ impl LocalBackend {
         sq: &pb::StructuredQuery,
     ) -> Result<AcceptedQuery, Status> {
         let query = decode_structured_query(parent, sq).map_err(status)?;
-        self.gateway
-            .validate_query(&query)
-            .map_err(|r| r.to_status())
+        let mut gateway = self.gateway.clone();
+        gateway.indexes = self
+            .indexes
+            .read()
+            .map_err(|_| lock_poisoned())?
+            .get(parent.database.as_str())
+            .cloned()
+            .unwrap_or_default();
+        gateway.validate_query(&query).map_err(|r| r.to_status())
+    }
+
+    /// Atomically replaces the index catalog used by subsequent query plans.
+    pub fn replace_indexes(&self, indexes: fireemu_core_firestore::index::IndexSet) {
+        self.replace_database_indexes("(default)", indexes);
+    }
+
+    /// Atomically replaces one database's index catalog.
+    pub fn replace_database_indexes(
+        &self,
+        database: &str,
+        indexes: fireemu_core_firestore::index::IndexSet,
+    ) {
+        if let Ok(mut current) = self.indexes.write() {
+            current.insert(database.to_owned(), indexes);
+        }
+    }
+
+    /// Returns a snapshot of the index catalog currently used for query planning.
+    #[must_use]
+    pub fn indexes(&self) -> fireemu_core_firestore::index::IndexSet {
+        self.indexes_for_database("(default)")
+    }
+
+    /// Returns one database's current query-planning index catalog.
+    #[must_use]
+    pub fn indexes_for_database(&self, database: &str) -> fireemu_core_firestore::index::IndexSet {
+        self.indexes.read().map_or_else(
+            |error| {
+                error
+                    .into_inner()
+                    .get(database)
+                    .cloned()
+                    .unwrap_or_default()
+            },
+            |indexes| indexes.get(database).cloned().unwrap_or_default(),
+        )
     }
 
     /// Runs an accepted query at the latest version and returns core documents.
@@ -1638,11 +1688,7 @@ impl LocalBackend {
                 "RunQuery requires a structured_query",
             ));
         };
-        let query = decode_structured_query(&parent, sq).map_err(status)?;
-        let accepted = self
-            .gateway
-            .validate_query(&query)
-            .map_err(|r| r.to_status())?;
+        let accepted = self.accepted_query(&parent, sq)?;
         let now = self.now();
         let read_at = match &req.consistency_selector {
             Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
@@ -1740,11 +1786,7 @@ impl LocalBackend {
                 "aggregation query requires a structured_query",
             ));
         };
-        let query = decode_structured_query(&parent, sq).map_err(status)?;
-        let accepted = self
-            .gateway
-            .validate_query(&query)
-            .map_err(|r| r.to_status())?;
+        let accepted = self.accepted_query(&parent, sq)?;
         let (aliases, aggregations) = decode_aggregations(saq)?;
         let now = self.now();
         let read_at = match &req.consistency_selector {

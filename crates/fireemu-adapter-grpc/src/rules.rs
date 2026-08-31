@@ -352,6 +352,7 @@ pub enum RulesLoadError {
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RwLock<LoadedRules>>,
+    database_rules: BTreeMap<String, Arc<RwLock<LoadedRules>>>,
     auth: Arc<Mutex<AuthStore>>,
     clock: Arc<Mutex<VirtualClock>>,
     /// Stores of the other session projects (tokens are verified against the store of
@@ -372,6 +373,7 @@ impl RulesEnforcer {
     ) -> Self {
         Self {
             rules,
+            database_rules: BTreeMap::new(),
             auth,
             clock,
             registry: None,
@@ -390,6 +392,20 @@ impl RulesEnforcer {
     pub fn with_registry(mut self, registry: Arc<fireemu_core_auth::store::AuthRegistry>) -> Self {
         self.registry = Some(registry);
         self
+    }
+
+    /// Installs rulesets declared for named Firestore databases.
+    #[must_use]
+    pub fn with_database_rules(
+        mut self,
+        rules: BTreeMap<String, Arc<RwLock<LoadedRules>>>,
+    ) -> Self {
+        self.database_rules = rules;
+        self
+    }
+
+    fn rules_for_database(&self, database: &str) -> &Arc<RwLock<LoadedRules>> {
+        self.database_rules.get(database).unwrap_or(&self.rules)
     }
 
     /// Sets how a caller's ID token is verified. The default is
@@ -508,7 +524,7 @@ impl RulesEnforcer {
             return Ok(());
         }
         let rules = self
-            .rules
+            .rules_for_database(path.database().as_str())
             .read()
             .map_err(|_| Status::internal("rules lock poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {
@@ -557,7 +573,11 @@ impl RulesEnforcer {
             return Ok(());
         }
         let rules = self
-            .rules
+            .rules_for_database(
+                items
+                    .first()
+                    .map_or("(default)", |(path, _)| path.database().as_str()),
+            )
             .read()
             .map_err(|_| Status::internal("rules lock poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {
@@ -609,7 +629,7 @@ impl RulesEnforcer {
             return Ok(());
         }
         let rules = self
-            .rules
+            .rules_for_database(parent.database.as_str())
             .read()
             .map_err(|_| Status::internal("rules lock poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {
@@ -673,7 +693,7 @@ impl RulesEnforcer {
             return Ok(());
         }
         let rules = self
-            .rules
+            .rules_for_database(parent.database.as_str())
             .read()
             .map_err(|_| Status::internal("rules lock poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {

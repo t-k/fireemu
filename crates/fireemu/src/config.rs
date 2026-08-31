@@ -4,6 +4,8 @@
 //! that typos never silently change behaviour (the JSON schema in `spec/config` is the
 //! authority; this loader enforces the same rule on the subset it understands).
 
+use std::collections::BTreeMap;
+
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_firestore::index::IndexValidationPolicy;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -28,6 +30,15 @@ pub enum CompatibilityProfile {
     /// Add fireemu's own validation on top. Every difference it makes may only refuse more
     /// than the official emulator, never less.
     Strict,
+}
+
+/// Rules and index files declared for one Firestore database in `firebase.json`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FirestoreDatabaseFiles {
+    /// Security Rules source.
+    pub rules: Option<String>,
+    /// Composite and single-field index configuration.
+    pub indexes: Option<String>,
 }
 
 impl CompatibilityProfile {
@@ -136,6 +147,8 @@ pub struct RuntimeConfig {
     pub text_index_file: Option<String>,
     /// Path of the Security Rules source, if configured.
     pub rules_file: Option<String>,
+    /// Per-database Firestore files, including `(default)` when declared by `firebase.json`.
+    pub firestore_databases: BTreeMap<String, FirestoreDatabaseFiles>,
     /// Path of the Storage Security Rules source, if configured.
     pub storage_rules_file: Option<String>,
     /// Whether Security Rules are enforced on the Firestore surface.
@@ -357,6 +370,7 @@ impl Default for RuntimeConfig {
             index_file: None,
             text_index_file: None,
             rules_file: None,
+            firestore_databases: BTreeMap::new(),
             storage_rules_file: None,
             rules_enforced: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
@@ -807,7 +821,7 @@ impl RuntimeConfig {
         &mut self,
         section: Option<&Value>,
         file: &dyn Fn(&Value, &str) -> Result<String, ConfigError>,
-        report: &mut FirebaseJsonReport,
+        _report: &mut FirebaseJsonReport,
     ) -> Result<(), ConfigError> {
         let entries: Vec<(&serde_json::Map<String, Value>, String)> = match section {
             None => Vec::new(),
@@ -852,18 +866,22 @@ impl RuntimeConfig {
                 )));
             }
             seen.push(database.clone());
+            let files = FirestoreDatabaseFiles {
+                rules: entry
+                    .get("rules")
+                    .map(|value| file(value, &format!("{path}.rules")))
+                    .transpose()?,
+                indexes: entry
+                    .get("indexes")
+                    .or_else(|| entry.get("index"))
+                    .map(|value| file(value, &format!("{path}.indexes")))
+                    .transpose()?,
+            };
             if database == "(default)" {
-                if let Some(v) = entry.get("rules") {
-                    self.rules_file = Some(file(v, &format!("{path}.rules"))?);
-                }
-                if let Some(v) = entry.get("indexes").or_else(|| entry.get("index")) {
-                    self.index_file = Some(file(v, &format!("{path}.indexes"))?);
-                }
-            } else {
-                report.notices.push(format!(
-                    "{path}: the named Firestore database {database} is served, but its own rules and indexes are not loaded; only the (default) database's are"
-                ));
+                self.rules_file.clone_from(&files.rules);
+                self.index_file.clone_from(&files.indexes);
             }
+            self.firestore_databases.insert(database, files);
         }
         Ok(())
     }
@@ -2225,6 +2243,10 @@ mod tests {
             .unwrap();
         assert_eq!(cfg.rules_file.as_deref(), Some("/proj/firestore.rules"));
         assert_eq!(
+            cfg.firestore_databases["(default)"].rules.as_deref(),
+            Some("/proj/firestore.rules")
+        );
+        assert_eq!(
             cfg.index_file.as_deref(),
             Some("/proj/firestore.indexes.json")
         );
@@ -2252,6 +2274,27 @@ mod tests {
         assert_eq!(cfg.index_file.as_deref(), Some("/proj/idx.json"));
         assert_eq!(cfg.functions_source, None);
         assert!(!only.functions);
+
+        let mut cfg = RuntimeConfig::default();
+        let report = cfg
+            .apply_firebase_json(
+                &json!({"firestore": [
+                    {"database": "(default)", "rules": "default.rules"},
+                    {"database": "staging", "rules": "staging.rules", "indexes": "staging.indexes.json"}
+                ]}),
+                base,
+                &Selection::default(),
+            )
+            .unwrap();
+        assert!(report.notices.is_empty(), "{:?}", report.notices);
+        assert_eq!(
+            cfg.firestore_databases["staging"].rules.as_deref(),
+            Some("/proj/staging.rules")
+        );
+        assert_eq!(
+            cfg.firestore_databases["staging"].indexes.as_deref(),
+            Some("/proj/staging.indexes.json")
+        );
         assert!(Selection::parse("auth,database").is_err());
         assert_eq!(
             cfg.apply_firebase_json(&json!({"firestore": {"rules": 1}}), base, &only),

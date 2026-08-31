@@ -1150,7 +1150,7 @@
       "criticality": "important",
       "owner": "fireemu",
       "status": "partial",
-      "note": "spec/config/firebase-json.schema.json and the two corpora under spec/config/firebase-json-examples and spec/config/firebase-json-invalid-examples are validated by tools/config-schema-check and replayed through RuntimeConfig::apply_firebase_json by the_firebase_json_corpus_agrees_with_the_loader, so the schema and the loader cannot drift. crates/fireemu/tests/cli.rs drives the shipped binary over a real project directory: a_project_alias_from_firebaserc_resolves_the_project, config_accepts_a_firebase_json_as_well_as_the_canonical_configuration, a_multi_codebase_functions_section_names_the_codebase_to_load, a_named_firestore_database_is_reported_rather_than_folded_into_the_default_one, a_routable_emulator_host_is_refused and a_command_line_port_overrides_the_one_in_firebase_json. Partial: a named Firestore database's own rules and indexes, a per-target Storage ruleset and a second Functions codebase are reported rather than loaded.",
+      "note": "spec/config/firebase-json.schema.json and the two corpora under spec/config/firebase-json-examples and spec/config/firebase-json-invalid-examples are validated by tools/config-schema-check and replayed through RuntimeConfig::apply_firebase_json by the_firebase_json_corpus_agrees_with_the_loader, so the schema and the loader cannot drift. crates/fireemu/tests/cli.rs drives the shipped binary over a real project directory. Named Firestore databases load and reload their own rules and indexes, and every Functions codebase has its own runner. Partial: a per-target Storage ruleset is still represented by the one project-wide Storage rules slot.",
       "artifacts": {
         "integration": [
           "crates/fireemu/tests/cli.rs",
@@ -1444,6 +1444,98 @@
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-functions/src/tasks.rs"
+        ]
+      }
+    },
+    {
+      "id": "FN-OPTIONS-001",
+      "statement": "Every locally meaningful 2nd-gen ScheduleOptions and GlobalOptions field is discovered and enforced, while deployment-only resource, IAM and networking fields are retained without claiming local Cloud Run semantics.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/functions_discovery.rs",
+          "crates/fireemu-adapter-functions/tests/runtime.rs",
+          "crates/fireemu-core-functions/tests/core.rs"
+        ]
+      }
+    },
+    {
+      "id": "FN-RELOAD-001",
+      "statement": "A source, compiled-output or environment change publishes a fresh Functions runner only after successful discovery, and a failed reload keeps the last-known-good generation.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "partial",
+      "note": "Handler, build and environment changes reload in place. Adding or removing an exported trigger still requires restart because the Rust routing manifest is immutable for one daemon generation.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/src/functions.rs",
+          "crates/fireemu-adapter-functions/src/runtime.rs"
+        ]
+      }
+    },
+    {
+      "id": "AUTH-TENANT-001",
+      "statement": "Identity Platform tenants isolate users, tokens and refresh sessions across client and Admin routes, and tenant account files import and export without entering the default namespace.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/auth_flows.rs",
+          "crates/fireemu/tests/import_export.rs"
+        ]
+      }
+    },
+    {
+      "id": "AUTH-PRIVACY-001",
+      "statement": "Improved email privacy hides enumeration responses, forbids direct self-service email changes, preserves verified OOB changes and permits the documented signUp-with-ID-token linking route.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      }
+    },
+    {
+      "id": "AUTH-BLOCKING-001",
+      "statement": "Before-create and before-sign-in functions run synchronously without the Auth store lock, reject atomically, and apply user-record and session-claim updates before final token issuance.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+          "crates/fireemu/tests/functions_discovery.rs"
+        ]
+      }
+    },
+    {
+      "id": "FS-CONFIG-RELOAD-001",
+      "statement": "Every configured Firestore database enforces its own rules and index catalog, and file reload publishes only a complete valid generation while retaining the last-known-good generation after an invalid save.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu/src/main.rs"
+        ]
+      }
+    },
+    {
+      "id": "FS-GRPC-TRAILERS-001",
+      "statement": "Differential Firestore failures compare grpc-js details and every ordered ASCII or binary trailer row rather than comparing only the shared REST-style status code.",
+      "criticality": "important",
+      "owner": "conformance",
+      "status": "implemented",
+      "artifacts": {
+        "conformance": "conformance/src/normalize.mjs",
+        "integration": [
+          "conformance/src/diff.test.mjs"
         ]
       }
     },

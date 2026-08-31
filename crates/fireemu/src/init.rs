@@ -52,7 +52,10 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let options = parse_args(args)?;
     let cwd = std::env::current_dir()
         .map_err(|e| CliError::refused(format!("cannot resolve the working directory: {e}")))?;
-    let terminals = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let terminals = automatic_interaction(
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    );
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let options = complete_options(options, &cwd, &mut input, &mut output, terminals)?;
@@ -85,6 +88,10 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     bytes.push(b'\n');
     write_config(&destination, &bytes, options.force)?;
     Ok(destination)
+}
+
+const fn automatic_interaction(stdin_terminal: bool, stdout_terminal: bool) -> bool {
+    stdin_terminal && stdout_terminal
 }
 
 fn parse_args(args: &[String]) -> Result<InitArgs, CliError> {
@@ -170,7 +177,7 @@ fn complete_options(
     if options.profile.is_none() {
         writeln!(
             output,
-            "Profiles:\n  strict (recommended): additional validation and production limit checks.\n  firebase: firebase reproduces the pinned official emulator behavior, including its limitations."
+            "Profiles:\n  strict (recommended): additional validation and production limit checks.\n  firebase: reproduces the pinned official emulator behavior, including its limitations."
         )
         .map_err(|error| output_error(&error))?;
         loop {
@@ -270,7 +277,7 @@ fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
                 path.display()
             )))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) if destination_is_missing(error.kind()) => false,
         Err(error) => {
             return Err(CliError::refused(format!(
                 "cannot inspect {}: {error}",
@@ -305,6 +312,10 @@ fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
         let _ = std::fs::remove_file(&temporary);
     }
     write_result
+}
+
+const fn destination_is_missing(kind: std::io::ErrorKind) -> bool {
+    matches!(kind, std::io::ErrorKind::NotFound)
 }
 
 #[cfg(not(windows))]
@@ -348,5 +359,27 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
                 destination.display()
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn automatic_interaction_requires_both_terminal_streams() {
+        assert!(super::automatic_interaction(true, true));
+        assert!(!super::automatic_interaction(true, false));
+        assert!(!super::automatic_interaction(false, true));
+        assert!(!super::automatic_interaction(false, false));
+    }
+
+    #[test]
+    fn only_not_found_means_the_destination_is_absent() {
+        assert!(super::destination_is_missing(std::io::ErrorKind::NotFound));
+        assert!(!super::destination_is_missing(
+            std::io::ErrorKind::PermissionDenied
+        ));
+        assert!(!super::destination_is_missing(
+            std::io::ErrorKind::InvalidInput
+        ));
     }
 }

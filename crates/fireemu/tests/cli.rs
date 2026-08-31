@@ -153,7 +153,7 @@ fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("firebase reproduces the pinned official emulator behavior"),
+        stdout.contains("firebase: reproduces the pinned official emulator behavior"),
         "{stdout}"
     );
     assert!(
@@ -165,6 +165,14 @@ fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
         serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
     assert_eq!(generated["profile"], "strict");
     assert_eq!(generated["firebaseJson"], "firebase.json");
+
+    let dir = scratch("init-wizard-firebase-without-detected-config");
+    let out = run_in(&dir, &["init", "--interactive"], Some("firebase\n\ny\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
+    assert_eq!(generated["profile"], "firebase");
+    assert!(generated.get("firebaseJson").is_none());
 }
 
 #[test]
@@ -190,6 +198,14 @@ fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
     assert_eq!(generated["profile"], "firebase");
     assert_eq!(generated["firebaseJson"], "project.json");
     assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
+
+    let strict = scratch("init-explicit-strict");
+    let out = run_in(&strict, &["init", "--yes", "--profile", "strict"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(strict.join("fireemu.json")).unwrap())
+            .unwrap();
+    assert_eq!(generated["profile"], "strict");
 
     let redirected = scratch("init-redirected");
     let out = run_in(&redirected, &["init"], Some("firebase\nmissing.json\nn\n"));
@@ -265,6 +281,16 @@ fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
     let generated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(destination).unwrap()).unwrap();
     assert_eq!(generated["firebaseJson"], "valid.json");
+
+    let absent = scratch("init-force-absent-destination");
+    write(&absent, "valid.json", "{}\n");
+    let out = run_in(
+        &absent,
+        &["init", "--yes", "--force", "--firebase-json", "valid.json"],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(absent.join("fireemu.json").is_file());
 }
 
 #[test]

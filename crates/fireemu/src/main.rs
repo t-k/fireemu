@@ -1,6 +1,7 @@
 //! `fireemu` command-line entry point.
 //!
 //! ```text
+//! fireemu init [options]
 //! fireemu up | emulators:start   [options]
 //! fireemu exec | emulators:exec  [options] -- <command...>
 //! fireemu emulators:export <dir> [options]
@@ -41,6 +42,7 @@ mod doctor;
 mod functions;
 mod hub;
 mod import_export;
+mod init;
 mod sessions;
 mod snapshots;
 mod ui;
@@ -71,8 +73,41 @@ use crate::config::{RuntimeConfig, Selection};
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
+    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
     ExitCode::from(2)
+}
+
+struct DiagnosticPath<'a>(&'a Path);
+
+impl std::fmt::Display for DiagnosticPath<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_diagnostic_text(formatter, &self.0.to_string_lossy())
+    }
+}
+
+const fn diagnostic_path(path: &Path) -> DiagnosticPath<'_> {
+    DiagnosticPath(path)
+}
+
+struct DiagnosticText<'a>(&'a str);
+
+impl std::fmt::Display for DiagnosticText<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_diagnostic_text(formatter, self.0)
+    }
+}
+
+const fn diagnostic_text(text: &str) -> DiagnosticText<'_> {
+    DiagnosticText(text)
+}
+
+fn write_diagnostic_text(formatter: &mut std::fmt::Formatter<'_>, text: &str) -> std::fmt::Result {
+    for character in text.chars() {
+        for escaped in character.escape_debug() {
+            write!(formatter, "{escaped}")?;
+        }
+    }
+    Ok(())
 }
 
 /// A command-line or configuration failure and the exit code it produces: 2 for usage, 1 for
@@ -155,6 +190,14 @@ struct Options {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("init") => match init::run(&args[1..]) {
+            Ok(path) => {
+                println!("created {}", diagnostic_path(&path));
+                println!("next: fireemu up --config fireemu.json");
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&e),
+        },
         Some("up" | "emulators:start") => match parse_options(&args[1..]) {
             Ok(options) => run(options, None),
             Err(e) => fail(&e),
@@ -509,11 +552,29 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
 /// firebase.json` works verbatim while every existing `--config fireemu.json` keeps working.
 fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| CliError::refused(format!("cannot read {}: {e}", path.display())))?;
+        .map_err(|e| CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path))))?;
     let json: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", path.display())))?;
+        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", diagnostic_path(path))))?;
     let canonical = json.get("schemaVersion").is_some();
     Ok((json, canonical))
+}
+
+/// Reads a Firebase project configuration and refuses a canonical fireemu document.
+fn read_firebase_json(path: &Path) -> Result<(serde_json::Value, PathBuf), CliError> {
+    let (json, canonical) = read_config_file(path)?;
+    if canonical {
+        return Err(CliError::refused(format!(
+            "{}: this is a fireemu canonical configuration (it has schemaVersion), not a firebase.json; pass it with --config",
+            diagnostic_path(path)
+        )));
+    }
+    if !json.is_object() {
+        return Err(CliError::refused(format!(
+            "{}: firebase.json must be an object",
+            diagnostic_path(path)
+        )));
+    }
+    Ok((json, path.to_path_buf()))
 }
 
 /// The directory paths inside a `firebase.json` are relative to.
@@ -529,8 +590,9 @@ fn resolve_project(dir: &Path, requested: Option<&str>) -> Result<Option<String>
     let Ok(text) = std::fs::read_to_string(&rc_path) else {
         return Ok(requested.map(str::to_owned));
     };
-    let rc: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", rc_path.display())))?;
+    let rc: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        CliError::refused(format!("{} does not parse: {e}", diagnostic_path(&rc_path)))
+    })?;
     Ok(config::resolve_project_alias(&rc, requested)?)
 }
 
@@ -577,7 +639,16 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         Some(p) => {
             let (json, canonical) = read_config_file(p)?;
             if canonical {
-                (RuntimeConfig::from_json(&json)?, None)
+                let config = RuntimeConfig::from_json(&json)?;
+                let firebase = if raw.firebase_json.is_none() {
+                    config::firebase_json_reference(&json)?
+                        .map(|reference| project_dir(p).join(reference))
+                        .map(|path| read_firebase_json(&path))
+                        .transpose()?
+                } else {
+                    None
+                };
+                (config, firebase)
             } else {
                 (RuntimeConfig::default(), Some((json, p.clone())))
             }
@@ -586,16 +657,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
     };
     // A firebase.json from `--firebase-json` wins over one that reached `--config`.
     let firebase = match &raw.firebase_json {
-        Some(p) => {
-            let (json, canonical) = read_config_file(p)?;
-            if canonical {
-                return Err(CliError::refused(format!(
-                    "{}: this is a fireemu canonical configuration (it has schemaVersion), not a firebase.json; pass it with --config",
-                    p.display()
-                )));
-            }
-            Some((json, p.clone()))
-        }
+        Some(p) => Some(read_firebase_json(p)?),
         None => firebase_from_config,
     };
     let mut project_root = PathBuf::from(".");
@@ -604,7 +666,7 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         let report = cfg.apply_firebase_json(json, &project_root, &only)?;
         if raw.verbosity > Verbosity::Quiet {
             for notice in &report.notices {
-                eprintln!("note: {}: {notice}", path.display());
+                eprintln!("note: {}: {notice}", diagnostic_path(path));
             }
         }
     }

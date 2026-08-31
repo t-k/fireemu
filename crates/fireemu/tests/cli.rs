@@ -31,6 +31,30 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+fn run_in(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    command
+        .current_dir(dir)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match input {
+        None => command.stdin(Stdio::null()).output().unwrap(),
+        Some(input) => {
+            use std::io::Write as _;
+
+            let mut child = command.stdin(Stdio::piped()).spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            child.wait_with_output().unwrap()
+        }
+    }
+}
+
 /// The port arguments every successful scenario needs.
 const PORTS: [&str; 14] = [
     "--firestore-port",
@@ -87,6 +111,272 @@ fn the_official_command_names_are_aliases_of_the_short_ones() {
     let out = run(&["emulators:frobnicate"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("usage: fireemu"));
+}
+
+#[test]
+fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
+    let dir = scratch("init-default");
+    write(&dir, "firebase.json", "{}\n");
+
+    let out = run_in(&dir, &["init", "--yes"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let path = dir.join("fireemu.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.ends_with('\n'));
+    let generated: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(generated["$schema"], config_schema_url());
+    assert_eq!(generated["schemaVersion"], 1);
+    assert_eq!(generated["profile"], "strict");
+    assert_eq!(generated["firebaseJson"], "firebase.json");
+    assert_eq!(generated["firestore"]["edition"], "standard");
+    assert_eq!(generated["firestore"]["apiMode"], "native");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("fireemu up --config fireemu.json"));
+
+    let before = std::fs::read(&path).unwrap();
+    let out = run_in(&dir, &["init", "--yes"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("already exists"));
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
+
+#[test]
+fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
+    let dir = scratch("init-wizard");
+    write(&dir, "firebase.json", "{}\n");
+
+    let out = run_in(&dir, &["init", "--interactive"], Some("\n\ny\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("strict (recommended)"), "{stdout}");
+    assert!(
+        stdout.contains("additional validation and production limit checks"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("firebase: reproduces the pinned official emulator behavior"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("loaded again on every fireemu start"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Create fireemu.json? [Y/n]"), "{stdout}");
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
+    assert_eq!(generated["profile"], "strict");
+    assert_eq!(generated["firebaseJson"], "firebase.json");
+
+    let dir = scratch("init-wizard-firebase-without-detected-config");
+    let out = run_in(&dir, &["init", "--interactive"], Some("firebase\n\ny\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("fireemu.json")).unwrap()).unwrap();
+    assert_eq!(generated["profile"], "firebase");
+    assert!(generated.get("firebaseJson").is_none());
+}
+
+#[test]
+fn init_options_select_values_and_non_tty_input_never_opens_the_wizard() {
+    let explicit = scratch("init-explicit");
+    write(&explicit, "project.json", "{}\n");
+    let out = run_in(
+        &explicit,
+        &[
+            "init",
+            "--yes",
+            "--profile",
+            "firebase",
+            "--firebase-json",
+            "project.json",
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(explicit.join("fireemu.json")).unwrap())
+            .unwrap();
+    assert_eq!(generated["profile"], "firebase");
+    assert_eq!(generated["firebaseJson"], "project.json");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
+
+    let strict = scratch("init-explicit-strict");
+    let out = run_in(&strict, &["init", "--yes", "--profile", "strict"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(strict.join("fireemu.json")).unwrap())
+            .unwrap();
+    assert_eq!(generated["profile"], "strict");
+
+    let redirected = scratch("init-redirected");
+    let out = run_in(&redirected, &["init"], Some("firebase\nmissing.json\nn\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(redirected.join("fireemu.json")).unwrap())
+            .unwrap();
+    assert_eq!(generated["profile"], "strict");
+    assert!(generated.get("firebaseJson").is_none());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Profiles:"));
+}
+
+#[test]
+fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
+    for (label, args) in [
+        ("conflicting modes", vec!["init", "--interactive", "--yes"]),
+        (
+            "duplicate profile",
+            vec!["init", "--profile", "strict", "--profile", "firebase"],
+        ),
+        (
+            "duplicate source",
+            vec![
+                "init",
+                "--firebase-json",
+                "a.json",
+                "--firebase-json",
+                "b.json",
+            ],
+        ),
+        ("bad profile", vec!["init", "--profile", "production"]),
+        ("missing profile", vec!["init", "--profile"]),
+        ("missing source", vec!["init", "--firebase-json"]),
+    ] {
+        let dir = scratch(&format!("init-usage-{}", label.replace(' ', "-")));
+        let out = run_in(&dir, &args, None);
+        assert_eq!(out.status.code(), Some(2), "{label}: {}", stderr(&out));
+        assert!(!dir.join("fireemu.json").exists(), "{label}");
+    }
+
+    let dir = scratch("init-usage-control-character");
+    let out = run_in(&dir, &["init", "--bad-\u{1b}[31m"], None);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!stderr(&out).contains('\u{1b}'), "{}", stderr(&out));
+    assert!(stderr(&out).contains("\\u{1b}"), "{}", stderr(&out));
+}
+
+#[test]
+fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
+    let dir = scratch("init-force-validation");
+    let destination = write(&dir, "fireemu.json", "keep this exact content\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    write(&dir, "malformed.json", "{ nope\n");
+
+    let out = run_in(
+        &dir,
+        &[
+            "init",
+            "--yes",
+            "--force",
+            "--firebase-json",
+            "malformed.json",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("malformed.json does not parse"));
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        "keep this exact content\n"
+    );
+
+    write(&dir, "valid.json", "{}\n");
+    let out = run_in(
+        &dir,
+        &["init", "--yes", "--force", "--firebase-json", "valid.json"],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(destination).unwrap()).unwrap();
+    assert_eq!(generated["firebaseJson"], "valid.json");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            std::fs::metadata(dir.join("fireemu.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    let absent = scratch("init-force-absent-destination");
+    write(&absent, "valid.json", "{}\n");
+    let out = run_in(
+        &absent,
+        &["init", "--yes", "--force", "--firebase-json", "valid.json"],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(absent.join("fireemu.json").is_file());
+}
+
+#[test]
+fn init_force_refuses_missing_canonical_and_directory_sources_or_destinations() {
+    for (label, source, body, fragment) in [
+        ("missing", "missing.json", None, "cannot read"),
+        (
+            "canonical",
+            "other-fireemu.json",
+            Some(r#"{"schemaVersion":1}"#),
+            "not a firebase.json",
+        ),
+        ("non-object", "array.json", Some("[]"), "must be an object"),
+    ] {
+        let dir = scratch(&format!("init-source-{label}"));
+        if let Some(body) = body {
+            write(&dir, source, body);
+        }
+        let out = run_in(&dir, &["init", "--yes", "--firebase-json", source], None);
+        assert_eq!(out.status.code(), Some(1), "{label}: {}", stderr(&out));
+        assert!(stderr(&out).contains(fragment), "{label}: {}", stderr(&out));
+        assert!(!dir.join("fireemu.json").exists());
+    }
+
+    let dir = scratch("init-control-character-source");
+    let source = "missing-\u{1b}[31m.json";
+    let out = run_in(&dir, &["init", "--yes", "--firebase-json", source], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!stderr(&out).contains('\u{1b}'), "{}", stderr(&out));
+    assert!(stderr(&out).contains("\\u{1b}"), "{}", stderr(&out));
+
+    let dir = scratch("init-directory-destination");
+    std::fs::create_dir(dir.join("fireemu.json")).unwrap();
+    let out = run_in(&dir, &["init", "--yes", "--force"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("not a regular file"));
+    assert!(dir.join("fireemu.json").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn init_force_refuses_a_symlink_destination_without_touching_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = scratch("init-symlink");
+    let target = write(&dir, "target.json", "keep\n");
+    let destination = dir.join("fireemu.json");
+    symlink(&target, &destination).unwrap();
+
+    let out = run_in(&dir, &["init", "--yes", "--force"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("symbolic link"));
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "keep\n");
+    assert!(std::fs::symlink_metadata(destination)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
+fn config_schema_url() -> &'static str {
+    "https://fireemu.dev/spec/config/fireemu.schema.json"
 }
 
 #[test]
@@ -289,6 +579,73 @@ fn config_accepts_a_firebase_json_as_well_as_the_canonical_configuration() {
         "{}",
         stderr(&out)
     );
+}
+
+#[test]
+fn a_canonical_config_live_loads_its_relative_firebase_json_reference() {
+    let dir = scratch("embedded-firebase-json");
+    let alternate = dir.join("alternate");
+    std::fs::create_dir_all(&alternate).unwrap();
+    let canonical = write(
+        &dir,
+        "fireemu.json",
+        r#"{
+  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firebaseJson": "firebase.json",
+  "firestore": { "edition": "standard", "apiMode": "native" }
+}
+"#,
+    );
+    write(&dir, "firebase.json", r#"{"emulators": {}}"#);
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-embedded"}}"#,
+    );
+    let alternate_firebase = write(&alternate, "firebase.json", r#"{"emulators": {}}"#);
+    write(
+        &alternate,
+        ".firebaserc",
+        r#"{"projects": {"default": "demo-explicit"}}"#,
+    );
+
+    let env = env_of(&dir, &["--config", canonical.to_str().unwrap()]);
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-embedded");
+
+    std::fs::remove_file(dir.join("firebase.json")).unwrap();
+    let env = env_of(
+        &dir,
+        &[
+            "--config",
+            canonical.to_str().unwrap(),
+            "--firebase-json",
+            alternate_firebase.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(env["GCLOUD_PROJECT"], "demo-explicit");
+
+    let invalid = write(
+        &dir,
+        "invalid-fireemu.json",
+        r#"{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firebaseJson": "missing.json",
+  "unknown": true,
+  "firestore": { "edition": "standard", "apiMode": "native" }
+}
+"#,
+    );
+    let out = exec_with(&["--config", invalid.to_str().unwrap()], &["true"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("unknown config key"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stderr(&out).contains("cannot read"), "{}", stderr(&out));
 }
 
 #[test]

@@ -1180,7 +1180,9 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 const KNOWN_TOP_LEVEL: &[&str] = &[
+    "$schema",
     "schemaVersion",
+    "firebaseJson",
     "profile",
     "bind",
     "projects",
@@ -1196,6 +1198,19 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "trace",
     "daemon",
 ];
+
+pub const CANONICAL_SCHEMA_URL: &str = "https://fireemu.dev/spec/config/fireemu.schema.json";
+
+/// The Firebase project configuration composed by a canonical fireemu configuration.
+/// Its path is resolved by the CLI because that layer knows which file contained this JSON.
+pub fn firebase_json_reference(json: &Value) -> Result<Option<&str>, ConfigError> {
+    match json.get("firebaseJson") {
+        None => Ok(None),
+        Some(Value::String(path)) if !path.is_empty() => Ok(Some(path)),
+        Some(Value::String(_)) => Err(ConfigError("firebaseJson must not be empty".into())),
+        Some(_) => Err(ConfigError("firebaseJson must be a string".into())),
+    }
+}
 
 impl RuntimeConfig {
     /// Selects the compatibility profile and rewrites the settings it derives. Every key the
@@ -1616,6 +1631,14 @@ impl RuntimeConfig {
                 return Err(ConfigError(format!("unknown config key {key:?}")));
             }
         }
+        if let Some(schema) = obj.get("$schema") {
+            if schema.as_str() != Some(CANONICAL_SCHEMA_URL) {
+                return Err(ConfigError(format!(
+                    "$schema must be {CANONICAL_SCHEMA_URL:?}"
+                )));
+            }
+        }
+        let _ = firebase_json_reference(json)?;
         if obj.get("schemaVersion").and_then(Value::as_i64) != Some(1) {
             return Err(ConfigError("schemaVersion must be 1".into()));
         }

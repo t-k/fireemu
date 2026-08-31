@@ -9,7 +9,15 @@ import {
   Section,
   Spinner,
 } from "../components/common";
-import { dropRules, getRules, putRules, rulesRequests, type RulesExprValue } from "../api/control";
+import {
+  dropRules,
+  getRules,
+  putRules,
+  ruleCoverage,
+  rulesRequests,
+  type RulesExprValue,
+} from "../api/control";
+import { coverageRows, coverageSummary } from "../lib/coverage";
 import { settle } from "../api/client";
 
 const RulesEditor: Component<{ which: "firestore" | "storage"; title: string }> = (props) => {
@@ -212,6 +220,79 @@ const RulesRequestsPanel: Component = () => {
   );
 };
 
+/**
+ * The per-expression coverage of the Firestore ruleset, exactly as the official emulator's
+ * `:ruleCoverage` report gives it: every source position and the values it took, with the
+ * reached / total count. Read through the same privileged Firestore-REST front the data
+ * browser uses; the project is the selected session's.
+ */
+const RulesCoveragePanel: Component = () => {
+  const project = appState.project;
+  const [cov, { refetch }] = createResource(project, (p) => settle(ruleCoverage(p)));
+  const current = () => cov()?.unwrapOr(null) ?? null;
+  const rows = () => {
+    const c = current();
+    return c ? coverageRows(c.report) : [];
+  };
+  const summary = () => {
+    const c = current();
+    return c ? coverageSummary(c) : null;
+  };
+  return (
+    <Section
+      title={t("rules.coverage")}
+      actions={
+        <AsyncButton
+          class="btn"
+          onClick={async () => {
+            await refetch();
+          }}
+          testId="rules-coverage-refresh"
+        >
+          {t("rules.refresh")}
+        </AsyncButton>
+      }
+    >
+      <Show when={!cov.loading} fallback={<Spinner />}>
+        <Show
+          when={rows().length > 0}
+          fallback={<p class="text-sm text-zinc-500">{t("rules.coverageNone")}</p>}
+        >
+          <p
+            class="mb-2 text-sm text-zinc-600 dark:text-zinc-300"
+            data-testid="rules-coverage-summary"
+          >
+            {t("rules.coverageReached", {
+              reached: String(summary()?.reached ?? 0),
+              total: String(summary()?.total ?? 0),
+            })}
+          </p>
+          <table class="table" data-testid="rules-coverage">
+            <thead>
+              <tr>
+                <th>{t("rules.position")}</th>
+                <th>{t("rules.values")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={rows()}>
+                {(r) => (
+                  <tr class={r.reached ? "" : "text-zinc-400"}>
+                    <td class="mono">
+                      {r.line}:{r.column}
+                    </td>
+                    <td class="mono">{r.summary}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Show>
+      </Show>
+    </Section>
+  );
+};
+
 const Rules: Component = () => (
   <div>
     <h1 class="mb-4 text-xl font-bold">{t("rules.title")}</h1>
@@ -223,6 +304,7 @@ const Rules: Component = () => (
     <RulesEditor which="firestore" title={t("rules.firestore")} />
     <RulesEditor which="storage" title={t("rules.storage")} />
     <RulesRequestsPanel />
+    <RulesCoveragePanel />
   </div>
 );
 

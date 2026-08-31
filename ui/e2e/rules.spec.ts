@@ -74,4 +74,26 @@ test.describe("Rules", () => {
     await expect(trace).toContainText("4:");
     await expect(trace).toContainText("true x1");
   });
+  test("renders the :ruleCoverage report -- positions, values and the reached count", async ({
+    page,
+    request,
+  }) => {
+    await api(request, "PUT", "control/v1/rules", { source: RULES });
+    // Exercise the ruleset so coverage has values to report.
+    expect((await asClient("GET", "documents/traced/a")).status).toBe(404);
+    expect(
+      (await asClient("PATCH", "documents/traced/a", { fields: { n: { integerValue: "1" } } }))
+        .status,
+    ).toBe(403);
+
+    await gotoApp(page, "/rules");
+    await page.getByTestId("rules-coverage-refresh").click();
+    await expect(page.getByTestId("rules-coverage-summary")).toContainText(
+      "expressions were evaluated",
+    );
+    const rows = page.getByTestId("rules-coverage").locator("tbody tr");
+    await expect(rows.first()).toBeVisible();
+    // At least one position was reached and reads as a boolean the rule evaluated.
+    await expect(page.getByTestId("rules-coverage")).toContainText("true");
+  });
 });

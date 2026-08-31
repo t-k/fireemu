@@ -12,10 +12,12 @@ describe("product scope", () => {
     expect(productScope().find((r) => r.id === "requests")?.status).toBe("supported");
   });
 
+  it("marks the Rules coverage view supported (its panel is on the Rules page)", () => {
+    expect(productScope().find((r) => r.id === "coverage")?.status).toBe("supported");
+  });
+
   it("marks diagnostics whose backend exists but UI view does not as pending UI, never supported", () => {
-    const scope = productScope();
-    expect(scope.find((r) => r.id === "coverage")?.status).toBe("pendingUi");
-    expect(scope.find((r) => r.id === "alerts")?.status).toBe("pendingUi");
+    expect(productScope().find((r) => r.id === "alerts")?.status).toBe("pendingUi");
   });
 
   it("marks the official Logging emulator as substituted by the SSE stream", () => {

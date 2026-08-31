@@ -248,6 +248,9 @@ export const en = {
   "rules.saved": "Rules replaced",
   "rules.source": "Source",
   "rules.requests": "Requests",
+  "rules.coverage": "Rules coverage",
+  "rules.coverageNone": "No coverage yet: load a ruleset and let a request evaluate against it.",
+  "rules.coverageReached": "{reached} of {total} expressions were evaluated.",
   "rules.requestsNone": "No request has been decided against the loaded rules yet.",
   "rules.refresh": "Refresh",
   "rules.method": "Method",
@@ -408,7 +411,7 @@ export const en = {
     "Supported (UI-PARITY-03): the Rules page lists the requests Security Rules decided, newest first, each with its per-expression trace, read from the daemon's request-trace route.",
   "scope.coverage": "Rules coverage",
   "scope.coverageNote":
-    "Pending UI (UI-PARITY-03): the daemon serves the official :ruleCoverage report; the parity coverage view is not built yet. No fireemu-only substitute is shown in its place.",
+    "Supported (UI-PARITY-03): the Rules page renders the official :ruleCoverage report -- every source position and the values it took, with the reached / total count.",
   "scope.alerts": "Firebase alerts",
   "scope.alertsNote":
     "Pending UI (UI-PARITY-04): the daemon serves the Eventarc google-channel / publishEvents mechanism that alerts flow through; the synthesis workflow is not built in the UI yet. No fireemu-only injection path is offered in its place.",

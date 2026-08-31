@@ -173,3 +173,38 @@ export type RulesRequests = { capacity: number; loaded: boolean; requests: Rules
 
 export const rulesRequests = (session: string): ResultAsync<RulesRequests, ApiError> =>
   request<RulesRequests>("GET", `${base(session)}/rules/requests`);
+
+/** One value a coverage expression took, in the official :ruleCoverage encoding. */
+export type CoverageValue = {
+  boolValue?: boolean;
+  intValue?: string;
+  floatValue?: number;
+  stringValue?: string;
+  typeValue?: string;
+  nullValue?: null;
+  undefined?: { causeMessage: string };
+};
+
+/** A node of the coverage report tree: a source position and what it evaluated to. */
+export type CoverageNode = {
+  sourcePosition: { line: number; column: number; currentOffset: number; endOffset: number };
+  values?: { value: CoverageValue; count: number }[];
+  children?: CoverageNode[];
+};
+
+/** The official :ruleCoverage report: the rules source and the evaluated-expression tree. */
+export type RuleCoverage = {
+  rules: { files: { name: string; content: string }[] };
+  report: CoverageNode[];
+};
+
+/**
+ * The per-expression coverage of the Firestore ruleset, keyed by source position, exactly as
+ * the official emulator's `GET /emulator/v1/projects/{project}:ruleCoverage` serves it. Reached
+ * through the same privileged Firestore-REST front the data browser uses.
+ */
+export const ruleCoverage = (project: string): ResultAsync<RuleCoverage, ApiError> =>
+  request<RuleCoverage>(
+    "GET",
+    `firestore/emulator/v1/projects/${encodeURIComponent(project)}:ruleCoverage`,
+  );

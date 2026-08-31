@@ -90,6 +90,8 @@ impl Daemon {
                 "0",
                 "--storage-port",
                 "0",
+                "--logging-port",
+                "0",
                 "--ui-port",
                 "0",
                 "--hub-port",

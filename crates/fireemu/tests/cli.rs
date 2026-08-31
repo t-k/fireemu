@@ -32,7 +32,7 @@ fn run(args: &[&str]) -> Output {
 }
 
 /// The port arguments every successful scenario needs.
-const PORTS: [&str; 12] = [
+const PORTS: [&str; 14] = [
     "--firestore-port",
     "0",
     "--http-port",
@@ -44,6 +44,8 @@ const PORTS: [&str; 12] = [
     "--ui-port",
     "0",
     "--hub-port",
+    "0",
+    "--logging-port",
     "0",
 ];
 
@@ -318,9 +320,10 @@ fn a_deferred_emulator_entry_is_a_notice_unless_only_asks_for_it() {
         !text.contains("emulators.pubsub"),
         "pubsub is served and must not be reported as unserved: {text}"
     );
+    // The Logging emulator is now served: its firebase.json entry is applied, not a notice.
     assert!(
-        text.contains("emulators.logging") && text.contains("out of scope"),
-        "the Logging emulator stream is out of scope for this release and must say so: {text}"
+        !text.contains("emulators.logging"),
+        "logging is served and must not be reported as unserved: {text}"
     );
 
     // Naming one in --only is refused before anything binds; the message names the product.

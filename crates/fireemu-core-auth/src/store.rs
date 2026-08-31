@@ -989,16 +989,15 @@ impl AuthStore {
             .map(Arc::as_ref)
     }
 
-    /// Changes the email, enforcing uniqueness unless duplicate-email mode is enabled.
+    /// Changes the email (unique across users).
     pub fn set_email(&mut self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
         if !email.contains('@') || email.chars().any(char::is_control) {
             return Err(AuthError::InvalidEmail);
         }
-        if !self.config.allow_duplicate_emails
-            && self
-                .users
-                .values()
-                .any(|u| u.local_id != *uid && u.email.as_deref() == Some(email))
+        if self
+            .users
+            .values()
+            .any(|u| u.local_id != *uid && u.email.as_deref() == Some(email))
         {
             return Err(AuthError::EmailExists);
         }
@@ -1102,11 +1101,25 @@ impl AuthStore {
 
     /// Creates a user.
     pub fn create_user(&mut self, new: NewUser, now: LogicalInstant) -> Result<LocalId, AuthError> {
+        self.create_user_with_email_policy(new, now, true)
+    }
+
+    /// Creates the provider-scoped account used by IdP sign-in when email uniqueness is off.
+    fn create_idp_user(&mut self, new: NewUser, now: LogicalInstant) -> Result<LocalId, AuthError> {
+        self.create_user_with_email_policy(new, now, false)
+    }
+
+    fn create_user_with_email_policy(
+        &mut self,
+        new: NewUser,
+        now: LogicalInstant,
+        enforce_unique_email: bool,
+    ) -> Result<LocalId, AuthError> {
         if let Some(email) = &new.email {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(AuthError::InvalidEmail);
             }
-            if !self.config.allow_duplicate_emails
+            if enforce_unique_email
                 && self
                     .users
                     .values()
@@ -1518,14 +1531,16 @@ impl AuthStore {
             }
         }
         // 3. No match: a new account, linked to the identity.
-        let uid = self.create_user(
-            NewUser {
-                email: identity.email.clone(),
-                email_verified: identity.email.is_some() && email_verified,
-                provider: Provider::Federated(identity.provider_id.clone()),
-            },
-            now,
-        )?;
+        let new_user = NewUser {
+            email: identity.email.clone(),
+            email_verified: identity.email.is_some() && email_verified,
+            provider: Provider::Federated(identity.provider_id.clone()),
+        };
+        let uid = if self.config.allow_duplicate_emails {
+            self.create_idp_user(new_user, now)?
+        } else {
+            self.create_user(new_user, now)?
+        };
         self.link_profile_from_identity(&uid, &identity);
         self.link_federated(&uid, identity)?;
         self.record_sign_in(&uid, now);

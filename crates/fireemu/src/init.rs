@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::config::CANONICAL_SCHEMA_URL;
 use crate::CliError;
 
+static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[derive(Clone, Copy)]
 enum Profile {
     Strict,
@@ -55,6 +57,14 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let mut output = std::io::stdout().lock();
     let options = complete_options(options, &cwd, &mut input, &mut output, terminals)?;
     let destination = cwd.join("fireemu.json");
+    if let Some(reference) = &options.firebase_json {
+        let source = if reference.is_absolute() {
+            reference.clone()
+        } else {
+            cwd.join(reference)
+        };
+        let _ = crate::read_firebase_json(&source)?;
+    }
     let mut document = serde_json::json!({
         "$schema": CANONICAL_SCHEMA_URL,
         "schemaVersion": 1,
@@ -162,7 +172,7 @@ fn complete_options(
             output,
             "Profiles:\n  strict (recommended): additional validation and production limit checks.\n  firebase: firebase reproduces the pinned official emulator behavior, including its limitations."
         )
-        .map_err(output_error)?;
+        .map_err(|error| output_error(&error))?;
         loop {
             let answer = prompt(input, output, "Profile [strict]: ")?;
             match answer.as_str() {
@@ -174,7 +184,8 @@ fn complete_options(
                     options.profile = Some(Profile::Firebase);
                     break;
                 }
-                _ => writeln!(output, "Enter strict or firebase.").map_err(output_error)?,
+                _ => writeln!(output, "Enter strict or firebase.")
+                    .map_err(|error| output_error(&error))?,
             }
         }
     }
@@ -183,7 +194,7 @@ fn complete_options(
             output,
             "A Firebase configuration is loaded again on every fireemu start, so rules, indexes, Functions, and emulator ports stay current. Enter none to create no reference."
         )
-        .map_err(output_error)?;
+        .map_err(|error| output_error(&error))?;
         let label = if detected {
             "Firebase configuration [firebase.json]: "
         } else {
@@ -211,8 +222,10 @@ fn prompt(
     output: &mut impl Write,
     text: &str,
 ) -> Result<String, CliError> {
-    output.write_all(text.as_bytes()).map_err(output_error)?;
-    output.flush().map_err(output_error)?;
+    output
+        .write_all(text.as_bytes())
+        .map_err(|error| output_error(&error))?;
+    output.flush().map_err(|error| output_error(&error))?;
     let mut answer = String::new();
     input
         .read_line(&mut answer)
@@ -220,18 +233,16 @@ fn prompt(
     Ok(answer.trim().to_owned())
 }
 
-fn output_error(error: std::io::Error) -> CliError {
+fn output_error(error: &std::io::Error) -> CliError {
     CliError::refused(format!("cannot write wizard output: {error}"))
 }
 
 fn write_config(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true);
     if force {
-        options.truncate(true);
-    } else {
-        options.create_new(true);
+        return replace_config(path, bytes);
     }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
     let mut file = options.open(path).map_err(|e| {
         let detail = if e.kind() == std::io::ErrorKind::AlreadyExists {
             "already exists".to_owned()
@@ -242,4 +253,100 @@ fn write_config(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> 
     })?;
     file.write_all(bytes)
         .map_err(|e| CliError::refused(format!("cannot write {}: {e}", path.display())))
+}
+
+fn replace_config(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    let existing = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(CliError::refused(format!(
+                "{} is a symbolic link and will not be replaced",
+                path.display()
+            )))
+        }
+        Ok(metadata) if metadata.is_file() => true,
+        Ok(_) => {
+            return Err(CliError::refused(format!(
+                "{} is not a regular file",
+                path.display()
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(CliError::refused(format!(
+                "cannot inspect {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let sequence = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("fireemu.json");
+    let temporary = path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
+    let write_result = (|| -> Result<(), CliError> {
+        let mut temporary_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| {
+                CliError::refused(format!("cannot create {}: {e}", temporary.display()))
+            })?;
+        temporary_file
+            .write_all(bytes)
+            .map_err(|e| CliError::refused(format!("cannot write {}: {e}", temporary.display())))?;
+        temporary_file
+            .sync_all()
+            .map_err(|e| CliError::refused(format!("cannot sync {}: {e}", temporary.display())))?;
+        drop(temporary_file);
+        replace_path(&temporary, path, existing)
+    })();
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+#[cfg(not(windows))]
+fn replace_path(temporary: &Path, destination: &Path, _existing: bool) -> Result<(), CliError> {
+    std::fs::rename(temporary, destination).map_err(|e| {
+        CliError::refused(format!(
+            "cannot replace {} with {}: {e}",
+            destination.display(),
+            temporary.display()
+        ))
+    })
+}
+
+#[cfg(windows)]
+fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<(), CliError> {
+    if !existing {
+        return std::fs::rename(temporary, destination).map_err(|e| {
+            CliError::refused(format!(
+                "cannot install {} as {}: {e}",
+                temporary.display(),
+                destination.display()
+            ))
+        });
+    }
+    let backup = destination.with_extension(format!("json.{}.bak", std::process::id()));
+    std::fs::rename(destination, &backup).map_err(|e| {
+        CliError::refused(format!(
+            "cannot prepare {} for replacement: {e}",
+            destination.display()
+        ))
+    })?;
+    match std::fs::rename(temporary, destination) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(backup);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::fs::rename(&backup, destination);
+            Err(CliError::refused(format!(
+                "cannot replace {}: {error}",
+                destination.display()
+            )))
+        }
+    }
 }

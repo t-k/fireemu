@@ -231,6 +231,91 @@ fn init_option_conflicts_duplicates_and_missing_values_are_usage_errors() {
     }
 }
 
+#[test]
+fn init_force_validates_the_firebase_source_before_replacing_a_regular_file() {
+    let dir = scratch("init-force-validation");
+    let destination = write(&dir, "fireemu.json", "keep this exact content\n");
+    write(&dir, "malformed.json", "{ nope\n");
+
+    let out = run_in(
+        &dir,
+        &[
+            "init",
+            "--yes",
+            "--force",
+            "--firebase-json",
+            "malformed.json",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("malformed.json does not parse"));
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        "keep this exact content\n"
+    );
+
+    write(&dir, "valid.json", "{}\n");
+    let out = run_in(
+        &dir,
+        &["init", "--yes", "--force", "--firebase-json", "valid.json"],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let generated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(destination).unwrap()).unwrap();
+    assert_eq!(generated["firebaseJson"], "valid.json");
+}
+
+#[test]
+fn init_force_refuses_missing_canonical_and_directory_sources_or_destinations() {
+    for (label, source, body, fragment) in [
+        ("missing", "missing.json", None, "cannot read"),
+        (
+            "canonical",
+            "other-fireemu.json",
+            Some(r#"{"schemaVersion":1}"#),
+            "not a firebase.json",
+        ),
+    ] {
+        let dir = scratch(&format!("init-source-{label}"));
+        if let Some(body) = body {
+            write(&dir, source, body);
+        }
+        let out = run_in(&dir, &["init", "--yes", "--firebase-json", source], None);
+        assert_eq!(out.status.code(), Some(1), "{label}: {}", stderr(&out));
+        assert!(stderr(&out).contains(fragment), "{label}: {}", stderr(&out));
+        assert!(!dir.join("fireemu.json").exists());
+    }
+
+    let dir = scratch("init-directory-destination");
+    std::fs::create_dir(dir.join("fireemu.json")).unwrap();
+    let out = run_in(&dir, &["init", "--yes", "--force"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("not a regular file"));
+    assert!(dir.join("fireemu.json").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn init_force_refuses_a_symlink_destination_without_touching_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = scratch("init-symlink");
+    let target = write(&dir, "target.json", "keep\n");
+    let destination = dir.join("fireemu.json");
+    symlink(&target, &destination).unwrap();
+
+    let out = run_in(&dir, &["init", "--yes", "--force"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("symbolic link"));
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "keep\n");
+    assert!(std::fs::symlink_metadata(destination)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
 fn config_schema_url() -> &'static str {
     "https://fireemu.dev/spec/config/fireemu.schema.json"
 }

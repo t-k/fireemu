@@ -16,8 +16,8 @@ describe("product scope", () => {
     expect(productScope().find((r) => r.id === "coverage")?.status).toBe("supported");
   });
 
-  it("marks diagnostics whose backend exists but UI view does not as pending UI, never supported", () => {
-    expect(productScope().find((r) => r.id === "alerts")?.status).toBe("pendingUi");
+  it("marks the Firebase alerts workflow supported (it publishes through the official path)", () => {
+    expect(productScope().find((r) => r.id === "alerts")?.status).toBe("supported");
   });
 
   it("marks the official Logging emulator as substituted by the SSE stream", () => {

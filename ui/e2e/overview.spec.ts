@@ -25,7 +25,7 @@ test.describe("Overview", () => {
     await expect(scope.getByTestId("scope-extensions")).toContainText("not planned");
     await expect(scope.getByTestId("scope-requests")).toContainText("supported");
     await expect(scope.getByTestId("scope-coverage")).toContainText("supported");
-    await expect(scope.getByTestId("scope-alerts")).toContainText("pending UI");
+    await expect(scope.getByTestId("scope-alerts")).toContainText("supported");
     await expect(scope.getByTestId("scope-logging")).toContainText("substituted");
   });
 

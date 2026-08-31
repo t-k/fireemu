@@ -131,6 +131,22 @@ export const awaitIdle = (
 export const capabilities = (): ResultAsync<Json, ApiError> =>
   request("GET", "control/v1/capabilities");
 
+/**
+ * Publishes a Firebase alert through the official Eventarc `/google/publishEvents` mechanism
+ * (the UI front reaches it in process), firing every registered `onAlertPublished` handler for
+ * the alerttype. Returns how many handlers it reached.
+ */
+export const publishAlert = (
+  alertType: string,
+  payload: unknown,
+  appId?: string,
+): ResultAsync<{ delivered: number; alertType: string }, ApiError> =>
+  request(
+    "POST",
+    "functions/alerts",
+    appId ? { alertType, payload, appId } : { alertType, payload },
+  );
+
 /** One value an expression took while a request was decided. */
 export type RulesExprValue = {
   kind: "null" | "bool" | "int" | "float" | "string" | "composite" | "undefined";

@@ -13,6 +13,7 @@ const OFFICIAL_NAV: NavItem[] = [
   { href: "/auth", key: "nav.auth" },
   { href: "/storage", key: "nav.storage" },
   { href: "/functions", key: "nav.functions" },
+  { href: "/alerts", key: "nav.alerts" },
   { href: "/rules", key: "nav.rules" },
   { href: "/appcheck", key: "nav.appCheck" },
 ];

@@ -57,7 +57,7 @@ export const productScope = (): readonly ProductScopeRow[] => [
     noteKey: "scope.requestsNote",
   },
   { id: "coverage", nameKey: "scope.coverage", status: "supported", noteKey: "scope.coverageNote" },
-  { id: "alerts", nameKey: "scope.alerts", status: "pendingUi", noteKey: "scope.alertsNote" },
+  { id: "alerts", nameKey: "scope.alerts", status: "supported", noteKey: "scope.alertsNote" },
   { id: "logging", nameKey: "scope.logging", status: "substituted", noteKey: "scope.loggingNote" },
 ];
 

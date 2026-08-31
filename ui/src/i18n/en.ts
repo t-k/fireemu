@@ -27,6 +27,7 @@ export const en = {
   "nav.firestore": "Firestore",
   "nav.auth": "Authentication",
   "nav.storage": "Storage",
+  "nav.alerts": "Alerts",
   "nav.functions": "Functions",
   "nav.rules": "Rules",
   "nav.appCheck": "App Check",
@@ -373,6 +374,16 @@ export const en = {
   "nav.sectionOfficial": "Emulator products",
   "nav.sectionRuntime": "fireemu runtime",
 
+  "alerts.title": "Firebase alerts",
+  "alerts.intro":
+    "Publish a Firebase alert through the official Eventarc google-channel mechanism (publishEvents), exactly as the Emulator Suite UI and the Admin SDK do. Every registered onAlertPublished handler for the chosen alert type receives it; this is parity, not a fireemu-only injection.",
+  "alerts.publish": "Publish an alert",
+  "alerts.type": "Alert type",
+  "alerts.appId": "App ID (optional)",
+  "alerts.payload": "Payload (the alert's data)",
+  "alerts.publishButton": "Publish alert",
+  "alerts.delivered": "Published: {count} handler(s) received the alert.",
+  "alerts.badJson": "The payload is not valid JSON: {error}",
   "scope.title": "Product scope",
   "scope.intro":
     "What a user of the official Emulator Suite UI can expect here. Deferred and not-planned products are named explicitly rather than shown as empty tabs.",
@@ -414,7 +425,7 @@ export const en = {
     "Supported (UI-PARITY-03): the Rules page renders the official :ruleCoverage report -- every source position and the values it took, with the reached / total count.",
   "scope.alerts": "Firebase alerts",
   "scope.alertsNote":
-    "Pending UI (UI-PARITY-04): the daemon serves the Eventarc google-channel / publishEvents mechanism that alerts flow through; the synthesis workflow is not built in the UI yet. No fireemu-only injection path is offered in its place.",
+    "Supported (UI-PARITY-04): the Alerts page publishes a Firebase alert through the official Eventarc google-channel / publishEvents mechanism, firing every registered onAlertPublished handler. Parity, not a fireemu-only injection.",
   "scope.logging": "Logging emulator (WebSocket, port 4500)",
   "scope.loggingNote":
     "Substituted: fireemu does not serve the official Logging WebSocket. The live Functions log stream (server-sent events, filterable by level and text) is the local substitute.",

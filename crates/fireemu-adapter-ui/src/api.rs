@@ -35,6 +35,9 @@ pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiRespo
     if rest == "functions/logs" {
         return sse::functions_logs(state, req);
     }
+    if rest == "functions/alerts" {
+        return alerts(state, req);
+    }
     if let Some(path) = rest.strip_prefix("appcheck/") {
         return app_check(state, path, req);
     }
@@ -42,6 +45,70 @@ pub async fn route(state: &Arc<UiState>, rest: &str, req: &UiRequest) -> UiRespo
         return control(state, path, req).await;
     }
     UiResponse::error(404, "NOT_FOUND")
+}
+
+/// The `CloudEvent` type every `onAlertPublished` family member is registered under
+/// (`firebase-functions/v2/alerts` `eventType`).
+const ALERT_EVENT_TYPE: &str = "google.firebase.firebasealerts.alerts.v1.published";
+
+/// Publishes a Firebase alert the way the official Emulator Suite UI does: it builds the
+/// `CloudEvent` an alert carries and POSTs it to the Eventarc emulator's `/google/publishEvents`
+/// route. fireemu serves that route on the functions port; this front reaches the same code
+/// in process (`accept_verbatim` + `publish_custom_event` on the sentinel `google` channel),
+/// so a registered `onAlertPublished` handler fires exactly as it would for the Admin SDK.
+/// This is the official mechanism, not a fireemu-only injection.
+///
+/// Body: `{ "alertType": <one of the official alerttype values>, "appId"?: <string>,
+/// "payload"?: <the alert's data.payload object> }`. The answer reports how many handlers the
+/// alert reached.
+fn alerts(state: &UiState, req: &UiRequest) -> UiResponse {
+    if req.method != "POST" {
+        return UiResponse::error(405, "METHOD_NOT_ALLOWED");
+    }
+    let Some(runtime) = state.functions.clone() else {
+        return UiResponse::error(404, "NOT_FOUND : no functions runtime is configured");
+    };
+    let body = match json_body(req) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    // The alerttype filter an onAlertPublished trigger matches on: a non-empty, bounded,
+    // control-character-free string (it becomes an Eventarc attribute).
+    let Some(alert_type) = body.get("alertType").and_then(Value::as_str).filter(|s| {
+        !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| (0x20..0x7f).contains(&b))
+    }) else {
+        return UiResponse::error(
+            400,
+            "INVALID_ARGUMENT : alertType is required (an alerttype such as crashlytics.newFatalIssue)",
+        );
+    };
+    let app_id = body.get("appId").and_then(Value::as_str);
+    let payload = body.get("payload").cloned().unwrap_or_else(|| json!({}));
+    let mut event = json!({
+        "specversion": "1.0",
+        "type": ALERT_EVENT_TYPE,
+        "source": format!("//firebasealerts.googleapis.com/projects/{}", state.info.project),
+        "id": "ui-alert",
+        "alerttype": alert_type,
+        "data": payload,
+    });
+    if let Some(app_id) = app_id {
+        event["appid"] = json!(app_id);
+    }
+    let published = match fireemu_adapter_functions::eventarc::accept_verbatim(&event) {
+        Ok(p) => p,
+        Err(why) => return UiResponse::error(400, &format!("INVALID_ARGUMENT : {why}")),
+    };
+    let delivered = runtime.publish_custom_event(
+        fireemu_adapter_functions::eventarc::GOOGLE_CHANNEL,
+        &published.event_type,
+        &published.attributes,
+        &published.event,
+    );
+    no_store(UiResponse::json(
+        200,
+        &json!({"delivered": delivered, "alertType": alert_type}),
+    ))
 }
 
 /// The JSON body of a request (`{}` when empty), or the error to answer with.

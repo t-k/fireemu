@@ -1231,3 +1231,32 @@ async fn concurrent_event_streams_are_bounded_and_the_surplus_is_refused() {
     // Holding the receivers keeps the slots taken; dropping them lets the tasks end.
     drop(held);
 }
+
+#[tokio::test]
+async fn the_alerts_front_needs_a_runtime_and_refuses_a_get() {
+    let s = state();
+    // No functions runtime is wired into the default test state, so an alert has nowhere to go.
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/alerts",
+                &json!({"alertType": "crashlytics.newFatalIssue"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 404, "{body}");
+    // GET is not how an alert is published.
+    let (status, _) = call(
+        &s,
+        browser(
+            request("GET", "/ui/api/functions/alerts", &Value::Null),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 405);
+}

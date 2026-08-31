@@ -54,6 +54,10 @@ impl SnapshotHook for Firestore {
         self.0.restore_scope(scope, snapshot);
         Ok(())
     }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<FirestoreSnapshot>()
+            .map_or(0, FirestoreSnapshot::retained_bytes)
+    }
 }
 
 /// The session's buckets and objects.
@@ -97,6 +101,13 @@ impl SnapshotHook for Storage {
             .map_err(|_| poisoned(self.name(), "the object store"))?;
         store.restore_buckets(self.owned(scope), captured, scope.is_default());
         Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<fireemu_core_storage::store::StorageState>()
+            .map_or(
+                0,
+                fireemu_core_storage::store::StorageState::retained_blob_bytes,
+            )
     }
 }
 
@@ -157,6 +168,10 @@ impl SnapshotHook for Auth {
             );
         }
         Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<AuthSnapshot>()
+            .map_or(0, AuthSnapshot::retained_bytes)
     }
 }
 
@@ -576,5 +591,43 @@ mod tests {
             s.user(&uid).unwrap().mfa.is_empty(),
             "AUTH-SNAPSHOT-SECRET-05: no secret, no factor"
         );
+    }
+
+    /// `SNAP-MEM-01`: the production Auth hook reports a positive retained-byte estimate for a
+    /// populated store and zero for a part that is not its shape, so the session byte budget
+    /// counts the Auth part and never miscounts a foreign one.
+    #[test]
+    fn the_auth_hook_estimates_retained_bytes_and_ignores_a_foreign_part() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+        use std::sync::{Arc, Mutex};
+
+        let store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let registry = Arc::new(AuthRegistry::new("demo-app", store.clone()));
+        let hook = super::Auth(registry);
+        let scope = Scope::Project("demo-app".to_owned());
+
+        // No users: zero.
+        let empty = hook.capture(&scope).expect("capture");
+        assert_eq!(hook.retained_bytes(&empty), 0);
+
+        {
+            let mut s = store.lock().unwrap();
+            s.create_user(NewUser::email("a@example.com"), AT).unwrap();
+        }
+        let part = hook.capture(&scope).expect("capture");
+        assert!(
+            hook.retained_bytes(&part) > 0,
+            "a populated store retains a positive estimate"
+        );
+
+        // A part of another shape contributes zero rather than a wrong count.
+        let foreign: super::SnapshotPart = Arc::new(7u8);
+        assert_eq!(hook.retained_bytes(&foreign), 0);
     }
 }

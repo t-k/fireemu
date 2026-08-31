@@ -362,12 +362,33 @@
       "statement": "A generation number is never reused for the same object.",
       "criticality": "critical",
       "owner": "core-storage",
-      "status": "planned",
+      "status": "implemented",
       "artifacts": {
-        "tla": "StorageGeneration.tla::GenerationMonotonicity",
+        "tla": "StorageGeneration.tla::GenerationNeverReused",
         "mutation": [
           "M-STORAGE-003",
-          "M-STORAGE-004"
+          "M-STORAGE-004",
+          "M-TLA-STORAGE-REUSE-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-storage/tests/store.rs",
+          "crates/fireemu-core-storage/tests/snapshot.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-STORAGE-002",
+      "statement": "Restoring an older snapshot never lowers the generation allocator high-water or removes issued-generation history.",
+      "criticality": "critical",
+      "owner": "core-storage",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "StorageGeneration.tla::RestorePreservesGenerationHighWater",
+        "mutation": [
+          "M-TLA-STORAGE-RESTORE-HIGH-WATER-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-storage/tests/snapshot.rs"
         ]
       }
     },

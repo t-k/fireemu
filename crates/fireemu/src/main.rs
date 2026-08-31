@@ -987,12 +987,15 @@ fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
 }
 
 fn watched_file_signature(path: &str) -> Result<u64, String> {
+    watched_file(path).map(|(signature, _)| signature)
+}
+
+fn watched_file(path: &str) -> Result<(u64, Vec<u8>), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    Ok(bytes
-        .into_iter()
-        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
-        }))
+    let signature = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(*byte)
+    });
+    Ok((signature, bytes))
 }
 
 fn start_rules_reload_supervisor(
@@ -1017,17 +1020,28 @@ fn start_rules_reload_supervisor(
                 }
             };
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let source = match std::fs::read_to_string(&path) {
-                Ok(source) => source,
+            let (candidate_signature, bytes) = match watched_file(&path) {
+                Ok(candidate) => candidate,
                 Err(error) => {
-                    observed = Some(signature);
                     eprintln!(
                         "warning: {label} reload failed; keeping the last-known-good rules: {error}"
                     );
                     continue;
                 }
             };
-            observed = Some(watched_file_signature(&path).unwrap_or(signature));
+            if candidate_signature == observed.unwrap_or(signature) {
+                continue;
+            }
+            observed = Some(candidate_signature);
+            let source = match String::from_utf8(bytes) {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!(
+                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
+                    );
+                    continue;
+                }
+            };
             match LoadedRules::from_source(&source) {
                 Ok(candidate) => {
                     if let Ok(mut current) = rules.write() {
@@ -1061,8 +1075,29 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                 }
             };
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            observed = Some(watched_file_signature(&path).unwrap_or(signature));
-            match control::load_indexes(&path) {
+            let (candidate_signature, bytes) = match watched_file(&path) {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    eprintln!(
+                        "warning: Firestore index reload failed; keeping the last-known-good indexes: {error}"
+                    );
+                    continue;
+                }
+            };
+            if candidate_signature == observed.unwrap_or(signature) {
+                continue;
+            }
+            observed = Some(candidate_signature);
+            let text = match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!(
+                        "warning: Firestore index reload failed; keeping the last-known-good indexes: {error}"
+                    );
+                    continue;
+                }
+            };
+            match control::parse_indexes(&path, &text) {
                 Ok(indexes) => {
                     backend.replace_database_indexes(&database, indexes);
                     eprintln!("note: reloaded Firestore indexes for {database} from {path}");

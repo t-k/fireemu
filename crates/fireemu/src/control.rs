@@ -47,6 +47,11 @@ pub fn load_text_indexes(
 /// Loads `firestore.indexes.json` (composite indexes and single-field exemptions).
 pub fn load_indexes(path: &str) -> Result<IndexSet, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    parse_indexes(path, &text)
+}
+
+/// Parses one `firestore.indexes.json` generation already read by a reload supervisor.
+pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
     let json: Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
     let mut set = IndexSet::default();
     for idx in json

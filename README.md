@@ -75,6 +75,7 @@ The real `firebase-admin`, `firebase` (Node: gRPC streams; browser: the WebChann
 
 ```sh
 npm install -D fireemu
+npx fireemu init
 npx fireemu doctor
 ```
 
@@ -89,6 +90,17 @@ so exactly one binary is installed and the rest are skipped. There is no install
 is downloaded at install time, so an install that resolved from a cache or a private registry is a
 complete, offline installation. The Emulator UI is compiled into the binary; the Node runner that
 hosts a Functions codebase ships beside it.
+
+### Initialize a project
+
+`npx fireemu init` creates a canonical `fireemu.json` with the recommended `strict` profile, Standard edition Firestore and the Native API. In a terminal it opens a short wizard that explains how `strict` adds validation and production limit checks while `firebase` reproduces the pinned official emulator behavior, then explains how a Firebase project configuration is composed. Redirected or CI input uses the same defaults without prompting; `--interactive` forces the wizard, while `--yes` and `--no-interactive` suppress it.
+
+When a `firebase.json` is present, init records `"firebaseJson": "firebase.json"`. The daemon reloads that referenced file on every start, so changes to Security Rules, indexes, Functions codebases and emulator ports remain live without regenerating `fireemu.json`. Use `--profile firebase`, `--firebase-json <file>` or both to choose explicitly. An existing `fireemu.json` is never replaced unless `--force` is present, and even forced initialization refuses a directory or symbolic-link destination.
+
+```sh
+npx fireemu init --yes
+npx fireemu up --config fireemu.json
+```
 
 ### Supported platforms and prerequisites
 
@@ -150,6 +162,7 @@ scripts.
 ## Run
 
 ```sh
+cargo run -p fireemu -- init --yes
 cargo run -p fireemu -- up --firestore-port 8080 --http-port 9099 --storage-port 9199
 #   optional: --config fireemu.json  (see spec/config/fireemu.schema.json)
 #   optional: --config firebase.json  (a file without `schemaVersion` is a firebase.json)
@@ -170,6 +183,7 @@ SIGINT and SIGTERM are forwarded to the command (its status becomes `128 + signa
 
 | command | what it does |
 | --- | --- |
+| `init` | create `fireemu.json`; explain profile and Firebase composition choices in a terminal |
 | `up`, `emulators:start` | serve until Ctrl-C |
 | `exec`, `emulators:exec` | serve, run `-- <command...>`, exit with its status |
 | `emulators:export <dir>` | write an export directory from a running suite (see [Import and export](#import-and-export)) |

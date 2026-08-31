@@ -1,6 +1,7 @@
 //! `fireemu` command-line entry point.
 //!
 //! ```text
+//! fireemu init [options]
 //! fireemu up | emulators:start   [options]
 //! fireemu exec | emulators:exec  [options] -- <command...>
 //! fireemu emulators:export <dir> [options]

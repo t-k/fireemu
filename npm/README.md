@@ -17,6 +17,7 @@ against it unchanged.
 
 ```sh
 npm install -D fireemu
+npx fireemu init
 npx fireemu doctor
 ```
 
@@ -30,10 +31,21 @@ launcher; the daemon for your platform arrives as an optional dependency
 (`@fireemu/darwin-arm64` and friends), so npm installs exactly one binary and skips the rest.
 An install that resolved from a cache or a private registry is a complete, offline installation.
 
+## Initialize
+
+`npx fireemu init` creates `fireemu.json` with the recommended `strict` profile. In a terminal, its wizard explains the extra validation supplied by `strict`, the pinned official behavior selected by `firebase`, and how a referenced Firebase project configuration stays live. In CI or with redirected input it uses the strict defaults without prompting; use `--interactive` to force the wizard or `--yes`/`--no-interactive` to suppress it.
+
+If the project already has `firebase.json`, init records it as a live `firebaseJson` reference so rules, indexes, Functions codebases and emulator ports are loaded again on every start. `--profile firebase` and `--firebase-json <file>` choose alternatives explicitly. Existing `fireemu.json` files are preserved unless `--force` is supplied, and a symbolic link is never overwritten.
+
+```sh
+npx fireemu init --yes
+npx fireemu up --config fireemu.json
+```
+
 ## Use
 
 ```sh
-npx fireemu up --firestore-port 8080 --http-port 9099 --storage-port 9199
+npx fireemu up --config fireemu.json
 ```
 
 `exec` is the `firebase emulators:exec` equivalent: it serves the same, runs a command with the

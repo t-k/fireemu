@@ -17,6 +17,9 @@ models=("$@")
 if [[ ${#models[@]} -eq 0 ]]; then
   models=()
   for f in "$here"/*.tla; do
+    # Trace harnesses deliberately violate a goal invariant to obtain one counterexample;
+    # their dedicated generator runs them separately and consumes the structured trace.
+    [[ "$f" == *Trace.tla ]] && continue
     models+=("$(basename "$f" .tla)")
   done
 fi

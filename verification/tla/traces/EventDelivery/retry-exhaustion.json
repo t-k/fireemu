@@ -1,14 +1,114 @@
 {
   "schemaVersion": 1,
   "scenario": "retry-exhaustion",
-  "initial": { "state": "Pending", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false },
+  "initial": {
+    "state": "Pending",
+    "attempts": 0,
+    "maxAttempts": 2,
+    "capturedEpoch": 0,
+    "currentEpoch": 0,
+    "terminal": false,
+    "cancelled": false,
+    "stale": false
+  },
   "steps": [
-    { "operation": "Lease", "target": "e1", "expected": { "state": "Leased", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "Start", "target": "e1", "expected": { "state": "Running", "attempts": 1, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "Fail", "target": "e1", "expected": { "state": "RetryWaiting", "attempts": 1, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "RetryDue", "target": "e1", "expected": { "state": "Pending", "attempts": 1, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "Lease", "target": "e1", "expected": { "state": "Leased", "attempts": 1, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "Start", "target": "e1", "expected": { "state": "Running", "attempts": 2, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "Fail", "target": "e1", "expected": { "state": "DeadLettered", "attempts": 2, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": true, "cancelled": false, "stale": false } }
+    {
+      "operation": "Lease",
+      "target": "e1",
+      "expected": {
+        "state": "Leased",
+        "attempts": 0,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "Start",
+      "target": "e1",
+      "expected": {
+        "state": "Running",
+        "attempts": 1,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "Fail",
+      "target": "e1",
+      "expected": {
+        "state": "RetryWaiting",
+        "attempts": 1,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "RetryDue",
+      "target": "e1",
+      "expected": {
+        "state": "Pending",
+        "attempts": 1,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "Lease",
+      "target": "e1",
+      "expected": {
+        "state": "Leased",
+        "attempts": 1,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "Start",
+      "target": "e1",
+      "expected": {
+        "state": "Running",
+        "attempts": 2,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "Fail",
+      "target": "e1",
+      "expected": {
+        "state": "DeadLettered",
+        "attempts": 2,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": true,
+        "cancelled": false,
+        "stale": false
+      }
+    }
   ]
 }

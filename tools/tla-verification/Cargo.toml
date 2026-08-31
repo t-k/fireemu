@@ -9,6 +9,8 @@ publish.workspace = true
 description = "development tool for reproducible TLA+ mutation evidence"
 
 [dependencies]
+fireemu-core-events = { path = "../../crates/fireemu-core-events" }
+fireemu-core-types = { path = "../../crates/fireemu-core-types" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

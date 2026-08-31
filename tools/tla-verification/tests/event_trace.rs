@@ -1,4 +1,4 @@
-//! Strict canonical EventDelivery trace schema.
+//! Strict canonical `EventDelivery` trace schema.
 
 use tla_verification::event_trace::{parse_event_trace, EventOperation};
 

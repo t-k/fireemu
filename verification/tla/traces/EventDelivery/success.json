@@ -1,10 +1,58 @@
 {
   "schemaVersion": 1,
   "scenario": "success",
-  "initial": { "state": "Pending", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false },
+  "initial": {
+    "state": "Pending",
+    "attempts": 0,
+    "maxAttempts": 2,
+    "capturedEpoch": 0,
+    "currentEpoch": 0,
+    "terminal": false,
+    "cancelled": false,
+    "stale": false
+  },
   "steps": [
-    { "operation": "Lease", "target": "e1", "expected": { "state": "Leased", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "Start", "target": "e1", "expected": { "state": "Running", "attempts": 1, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "Succeed", "target": "e1", "expected": { "state": "Succeeded", "attempts": 1, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": true, "cancelled": false, "stale": false } }
+    {
+      "operation": "Lease",
+      "target": "e1",
+      "expected": {
+        "state": "Leased",
+        "attempts": 0,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "Start",
+      "target": "e1",
+      "expected": {
+        "state": "Running",
+        "attempts": 1,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "Succeed",
+      "target": "e1",
+      "expected": {
+        "state": "Succeeded",
+        "attempts": 1,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 0,
+        "terminal": true,
+        "cancelled": false,
+        "stale": false
+      }
+    }
   ]
 }

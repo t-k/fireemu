@@ -1998,6 +1998,8 @@ dependencies = [
 name = "tla-verification"
 version = "0.1.0"
 dependencies = [
+ "fireemu-core-events",
+ "fireemu-core-types",
  "serde",
  "serde_json",
  "sha2",

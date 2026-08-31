@@ -1,9 +1,44 @@
 {
   "schemaVersion": 1,
   "scenario": "stale-discard",
-  "initial": { "state": "Pending", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 0, "terminal": false, "cancelled": false, "stale": false },
+  "initial": {
+    "state": "Pending",
+    "attempts": 0,
+    "maxAttempts": 2,
+    "capturedEpoch": 0,
+    "currentEpoch": 0,
+    "terminal": false,
+    "cancelled": false,
+    "stale": false
+  },
   "steps": [
-    { "operation": "Reset", "target": null, "expected": { "state": "Pending", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 1, "terminal": false, "cancelled": false, "stale": false } },
-    { "operation": "DiscardStale", "target": "e1", "expected": { "state": "DiscardedStaleEpoch", "attempts": 0, "maxAttempts": 2, "capturedEpoch": 0, "currentEpoch": 1, "terminal": true, "cancelled": false, "stale": true } }
+    {
+      "operation": "Reset",
+      "target": null,
+      "expected": {
+        "state": "Pending",
+        "attempts": 0,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 1,
+        "terminal": false,
+        "cancelled": false,
+        "stale": false
+      }
+    },
+    {
+      "operation": "DiscardStale",
+      "target": "e1",
+      "expected": {
+        "state": "DiscardedStaleEpoch",
+        "attempts": 0,
+        "maxAttempts": 2,
+        "capturedEpoch": 0,
+        "currentEpoch": 1,
+        "terminal": true,
+        "cancelled": false,
+        "stale": true
+      }
+    }
   ]
 }

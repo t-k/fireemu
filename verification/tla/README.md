@@ -52,6 +52,28 @@ cargo run -p tla-verification -- verify-triage
 
 `AwaitIdleIgnoreTextIndex.cfg` is an additional policy configuration. Regenerate its evidence with the same `AwaitIdle.json` manifest when `AwaitIdle.tla` changes; the default same-stem cfg remains the traceability contract.
 
+## EventDelivery implementation conformance
+
+`EventDeliveryTrace.tla` is a counterexample harness, not a standalone proof model. It deliberately violates `TraceGoalNotReached` after reaching one bounded scenario goal. Generate all four canonical structured traces with the pinned JAR:
+
+```sh
+cargo run -p tla-verification -- trace-generate-eventdelivery \
+  --root . \
+  --jar .tools/tla2tools-1.8.0.jar
+```
+
+The generator runs TLC with one worker in a temporary directory, converts `-dumpTrace json` output without parsing console text, validates the declared scenario goal, and writes `traces/EventDelivery/{success,retry-exhaustion,stale-discard,cancel}.json`. The ordinary `run-tlc.sh` skips `*Trace.tla` harnesses because their expected outcome is a goal counterexample.
+
+Replay all four canonical traces through `fireemu-core-events` and compare the projection after every action:
+
+```sh
+cargo run -p tla-verification -- check-eventdelivery
+```
+
+Pass `--trace verification/tla/traces/EventDelivery/retry-exhaustion.json` to check one fixture while diagnosing a divergence.
+
+`cargo test -p tla-verification --test event_replay` checks all four scenarios. This is a lightweight bounded implementation-conformance check: it compares lifecycle state, attempt count, captured/current epoch, and terminal/cancelled/stale flags. It does not prove temporal liveness, equivalence under concurrent execution, the Rust-only `Interrupt` transition, or that arbitrary production executions were model checked.
+
 ## Planned logical-time model
 
 `SessionEpoch.tla` verifies session epoch freshness and reset ordering; it is not evidence that the virtual clock is monotonic. `INV-TIME-001` therefore relies on its Rust property, Kani harness, and semantic mutation until a dedicated Scheduler/logical-time model is added.

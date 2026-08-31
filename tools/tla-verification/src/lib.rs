@@ -1,5 +1,6 @@
 //! Contracts and tooling for repository-owned TLA+ verification evidence.
 
+pub mod event_replay;
 pub mod event_trace;
 
 use std::collections::HashSet;

@@ -79,7 +79,8 @@
           "M-TLA-EVENT-TERMINAL-001"
         ],
         "integration": [
-          "crates/fireemu-core-events/tests/state_machine.rs"
+          "crates/fireemu-core-events/tests/state_machine.rs",
+          "tools/tla-verification/tests/event_replay.rs"
         ]
       },
       "note": "terminal_event_rejects_every_transition builds a real event, so it allocates: on macOS with Kani 0.67 it hits the known 'malloc with missing definition' limitation recorded in the README and only verifies where the allocator is modelled."
@@ -96,7 +97,8 @@
           "M-TLA-EVENT-LEGAL-001"
         ],
         "integration": [
-          "crates/fireemu-core-events/tests/state_machine.rs"
+          "crates/fireemu-core-events/tests/state_machine.rs",
+          "tools/tla-verification/tests/event_replay.rs"
         ]
       }
     },
@@ -113,7 +115,8 @@
           "M-TLA-EVENT-ATTEMPTS-001"
         ],
         "integration": [
-          "crates/fireemu-core-events/tests/state_machine.rs"
+          "crates/fireemu-core-events/tests/state_machine.rs",
+          "tools/tla-verification/tests/event_replay.rs"
         ]
       }
     },
@@ -131,7 +134,8 @@
         ],
         "integration": [
           "crates/fireemu-core-events/tests/outbox.rs",
-          "crates/fireemu-core-events/tests/state_machine.rs"
+          "crates/fireemu-core-events/tests/state_machine.rs",
+          "tools/tla-verification/tests/event_replay.rs"
         ]
       }
     },

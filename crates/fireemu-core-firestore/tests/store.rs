@@ -365,7 +365,12 @@ fn limit_violations_reject_the_whole_commit_atomically() {
 }
 
 #[test]
-fn transactions_validate_their_read_set_on_commit() {
+fn a_read_locks_the_document_against_an_out_of_band_writer() {
+    // Pessimistic concurrency (the official emulator's model): reading a document inside a
+    // transaction locks it, so an out-of-band write that touches it contends -- the store
+    // reports `LockContended` naming when the lock is released (the reader's expiry), and
+    // the adapter turns that into the wait/`ABORTED "Transaction lock timeout."` the wire
+    // sees. The reading transaction, holding its own lock, commits normally.
     let mut s = FirestoreState::new();
     s.commit(
         &[set("acct/a", &[("balance", Value::Integer(100))])],
@@ -379,56 +384,60 @@ fn transactions_validate_their_read_set_on_commit() {
         .unwrap()
         .unwrap();
     assert_eq!(doc.fields.get("balance"), Some(&Value::Integer(100)));
-    // A concurrent writer changes the document before the transaction commits.
-    s.commit(
-        &[set("acct/a", &[("balance", Value::Integer(90))])],
-        None,
-        t(2),
-    )
-    .unwrap();
-    let write = set("acct/a", &[("balance", Value::Integer(80))]);
+    // An out-of-band writer that touches the locked document is refused; nothing is written.
+    // The lock is released at the reader's idle deadline (started at t(1), idle window 60 s).
     assert!(matches!(
-        s.commit(std::slice::from_ref(&write), Some(&txn), t(3)),
-        Err(FirestoreError::Aborted(_))
+        s.commit(
+            &[set("acct/a", &[("balance", Value::Integer(90))])],
+            None,
+            t(2),
+        ),
+        Err(FirestoreError::LockContended { earliest_release }) if earliest_release == t(61)
     ));
     assert_eq!(
         s.get(&path("acct/a")).unwrap().fields.get("balance"),
-        Some(&Value::Integer(90)),
-        "aborted transaction wrote nothing"
+        Some(&Value::Integer(100)),
+        "the contended out-of-band write changed nothing"
     );
+    // The transaction commits on the value it read: it holds the lock, so its own write never
+    // contends with itself.
+    let write = set("acct/a", &[("balance", Value::Integer(80))]);
+    assert!(s
+        .commit(std::slice::from_ref(&write), Some(&txn), t(3))
+        .is_ok());
+    assert_eq!(
+        s.get(&path("acct/a")).unwrap().fields.get("balance"),
+        Some(&Value::Integer(80)),
+        "the transaction's value wins, not the refused writer's"
+    );
+    // Once the transaction has committed it holds nothing, so the out-of-band writer succeeds.
+    assert!(s
+        .commit(
+            &[set("acct/a", &[("balance", Value::Integer(90))])],
+            None,
+            t(4),
+        )
+        .is_ok());
     // A finished transaction is ABORTED on reuse, the code the SDKs retry on and the one the
     // official emulator answers (conformance/src/firestore-probe, transactions/lifecycle).
     assert!(
         matches!(
-            s.commit(std::slice::from_ref(&write), Some(&txn), t(4)),
+            s.commit(std::slice::from_ref(&write), Some(&txn), t(5)),
             Err(FirestoreError::Aborted(_))
         ),
         "a finished transaction cannot be reused"
     );
 
-    let txn2 = s.begin_transaction(false, t(5)).unwrap();
-    assert!(s
-        .get_in_transaction(&txn2, &path("acct/missing"))
-        .unwrap()
-        .is_none());
-    let _ = s.get_in_transaction(&txn2, &path("acct/a")).unwrap();
-    assert!(s.commit(&[write], Some(&txn2), t(6)).is_ok());
-    assert_eq!(
-        s.get(&path("acct/a")).unwrap().fields.get("balance"),
-        Some(&Value::Integer(80))
-    );
-
-    let txn3 = s.begin_transaction(false, t(7)).unwrap();
+    // Reading a document that is absent still locks the key: an out-of-band create contends.
+    let txn3 = s.begin_transaction(false, t(6)).unwrap();
     let _ = s.get_in_transaction(&txn3, &path("acct/missing")).unwrap();
-    s.commit(&[set("acct/missing", &[("x", Value::Null)])], None, t(8))
-        .unwrap();
-    assert!(
-        matches!(
-            s.commit(&[set("acct/other", &[])], Some(&txn3), t(9)),
-            Err(FirestoreError::Aborted(_))
-        ),
-        "a document created after being read as absent aborts"
-    );
+    assert!(matches!(
+        s.commit(&[set("acct/missing", &[("x", Value::Null)])], None, t(7)),
+        Err(FirestoreError::LockContended { .. })
+    ));
+    // A write to a document the transaction did not read is not blocked by it.
+    assert!(s.commit(&[set("acct/other", &[])], None, t(8)).is_ok());
+    s.rollback(&txn3).unwrap();
 
     let ro = s.begin_transaction(true, t(10)).unwrap();
     assert!(matches!(
@@ -463,9 +472,10 @@ fn transaction_snapshot_reads_are_stable() {
         s.get_in_transaction(&txn, &path("k/1")).map(|_| ()),
         Ok(())
     ));
+    // A transaction past its total budget is ABORTED, as the SDKs expect.
     assert!(matches!(
         s.commit(&[], Some(&txn), late),
-        Err(FirestoreError::InvalidArgument(_))
+        Err(FirestoreError::Aborted(_))
     ));
 }
 
@@ -590,7 +600,12 @@ fn array_transforms_report_null_results_and_transform_limit_is_per_document() {
 }
 
 #[test]
-fn transactions_detect_phantom_query_results() {
+fn a_query_locks_its_collection_against_a_phantom_write() {
+    // A query inside a transaction locks the collection it scanned, so an out-of-band write
+    // that would add (or remove) a row -- a phantom -- contends. The transaction's own writes
+    // into that collection are not blocked by its own lock. This is the pessimistic model the
+    // official emulator uses: it refuses the phantom-creating writer rather than aborting the
+    // transaction at commit.
     use fireemu_core_firestore::query::{Query, QueryScope};
     use fireemu_core_types::ids::CollectionId;
     let mut s = FirestoreState::new();
@@ -602,21 +617,32 @@ fn transactions_detect_phantom_query_results() {
     .unwrap();
     let txn = s.begin_transaction(false, t(0)).unwrap();
     assert!(s.run_query_in_transaction(&txn, &q).unwrap().is_empty());
-    // A row matching the query appears after the transaction ran it.
-    s.commit(&[set("ph/new", &[("v", Value::Integer(1))])], None, t(1))
-        .unwrap();
+    // An out-of-band write of a new row into the scanned collection is refused.
     assert!(matches!(
-        s.commit(&[set("other/x", &[])], Some(&txn), t(2)),
-        Err(FirestoreError::Aborted(_))
+        s.commit(&[set("ph/new", &[("v", Value::Integer(1))])], None, t(1)),
+        Err(FirestoreError::LockContended { .. })
     ));
+    // A write to an unrelated collection is not blocked by the query's lock.
+    assert!(s.commit(&[set("other/x", &[])], None, t(1)).is_ok());
+    // The transaction's own write into the scanned collection commits: it holds the lock.
+    assert!(s.commit(&[set("ph/mine", &[])], Some(&txn), t(2)).is_ok());
 
-    let txn2 = s.begin_transaction(false, t(3)).unwrap();
-    assert_eq!(s.run_query_in_transaction(&txn2, &q).unwrap().len(), 1);
-    assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(4)).is_ok());
+    // Once the transaction is finished the collection is free again.
+    assert!(s
+        .commit(&[set("ph/new", &[("v", Value::Integer(1))])], None, t(3))
+        .is_ok());
+
+    let txn2 = s.begin_transaction(false, t(4)).unwrap();
+    assert_eq!(s.run_query_in_transaction(&txn2, &q).unwrap().len(), 2);
+    assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(5)).is_ok());
 }
 
 #[test]
 fn transactions_expire_on_idle_and_total_time() {
+    // Expiry is inclusive at the deadline (`now >= deadline`): a transaction is alive strictly
+    // inside its 60 s idle window and 270 s total budget, and gone once a deadline is reached.
+    // This is the boundary the lock check uses too, so a holder's lock is released at exactly
+    // the instant its own commit would be refused.
     let mut s = FirestoreState::new();
     let txn = s.begin_transaction(false, t(0)).unwrap();
     assert!(s.touch_transaction(&txn, t(59)).is_ok());
@@ -624,9 +650,11 @@ fn transactions_expire_on_idle_and_total_time() {
         s.touch_transaction(&txn, t(118)).is_ok(),
         "idle window restarts"
     );
+    // 60 s after the last activity (t(118)) the idle budget is spent. An expired transaction
+    // is ABORTED (the code the SDKs retry), the same as a finished one.
     assert!(matches!(
-        s.touch_transaction(&txn, t(179)),
-        Err(FirestoreError::InvalidArgument(m)) if m.contains("IDLE")
+        s.touch_transaction(&txn, t(178)),
+        Err(FirestoreError::Aborted(_))
     ));
     assert!(
         s.touch_transaction(&txn, t(180)).is_err(),
@@ -634,12 +662,13 @@ fn transactions_expire_on_idle_and_total_time() {
     );
 
     let txn = s.begin_transaction(false, t(200)).unwrap();
+    // Touching every 59 s keeps the idle window open, but the total budget still fires.
     for step in 1..=4 {
-        assert!(s.touch_transaction(&txn, t(200 + step * 60)).is_ok());
+        assert!(s.touch_transaction(&txn, t(200 + step * 59)).is_ok());
     }
     assert!(matches!(
-        s.touch_transaction(&txn, t(200 + 271)),
-        Err(FirestoreError::InvalidArgument(m)) if m.contains("TOTAL")
+        s.touch_transaction(&txn, t(200 + 270)),
+        Err(FirestoreError::Aborted(_))
     ));
 }
 

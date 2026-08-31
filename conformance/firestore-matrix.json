@@ -6805,7 +6805,7 @@
           "oracle": {
             "status": 400,
             "code": "FAILED_PRECONDITION",
-            "message": "the stored version (1788117043565034) does not match the required base version (1788117043561850)"
+            "message": "the stored version (1788151519830406) does not match the required base version (1788151519827800)"
           }
         },
         "update-time-precondition-on-a-missing-document": {
@@ -7663,21 +7663,6 @@
             "status": 409,
             "code": "ABORTED",
             "message": "Transaction lock timeout."
-          },
-          "divergence": {
-            "fireemu": {
-              "status": 200,
-              "code": "OK",
-              "body": {
-                "commitTime": "<now>",
-                "writeResults": [
-                  {
-                    "updateTime": "<now>"
-                  }
-                ]
-              }
-            },
-            "reason": "fireemu runs transactions optimistically (MVCC with read-set validation at commit): a write outside the transaction always commits, and the transaction that read the document is ABORTED when it commits, which the SDKs retry. The official emulator takes locks on the documents a transaction reads, refuses the out-of-band write with ABORTED 'Transaction lock timeout.' after waiting, and commits the transaction. Both models keep the read set serializable; they differ in which side is told to retry."
           }
         },
         "contended-commit-is-aborted": {
@@ -7692,13 +7677,6 @@
               ],
               "commitTime": "<now>"
             }
-          },
-          "divergence": {
-            "fireemu": {
-              "status": 409,
-              "code": "ABORTED"
-            },
-            "reason": "fireemu runs transactions optimistically (MVCC with read-set validation at commit): a write outside the transaction always commits, and the transaction that read the document is ABORTED when it commits, which the SDKs retry. The official emulator takes locks on the documents a transaction reads, refuses the out-of-band write with ABORTED 'Transaction lock timeout.' after waiting, and commits the transaction. Both models keep the read set serializable; they differ in which side is told to retry."
           }
         },
         "counter-keeps-the-out-of-band-value": {
@@ -7715,23 +7693,6 @@
               "createTime": "<now>",
               "updateTime": "<now>"
             }
-          },
-          "divergence": {
-            "fireemu": {
-              "status": 200,
-              "code": "OK",
-              "body": {
-                "name": "projects/demo-firestore-probe/databases/(default)/documents/tx/counter",
-                "fields": {
-                  "value": {
-                    "integerValue": "100"
-                  }
-                },
-                "createTime": "<now>",
-                "updateTime": "<now>"
-              }
-            },
-            "reason": "fireemu runs transactions optimistically (MVCC with read-set validation at commit): a write outside the transaction always commits, and the transaction that read the document is ABORTED when it commits, which the SDKs retry. The official emulator takes locks on the documents a transaction reads, refuses the out-of-band write with ABORTED 'Transaction lock timeout.' after waiting, and commits the transaction. Both models keep the read set serializable; they differ in which side is told to retry. Here the out-of-band value (100) is what remains."
           }
         },
         "begin-unread": {
@@ -7833,21 +7794,6 @@
             "status": 409,
             "code": "ABORTED",
             "message": "Transaction lock timeout."
-          },
-          "divergence": {
-            "fireemu": {
-              "status": 200,
-              "code": "OK",
-              "body": {
-                "commitTime": "<now>",
-                "writeResults": [
-                  {
-                    "updateTime": "<now>"
-                  }
-                ]
-              }
-            },
-            "reason": "fireemu runs transactions optimistically (MVCC with read-set validation at commit): a write outside the transaction always commits, and the transaction that read the document is ABORTED when it commits, which the SDKs retry. The official emulator takes locks on the documents a transaction reads, refuses the out-of-band write with ABORTED 'Transaction lock timeout.' after waiting, and commits the transaction. Both models keep the read set serializable; they differ in which side is told to retry. A query run inside a transaction pins its result set the same way: a document that would join the result (a phantom row) aborts the transaction at commit on fireemu, while the official emulator refuses the write that would create it."
           }
         },
         "commit-after-a-phantom-row": {
@@ -7862,13 +7808,6 @@
               ],
               "commitTime": "<now>"
             }
-          },
-          "divergence": {
-            "fireemu": {
-              "status": 409,
-              "code": "ABORTED"
-            },
-            "reason": "The transaction side of the phantom-write row."
           }
         },
         "begin-read-only": {

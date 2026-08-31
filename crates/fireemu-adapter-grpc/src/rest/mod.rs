@@ -640,7 +640,7 @@ impl RestState {
         let guard = self.write_guard(principal);
         let doc = self
             .local
-            .execute_planned_with(&parsed, write, req.mask.as_ref(), &*guard)?;
+            .execute_planned_with(&parsed, &write, req.mask.as_ref(), &*guard)?;
         Ok(ok(document_to_json(&doc)))
     }
 
@@ -674,7 +674,7 @@ impl RestState {
         let guard = self.write_guard(principal);
         let doc = self
             .local
-            .execute_planned_with(&parsed, write, req.mask.as_ref(), &*guard)?;
+            .execute_planned_with(&parsed, &write, req.mask.as_ref(), &*guard)?;
         Ok(ok(document_to_json(&doc)))
     }
 

@@ -366,7 +366,7 @@ impl Firestore for GatewayService {
             let (parent, write) = LocalBackend::plan_update(request.get_ref())?;
             let guard = self.write_guard(&caller);
             return local
-                .execute_planned_with(&parent, write, request.get_ref().mask.as_ref(), &*guard)
+                .execute_planned_with(&parent, &write, request.get_ref().mask.as_ref(), &*guard)
                 .map(Response::new);
         }
         self.client()?.update_document(request.into_inner()).await
@@ -672,7 +672,7 @@ impl Firestore for GatewayService {
             let (parent, write) = local.plan_create(request.get_ref())?;
             let guard = self.write_guard(&caller);
             return local
-                .execute_planned_with(&parent, write, request.get_ref().mask.as_ref(), &*guard)
+                .execute_planned_with(&parent, &write, request.get_ref().mask.as_ref(), &*guard)
                 .map(Response::new);
         }
         self.client()?.create_document(request.into_inner()).await

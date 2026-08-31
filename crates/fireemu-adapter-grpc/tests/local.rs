@@ -329,7 +329,7 @@ async fn create_update_with_mask_transforms_and_preconditions() {
 }
 
 #[tokio::test]
-async fn transactions_abort_on_conflict_and_batch_get_reports_missing() {
+async fn a_locked_read_refuses_the_out_of_band_writer_and_batch_get_reports_missing() {
     let (mut client, _clock, handle) = start().await;
     client
         .commit(pb::CommitRequest {
@@ -370,16 +370,21 @@ async fn transactions_abort_on_conflict_and_batch_get_reports_missing() {
         }
     }
     assert_eq!((found, missing), (1, 1));
-    // Someone else writes the document.
-    client
+    // Pessimistic concurrency: the read locked acct/a, so an out-of-band writer that touches
+    // it is made to wait and then refused with ABORTED "Transaction lock timeout." -- the
+    // transaction keeps the lock and nothing is written behind its back.
+    let lock_timeout = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(90))])],
             ..Default::default()
         })
         .await
-        .unwrap();
-    let aborted = client
+        .unwrap_err();
+    assert_eq!(lock_timeout.code(), tonic::Code::Aborted);
+    assert_eq!(lock_timeout.message(), "Transaction lock timeout.");
+    // The transaction commits on the value it read.
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(80))])],
@@ -387,8 +392,7 @@ async fn transactions_abort_on_conflict_and_batch_get_reports_missing() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(aborted.code(), tonic::Code::Aborted);
+        .unwrap();
     let got = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/acct/a"),
@@ -397,7 +401,7 @@ async fn transactions_abort_on_conflict_and_batch_get_reports_missing() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(got.fields.get("balance"), Some(&i(90)));
+    assert_eq!(got.fields.get("balance"), Some(&i(80)));
 
     let txn2 = client
         .begin_transaction(pb::BeginTransactionRequest {
@@ -710,15 +714,19 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     assert!(second.transaction.is_empty());
     assert!(stream.next().await.is_none());
 
-    // A concurrent insert is invisible to the transaction's aggregation and aborts its commit.
-    client
+    // Pessimistic concurrency: the transaction's query locked the `snap` collection, so a
+    // concurrent insert into it (a phantom row) is refused with "Transaction lock timeout."
+    // rather than allowed to invalidate the transaction.
+    let lock_timeout = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/2", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(lock_timeout.code(), tonic::Code::Aborted);
+    assert_eq!(lock_timeout.message(), "Transaction lock timeout.");
     let mut stream = client
         .run_aggregation_query(pb::RunAggregationQueryRequest {
             parent: DOCS.to_owned(),
@@ -737,7 +745,9 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
         .into_inner();
     let result = stream.next().await.unwrap().unwrap().result.unwrap();
     assert_eq!(result.aggregate_fields.get("n"), Some(&i(1)));
-    let err = client
+    // The transaction commits: writing into the collection it locked never contends with
+    // itself.
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/3", &[("v", i(3))])],
@@ -745,8 +755,7 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Aborted);
+        .unwrap();
 
     // An empty BatchGet with new_transaction still returns the token.
     let mut stream = client
@@ -970,16 +979,21 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
         .unwrap()
         .into_inner();
     assert_eq!(listed.documents.len(), 1);
-    // A document added to the scanned collection after the read aborts the transaction.
-    client
+    // The list locked the `scan` collection, so an out-of-band insert into it (a phantom) is
+    // refused with "Transaction lock timeout." rather than allowed behind the transaction.
+    let lock_timeout = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/b", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap();
-    let err = client
+        .unwrap_err();
+    assert_eq!(lock_timeout.code(), tonic::Code::Aborted);
+    assert_eq!(lock_timeout.message(), "Transaction lock timeout.");
+    // The transaction commits a write into the collection it scanned; its own lock never
+    // blocks it.
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/a", &[("v", i(3))])],
@@ -987,8 +1001,7 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Aborted);
+        .unwrap();
     handle.abort();
 }
 

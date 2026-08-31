@@ -281,6 +281,11 @@ pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
             tonic::Status::not_found(format!("No document to update: {}", p.resource_name()))
         }
         FirestoreError::Aborted(m) => tonic::Status::aborted(m.clone()),
+        // A lock contention that reached the wire (a bulk `BatchWrite`, or a path that did
+        // not go through the lock-wait loop) is reported as the official emulator reports a
+        // held lock: `ABORTED` with this message. The single-write commit paths intercept
+        // `LockContended` before this and wait it out on the virtual clock instead.
+        FirestoreError::LockContended { .. } => tonic::Status::aborted("Transaction lock timeout."),
         // The official backend reports size / depth violations as INVALID_ARGUMENT.
         FirestoreError::ResourceExhausted(v) => tonic::Status::invalid_argument(format!(
             "{}: {} exceeds {} ({:?})",

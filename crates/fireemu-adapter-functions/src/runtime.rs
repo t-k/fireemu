@@ -385,6 +385,16 @@ struct CodebaseGeneration {
     cleanup_dir: Option<Arc<CleanupDir>>,
 }
 
+/// One atomic view of the generation a restart is replacing. Keeping the runner, spawn
+/// specification, revision and source owner together prevents reload from changing the
+/// generation between a crash and its replacement being selected.
+struct RespawnGeneration {
+    runner: Arc<Runner>,
+    spawn: SpawnSpec,
+    revision: u64,
+    cleanup_dir: Option<Arc<CleanupDir>>,
+}
+
 struct CleanupDir(std::path::PathBuf);
 
 impl Drop for CleanupDir {
@@ -404,6 +414,16 @@ impl Codebase {
         self.generation
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn capture_respawn(&self) -> Option<RespawnGeneration> {
+        let current = self.generation();
+        Some(RespawnGeneration {
+            runner: current.runner.clone(),
+            spawn: current.spawn.clone()?,
+            revision: current.revision,
+            cleanup_dir: current.cleanup_dir.clone(),
+        })
     }
 }
 
@@ -1571,24 +1591,49 @@ impl FunctionsRuntime {
 
     /// Restarts the runner of one codebase.
     fn respawn_one(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
-        let Some((spec, codebase_revision, source_generation)) =
-            self.codebases.get(index).and_then(|codebase| {
-                let current = codebase.generation();
-                Some((
-                    current.spawn.clone()?,
-                    current.revision,
-                    current.cleanup_dir.clone(),
-                ))
-            })
+        let Some(respawn) = self
+            .codebases
+            .get(index)
+            .and_then(Codebase::capture_respawn)
         else {
             return;
         };
+        self.spawn_captured(index, generation, respawn);
+    }
+
+    /// Crashes and replaces one atomic codebase generation. A reload that wins after the
+    /// capture increments the revision, so this older replacement can no longer displace it.
+    fn crash_and_respawn(self: &Arc<Self>, index: usize, generation: Option<Epoch>) {
+        let Some(respawn) = self
+            .codebases
+            .get(index)
+            .and_then(Codebase::capture_respawn)
+        else {
+            return;
+        };
+        respawn.runner.kill_now();
+        self.spawn_captured(index, generation, respawn);
+    }
+
+    fn spawn_captured(
+        self: &Arc<Self>,
+        index: usize,
+        generation: Option<Epoch>,
+        respawn: RespawnGeneration,
+    ) {
+        let RespawnGeneration {
+            runner: retired_runner,
+            spawn,
+            revision: codebase_revision,
+            cleanup_dir: source_generation,
+        } = respawn;
         let runtime = self.clone();
         tokio::spawn(async move {
             // Retain the immutable source until this spawn either installs or is rejected as
             // stale. A concurrent reload can otherwise drop its last live owner mid-import.
             let _source_generation = source_generation;
-            match Runner::spawn_spec(&spec).await {
+            let _retired_runner = retired_runner;
+            match Runner::spawn_spec(&spawn).await {
                 Ok(runner) => {
                     // A later reset supersedes this restart: its own replacement is
                     // the runner of record and this one must not outlive the kill.
@@ -2046,8 +2091,7 @@ impl FunctionsRuntime {
                 FaultAction::CrashRunner => {
                     let generation = self.inner.lock().ok().map(|i| i.epoch);
                     let index = self.owner.get(function).copied().unwrap_or(0);
-                    self.runner_at(index).kill_now();
-                    self.respawn_one(index, generation);
+                    self.crash_and_respawn(index, generation);
                     answer = Some(Err(format!(
                         "fault plan: the runner crashed while serving {function}"
                     )));
@@ -2164,9 +2208,8 @@ impl FunctionsRuntime {
             if crash {
                 // The runner dies mid-invocation: the attempt is given back (RunnerGone) and
                 // a fresh runner takes over, as after a crashed instance.
-                runner.kill_now();
                 let generation = Some(inner.epoch);
-                self.respawn_one(index, generation);
+                self.crash_and_respawn(index, generation);
             }
             tokio::spawn(async move {
                 let Invocation { outcome, late } = match fault_outcome {

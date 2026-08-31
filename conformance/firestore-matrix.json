@@ -6507,9 +6507,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "collectionIds": [
-                "prj"
-              ]
+              "collectionIds": ["prj"]
             }
           }
         },
@@ -6518,9 +6516,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "collectionIds": [
-                "sub"
-              ]
+              "collectionIds": ["sub"]
             }
           }
         },
@@ -6529,9 +6525,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "collectionIds": [
-                "prj"
-              ],
+              "collectionIds": ["prj"],
               "nextPageToken": "<token>"
             }
           }
@@ -6820,9 +6814,7 @@
             "status": 200,
             "code": "OK",
             "body": {
-              "writeResults": [
-                {}
-              ],
+              "writeResults": [{}],
               "commitTime": "<now>"
             }
           }

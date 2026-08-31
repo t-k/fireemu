@@ -27,6 +27,23 @@
       }
     },
     {
+      "id": "INV-EPOCH-002",
+      "statement": "Work captures the current epoch only while the session is Active.",
+      "criticality": "critical",
+      "owner": "core-session",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "SessionEpoch.tla::WorkCapturedOnlyWhileActive",
+        "mutation": [
+          "M-EPOCH-001",
+          "M-TLA-EPOCH-CAPTURE-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-session/tests/session.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-TIME-001",
       "statement": "Logical time never moves backwards during normal operation.",
       "criticality": "critical",

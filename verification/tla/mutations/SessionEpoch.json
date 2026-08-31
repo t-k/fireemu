@@ -10,6 +10,13 @@
       "to": "/\\ workEpoch[w] # epoch\n    /\\ applied' ="
     },
     {
+      "id": "M-TLA-EPOCH-CAPTURE-001",
+      "property": "WorkCapturedOnlyWhileActive",
+      "operator": "capture-work-outside-active-state",
+      "from": "CaptureWork(w) ==\n    /\\ state = \"Active\"",
+      "to": "CaptureWork(w) ==\n    /\\ TRUE"
+    },
+    {
       "id": "M-TLA-EPOCH-MONOTONIC-001",
       "property": "EpochNeverDecreases",
       "operator": "choose-any-reset-epoch",

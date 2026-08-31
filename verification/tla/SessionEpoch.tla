@@ -10,6 +10,7 @@
 (*                                                                         *)
 (* Properties                                                              *)
 (*   INV-EPOCH-001  EpochIsolation                                         *)
+(*   INV-EPOCH-002  WorkCapturedOnlyWhileActive                            *)
 (*   INV-TIME-001   EpochNeverDecreases (epoch is the model's clock)       *)
 (*   LIVE-RESET-001 ResetEventuallyActivatesNewEpoch                       *)
 (***************************************************************************)
@@ -18,32 +19,51 @@ EXTENDS Naturals, FiniteSets
 CONSTANTS Workers,   \* set of worker identities
           MaxEpoch   \* bound on the number of resets explored
 
-VARIABLES state,     \* lifecycle state
-          epoch,     \* current epoch
-          workEpoch, \* workEpoch[w]: epoch captured by worker w's work item (NoWork if none)
-          applied    \* set of records [worker, work, session] for applied effects
+VARIABLES state,             \* lifecycle state
+          epoch,             \* current epoch
+          workEpoch,         \* workEpoch[w]: captured epoch (NoWork if none)
+          applied,           \* records [worker, work, session] for applied effects
+          previousState,
+          lastCapturedEpoch,
+          lastAction
 
-vars == <<state, epoch, workEpoch, applied>>
+vars == <<state, epoch, workEpoch, applied, previousState, lastCapturedEpoch,
+          lastAction>>
 
 NoWork == MaxEpoch + 1
 
 States == {"Creating", "Active", "Resetting", "Closing", "Closed"}
+
+Actions == {"Init", "Activate", "BeginReset", "CompleteReset", "BeginClose",
+             "CompleteClose", "CaptureWork", "ApplyWork", "DiscardWork"}
 
 TypeOK ==
     /\ state \in States
     /\ epoch \in 0..MaxEpoch
     /\ workEpoch \in [Workers -> 0..NoWork]
     /\ applied \subseteq [worker: Workers, work: 0..MaxEpoch, session: 0..MaxEpoch]
+    /\ previousState \in States
+    /\ lastCapturedEpoch \in 0..NoWork
+    /\ lastAction \in Actions
 
 Init ==
     /\ state = "Creating"
     /\ epoch = 0
     /\ workEpoch = [w \in Workers |-> NoWork]
     /\ applied = {}
+    /\ previousState = state
+    /\ lastCapturedEpoch = NoWork
+    /\ lastAction = "Init"
+
+Record(action, capturedEpoch) ==
+    /\ previousState' = state
+    /\ lastCapturedEpoch' = capturedEpoch
+    /\ lastAction' = action
 
 Activate ==
     /\ state = "Creating"
     /\ state' = "Active"
+    /\ Record("Activate", NoWork)
     /\ UNCHANGED <<epoch, workEpoch, applied>>
 
 \* Reset: bump the epoch first, then publish the new epoch as Active.
@@ -52,22 +72,26 @@ BeginReset ==
     /\ epoch < MaxEpoch
     /\ state' = "Resetting"
     /\ epoch' = epoch + 1
+    /\ Record("BeginReset", NoWork)
     /\ UNCHANGED <<workEpoch, applied>>
 
 CompleteReset ==
     /\ state = "Resetting"
     /\ state' = "Active"
+    /\ Record("CompleteReset", NoWork)
     /\ UNCHANGED <<epoch, workEpoch, applied>>
 
 \* A session is always closable, including from an unfinished reset.
 BeginClose ==
     /\ state \in {"Creating", "Active", "Resetting"}
     /\ state' = "Closing"
+    /\ Record("BeginClose", NoWork)
     /\ UNCHANGED <<epoch, workEpoch, applied>>
 
 CompleteClose ==
     /\ state = "Closing"
     /\ state' = "Closed"
+    /\ Record("CompleteClose", NoWork)
     /\ UNCHANGED <<epoch, workEpoch, applied>>
 
 \* A worker creates a work item while the session is active; the item captures the epoch.
@@ -75,6 +99,7 @@ CaptureWork(w) ==
     /\ state = "Active"
     /\ workEpoch[w] = NoWork
     /\ workEpoch' = [workEpoch EXCEPT ![w] = epoch]
+    /\ Record("CaptureWork", epoch)
     /\ UNCHANGED <<state, epoch, applied>>
 
 \* The epoch guard: apply only when the captured epoch is current and the session is Active.
@@ -84,6 +109,7 @@ ApplyWork(w) ==
     /\ workEpoch[w] = epoch
     /\ applied' = applied \cup {[worker |-> w, work |-> workEpoch[w], session |-> epoch]}
     /\ workEpoch' = [workEpoch EXCEPT ![w] = NoWork]
+    /\ Record("ApplyWork", NoWork)
     /\ UNCHANGED <<state, epoch>>
 
 \* A stale work item is discarded without any effect.
@@ -91,6 +117,7 @@ DiscardWork(w) ==
     /\ workEpoch[w] # NoWork
     /\ workEpoch[w] # epoch
     /\ workEpoch' = [workEpoch EXCEPT ![w] = NoWork]
+    /\ Record("DiscardWork", NoWork)
     /\ UNCHANGED <<state, epoch, applied>>
 
 Next ==
@@ -108,6 +135,11 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 -----------------------------------------------------------------------------
 \* INV-EPOCH-001: every applied effect was produced in the epoch that was current.
 EpochIsolation == \A a \in applied: a.work = a.session
+
+WorkCapturedOnlyWhileActive ==
+    lastAction = "CaptureWork" =>
+        /\ previousState = "Active"
+        /\ lastCapturedEpoch = epoch
 
 \* INV-TIME-001 (model clock): the epoch never decreases.
 EpochNeverDecreases == [][epoch' >= epoch]_vars

@@ -3,7 +3,7 @@
 //! moves on, and releases the sharing when either side drops or replaces the blob.
 
 use fireemu_core_storage::name::{BucketName, ObjectName};
-use fireemu_core_storage::store::{NewMetadata, Precondition, StorageState};
+use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
 use fireemu_core_types::time::LogicalInstant;
 
 fn t(n: i64) -> LogicalInstant {
@@ -70,7 +70,7 @@ fn restore_shares_the_captured_blobs_instead_of_copying_them() {
 
     put(&mut live, "big.bin", vec![2u8; 8]);
     put(&mut live, "extra.bin", vec![3u8; 64]);
-    live.restore_buckets(|_| true, &capture, true);
+    live.restore_buckets(|_| true, &capture);
 
     let meta = live.get(&bucket(), &name("big.bin")).unwrap().clone();
     assert_eq!(live.bytes(&meta), vec![1u8; MIB].as_slice());
@@ -95,7 +95,7 @@ fn restoring_an_older_snapshot_never_reuses_an_issued_generation() {
         .expect("later object")
         .generation;
 
-    live.restore_buckets(|_| true, &capture, true);
+    live.restore_buckets(|_| true, &capture);
     put(&mut live, "object.txt", b"after restore".to_vec());
     let generation_after_restore = live
         .get(&bucket(), &name("object.txt"))
@@ -106,4 +106,123 @@ fn restoring_an_older_snapshot_never_reuses_an_issued_generation() {
         generation_after_restore > highest_issued,
         "restore must preserve the allocator high-water above every issued generation"
     );
+}
+
+#[test]
+fn restoring_one_scope_preserves_global_allocators_and_credentials() {
+    let default_bucket = bucket();
+    let registered_bucket = BucketName::try_new("registered.appspot.com").unwrap();
+    let mut live = StorageState::new(7);
+    live.put(
+        &default_bucket,
+        &name("captured.txt"),
+        b"captured".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(0),
+    )
+    .unwrap();
+    let capture = live.capture_buckets(|bucket| bucket == default_bucket.as_str());
+
+    live.put(
+        &registered_bucket,
+        &name("registered.txt"),
+        b"registered bytes".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+    let issued_token = live.mint_download_token();
+    let registered_upload = live
+        .begin_upload(
+            &registered_bucket,
+            &name("upload.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(1),
+        )
+        .unwrap();
+
+    live.restore_buckets(|bucket| bucket == default_bucket.as_str(), &capture);
+    let token_after_restore = live.mint_download_token();
+    let default_upload = live
+        .begin_upload(
+            &default_bucket,
+            &name("new-upload.bin"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(2),
+        )
+        .unwrap();
+    live.put(
+        &default_bucket,
+        &name("new-object.txt"),
+        b"default bytes".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(2),
+    )
+    .unwrap();
+
+    assert_ne!(
+        token_after_restore, issued_token,
+        "bearer tokens never repeat"
+    );
+    assert_ne!(default_upload, registered_upload, "upload IDs never repeat");
+    assert_eq!(
+        live.upload_bucket(&registered_upload, t(2)).unwrap(),
+        &registered_bucket
+    );
+    let registered = live
+        .get(&registered_bucket, &name("registered.txt"))
+        .expect("registered project object survives default restore");
+    assert_eq!(live.bytes(registered), b"registered bytes");
+}
+
+#[test]
+fn restoring_one_scope_preserves_pending_events_from_other_scopes() {
+    let default_bucket = bucket();
+    let registered_bucket = BucketName::try_new("registered.appspot.com").unwrap();
+    let mut live = StorageState::new(7);
+    live.put(
+        &default_bucket,
+        &name("captured.txt"),
+        b"captured".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(0),
+    )
+    .unwrap();
+    let _ = live.drain_events();
+    let capture = live.capture_buckets(|bucket| bucket == default_bucket.as_str());
+    live.put(
+        &default_bucket,
+        &name("owned.txt"),
+        b"owned".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+    live.put(
+        &registered_bucket,
+        &name("retained.txt"),
+        b"retained".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+
+    live.restore_buckets(|bucket| bucket == default_bucket.as_str(), &capture);
+
+    let events = live.drain_events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        StorageEvent::Finalized(metadata) if metadata.bucket == registered_bucket
+    ));
 }

@@ -468,6 +468,14 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
             "rateLimitExceeded",
         ),
         StorageError::ChecksumMismatch(m) => (400, format!("checksum mismatch: {m}"), "invalid"),
+        StorageError::InvalidImportedIdentity(m) => {
+            (400, format!("invalid imported identity: {m}"), "invalid")
+        }
+        StorageError::IdentityExhausted => (
+            507,
+            "storage identity space exhausted".to_owned(),
+            "internalError",
+        ),
     }
 }
 
@@ -2373,6 +2381,7 @@ fn fb_commit(
     } else {
         Method::Create
     };
+    let next_generation = store.next_generation_preview().map_err(fb_core_err)?;
     state
         .authorize(
             principal,
@@ -2380,15 +2389,7 @@ fn fb_commit(
             b,
             n.as_str(),
             existing.as_ref().map(storage_rules_value),
-            incoming_rules_value(
-                b,
-                n,
-                &meta,
-                data.len() as u64,
-                hashes,
-                store.next_generation_preview(),
-                now,
-            ),
+            incoming_rules_value(b, n, &meta, data.len() as u64, hashes, next_generation, now),
         )
         .map_err(|denial| denial.with_header("x-goog-upload-status", "final"))?;
     store
@@ -2546,21 +2547,16 @@ fn finalize_resumable(
     } else {
         Method::Create
     };
+    let next_generation = store
+        .next_generation_preview()
+        .map_err(FinalizeError::Store)?;
     if let Err(denial) = state.authorize(
         &principal,
         method,
         &b,
         n.as_str(),
         existing.as_ref().map(storage_rules_value),
-        incoming_rules_value(
-            &b,
-            &n,
-            &meta,
-            size,
-            hashes,
-            store.next_generation_preview(),
-            now,
-        ),
+        incoming_rules_value(&b, &n, &meta, size, hashes, next_generation, now),
     ) {
         let _ = store.mark_upload_denied(id, now);
         return Err(FinalizeError::Denied(denial));

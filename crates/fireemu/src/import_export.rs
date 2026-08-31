@@ -757,11 +757,22 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
         }
     }
     paths.sort();
+    let mut identities = BTreeSet::new();
     for path in paths {
         let text =
             read_text_inside(dir, &path).map_err(|e| ArtifactError::new("storage", &path, e))?;
         let meta = ExportedObject::parse(&text)
             .map_err(|e| ArtifactError::new("storage", &path, e.to_string()))?;
+        if !identities.insert((meta.bucket.clone(), meta.name.clone())) {
+            return Err(ArtifactError::new(
+                "storage",
+                &path,
+                format!(
+                    "duplicate storage object {}/{} appears in more than one metadata file",
+                    meta.bucket, meta.name
+                ),
+            ));
+        }
         let id = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -820,11 +831,19 @@ fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject,
         .map_err(|e| refuse(format!("bucket {:?}: {e}", meta.bucket)))?;
     let name = ObjectName::try_new(meta.name.clone())
         .map_err(|e| refuse(format!("object name {:?}: {e}", meta.name)))?;
+    let generation = u64::try_from(meta.generation)
+        .ok()
+        .filter(|generation| *generation >= 1)
+        .ok_or_else(|| refuse("generation must be at least 1".to_owned()))?;
+    let metageneration = u64::try_from(meta.metageneration)
+        .ok()
+        .filter(|metageneration| *metageneration >= 1)
+        .ok_or_else(|| refuse("metageneration must be at least 1".to_owned()))?;
     Ok(ImportedObject {
         bucket,
         name,
-        generation: u64::try_from(meta.generation).unwrap_or(1),
-        metageneration: u64::try_from(meta.metageneration).unwrap_or(1),
+        generation,
+        metageneration,
         content_type: meta
             .content_type
             .clone()
@@ -1246,7 +1265,28 @@ fn export_storage(
     buckets.dedup();
 
     for object in store.all_objects() {
-        let generation = i64::try_from(object.generation).unwrap_or(i64::MAX);
+        let generation = i64::try_from(object.generation).map_err(|_| {
+            ArtifactError::new(
+                "storage",
+                &section_dir,
+                format!(
+                    "object {}/{} has a generation that the official export format cannot preserve",
+                    object.bucket.as_str(),
+                    object.name.as_str()
+                ),
+            )
+        })?;
+        let metageneration = i64::try_from(object.metageneration).map_err(|_| {
+            ArtifactError::new(
+                "storage",
+                &section_dir,
+                format!(
+                    "object {}/{} has a metageneration that the official export format cannot preserve",
+                    object.bucket.as_str(),
+                    object.name.as_str()
+                ),
+            )
+        })?;
         let id = blob_id(object.bucket.as_str(), object.name.as_str(), generation);
         let blob_path = blobs_dir.join(&id);
         write_private_file(&blob_path, store.bytes(object))
@@ -1255,7 +1295,7 @@ fn export_storage(
             name: object.name.as_str().to_owned(),
             bucket: object.bucket.as_str().to_owned(),
             generation,
-            metageneration: i64::try_from(object.metageneration).unwrap_or(1),
+            metageneration,
             content_type: Some(object.content_type.clone()),
             storage_class: Some("STANDARD".to_owned()),
             download_tokens: object.download_tokens.clone(),

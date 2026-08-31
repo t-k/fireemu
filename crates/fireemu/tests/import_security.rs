@@ -38,6 +38,36 @@ fn import(dir: &Path) -> std::process::Output {
         .unwrap()
 }
 
+fn storage_export_with_identity(
+    name: &str,
+    generation: i64,
+    metageneration: i64,
+) -> std::path::PathBuf {
+    let dir = scratch(name);
+    let export = dir.join("export");
+    std::fs::create_dir_all(export.join("storage_export/blobs")).unwrap();
+    std::fs::create_dir_all(export.join("storage_export/metadata")).unwrap();
+    std::fs::write(
+        export.join("firebase-export-metadata.json"),
+        r#"{"version":"15.28.2","storage":{"version":"15.28.2","path":"storage_export"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        export.join("storage_export/buckets.json"),
+        r#"{"buckets":[{"id":"demo-app.appspot.com"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        export.join("storage_export/metadata/obj.json"),
+        format!(
+            r#"{{"name":"obj","bucket":"demo-app.appspot.com","generation":{generation},"metageneration":{metageneration},"size":1,"contentType":"text/plain"}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(export.join("storage_export/blobs/obj"), b"x").unwrap();
+    export
+}
+
 #[cfg(unix)]
 #[test]
 fn a_storage_blob_that_is_a_symlink_is_refused_without_reading_its_target() {
@@ -109,4 +139,37 @@ fn a_blob_whose_size_disagrees_with_its_metadata_is_refused_without_naming_the_r
         "the real size must not be reported: {stderr}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn zero_or_negative_storage_identity_is_refused_instead_of_becoming_generation_one() {
+    for (name, generation, metageneration, field) in [
+        ("zero-generation", 0, 1, "generation"),
+        ("negative-metageneration", 1, -1, "metageneration"),
+    ] {
+        let export = storage_export_with_identity(name, generation, metageneration);
+        let output = import(&export);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains(field), "{stderr}");
+        assert!(stderr.contains("at least 1"), "{stderr}");
+        let _ = std::fs::remove_dir_all(export.parent().unwrap());
+    }
+}
+
+#[test]
+fn duplicate_storage_object_identities_are_refused_instead_of_replacing_bytes() {
+    let export = storage_export_with_identity("duplicate-identity", 7, 1);
+    std::fs::write(
+        export.join("storage_export/metadata/duplicate.json"),
+        r#"{"name":"obj","bucket":"demo-app.appspot.com","generation":7,"metageneration":1,"size":1,"contentType":"text/plain"}"#,
+    )
+    .unwrap();
+    std::fs::write(export.join("storage_export/blobs/duplicate"), b"y").unwrap();
+
+    let output = import(&export);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("duplicate storage object"), "{stderr}");
+    let _ = std::fs::remove_dir_all(export.parent().unwrap());
 }

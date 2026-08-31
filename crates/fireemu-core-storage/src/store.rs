@@ -34,6 +34,8 @@ pub const MAX_UPLOAD_SESSIONS: usize = 256;
 pub const MAX_FINISHED_UPLOAD_SESSIONS: usize = 256;
 /// Default listing page size.
 pub const DEFAULT_LIST_PAGE_SIZE: usize = 1000;
+/// Largest generation identity that official import/export artifacts preserve losslessly.
+pub const MAX_PERSISTED_IDENTITY: u64 = i64::MAX as u64;
 
 /// Opaque blob identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -297,6 +299,10 @@ pub enum StorageError {
     TooManyUploads,
     /// The received bytes do not match the checksum the client declared.
     ChecksumMismatch(String),
+    /// An imported live object used a reserved generation identity.
+    InvalidImportedIdentity(String),
+    /// No further losslessly persisted generation identity can be allocated.
+    IdentityExhausted,
     /// A not-match precondition named the current generation / metageneration (reads answer
     /// `304 Not Modified`, writes `412`).
     NotModified(String),
@@ -317,6 +323,8 @@ impl fmt::Display for StorageError {
             Self::UploadSizeMismatch => f.write_str("upload size differs from the declared total"),
             Self::TooManyUploads => f.write_str("too many open upload sessions"),
             Self::ChecksumMismatch(m) => write!(f, "checksum mismatch: {m}"),
+            Self::InvalidImportedIdentity(m) => write!(f, "invalid imported identity: {m}"),
+            Self::IdentityExhausted => f.write_str("storage identity space exhausted"),
             Self::NotModified(m) => write!(f, "not modified: {m}"),
         }
     }
@@ -608,15 +616,9 @@ impl StorageState {
     }
 
     /// Replaces the buckets `owned` selects with `captured`'s objects, blobs and uploads
-    /// (a session restore); the other buckets stay. With `counters` the token generator
-    /// and the counters come back too (the default session, which owns them); otherwise
-    /// the counters only move forward so restored identifiers cannot collide.
-    pub fn restore_buckets(
-        &mut self,
-        owned: impl Fn(&str) -> bool,
-        captured: &Self,
-        counters: bool,
-    ) {
+    /// (a session restore); the other buckets stay. Global allocators and the credential RNG
+    /// never rewind: their identifiers may still be referenced by another scope or client.
+    pub fn restore_buckets(&mut self, owned: impl Fn(&str) -> bool, captured: &Self) {
         self.remove_buckets_where(&owned);
         for (k, v) in &captured.objects {
             if owned(k.0.as_str()) {
@@ -631,17 +633,17 @@ impl StorageState {
                 self.uploads.insert(k.clone(), v.clone());
             }
         }
-        if counters {
-            self.next_blob = captured.next_blob;
-            self.next_generation = self.next_generation.max(captured.next_generation);
-            self.next_upload = captured.next_upload;
-            self.rng = captured.rng.clone();
-        } else {
-            self.next_blob = self.next_blob.max(captured.next_blob);
-            self.next_generation = self.next_generation.max(captured.next_generation);
-            self.next_upload = self.next_upload.max(captured.next_upload);
-        }
-        self.events.clear();
+        self.next_blob = self.next_blob.max(captured.next_blob);
+        self.next_generation = self.next_generation.max(captured.next_generation);
+        self.next_upload = self.next_upload.max(captured.next_upload);
+        self.events.retain(|event| {
+            let bucket = match event {
+                StorageEvent::Finalized(metadata)
+                | StorageEvent::Deleted(metadata)
+                | StorageEvent::MetadataUpdated(metadata) => &metadata.bucket,
+            };
+            !owned(bucket.as_str())
+        });
     }
 
     /// Bytes of object data this state retains, each blob counted once (`SNAP-MEM-01`).
@@ -708,9 +710,11 @@ impl StorageState {
     /// The generation the next commit will draw, for the `request.resource` a rules
     /// evaluation sees before the commit exists (the official emulator builds the whole
     /// prospective object, generation included, before its rules run).
-    #[must_use]
-    pub fn next_generation_preview(&self) -> u64 {
-        self.next_generation + 1
+    pub fn next_generation_preview(&self) -> Result<u64, StorageError> {
+        self.next_generation
+            .checked_add(1)
+            .filter(|generation| *generation <= MAX_PERSISTED_IDENTITY)
+            .ok_or(StorageError::IdentityExhausted)
     }
 
     /// Object metadata.
@@ -755,9 +759,14 @@ impl StorageState {
         }
         let key = (bucket.clone(), name.clone());
         Self::check(self.objects.get(&key), pre)?;
-        self.next_blob += 1;
-        let blob = BlobId(self.next_blob);
-        self.next_generation += 1;
+        let next_blob = self
+            .next_blob
+            .checked_add(1)
+            .ok_or(StorageError::IdentityExhausted)?;
+        let next_generation = self.next_generation_preview()?;
+        self.next_blob = next_blob;
+        let blob = BlobId(next_blob);
+        self.next_generation = next_generation;
         let meta = ObjectMetadata {
             bucket: bucket.clone(),
             name: name.clone(),
@@ -809,7 +818,11 @@ impl StorageState {
         if metadata_budget_size(&next.custom, &next.download_tokens) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
-        next.metageneration += 1;
+        next.metageneration = next
+            .metageneration
+            .checked_add(1)
+            .filter(|metageneration| *metageneration <= MAX_PERSISTED_IDENTITY)
+            .ok_or(StorageError::IdentityExhausted)?;
         next.updated = now;
         *meta = next.clone();
         self.events
@@ -826,19 +839,23 @@ impl StorageState {
         name: &ObjectName,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
-        let token = self.token();
-        let meta = self
-            .objects
-            .get_mut(&(bucket.clone(), name.clone()))
-            .ok_or(StorageError::NotFound)?;
+        let key = (bucket.clone(), name.clone());
+        let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
         // The token-mint route (?create_token=true) has no other size gate, so the count
         // cap is enforced here too: an unauthenticated caller cannot grow the list without
         // limit one token at a time (S-1).
         if meta.download_tokens.len() >= MAX_DOWNLOAD_TOKENS {
             return Err(StorageError::MetadataTooLarge);
         }
+        let next_metageneration = meta
+            .metageneration
+            .checked_add(1)
+            .filter(|metageneration| *metageneration <= MAX_PERSISTED_IDENTITY)
+            .ok_or(StorageError::IdentityExhausted)?;
+        let token = self.token();
+        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
         meta.download_tokens.push(token);
-        meta.metageneration += 1;
+        meta.metageneration = next_metageneration;
         meta.updated = now;
         let updated = meta.clone();
         self.events
@@ -857,22 +874,31 @@ impl StorageState {
         token: &str,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
-        let replacement = self.token();
-        let meta = self
-            .objects
-            .get_mut(&(bucket.clone(), name.clone()))
-            .ok_or(StorageError::NotFound)?;
+        let key = (bucket.clone(), name.clone());
+        let meta = self.objects.get(&key).ok_or(StorageError::NotFound)?;
         if meta.download_tokens.is_empty() {
             return Ok(meta.clone());
         }
+        let replacement_needed = meta
+            .download_tokens
+            .iter()
+            .all(|existing| existing == token);
+        let bump = if replacement_needed { 2 } else { 1 };
+        let next_metageneration = meta
+            .metageneration
+            .checked_add(bump)
+            .filter(|metageneration| *metageneration <= MAX_PERSISTED_IDENTITY)
+            .ok_or(StorageError::IdentityExhausted)?;
+        let replacement = replacement_needed.then(|| self.token());
+        let meta = self.objects.get_mut(&key).ok_or(StorageError::NotFound)?;
         meta.download_tokens.retain(|t| t != token);
         if meta.download_tokens.is_empty() {
-            meta.download_tokens.push(replacement);
+            meta.download_tokens
+                .push(replacement.expect("an empty token list requires a replacement"));
             // Upstream's replacement mint is its own (silent) metadata update, so removing
             // the last token moves the metageneration by two while emitting one event.
-            meta.metageneration += 1;
         }
-        meta.metageneration += 1;
+        meta.metageneration = next_metageneration;
         meta.updated = now;
         let updated = meta.clone();
         self.events
@@ -1022,6 +1048,15 @@ impl StorageState {
         if custom_metadata_size(&object.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
+        if object.generation == 0
+            || object.generation > MAX_PERSISTED_IDENTITY
+            || object.metageneration == 0
+            || object.metageneration > MAX_PERSISTED_IDENTITY
+        {
+            return Err(StorageError::InvalidImportedIdentity(format!(
+                "generation and metageneration must both be between 1 and {MAX_PERSISTED_IDENTITY}"
+            )));
+        }
         let md5 = md5(&bytes);
         if let Some(recorded) = object.md5 {
             if recorded != md5 {
@@ -1049,8 +1084,12 @@ impl StorageState {
                 )));
             }
         }
-        self.next_blob += 1;
-        let blob = BlobId(self.next_blob);
+        let next_blob = self
+            .next_blob
+            .checked_add(1)
+            .ok_or(StorageError::IdentityExhausted)?;
+        self.next_blob = next_blob;
+        let blob = BlobId(next_blob);
         self.next_generation = self.next_generation.max(object.generation);
         let meta = ObjectMetadata {
             bucket: object.bucket.clone(),
@@ -1135,6 +1174,10 @@ impl StorageState {
         {
             return Err(StorageError::MetadataTooLarge);
         }
+        let next_upload = self
+            .next_upload
+            .checked_add(1)
+            .ok_or(StorageError::IdentityExhausted)?;
         self.sweep_uploads(now);
         let receiving = self
             .uploads
@@ -1144,8 +1187,8 @@ impl StorageState {
         if receiving >= MAX_UPLOAD_SESSIONS {
             return Err(StorageError::TooManyUploads);
         }
-        self.next_upload += 1;
-        let sequence = self.next_upload;
+        self.next_upload = next_upload;
+        let sequence = next_upload;
         let token = self.token();
         let id = UploadId(format!("upload-{sequence:08}-{token}"));
         self.uploads.insert(

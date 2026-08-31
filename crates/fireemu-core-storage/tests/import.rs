@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use fireemu_core_storage::hash::{crc32c, md5};
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
-    ImportedObject, NewMetadata, Precondition, StorageError, StorageState,
+    ImportedObject, MetadataPatch, NewMetadata, Precondition, StorageError, StorageState,
 };
 use fireemu_core_types::time::LogicalInstant;
 
@@ -98,6 +98,106 @@ fn a_blob_whose_digest_does_not_match_its_metadata_is_refused() {
 }
 
 #[test]
+fn imported_live_objects_require_positive_generation_and_metageneration() {
+    let mut store = StorageState::new(7);
+    let mut zero_generation = imported("zero-generation", b"x");
+    zero_generation.generation = 0;
+    assert!(matches!(
+        store.insert_imported(zero_generation, b"x".to_vec()),
+        Err(StorageError::InvalidImportedIdentity(_))
+    ));
+
+    let mut zero_metageneration = imported("zero-metageneration", b"x");
+    zero_metageneration.metageneration = 0;
+    assert!(matches!(
+        store.insert_imported(zero_metageneration, b"x".to_vec()),
+        Err(StorageError::InvalidImportedIdentity(_))
+    ));
+
+    let mut exhausted_generation = imported("exhausted-generation", b"x");
+    exhausted_generation.generation = u64::MAX;
+    assert!(matches!(
+        store.insert_imported(exhausted_generation, b"x".to_vec()),
+        Err(StorageError::InvalidImportedIdentity(_))
+    ));
+
+    let mut unexportable_generation = imported("unexportable-generation", b"x");
+    unexportable_generation.generation = i64::MAX as u64 + 1;
+    assert!(matches!(
+        store.insert_imported(unexportable_generation, b"x".to_vec()),
+        Err(StorageError::InvalidImportedIdentity(_))
+    ));
+}
+
+#[test]
+fn representable_identity_exhaustion_fails_without_changing_object_state() {
+    let mut generation_store = StorageState::new(7);
+    let mut last_generation = imported("last-generation", b"x");
+    last_generation.generation = i64::MAX as u64;
+    generation_store
+        .insert_imported(last_generation, b"x".to_vec())
+        .expect("the largest exportable generation imports");
+    let before = generation_store
+        .get(&bucket(), &object("last-generation"))
+        .cloned();
+    assert!(matches!(
+        generation_store.put(
+            &bucket(),
+            &object("new"),
+            b"y".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(0),
+        ),
+        Err(StorageError::IdentityExhausted)
+    ));
+    assert_eq!(
+        generation_store.get(&bucket(), &object("last-generation")),
+        before.as_ref()
+    );
+    assert!(generation_store.get(&bucket(), &object("new")).is_none());
+    assert!(generation_store.drain_events().is_empty());
+
+    let mut metageneration_store = StorageState::new(7);
+    let mut last_metageneration = imported("last-metageneration", b"x");
+    last_metageneration.metageneration = i64::MAX as u64;
+    metageneration_store
+        .insert_imported(last_metageneration, b"x".to_vec())
+        .expect("the largest exportable metageneration imports");
+    let before = metageneration_store
+        .get(&bucket(), &object("last-metageneration"))
+        .cloned();
+    assert!(matches!(
+        metageneration_store.update_metadata(
+            &bucket(),
+            &object("last-metageneration"),
+            &MetadataPatch::default(),
+            Precondition::default(),
+            t(0),
+        ),
+        Err(StorageError::IdentityExhausted)
+    ));
+    assert!(matches!(
+        metageneration_store.add_download_token(&bucket(), &object("last-metageneration"), t(0),),
+        Err(StorageError::IdentityExhausted)
+    ));
+    assert!(matches!(
+        metageneration_store.remove_download_token(
+            &bucket(),
+            &object("last-metageneration"),
+            "kept-token",
+            t(0),
+        ),
+        Err(StorageError::IdentityExhausted)
+    ));
+    assert_eq!(
+        metageneration_store.get(&bucket(), &object("last-metageneration")),
+        before.as_ref()
+    );
+    assert!(metageneration_store.drain_events().is_empty());
+}
+
+#[test]
 fn an_import_without_recorded_digests_computes_them_from_the_bytes() {
     let mut store = StorageState::new(7);
     let mut without = imported("a", b"x");
@@ -131,6 +231,31 @@ fn a_write_after_an_import_takes_a_generation_past_the_imported_one() {
     assert!(
         written.generation > 1_788_105_513_194,
         "a later write cannot reuse an imported generation"
+    );
+}
+
+#[test]
+fn restoring_a_capture_taken_before_an_import_preserves_the_imported_generation_high_water() {
+    let mut store = StorageState::new(7);
+    let capture = store.capture_buckets(|_| true);
+    store
+        .insert_imported(imported("imported", b"x"), b"x".to_vec())
+        .expect("the import succeeds");
+    store.restore_buckets(|_| true, &capture);
+
+    let written = store
+        .put(
+            &bucket(),
+            &object("after-restore"),
+            b"y".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(0),
+        )
+        .expect("the write succeeds");
+    assert!(
+        written.generation > 1_788_105_513_194,
+        "restore cannot rewind the generation high-water established by an import"
     );
 }
 

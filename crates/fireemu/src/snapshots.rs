@@ -99,7 +99,7 @@ impl SnapshotHook for Storage {
             .store
             .lock()
             .map_err(|_| poisoned(self.name(), "the object store"))?;
-        store.restore_buckets(self.owned(scope), captured, scope.is_default());
+        store.restore_buckets(self.owned(scope), captured);
         Ok(())
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {

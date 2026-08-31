@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "model": "AtomicCommitOutbox",
+  "mutations": [
+    {
+      "id": "M-TLA-COMMIT-ATOMIC-001",
+      "property": "AtomicCommit",
+      "operator": "publish-staged-document-before-commit",
+      "from": "/\\ staged' = staged \\cup {d}\n    /\\ stagedVersion' = [stagedVersion EXCEPT ![d] = version[d] + 1]\n    /\\ Record(\"StageWrite\")\n    /\\ UNCHANGED <<phase, version, stagedEvents, visible, outbox, conflict>>",
+      "to": "/\\ staged' = staged \\cup {d}\n    /\\ stagedVersion' = [stagedVersion EXCEPT ![d] = version[d] + 1]\n    /\\ visible' = visible \\cup {d}\n    /\\ Record(\"StageWrite\")\n    /\\ UNCHANGED <<phase, version, stagedEvents, outbox, conflict>>"
+    },
+    {
+      "id": "M-TLA-OUTBOX-COMPLETE-001",
+      "property": "OutboxCompleteness",
+      "operator": "omit-committed-outbox-events",
+      "from": "/\\ outbox' = outbox \\cup stagedEvents",
+      "to": "/\\ outbox' = outbox"
+    },
+    {
+      "id": "M-TLA-TXN-PARTIAL-001",
+      "property": "NoPartialTransaction",
+      "operator": "publish-only-one-staged-document",
+      "from": "/\\ visible' = visible \\cup staged",
+      "to": "/\\ visible' = visible \\cup {CHOOSE d \\in staged: TRUE}"
+    },
+    {
+      "id": "M-TLA-TXN-CONFLICT-001",
+      "property": "ConflictNeverCommits",
+      "operator": "allow-conflicted-transaction-to-commit",
+      "from": "/\\ ~conflict\n    /\\ staged # {}",
+      "to": "/\\ TRUE\n    /\\ staged # {}"
+    }
+  ]
+}

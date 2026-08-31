@@ -309,11 +309,15 @@
       "statement": "The write set of one commit is applied entirely or not at all.",
       "criticality": "critical",
       "owner": "core-firestore",
-      "status": "planned",
+      "status": "implemented",
       "artifacts": {
         "tla": "AtomicCommitOutbox.tla::AtomicCommit",
         "mutation": [
-          "M-COMMIT-001"
+          "M-COMMIT-001",
+          "M-TLA-COMMIT-ATOMIC-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-firestore/tests/store.rs"
         ]
       }
     },
@@ -322,25 +326,34 @@
       "statement": "When a trigger-relevant change is published, the corresponding logical event exists in the outbox.",
       "criticality": "critical",
       "owner": "core-firestore",
-      "status": "planned",
+      "status": "implemented",
       "artifacts": {
         "tla": "AtomicCommitOutbox.tla::OutboxCompleteness",
         "mutation": [
           "M-OUTBOX-001",
-          "M-OUTBOX-002"
+          "M-OUTBOX-002",
+          "M-TLA-OUTBOX-COMPLETE-001"
+        ],
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/local.rs"
         ]
-      }
+      },
+      "note": "The bounded model assumes the synchronous change sink neither panics nor loses its lock; it proves the in-process publication boundary, not crash-durable database/outbox atomicity."
     },
     {
       "id": "INV-TXN-001",
       "statement": "Transaction writes are never partially visible.",
       "criticality": "critical",
       "owner": "core-firestore",
-      "status": "planned",
+      "status": "implemented",
       "artifacts": {
-        "tla": "FirestoreMvcc.tla::NoPartialTransaction",
+        "tla": "AtomicCommitOutbox.tla::NoPartialTransaction",
         "mutation": [
-          "M-TXN-001"
+          "M-TXN-001",
+          "M-TLA-TXN-PARTIAL-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-firestore/tests/store.rs"
         ]
       }
     },

@@ -521,7 +521,11 @@ pub struct AuthStore {
     project_id: String,
     rng: SplitMix64,
     policy: TotpPolicy,
-    users: BTreeMap<LocalId, UserRecord>,
+    /// User records, each behind an `Arc` so an unchanged user is shared by reference between
+    /// the live store and every snapshot and only copied on mutation (`SNAP-MEM-03`, the Auth
+    /// analogue of the Storage `Arc<Vec<u8>>` blobs). Every mutation site clones exactly the
+    /// one user it touches through [`Arc::make_mut`].
+    users: BTreeMap<LocalId, Arc<UserRecord>>,
     counter: u64,
     refresh_tokens: BTreeMap<String, RefreshSession>,
     next_id_override: Option<String>,
@@ -552,6 +556,40 @@ pub const PENDING_SIGN_IN_TTL_SECONDS: i64 = 3_600;
 /// project may hold. A flow that keeps requesting codes without consuming them is refused at
 /// this budget, and the refused request creates nothing (`AUTH-TRANSIENT-03`).
 pub const MAX_OUTSTANDING_CODES: usize = 1_000;
+
+/// A cheap, saturating estimate of the heap bytes one user record holds: the fixed record
+/// plus the lengths of its owned strings, claims, second factors and federated identities.
+/// It only has to be monotonic and un-overflowable -- it gates a byte budget, it is not a
+/// wire size.
+fn user_record_bytes(user: &UserRecord) -> u64 {
+    let mut total = core::mem::size_of::<UserRecord>() as u64;
+    let text = |s: &Option<String>| s.as_ref().map_or(0, |t| t.len() as u64);
+    total = total.saturating_add(user.local_id.as_str().len() as u64);
+    total = total.saturating_add(text(&user.email));
+    total = total.saturating_add(text(&user.display_name));
+    total = total.saturating_add(text(&user.photo_url));
+    total = total.saturating_add(text(&user.phone_number));
+    total = total.saturating_add(user.custom_claims.canonical_json().len() as u64);
+    for f in &user.federated {
+        total = total.saturating_add(f.provider_id.len() as u64);
+        total = total.saturating_add(f.raw_id.len() as u64);
+        total = total.saturating_add(text(&f.email));
+        total = total.saturating_add(text(&f.display_name));
+        total = total.saturating_add(text(&f.photo_url));
+    }
+    // Second factors: enrollment ids, display names, phone numbers and any secret bytes.
+    for f in user.mfa.totp_factors() {
+        total = total.saturating_add(f.mfa_enrollment_id.len() as u64);
+        total = total.saturating_add(text(&f.display_name));
+        total = total.saturating_add(f.secret.expose_for_enrollment().len() as u64);
+    }
+    for f in user.mfa.phone_factors() {
+        total = total.saturating_add(f.mfa_enrollment_id.len() as u64);
+        total = total.saturating_add(text(&f.display_name));
+        total = total.saturating_add(f.phone_number.len() as u64);
+    }
+    total
+}
 
 impl AuthStore {
     /// Installs the ID token signer (RS256 session key). Tokens issued afterwards are
@@ -606,7 +644,7 @@ impl AuthStore {
             if let Some(user) = self.users.get(uid) {
                 events.push(UserEvent {
                     kind: UserEventKind::Created,
-                    user: user.clone(),
+                    user: UserRecord::clone(user),
                 });
             }
         }
@@ -639,7 +677,7 @@ impl AuthStore {
         self.users
             .iter()
             .find(|(k, _)| k.as_str() == uid)
-            .map(|(_, u)| u)
+            .map(|(_, u)| u.as_ref())
     }
 
     fn next_id(&mut self, prefix: &str) -> String {
@@ -716,7 +754,7 @@ impl AuthStore {
             VerificationPurpose::Enrollment { uid }
             | VerificationPurpose::MfaSignIn { uid, .. } => *uid != key,
         });
-        self.deleted_users.push(user);
+        self.deleted_users.push(Arc::unwrap_or_clone(user));
         Ok(())
     }
 
@@ -748,7 +786,15 @@ impl AuthStore {
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
         let enrollment_grace = self.policy.enrollment_session_ttl;
         for user in self.users.values_mut() {
-            for dropped in user.mfa.sweep(now, sign_in_ttl, enrollment_grace) {
+            // A user with nothing pending has nothing to sweep; leave its `Arc` shared with
+            // any snapshot rather than cloning it for a no-op (`SNAP-MEM-03`).
+            if user.mfa.pending_count() == 0 {
+                continue;
+            }
+            for dropped in Arc::make_mut(user)
+                .mfa
+                .sweep(now, sign_in_ttl, enrollment_grace)
+            {
                 self.pending_sign_in_owners.remove(&dropped);
             }
         }
@@ -768,7 +814,7 @@ impl AuthStore {
 
     /// Records a successful sign-in (Admin `lastLoginAt`).
     pub fn record_sign_in(&mut self, uid: &LocalId, now: LogicalInstant) {
-        if let Some(u) = self.users.get_mut(uid) {
+        if let Some(u) = self.users.get_mut(uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
         }
     }
@@ -867,7 +913,7 @@ impl AuthStore {
             .map_err(ImportUserError::SecondFactor)?;
         self.users.insert(
             local_id.clone(),
-            UserRecord {
+            Arc::new(UserRecord {
                 local_id: local_id.clone(),
                 email: user.email,
                 email_verified: user.email_verified,
@@ -884,7 +930,7 @@ impl AuthStore {
                 tokens_valid_after: user.tokens_valid_after,
                 federated: user.federated,
                 password,
-            },
+            }),
         );
         Ok(local_id)
     }
@@ -892,7 +938,7 @@ impl AuthStore {
     /// Users in creation order (stable `listUsers` paging).
     #[must_use]
     pub fn users_by_creation(&self) -> Vec<&UserRecord> {
-        let mut users: Vec<&UserRecord> = self.users.values().collect();
+        let mut users: Vec<&UserRecord> = self.users.values().map(Arc::as_ref).collect();
         users.sort_by_key(|u| u.sequence);
         users
     }
@@ -903,6 +949,7 @@ impl AuthStore {
         self.users
             .values()
             .find(|u| u.phone_number.as_deref() == Some(phone))
+            .map(Arc::as_ref)
     }
 
     /// Changes the email (unique across users).
@@ -917,7 +964,11 @@ impl AuthStore {
         {
             return Err(AuthError::EmailExists);
         }
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         user.email = Some(email.to_owned());
         Ok(())
     }
@@ -950,7 +1001,11 @@ impl AuthStore {
                 return Err(AuthError::PhoneNumberExists);
             }
         }
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         user.phone_number = phone.map(str::to_owned);
         Ok(())
     }
@@ -959,6 +1014,48 @@ impl AuthStore {
     #[must_use]
     pub fn all_user_ids(&self) -> Vec<LocalId> {
         self.users.keys().cloned().collect()
+    }
+
+    /// A cheap estimate of the heap bytes the user records hold (`SNAP-MEM-01`), each user
+    /// counted once. Saturating throughout, so no store -- however large or adversarial -- can
+    /// overflow the estimate into a small number and slip past a byte budget.
+    #[must_use]
+    pub fn retained_user_bytes(&self) -> u64 {
+        self.users
+            .values()
+            .map(|u| user_record_bytes(u))
+            .fold(0u64, u64::saturating_add)
+    }
+
+    /// A cheap estimate of the heap bytes the transient maps a snapshot still copies in full
+    /// hold: refresh sessions, email action codes and phone verification codes. Bounded by
+    /// [`MAX_OUTSTANDING_CODES`] and the number of live sessions; saturating.
+    #[must_use]
+    pub fn transient_bytes(&self) -> u64 {
+        let refresh = (self.refresh_tokens.len() as u64).saturating_mul(96);
+        let oob = (self.oob_codes.len() as u64).saturating_mul(96);
+        let verification = (self.verification_codes.len() as u64).saturating_mul(96);
+        refresh
+            .saturating_add(oob)
+            .saturating_add(verification)
+            .saturating_add((self.pending_sign_in_owners.len() as u64).saturating_mul(64))
+    }
+
+    /// Bytes of user records this store shares with `other` by allocation: users whose record
+    /// is the same `Arc` on both sides (`SNAP-MEM-03`). Used to see that a capture copied
+    /// nothing for the users it did not touch.
+    #[must_use]
+    pub fn users_shared_with(&self, other: &Self) -> u64 {
+        self.users
+            .iter()
+            .filter_map(|(id, rec)| {
+                other
+                    .users
+                    .get(id)
+                    .filter(|theirs| Arc::ptr_eq(rec, theirs))
+                    .map(|_| user_record_bytes(rec))
+            })
+            .fold(0u64, u64::saturating_add)
     }
 
     /// Creates a user.
@@ -989,7 +1086,7 @@ impl AuthStore {
         else {
             return Err(AuthError::LocalIdExists);
         };
-        slot.insert(UserRecord {
+        slot.insert(Arc::new(UserRecord {
             local_id: local_id.clone(),
             email: new.email,
             email_verified: new.email_verified,
@@ -1009,7 +1106,7 @@ impl AuthStore {
             tokens_valid_after: Self::whole_second(now),
             federated: Vec::new(),
             password: None,
-        });
+        }));
         self.created_users.push(local_id.clone());
         Ok(local_id)
     }
@@ -1203,7 +1300,7 @@ impl AuthStore {
                 return Err(AuthError::UserDisabled);
             }
             let uid = u.local_id.clone();
-            if let Some(u) = self.users.get_mut(&uid) {
+            if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
                 u.email_verified = true;
             }
             self.record_sign_in(&uid, now);
@@ -1224,11 +1321,14 @@ impl AuthStore {
     /// User owning a federated identity.
     #[must_use]
     pub fn user_by_federated(&self, provider_id: &str, raw_id: &str) -> Option<&UserRecord> {
-        self.users.values().find(|u| {
-            u.federated
-                .iter()
-                .any(|f| f.provider_id == provider_id && f.raw_id == raw_id)
-        })
+        self.users
+            .values()
+            .find(|u| {
+                u.federated
+                    .iter()
+                    .any(|f| f.provider_id == provider_id && f.raw_id == raw_id)
+            })
+            .map(Arc::as_ref)
     }
 
     /// Links a federated identity to `uid` (replacing the user's identity at that provider).
@@ -1243,7 +1343,11 @@ impl AuthStore {
         {
             return Err(AuthError::FederatedUserIdAlreadyLinked);
         }
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         user.federated
             .retain(|f| f.provider_id != identity.provider_id);
         user.federated.push(identity);
@@ -1256,7 +1360,11 @@ impl AuthStore {
         uid: &LocalId,
         provider_id: &str,
     ) -> Result<bool, AuthError> {
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         let before = user.federated.len();
         user.federated.retain(|f| f.provider_id != provider_id);
         Ok(user.federated.len() != before)
@@ -1300,7 +1408,7 @@ impl AuthStore {
             },
             now,
         )?;
-        if let Some(u) = self.users.get_mut(&uid) {
+        if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
             u.display_name.clone_from(&identity.display_name);
             u.photo_url.clone_from(&identity.photo_url);
         }
@@ -1319,7 +1427,11 @@ impl AuthStore {
     ) -> Result<EnrolledFactor, MfaError> {
         AuthStore::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
         let enrollment_id = self.random_id28();
-        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(MfaError::UserNotFound)?;
         if user.disabled {
             return Err(MfaError::UserDisabled);
         }
@@ -1346,7 +1458,7 @@ impl AuthStore {
         factors: Vec<(String, Option<String>)>,
         now: LogicalInstant,
     ) -> Result<(), MfaError> {
-        if let Some(user) = self.users.get_mut(uid) {
+        if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.mfa.phone_factors_mut().clear();
         }
         for (phone, display_name) in factors {
@@ -1361,7 +1473,11 @@ impl AuthStore {
         uid: &LocalId,
         enrollment_id: &str,
     ) -> Result<bool, MfaError> {
-        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(MfaError::UserNotFound)?;
         let before = user.mfa.factor_count();
         user.mfa
             .totp_factors_mut()
@@ -1380,7 +1496,11 @@ impl AuthStore {
         enrollment_id: &str,
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
-        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(MfaError::UserNotFound)?;
         if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
@@ -1426,7 +1546,11 @@ impl AuthStore {
         let mut salt = [0u8; 16];
         salt[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
         salt[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         user.password = Some(PasswordDigest::new(salt, password));
         Ok(())
     }
@@ -1434,13 +1558,21 @@ impl AuthStore {
     /// Removes the password credential (`deleteProvider: password`, `deleteAttribute:
     /// PASSWORD`); `true` when there was one.
     pub fn clear_password(&mut self, uid: &LocalId) -> Result<bool, AuthError> {
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         Ok(user.password.take().is_some())
     }
 
     /// Removes the email address and its verified flag (`deleteAttribute: EMAIL`).
     pub fn clear_email(&mut self, uid: &LocalId) -> Result<(), AuthError> {
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         user.email = None;
         user.email_verified = false;
         Ok(())
@@ -1493,7 +1625,7 @@ impl AuthStore {
                 AuthError::InvalidPassword
             });
         }
-        if let Some(u) = self.users.get_mut(&uid) {
+        if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
         }
         Ok(uid)
@@ -1505,6 +1637,7 @@ impl AuthStore {
         self.users
             .values()
             .find(|u| u.email.as_deref() == Some(email))
+            .map(Arc::as_ref)
     }
 
     /// Issues a refresh token for `uid` (plain session: the user's own provider and claims).
@@ -1594,12 +1727,13 @@ impl AuthStore {
     /// Looks up a user.
     #[must_use]
     pub fn user(&self, uid: &LocalId) -> Option<&UserRecord> {
-        self.users.get(uid)
+        self.users.get(uid).map(Arc::as_ref)
     }
 
-    /// Mutable user access.
+    /// Mutable user access. Clones the one user through [`Arc::make_mut`], so a snapshot that
+    /// shares it is left untouched (`SNAP-MEM-03`).
     pub fn user_mut(&mut self, uid: &LocalId) -> Option<&mut UserRecord> {
-        self.users.get_mut(uid)
+        self.users.get_mut(uid).map(Arc::make_mut)
     }
 
     /// Sets custom claims after the size check.
@@ -1609,7 +1743,11 @@ impl AuthStore {
         claims: CustomClaims,
     ) -> Result<(), AuthError> {
         claims.check_size().map_err(AuthError::LimitExceeded)?;
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         user.custom_claims = claims;
         Ok(())
     }
@@ -1673,7 +1811,11 @@ impl AuthStore {
             policy.params(),
             expires_at,
         );
-        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(MfaError::UserNotFound)?;
         user.mfa
             .pending_enrollments_mut()
             .insert(session_id, PendingEnrollment { secret, expires_at });
@@ -1690,7 +1832,11 @@ impl AuthStore {
     ) -> Result<EnrolledFactor, MfaError> {
         let policy = self.policy;
         let enrollment_id = self.random_id28();
-        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(MfaError::UserNotFound)?;
         let pending = user
             .mfa
             .pending_enrollments_mut()
@@ -1736,7 +1882,11 @@ impl AuthStore {
     ) -> Result<PendingSignInId, MfaError> {
         self.sweep_transient_credentials(now);
         let pending_id = self.next_id("signin-");
-        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(MfaError::UserNotFound)?;
         if user.disabled {
             return Err(MfaError::UserDisabled);
         }
@@ -1774,7 +1924,11 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
         let policy = self.policy;
-        let user = self.users.get_mut(uid).ok_or(MfaError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(MfaError::UserNotFound)?;
         if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
@@ -1856,7 +2010,11 @@ impl AuthStore {
 
     /// Revokes refresh tokens: tokens issued before `now` become invalid.
     pub fn revoke_tokens(&mut self, uid: &LocalId, now: LogicalInstant) -> Result<(), AuthError> {
-        let user = self.users.get_mut(uid).ok_or(AuthError::UserNotFound)?;
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
         user.tokens_valid_after = Self::whole_second(now);
         Ok(())
     }
@@ -1911,13 +2069,41 @@ pub struct AuthSnapshot(AuthStore);
 
 impl AuthSnapshot {
     /// Copies `store` without its TOTP secret material.
+    ///
+    /// Copy-on-write per user (`SNAP-MEM-03`): cloning the store bumps each user's `Arc`
+    /// refcount rather than deep-copying it, so a user with no TOTP secret -- the common case --
+    /// is shared by reference with the live store. Only a user that actually holds secret
+    /// material is cloned through [`Arc::make_mut`] and detached, so the snapshot still carries
+    /// no shared secret (`INV-AUTH-003`, ADR-034) while every unchanged user stays shared.
     #[must_use]
     pub fn capture(store: &AuthStore) -> Self {
         let mut copy = store.clone();
         for user in copy.users.values_mut() {
-            user.mfa.detach_totp_secrets();
+            if user.mfa.holds_no_totp_secret() {
+                continue;
+            }
+            Arc::make_mut(user).mfa.detach_totp_secrets();
         }
         Self(copy)
+    }
+
+    /// An estimate of the heap bytes the snapshot retains: the user records plus the transient
+    /// maps a capture still copies in full (refresh tokens, action and verification codes).
+    /// Saturating, so an adversarial store can never overflow the session byte budget
+    /// (`SNAP-MEM-01`).
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.0
+            .retained_user_bytes()
+            .saturating_add(self.0.transient_bytes())
+    }
+
+    /// Bytes of user records this snapshot shares with `live` by allocation: users whose
+    /// record is the same `Arc` on both sides, so the capture copied nothing for them
+    /// (`SNAP-MEM-03`, the Auth analogue of `StorageState::blob_bytes_shared_with`).
+    #[must_use]
+    pub fn users_shared_with(&self, live: &AuthStore) -> u64 {
+        self.0.users_shared_with(live)
     }
 
     /// Whether no user of the snapshot holds any TOTP secret material. Always true for a
@@ -1938,9 +2124,16 @@ impl AuthSnapshot {
         let mut restored = self.0.clone();
         let mut report = RestoreReport::default();
         for user in restored.users.values_mut() {
+            // Only a user with an enrolled (detached) TOTP factor needs rebinding; a user
+            // with none is left shared rather than cloned for a no-op.
+            if user.mfa.totp_factors().is_empty() {
+                continue;
+            }
             let dropped = match live.users.get(&user.local_id) {
-                Some(current) => user.mfa.rebind_totp_secrets(&current.mfa),
-                None => user.mfa.rebind_totp_secrets(&MfaState::default()),
+                Some(current) => Arc::make_mut(user).mfa.rebind_totp_secrets(&current.mfa),
+                None => Arc::make_mut(user)
+                    .mfa
+                    .rebind_totp_secrets(&MfaState::default()),
             };
             report.totp_factors_dropped += dropped;
         }
@@ -2038,5 +2231,124 @@ impl AuthRegistry {
             out.extend(others.keys().cloned());
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod snapshot_cow_tests {
+    //! Copy-on-write per user (`SNAP-MEM-03`): an [`AuthSnapshot`] shares the `Arc` of every
+    //! unchanged user with the live store, so a capture copies only the users it must detach,
+    //! and a post-capture mutation clones exactly the one user it touches while every retained
+    //! snapshot stays exactly as it was captured. These tests reach the private `users` map so
+    //! they can assert `Arc` identity directly.
+
+    use super::{AuthSnapshot, AuthStore, LocalId, NewUser};
+    use crate::mfa::TotpPolicy;
+    use crate::totp::totp_at;
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+    use std::sync::Arc;
+
+    const AT: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+    fn store() -> AuthStore {
+        AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default())
+    }
+
+    fn shares(snapshot: &AuthSnapshot, live: &AuthStore, uid: &LocalId) -> bool {
+        match (snapshot.0.users.get(uid), live.users.get(uid)) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn a_capture_shares_every_unchanged_user_by_reference() {
+        let mut live = store();
+        let a = live
+            .create_user(NewUser::email("a@example.com"), AT)
+            .unwrap();
+        let b = live
+            .create_user(NewUser::email("b@example.com"), AT)
+            .unwrap();
+
+        let snapshot = AuthSnapshot::capture(&live);
+        assert!(shares(&snapshot, &live, &a), "an unchanged user is shared");
+        assert!(shares(&snapshot, &live, &b), "an unchanged user is shared");
+        // Every byte the snapshot retains for its users is shared with the live store: the
+        // capture copied no user record at all.
+        assert_eq!(
+            snapshot.users_shared_with(&live),
+            live.retained_user_bytes(),
+            "no user record was copied on capture"
+        );
+    }
+
+    #[test]
+    fn a_post_capture_mutation_copies_only_the_one_user_and_leaves_the_snapshot_exact() {
+        let mut live = store();
+        let a = live
+            .create_user(NewUser::email("a@example.com"), AT)
+            .unwrap();
+        let b = live
+            .create_user(NewUser::email("b@example.com"), AT)
+            .unwrap();
+
+        let snapshot = AuthSnapshot::capture(&live);
+
+        // Mutate user a in the live store after the capture.
+        live.set_email(&a, "changed@example.com").unwrap();
+
+        // The snapshot's copy of a is untouched, and it is no longer the same allocation.
+        assert_eq!(
+            snapshot.0.users.get(&a).unwrap().email.as_deref(),
+            Some("a@example.com"),
+            "the retained snapshot keeps the captured value"
+        );
+        assert!(
+            !shares(&snapshot, &live, &a),
+            "a mutated user is copied, not shared"
+        );
+        // b was never touched: it is still the same allocation on both sides.
+        assert!(
+            shares(&snapshot, &live, &b),
+            "an untouched user stays shared after another user is mutated"
+        );
+    }
+
+    #[test]
+    fn a_capture_detaches_only_the_users_that_hold_a_secret_and_shares_the_rest() {
+        let mut live = store();
+        let plain = live
+            .create_user(NewUser::email("plain@example.com"), AT)
+            .unwrap();
+        let mfa = live
+            .create_user(NewUser::email("mfa@example.com"), AT)
+            .unwrap();
+        let material = live.start_totp_enrollment(&mfa, AT).unwrap();
+        let code = totp_at(material.secret_for_test(), &live.policy().params(), AT);
+        live.finalize_totp_enrollment(&mfa, &material.session_id, code, AT)
+            .unwrap();
+
+        let snapshot = AuthSnapshot::capture(&live);
+        assert!(snapshot.holds_no_totp_secret(), "no secret is retained");
+        assert!(
+            shares(&snapshot, &live, &plain),
+            "a user with no secret is shared"
+        );
+        assert!(
+            !shares(&snapshot, &live, &mfa),
+            "a user with a TOTP secret is copied so its secret can be detached"
+        );
+        // The live store still holds the real secret; only the snapshot's copy is detached.
+        assert!(
+            !live.user(&mfa).unwrap().mfa.totp_factors()[0]
+                .secret
+                .is_detached(),
+            "detaching the snapshot never touched the live secret"
+        );
+        assert!(snapshot.0.users.get(&mfa).unwrap().mfa.totp_factors()[0]
+            .secret
+            .is_detached());
     }
 }

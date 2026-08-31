@@ -190,7 +190,9 @@ mod tests {
         assert!(is_widget_path("/emulator/auth/handler"));
         assert!(is_widget_path("/emulator/auth/iframe"));
         assert!(!is_widget_path("/emulator/auth/other"));
-        assert!(!is_widget_path("/identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"));
+        assert!(!is_widget_path(
+            "/identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
+        ));
     }
 
     #[test]
@@ -207,7 +209,10 @@ mod tests {
 
     #[test]
     fn uri_component_encoding_matches_encodeuricomponent() {
-        assert_eq!(encode_uri_component("{\"a\":\"b c\"}"), "%7B%22a%22%3A%22b%20c%22%7D");
+        assert_eq!(
+            encode_uri_component("{\"a\":\"b c\"}"),
+            "%7B%22a%22%3A%22b%20c%22%7D"
+        );
         assert_eq!(encode_uri_component("aA0-_.!~*'()"), "aA0-_.!~*'()");
     }
 }

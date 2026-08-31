@@ -3107,7 +3107,9 @@ fn validate_saml_response(raw: Option<&String>) -> Result<Option<Value>, JsonRes
 /// Parses and validates a `signInWithIdp` credential, or the error the official emulator raises.
 fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
     if body.get("returnRefreshToken").is_some_and(|v| !v.is_null()) {
-        return Err(not_implemented("returnRefreshToken is not implemented yet."));
+        return Err(not_implemented(
+            "returnRefreshToken is not implemented yet.",
+        ));
     }
     if body.get("pendingIdToken").is_some_and(|v| !v.is_null()) {
         return Err(not_implemented("pendingIdToken is not implemented yet."));
@@ -3155,12 +3157,7 @@ fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
         || format!("FirebaseAuthEmulatorFakeAccessToken_{provider_id}"),
         String::clone,
     );
-    let base = idp_response_base(
-        &provider_id,
-        &info,
-        oauth_id_token,
-        &oauth_access_token_out,
-    );
+    let base = idp_response_base(&provider_id, &info, oauth_id_token, &oauth_access_token_out);
     Ok(ResolvedIdp {
         provider_id,
         info,
@@ -3301,7 +3298,10 @@ fn uri_is_absolute(uri: &str) -> bool {
     match uri.find(':') {
         Some(i) if i > 0 => {
             let scheme = &uri[..i];
-            scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
                 && scheme
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))

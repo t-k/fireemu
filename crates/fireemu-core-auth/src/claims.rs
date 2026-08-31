@@ -187,6 +187,11 @@ impl CustomClaims {
         self.entries.get(name)
     }
 
+    /// Removes a claim, returning whether it was present.
+    pub fn remove(&mut self, name: &str) -> bool {
+        self.entries.remove(name).is_some()
+    }
+
     /// Entries in canonical order.
     #[must_use]
     pub const fn entries(&self) -> &BTreeMap<String, ClaimValue> {

@@ -54,3 +54,14 @@ fn tenant_namespaces_isolate_users_and_bind_tokens_to_the_tenant() {
         Err(JwtError::WrongTenant { .. })
     ));
 }
+
+#[test]
+fn tenant_ids_cannot_contain_export_path_separators() {
+    let default = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = AuthRegistry::new("demo-app", default);
+
+    assert!(registry
+        .ensure_tenant("demo-app", "forward/slash")
+        .is_none());
+    assert!(registry.ensure_tenant("demo-app", "back\\slash").is_none());
+}

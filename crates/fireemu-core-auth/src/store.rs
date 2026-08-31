@@ -353,7 +353,14 @@ impl PasswordDigest {
     }
 
     fn verify(&self, password: &str) -> bool {
-        Self::new(self.salt, password).digest == self.digest
+        let candidate = Self::new(self.salt, password).digest;
+        candidate
+            .iter()
+            .zip(self.digest.iter())
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
+            == 0
     }
 
     /// The emulator salt and plaintext an export has to write back, when the credential
@@ -1776,20 +1783,23 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<LocalId, AuthError> {
         let private = self.config.enable_improved_email_privacy;
-        let (uid, disabled, ok) = self
-            .user_by_email(email)
-            .map(|u| {
-                (
-                    u.local_id.clone(),
-                    u.disabled,
-                    u.password.as_ref().is_some_and(|p| p.verify(password)),
-                )
-            })
-            .ok_or(if private {
-                AuthError::InvalidCredentials
-            } else {
-                AuthError::EmailNotFound
-            })?;
+        let Some(user) = self.user_by_email(email) else {
+            if private {
+                let dummy = PasswordDigest {
+                    salt: [0_u8; 16],
+                    digest: [0_u8; 20],
+                    emulator: None,
+                };
+                let _ = dummy.verify(password);
+                return Err(AuthError::InvalidCredentials);
+            }
+            return Err(AuthError::EmailNotFound);
+        };
+        let (uid, disabled, ok) = (
+            user.local_id.clone(),
+            user.disabled,
+            user.password.as_ref().is_some_and(|p| p.verify(password)),
+        );
         // The official emulator reports a disabled account before it checks the password.
         if disabled {
             return Err(AuthError::UserDisabled);
@@ -2337,6 +2347,7 @@ pub struct AuthRegistry {
     others: Mutex<BTreeMap<String, SharedAuthStore>>,
     tenants: Mutex<BTreeMap<TenantKey, SharedAuthStore>>,
     tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
+    operation_gates: Mutex<BTreeMap<TenantKey, Arc<Mutex<()>>>>,
     next_tenant_id: AtomicU64,
 }
 
@@ -2366,6 +2377,7 @@ impl AuthRegistry {
             others: Mutex::new(BTreeMap::new()),
             tenants: Mutex::new(BTreeMap::new()),
             tenant_metadata: Mutex::new(BTreeMap::new()),
+            operation_gates: Mutex::new(BTreeMap::new()),
             next_tenant_id: AtomicU64::new(1),
         }
     }
@@ -2420,6 +2432,9 @@ impl AuthRegistry {
             if let Ok(mut metadata) = self.tenant_metadata.lock() {
                 metadata.retain(|(candidate, _), _| candidate != project);
             }
+            if let Ok(mut gates) = self.operation_gates.lock() {
+                gates.retain(|(candidate, _), _| candidate != project);
+            }
         }
         removed
     }
@@ -2434,9 +2449,24 @@ impl AuthRegistry {
             .cloned()
     }
 
+    /// Per-namespace gate used while a blocking function runs without the store lock.
+    #[must_use]
+    pub fn operation_gate(&self, project: &str, tenant: Option<&str>) -> Arc<Mutex<()>> {
+        let key = (project.to_owned(), tenant.unwrap_or_default().to_owned());
+        self.operation_gates
+            .lock()
+            .map(|mut gates| {
+                gates
+                    .entry(key)
+                    .or_insert_with(|| Arc::new(Mutex::new(())))
+                    .clone()
+            })
+            .unwrap_or_else(|_| Arc::new(Mutex::new(())))
+    }
+
     /// Returns a tenant store, creating its isolated namespace on first use.
     pub fn ensure_tenant(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
-        if tenant.is_empty() || tenant.contains('/') {
+        if tenant.is_empty() || tenant.contains(['/', '\\']) {
             return None;
         }
         if let Some(store) = self.tenant_store(project, tenant) {
@@ -2560,6 +2590,9 @@ impl AuthRegistry {
             .is_some_and(|mut stores| stores.remove(&key).is_some());
         if let Ok(mut metadata) = self.tenant_metadata.lock() {
             metadata.remove(&key);
+        }
+        if let Ok(mut gates) = self.operation_gates.lock() {
+            gates.remove(&key);
         }
         removed
     }

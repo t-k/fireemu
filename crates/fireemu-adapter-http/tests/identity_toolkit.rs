@@ -23,6 +23,23 @@ struct RecordingBlockingHook {
 
 struct UpdatingBlockingHook;
 
+struct ClearingClaimsHook;
+
+impl AuthBlockingHook for ClearingClaimsHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        Ok(match event {
+            BlockingAuthEvent::BeforeCreate => json!({}),
+            BlockingAuthEvent::BeforeSignIn => json!({
+                "userRecord": {"updateMask": "customClaims", "customClaims": {}}
+            }),
+        })
+    }
+}
+
 impl AuthBlockingHook for UpdatingBlockingHook {
     fn invoke(
         &self,
@@ -212,6 +229,38 @@ fn blocking_auth_applies_user_and_session_claim_updates_before_issuing_tokens() 
         ))
     );
     assert!(user.custom_claims.get("risk").is_none());
+}
+
+#[test]
+fn blocking_auth_does_not_reissue_a_removed_persistent_claim() {
+    let mut s = state();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "claims@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let uid = created["localId"].as_str().unwrap();
+    let mut store = s.store.lock().unwrap();
+    let uid = store.user_by_id(uid).unwrap().local_id.clone();
+    store
+        .set_custom_claims(
+            &uid,
+            fireemu_core_auth::claims::CustomClaims::parse_attributes("{\"admin\":true}").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    s.blocking = Some(Arc::new(ClearingClaimsHook));
+
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "claims@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let claims =
+        fireemu_core_auth::jwt::decode_unsigned(signed_in["idToken"].as_str().unwrap()).unwrap();
+    assert!(claims.payload.get("admin").is_none());
 }
 
 fn advance(state: &AuthState, seconds: i64) -> LogicalInstant {
@@ -617,6 +666,59 @@ fn owner() -> RequestHeaders {
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
     let r = handle_with(state, method, path, &owner(), body);
     (r.status, r.body)
+}
+
+struct ReentrantAdminHook {
+    state: std::sync::Weak<AuthState>,
+}
+
+impl AuthBlockingHook for ReentrantAdminHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        if event == BlockingAuthEvent::BeforeSignIn {
+            let state = self.state.upgrade().ok_or("test state disappeared")?;
+            let response = handle_with(
+                &state,
+                "GET",
+                &format!("{ADMIN}/accounts:batchGet"),
+                &owner(),
+                &json!({}),
+            );
+            if response.status != 200 {
+                return Err(format!("Admin callback failed: {}", response.body));
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
+#[test]
+fn blocking_auth_can_call_back_into_admin_auth_without_deadlocking() {
+    let state = Arc::new_cyclic(|weak| {
+        let mut state = state();
+        state.blocking = Some(Arc::new(ReentrantAdminHook {
+            state: weak.clone(),
+        }));
+        state
+    });
+    let request_state = state.clone();
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = post(
+            &request_state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "callback@example.com", "password": "hunter22"}),
+        );
+        let _ = sent.send(result);
+    });
+
+    let (status, body) = received
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("blocking Auth must not hold the gate needed by Admin Auth");
+    assert_eq!(status, 200, "{body}");
 }
 
 #[test]

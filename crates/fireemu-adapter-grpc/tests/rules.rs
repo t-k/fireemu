@@ -11,7 +11,7 @@ use fireemu_adapter_grpc::rules::{LatestReader, Principal, RulesEnforcer};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::jwt::{base64url_encode, encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthStore, NewUser};
+use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_rules::runtime::LoadedRules;
@@ -114,6 +114,31 @@ fn named_databases_select_their_own_ruleset() {
     assert!(enforcer
         .authorize_get(&Principal::Anonymous, &staging_path, None, &reader)
         .is_ok());
+}
+
+#[test]
+fn tenant_tokens_build_a_firestore_rules_principal() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let parent = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let registry = Arc::new(AuthRegistry::new("demo-app", parent.clone()));
+    let tenant = registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    let mut tenant = tenant.lock().unwrap();
+    let uid = tenant
+        .create_user(NewUser::email("tenant@example.com"), START)
+        .unwrap();
+    let token = encode_unsigned(&tenant.id_token_claims(&uid, None, START).unwrap());
+    drop(tenant);
+    let enforcer = RulesEnforcer::new(Arc::new(RwLock::new(LoadedRules::default())), parent, clock)
+        .with_registry(registry);
+
+    assert!(matches!(
+        enforcer.principal_from_authorization(Some(&format!("Bearer {token}"))),
+        Ok(Principal::User(_))
+    ));
 }
 
 struct Harness {

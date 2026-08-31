@@ -692,6 +692,11 @@ fn dispatch_with_blocking_hook(
     let issued_session = signed_in
         .then(|| verify_session(&candidate, &response.body, at).ok())
         .flatten();
+    let persisted_claim_names: Vec<String> = uid
+        .as_ref()
+        .and_then(|uid| candidate.user(uid))
+        .map(|user| user.custom_claims.entries().keys().cloned().collect())
+        .unwrap_or_default();
     drop(store);
     let mut session_claims = None;
     if response.status == 200 {
@@ -742,6 +747,14 @@ fn dispatch_with_blocking_hook(
                 }
             }
             if let Some(mut session) = issued_session {
+                for name in &persisted_claim_names {
+                    session.extra_claims.remove(name);
+                }
+                if let Some(user) = candidate.user(&uid) {
+                    for name in user.custom_claims.entries().keys() {
+                        session.extra_claims.remove(name);
+                    }
+                }
                 if let Some(claims) = session_claims {
                     for (name, value) in claims.entries() {
                         if let Err(reason) = session.extra_claims.insert(name, value.clone()) {
@@ -802,10 +815,33 @@ pub fn handle_with(
     };
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
-    let Ok(_operation) = state.operation_gate.lock() else {
-        return error(500, "INTERNAL");
-    };
+    let resolution = routes::resolve(method, path);
     let store_arc = select_store(state, path, query, body);
+    let operation_gate = if state.blocking.is_some()
+        && matches!(
+            resolution,
+            routes::Resolution::Matched { route, .. }
+                if route.class == routes::RouteClass::EndUser
+        ) {
+        let Ok(store) = store_arc.lock() else {
+            return error(500, "INTERNAL");
+        };
+        let gate = state.registry.as_ref().map_or_else(
+            || state.operation_gate.clone(),
+            |registry| registry.operation_gate(store.project_id(), store.tenant_id()),
+        );
+        drop(store);
+        Some(gate)
+    } else {
+        None
+    };
+    let _operation = match operation_gate.as_ref() {
+        Some(gate) => match gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        },
+        None => None,
+    };
     // The functions runtime belongs to the default session: only its users' lifecycle
     // events reach the Auth triggers.
     let default_store = Arc::ptr_eq(&store_arc, &state.store);
@@ -831,7 +867,7 @@ pub fn handle_with(
     // The privilege class is decided by the path alone, so a wrong-method request to a
     // privileged path is refused for its missing credential before it is refused for its
     // method: the class check cannot be sidestepped by the method.
-    let (route, project, tenant) = match routes::resolve(method, path) {
+    let (route, project, tenant) = match resolution {
         routes::Resolution::Matched {
             route,
             project,
@@ -869,20 +905,30 @@ pub fn handle_with(
         drop(store);
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
+    if tenant.is_some() && store.tenant_id() != tenant {
+        return error(404, "TENANT_NOT_FOUND");
+    }
+    if let Some(denial) = tenant_policy_denial(state, route.handler, &store, body) {
+        return denial;
+    }
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
-    let response = if let Some(blocking) = &state.blocking {
-        dispatch_with_blocking_hook(
-            blocking.as_ref(),
-            route.handler,
-            &store_arc,
-            store,
-            query,
-            body,
-            headers,
-            at,
-        )
+    let response = if route.class == routes::RouteClass::EndUser {
+        if let Some(blocking) = &state.blocking {
+            dispatch_with_blocking_hook(
+                blocking.as_ref(),
+                route.handler,
+                &store_arc,
+                store,
+                query,
+                body,
+                headers,
+                at,
+            )
+        } else {
+            dispatch(route.handler, &mut store, query, body, headers, at)
+        }
     } else {
         dispatch(route.handler, &mut store, query, body, headers, at)
     };
@@ -1199,6 +1245,50 @@ fn tenant_management(
     }
 }
 
+fn tenant_policy_denial(
+    state: &AuthState,
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+) -> Option<JsonResponse> {
+    let tenant = store.tenant_id()?;
+    let metadata = state
+        .registry
+        .as_ref()?
+        .tenant_metadata(store.project_id(), tenant)?;
+    let authenticates = matches!(
+        handler,
+        routes::Handler::SignUp
+            | routes::Handler::SignInWithPassword
+            | routes::Handler::SignInWithCustomToken
+            | routes::Handler::SignInWithEmailLink
+            | routes::Handler::SignInWithPhoneNumber
+            | routes::Handler::SignInWithIdp
+            | routes::Handler::MfaSignInFinalize
+    );
+    if metadata.disable_auth && authenticates {
+        return Some(error(400, "PROJECT_DISABLED"));
+    }
+    if handler == routes::Handler::SignInWithPassword && !metadata.allow_password_signup {
+        return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    if handler == routes::Handler::SignInWithEmailLink && !metadata.enable_email_link_signin {
+        return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    if handler == routes::Handler::SignUp {
+        let links_existing_user = body.get("idToken").is_some();
+        let has_password = str_field(body, "password").is_some();
+        let has_email = str_field(body, "email").is_some();
+        if has_password && !links_existing_user && !metadata.allow_password_signup {
+            return Some(error(400, "OPERATION_NOT_ALLOWED"));
+        }
+        if !has_email && !has_password && !links_existing_user && !metadata.enable_anonymous_user {
+            return Some(error(400, "OPERATION_NOT_ALLOWED"));
+        }
+    }
+    None
+}
+
 /// The store a request is for. Project-scoped routes (Admin SDK, emulator inspection)
 /// name their project; client SDK routes of a session project are recognised by the API
 /// key the session declared, by the audience of the ID token they carry, or by the store
@@ -1214,7 +1304,7 @@ fn select_store(
     };
     if let Some((project, tenant)) = routes::scoped_target(path) {
         return tenant
-            .and_then(|tenant| registry.ensure_tenant(project, tenant))
+            .and_then(|tenant| registry.tenant_store(project, tenant))
             .or_else(|| registry.store_for(project))
             .unwrap_or_else(|| state.store.clone());
     }
@@ -1231,7 +1321,7 @@ fn select_store(
         if let Some(project) = project {
             let tenant = str_field(body, "tenantId");
             if let Some(store) = tenant
-                .and_then(|tenant| registry.ensure_tenant(&project, tenant))
+                .and_then(|tenant| registry.tenant_store(&project, tenant))
                 .or_else(|| registry.store_for(&project))
             {
                 return store;
@@ -1259,7 +1349,7 @@ fn select_store(
         if let Some((project, tenant)) = target {
             if let Some(store) = tenant
                 .as_deref()
-                .and_then(|tenant| registry.ensure_tenant(&project, tenant))
+                .and_then(|tenant| registry.tenant_store(&project, tenant))
                 .or_else(|| registry.store_for(&project))
             {
                 return store;
@@ -1272,7 +1362,7 @@ fn select_store(
         }
     }
     if let Some(tenant) = str_field(body, "tenantId") {
-        if let Some(store) = registry.ensure_tenant(registry.default_project(), tenant) {
+        if let Some(store) = registry.tenant_store(registry.default_project(), tenant) {
             return store;
         }
     }

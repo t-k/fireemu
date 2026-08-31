@@ -475,16 +475,28 @@ impl RulesEnforcer {
                     .auth
                     .lock()
                     .map_err(|_| Status::internal("auth store lock poisoned"))?;
-                let aud = fireemu_core_auth::jwt::decode_token(token, default.signer())
+                let target = fireemu_core_auth::jwt::decode_token(token, default.signer())
                     .ok()
                     .and_then(|d| {
-                        d.payload
+                        let audience = d
+                            .payload
                             .get("aud")
                             .and_then(fireemu_core_types::json::JsonValue::as_str)
-                            .map(str::to_owned)
+                            .map(str::to_owned)?;
+                        let tenant = d
+                            .payload
+                            .get("firebase")
+                            .and_then(|firebase| firebase.get("tenant"))
+                            .and_then(fireemu_core_types::json::JsonValue::as_str)
+                            .map(str::to_owned);
+                        Some((audience, tenant))
                     });
                 drop(default);
-                aud.and_then(|a| registry.store_for(&a))
+                target
+                    .and_then(|(project, tenant)| match tenant {
+                        Some(tenant) => registry.tenant_store(&project, &tenant),
+                        None => registry.store_for(&project),
+                    })
                     .unwrap_or_else(|| self.auth.clone())
             }
             None => self.auth.clone(),

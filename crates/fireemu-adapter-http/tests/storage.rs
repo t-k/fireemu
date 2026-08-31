@@ -1962,6 +1962,29 @@ fn upload_as(s: &StorageState, path: &str, authorization: &str) -> u16 {
 }
 
 #[test]
+fn tenant_tokens_authenticate_to_storage_rules() {
+    let s = state(Some(OWNED_STORAGE_RULES));
+    let tenant = s.auth.ensure_tenant("demo-app", "customer-a").unwrap();
+    let mut tenant = tenant.lock().unwrap();
+    let uid = tenant
+        .create_user(NewUser::email("tenant@example.com"), START)
+        .unwrap();
+    let token = fireemu_core_auth::jwt::encode_unsigned(
+        &tenant.id_token_claims(&uid, None, START).unwrap(),
+    );
+    drop(tenant);
+
+    assert_eq!(
+        upload_as(
+            &s,
+            &format!("owned/{}/x.txt", uid.as_str()),
+            &format!("Firebase {token}"),
+        ),
+        200
+    );
+}
+
+#[test]
 fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
     let bearer = format!("Firebase {}", mock_user_token("alice", "demo-app"));
 

@@ -1029,6 +1029,7 @@ fn tenant_admin_routes_use_an_isolated_namespace_and_issue_tenant_tokens() {
 
     let mut s = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer-a").unwrap();
     s.registry = Some(registry.clone());
     let tenant = format!("{V1}/projects/demo-app/tenants/customer-a");
 
@@ -1076,7 +1077,10 @@ fn client_tenant_id_selects_the_namespace_and_must_match_the_id_token() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut s = state();
-    s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    registry.ensure_tenant("demo-app", "customer-b").unwrap();
+    s.registry = Some(registry);
     let (status, created) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
@@ -1135,8 +1139,72 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
     assert_eq!(listed.body["tenants"].as_array().unwrap().len(), 0);
     let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
-    assert_eq!(implicit.status, 200, "{}", implicit.body);
-    assert_eq!(implicit.body["allowPasswordSignup"], true);
+    assert_eq!(implicit.status, 404, "{}", implicit.body);
+    assert_eq!(implicit.body["error"]["message"], "TENANT_NOT_FOUND");
+}
+
+#[test]
+fn untrusted_requests_cannot_create_or_use_an_unknown_tenant() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    s.registry = Some(registry.clone());
+
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "attacker", "email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(registry.tenant_store("demo-app", "attacker").is_none());
+
+    let (status, refused) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/tenants/attacker/accounts"),
+        &json!({"localId": "u1", "email": "a@example.com"}),
+    );
+    assert_eq!(status, 404, "{refused}");
+    assert!(registry.tenant_store("demo-app", "attacker").is_none());
+}
+
+#[test]
+fn tenant_authentication_flags_are_enforced() {
+    use fireemu_core_auth::store::{AuthRegistry, TenantMetadata};
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "restricted").unwrap();
+    assert!(registry.update_tenant("demo-app", "restricted", TenantMetadata::default(),));
+    s.registry = Some(registry.clone());
+
+    for body in [
+        json!({"tenantId": "restricted", "email": "a@example.com", "password": "hunter22"}),
+        json!({"tenantId": "restricted"}),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signUp"), &body);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+    }
+
+    assert!(registry.update_tenant(
+        "demo-app",
+        "restricted",
+        TenantMetadata {
+            allow_password_signup: true,
+            enable_email_link_signin: true,
+            enable_anonymous_user: true,
+            disable_auth: true,
+            ..TenantMetadata::default()
+        },
+    ));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "restricted", "email": "a@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");
 }
 
 #[test]

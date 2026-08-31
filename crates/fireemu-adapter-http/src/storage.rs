@@ -1168,12 +1168,12 @@ impl StorageState {
             .auth
             .store_for(&project)
             .ok_or_else(|| format!("invalid ID token: no Auth store for project {project:?}"))?;
-        let store = store_arc
+        let parent = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
         // The audience is checked before the signature so a token of another session
         // says so, instead of failing as an unknown user of this one.
-        let decoded = fireemu_core_auth::jwt::decode_token(token, store.signer());
+        let decoded = fireemu_core_auth::jwt::decode_token(token, parent.signer());
         let Ok(decoded_token) = decoded else {
             return if self.token_acceptance == TokenAcceptance::EmulatorMock {
                 Ok(Principal::Anonymous)
@@ -1192,6 +1192,23 @@ impl StorageState {
                 "invalid ID token: audience {aud:?} does not match the bucket's project {project:?}"
             ));
         }
+        let tenant = decoded_token
+            .payload
+            .get("firebase")
+            .and_then(|firebase| firebase.get("tenant"))
+            .and_then(fireemu_core_types::json::JsonValue::as_str)
+            .map(str::to_owned);
+        drop(parent);
+        let store_arc = match tenant {
+            Some(tenant) => self
+                .auth
+                .tenant_store(&project, &tenant)
+                .ok_or_else(|| format!("invalid ID token: unknown tenant {tenant:?}"))?,
+            None => store_arc,
+        };
+        let store = store_arc
+            .lock()
+            .map_err(|_| "auth store poisoned".to_owned())?;
         let decoded = verify_rules_token(token, &store, self.now(), self.token_acceptance)
             .map_err(|e| format!("invalid ID token: {e}"))?;
         drop(store);

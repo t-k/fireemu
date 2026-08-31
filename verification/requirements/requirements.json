@@ -50,7 +50,6 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "SessionEpoch.tla::EpochNeverDecreases",
         "kani": "virtual_clock_never_moves_backwards",
         "property": "prop_clock_advance_is_monotonic",
         "mutation": [

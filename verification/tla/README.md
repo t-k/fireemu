@@ -51,3 +51,7 @@ cargo run -p tla-verification -- verify-triage
 ```
 
 `AwaitIdleIgnoreTextIndex.cfg` is an additional policy configuration. Regenerate its evidence with the same `AwaitIdle.json` manifest when `AwaitIdle.tla` changes; the default same-stem cfg remains the traceability contract.
+
+## Planned logical-time model
+
+`SessionEpoch.tla` verifies session epoch freshness and reset ordering; it is not evidence that the virtual clock is monotonic. `INV-TIME-001` therefore relies on its Rust property, Kani harness, and semantic mutation until a dedicated Scheduler/logical-time model is added.

@@ -633,7 +633,7 @@ impl StorageState {
         }
         if counters {
             self.next_blob = captured.next_blob;
-            self.next_generation = captured.next_generation;
+            self.next_generation = self.next_generation.max(captured.next_generation);
             self.next_upload = captured.next_upload;
             self.rng = captured.rng.clone();
         } else {

@@ -52,7 +52,7 @@ pub fn load_indexes(path: &str) -> Result<IndexSet, String> {
 
 /// Parses one `firestore.indexes.json` generation already read by a reload supervisor.
 pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
-    let json: Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    let json: Value = serde_json::from_str(text).map_err(|e| format!("{path}: {e}"))?;
     let mut set = IndexSet::default();
     for idx in json
         .get("indexes")

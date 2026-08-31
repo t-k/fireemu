@@ -436,9 +436,7 @@ fn a_read_locks_the_document_against_an_out_of_band_writer() {
         Err(FirestoreError::LockContended { .. })
     ));
     // A write to a document the transaction did not read is not blocked by it.
-    assert!(s
-        .commit(&[set("acct/other", &[])], None, t(8))
-        .is_ok());
+    assert!(s.commit(&[set("acct/other", &[])], None, t(8)).is_ok());
     s.rollback(&txn3).unwrap();
 
     let ro = s.begin_transaction(true, t(10)).unwrap();
@@ -474,9 +472,10 @@ fn transaction_snapshot_reads_are_stable() {
         s.get_in_transaction(&txn, &path("k/1")).map(|_| ()),
         Ok(())
     ));
+    // A transaction past its total budget is ABORTED, as the SDKs expect.
     assert!(matches!(
         s.commit(&[], Some(&txn), late),
-        Err(FirestoreError::InvalidArgument(_))
+        Err(FirestoreError::Aborted(_))
     ));
 }
 
@@ -626,9 +625,7 @@ fn a_query_locks_its_collection_against_a_phantom_write() {
     // A write to an unrelated collection is not blocked by the query's lock.
     assert!(s.commit(&[set("other/x", &[])], None, t(1)).is_ok());
     // The transaction's own write into the scanned collection commits: it holds the lock.
-    assert!(s
-        .commit(&[set("ph/mine", &[])], Some(&txn), t(2))
-        .is_ok());
+    assert!(s.commit(&[set("ph/mine", &[])], Some(&txn), t(2)).is_ok());
 
     // Once the transaction is finished the collection is free again.
     assert!(s
@@ -642,6 +639,10 @@ fn a_query_locks_its_collection_against_a_phantom_write() {
 
 #[test]
 fn transactions_expire_on_idle_and_total_time() {
+    // Expiry is inclusive at the deadline (`now >= deadline`): a transaction is alive strictly
+    // inside its 60 s idle window and 270 s total budget, and gone once a deadline is reached.
+    // This is the boundary the lock check uses too, so a holder's lock is released at exactly
+    // the instant its own commit would be refused.
     let mut s = FirestoreState::new();
     let txn = s.begin_transaction(false, t(0)).unwrap();
     assert!(s.touch_transaction(&txn, t(59)).is_ok());
@@ -649,9 +650,11 @@ fn transactions_expire_on_idle_and_total_time() {
         s.touch_transaction(&txn, t(118)).is_ok(),
         "idle window restarts"
     );
+    // 60 s after the last activity (t(118)) the idle budget is spent. An expired transaction
+    // is ABORTED (the code the SDKs retry), the same as a finished one.
     assert!(matches!(
-        s.touch_transaction(&txn, t(179)),
-        Err(FirestoreError::InvalidArgument(m)) if m.contains("IDLE")
+        s.touch_transaction(&txn, t(178)),
+        Err(FirestoreError::Aborted(_))
     ));
     assert!(
         s.touch_transaction(&txn, t(180)).is_err(),
@@ -659,12 +662,13 @@ fn transactions_expire_on_idle_and_total_time() {
     );
 
     let txn = s.begin_transaction(false, t(200)).unwrap();
+    // Touching every 59 s keeps the idle window open, but the total budget still fires.
     for step in 1..=4 {
-        assert!(s.touch_transaction(&txn, t(200 + step * 60)).is_ok());
+        assert!(s.touch_transaction(&txn, t(200 + step * 59)).is_ok());
     }
     assert!(matches!(
-        s.touch_transaction(&txn, t(200 + 271)),
-        Err(FirestoreError::InvalidArgument(m)) if m.contains("TOTAL")
+        s.touch_transaction(&txn, t(200 + 270)),
+        Err(FirestoreError::Aborted(_))
     ));
 }
 

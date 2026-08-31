@@ -680,7 +680,10 @@ impl LocalBackend {
     fn with_lock_wait<T>(
         &self,
         parent: &Parent,
-        mut attempt: impl FnMut(&mut FirestoreState, fireemu_core_types::time::LogicalInstant) -> Result<Attempt<T>, Status>,
+        mut attempt: impl FnMut(
+            &mut FirestoreState,
+            fireemu_core_types::time::LogicalInstant,
+        ) -> Result<Attempt<T>, Status>,
     ) -> Result<T, Status> {
         let start = self.now();
         let wait_until = start
@@ -1411,14 +1414,14 @@ impl LocalBackend {
     /// `CreateDocument`.
     pub fn create_document(&self, req: &pb::CreateDocumentRequest) -> Result<pb::Document, Status> {
         let (parent, write) = self.plan_create(req)?;
-        self.execute_planned(&parent, write, req.mask.as_ref())
+        self.execute_planned(&parent, &write, req.mask.as_ref())
     }
 
     /// Executes a single planned write and returns the resulting document.
     pub fn execute_planned(
         &self,
         parent: &Parent,
-        write: Write,
+        write: &Write,
         mask: Option<&pb::DocumentMask>,
     ) -> Result<pb::Document, Status> {
         self.execute_planned_with(parent, write, mask, &allow_all)
@@ -1429,7 +1432,7 @@ impl LocalBackend {
     pub fn execute_planned_with(
         &self,
         parent: &Parent,
-        write: Write,
+        write: &Write,
         mask: Option<&pb::DocumentMask>,
         guard: WriteGuard<'_>,
     ) -> Result<pb::Document, Status> {
@@ -1437,8 +1440,8 @@ impl LocalBackend {
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
         let doc = self.with_lock_wait(parent, |db, now| {
-            guard(db, std::slice::from_ref(&write), now)?;
-            match db.commit(std::slice::from_ref(&write), None, now) {
+            guard(db, std::slice::from_ref(write), now)?;
+            match db.commit(std::slice::from_ref(write), None, now) {
                 Ok(result) => {
                     let doc = db
                         .get(&path)
@@ -1479,7 +1482,7 @@ impl LocalBackend {
     /// `UpdateDocument`.
     pub fn update_document(&self, req: &pb::UpdateDocumentRequest) -> Result<pb::Document, Status> {
         let (parent, write) = Self::plan_update(req)?;
-        self.execute_planned(&parent, write, req.mask.as_ref())
+        self.execute_planned(&parent, &write, req.mask.as_ref())
     }
 
     /// Decodes a `DeleteDocument` request into its write.

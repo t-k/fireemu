@@ -367,6 +367,12 @@ fn seconds_limit(id: &str, fallback: i64) -> LogicalDuration {
     }
 }
 
+/// The message the official emulator returns (with `ABORTED`) for a transaction that has been
+/// finished -- committed, rolled back, or run past its budget. `ABORTED` is the code the SDKs
+/// retry a transaction on.
+const TRANSACTION_NO_LONGER_VALID: &str =
+    "The referenced transaction has expired or is no longer valid.";
+
 fn transaction_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)
 }
@@ -685,27 +691,40 @@ impl FirestoreState {
 
     /// Checks that a transaction is still usable at `now` (total and idle budgets,
     /// `FS-LIMIT-TRANSACTION-TOTAL-TIME` / `FS-LIMIT-TRANSACTION-IDLE-TIME`) and records the
-    /// activity. An expired transaction is finished and reported as `InvalidArgument`.
+    /// activity. A transaction that has run out its budget is finished and reported as
+    /// `ABORTED` with the message the official emulator gives a transaction that is no longer
+    /// valid -- the code the SDKs retry on, which is what lets a client whose out-of-band
+    /// write was waiting on this transaction's lock finally make progress once it expires.
     pub fn touch_transaction(
         &mut self,
         id: &TransactionId,
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
         let t = self.transaction(id)?;
-        let expired = if elapsed(now, t.started_at) > transaction_ttl() {
-            Some("transaction expired (FS-LIMIT-TRANSACTION-TOTAL-TIME)")
-        } else if elapsed(now, t.last_activity) > transaction_idle_ttl() {
-            Some("transaction expired (FS-LIMIT-TRANSACTION-IDLE-TIME)")
-        } else {
-            None
-        };
+        // Expiry is inclusive at the deadline (`now >= deadline`), the same boundary
+        // `transaction_expiry` / the lock check use, so a transaction is considered gone by
+        // its own commit at exactly the instant its lock is released -- never one but not the
+        // other.
+        let total_deadline = t
+            .started_at
+            .checked_add(transaction_ttl())
+            .unwrap_or(LogicalInstant::MAX);
+        let idle_deadline = t
+            .last_activity
+            .checked_add(transaction_idle_ttl())
+            .unwrap_or(LogicalInstant::MAX);
+        let expired = now >= total_deadline || now >= idle_deadline;
         if let Some(t) = self.transactions.get_mut(id) {
-            match expired {
-                Some(_) => t.finished = true,
-                None => t.last_activity = now,
+            if expired {
+                t.finished = true;
+            } else {
+                t.last_activity = now;
             }
         }
-        expired.map_or(Ok(()), |m| Err(FirestoreError::InvalidArgument(m.into())))
+        if expired {
+            return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));
+        }
+        Ok(())
     }
 
     /// The version visible at `at` (the latest version committed at or before it; the empty
@@ -866,9 +885,7 @@ impl FirestoreState {
             Some(t) if !t.finished => Ok(t),
             // A finished transaction is reported the way the official emulator reports it:
             // `ABORTED`, which is the code the SDKs retry a transaction on.
-            Some(_) => Err(FirestoreError::Aborted(
-                "The referenced transaction has expired or is no longer valid.".into(),
-            )),
+            Some(_) => Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into())),
             None => Err(FirestoreError::InvalidArgument(
                 "Invalid transaction.".into(),
             )),

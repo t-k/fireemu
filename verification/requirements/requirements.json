@@ -535,6 +535,41 @@
       }
     },
     {
+      "id": "INV-AUTH-006",
+      "statement": "Every accepted TOTP code is inside the configured adjacent-step window at the instant it is accepted.",
+      "criticality": "critical",
+      "owner": "core-auth",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AuthTotp.tla::AcceptedOnlyWithinWindow",
+        "mutation": [
+          "M-AUTH-001",
+          "M-TLA-AUTH-WINDOW-FINALIZE-001",
+          "M-TLA-AUTH-WINDOW-VERIFY-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-auth/tests/mfa.rs",
+          "crates/fireemu-core-auth/tests/totp.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-AUTH-007",
+      "statement": "A TOTP enrollment may finalize at its exact expiry instant and never after that instant.",
+      "criticality": "critical",
+      "owner": "core-auth",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "AuthTotp.tla::EnrollmentAcceptedBeforeExpiry",
+        "mutation": [
+          "M-TLA-AUTH-EXPIRY-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-auth/tests/mfa.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-AUTH-004",
       "statement": "An expired transient Auth credential (email action code, phone verification code, TOTP enrollment session, pending second-factor sign-in) is never observable as active, every kind has an outstanding budget whose refusal creates nothing, pending sign-ins resolve by direct ownership lookup, and refresh tokens are never swept.",
       "criticality": "important",

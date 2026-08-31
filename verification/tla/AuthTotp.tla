@@ -23,11 +23,15 @@ VARIABLES clock,        \* current time step
           sessionEnd,   \* enrollment session expiry step
           lastAccepted, \* highest accepted step (-1 encoded as NoStep)
           accepted,     \* function step -> number of acceptances
-          tokenSecond   \* TRUE when a token with a second-factor claim was issued
+          tokenSecond,  \* TRUE when a token with a second-factor claim was issued
+          acceptedAt,   \* clock value of the latest accepted code
+          enrollmentAcceptedAt \* clock value of the accepted enrollment
 
-vars == <<clock, state, sessionEnd, lastAccepted, accepted, tokenSecond>>
+vars == <<clock, state, sessionEnd, lastAccepted, accepted, tokenSecond,
+          acceptedAt, enrollmentAcceptedAt>>
 
 NoStep == MaxStep + 1
+NoTime == MaxStep + SessionTtl + 1
 Steps == 0..MaxStep
 
 TypeOK ==
@@ -37,6 +41,8 @@ TypeOK ==
     /\ lastAccepted \in Steps \cup {NoStep}
     /\ accepted \in [Steps -> 0..2]
     /\ tokenSecond \in BOOLEAN
+    /\ acceptedAt \in Steps \cup {NoTime}
+    /\ enrollmentAcceptedAt \in Steps \cup {NoTime}
 
 Init ==
     /\ clock = 0
@@ -45,19 +51,24 @@ Init ==
     /\ lastAccepted = NoStep
     /\ accepted = [s \in Steps |-> 0]
     /\ tokenSecond = FALSE
+    /\ acceptedAt = NoTime
+    /\ enrollmentAcceptedAt = NoTime
 
 Tick ==
     /\ clock < MaxStep
     /\ clock' = clock + 1
-    /\ UNCHANGED <<state, sessionEnd, lastAccepted, accepted, tokenSecond>>
+    /\ UNCHANGED <<state, sessionEnd, lastAccepted, accepted, tokenSecond,
+                    acceptedAt, enrollmentAcceptedAt>>
 
 StartEnrollment ==
     /\ state \in {"NotEnrolled", "Expired"}
     /\ state' = "EnrollmentStarted"
     /\ sessionEnd' = clock + SessionTtl
-    /\ UNCHANGED <<clock, lastAccepted, accepted, tokenSecond>>
+    /\ UNCHANGED <<clock, lastAccepted, accepted, tokenSecond,
+                    acceptedAt, enrollmentAcceptedAt>>
 
-InWindow(step) == step + Window >= clock /\ step <= clock + Window
+InWindowAt(step, at) == step + Window >= at /\ step <= at + Window
+InWindow(step) == InWindowAt(step, clock)
 
 FinalizeEnrollment(step) ==
     /\ state = "EnrollmentStarted"
@@ -66,13 +77,16 @@ FinalizeEnrollment(step) ==
     /\ state' = "Enrolled"
     /\ lastAccepted' = step
     /\ accepted' = [accepted EXCEPT ![step] = @ + 1]
+    /\ acceptedAt' = clock
+    /\ enrollmentAcceptedAt' = clock
     /\ UNCHANGED <<clock, sessionEnd, tokenSecond>>
 
 ExpireEnrollment ==
     /\ state = "EnrollmentStarted"
     /\ clock > sessionEnd
     /\ state' = "Expired"
-    /\ UNCHANGED <<clock, sessionEnd, lastAccepted, accepted, tokenSecond>>
+    /\ UNCHANGED <<clock, sessionEnd, lastAccepted, accepted, tokenSecond,
+                    acceptedAt, enrollmentAcceptedAt>>
 
 \* Sign-in verification: replay protection is the guard step > lastAccepted.
 Verify(step) ==
@@ -82,7 +96,8 @@ Verify(step) ==
     /\ lastAccepted' = step
     /\ accepted' = [accepted EXCEPT ![step] = @ + 1]
     /\ tokenSecond' = TRUE
-    /\ UNCHANGED <<clock, state, sessionEnd>>
+    /\ acceptedAt' = clock
+    /\ UNCHANGED <<clock, state, sessionEnd, enrollmentAcceptedAt>>
 
 Next ==
     \/ Tick
@@ -103,6 +118,14 @@ NoTotpCodeReuse == \A s \in Steps: accepted[s] <= 1
 
 \* INV-AUTH-002: a second-factor token implies an enrolled factor.
 NoSecondFactorWithoutEnrollment == tokenSecond => state = "Enrolled"
+
+\* Every accepted code was inside the configured window at its acceptance time.
+AcceptedOnlyWithinWindow ==
+    acceptedAt = NoTime \/ InWindowAt(lastAccepted, acceptedAt)
+
+\* The implementation accepts the exact expiry instant and rejects every later instant.
+EnrollmentAcceptedBeforeExpiry ==
+    enrollmentAcceptedAt = NoTime \/ enrollmentAcceptedAt <= sessionEnd
 
 \* LIVE-AUTH-001
 EnrollmentEventuallyFinalizesOrExpires ==

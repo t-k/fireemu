@@ -13,8 +13,8 @@
       "id": "M-TLA-AUTH-ENROLLMENT-001",
       "property": "NoSecondFactorWithoutEnrollment",
       "operator": "issue-second-factor-token-after-expiry",
-      "from": "/\\ tokenSecond' = TRUE\n    /\\ UNCHANGED <<clock, state, sessionEnd>>",
-      "to": "/\\ tokenSecond' = TRUE\n    /\\ state' = \"Expired\"\n    /\\ UNCHANGED <<clock, sessionEnd>>"
+      "from": "/\\ tokenSecond' = TRUE\n    /\\ acceptedAt' = clock\n    /\\ UNCHANGED <<clock, state, sessionEnd, enrollmentAcceptedAt>>",
+      "to": "/\\ tokenSecond' = TRUE\n    /\\ acceptedAt' = clock\n    /\\ state' = \"Expired\"\n    /\\ UNCHANGED <<clock, sessionEnd, enrollmentAcceptedAt>>"
     },
     {
       "id": "M-TLA-AUTH-LIVENESS-001",
@@ -22,6 +22,27 @@
       "operator": "remove-enrollment-fairness",
       "from": "Fairness ==\n    /\\ WF_vars(Tick)\n    /\\ WF_vars(ExpireEnrollment)\n    /\\ \\A s \\in Steps: WF_vars(FinalizeEnrollment(s))",
       "to": "Fairness == TRUE"
+    },
+    {
+      "id": "M-TLA-AUTH-WINDOW-FINALIZE-001",
+      "property": "AcceptedOnlyWithinWindow",
+      "operator": "finalize-with-any-totp-step",
+      "from": "/\\ InWindow(step)\n    /\\ state' = \"Enrolled\"",
+      "to": "/\\ TRUE\n    /\\ state' = \"Enrolled\""
+    },
+    {
+      "id": "M-TLA-AUTH-WINDOW-VERIFY-001",
+      "property": "AcceptedOnlyWithinWindow",
+      "operator": "verify-with-any-totp-step",
+      "from": "/\\ InWindow(step)\n    /\\ (lastAccepted = NoStep \\/ step > lastAccepted)",
+      "to": "/\\ TRUE\n    /\\ (lastAccepted = NoStep \\/ step > lastAccepted)"
+    },
+    {
+      "id": "M-TLA-AUTH-EXPIRY-001",
+      "property": "EnrollmentAcceptedBeforeExpiry",
+      "operator": "finalize-expired-enrollment",
+      "from": "/\\ clock <= sessionEnd\n    /\\ InWindow(step)",
+      "to": "/\\ TRUE\n    /\\ InWindow(step)"
     }
   ]
 }

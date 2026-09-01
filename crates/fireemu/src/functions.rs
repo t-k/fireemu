@@ -838,42 +838,52 @@ fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool
             ));
         }
         if let [lower, "-", upper] = tokens.as_slice() {
-            let lower = version_floor(&requirement_parts(lower).ok_or_else(|| {
+            let lower_parts = requirement_parts(lower).ok_or_else(|| {
                 format!("package.json engines.node {expression:?} is not supported")
-            })?)
-            .ok_or_else(|| format!("package.json engines.node {expression:?} is not supported"))?;
+            })?;
+            let lower = if lower_parts.first().is_some_and(Option::is_none) {
+                None
+            } else {
+                Some(version_floor(&lower_parts).ok_or_else(|| {
+                    format!("package.json engines.node {expression:?} is not supported")
+                })?)
+            };
             let upper_parts = requirement_parts(upper).ok_or_else(|| {
                 format!("package.json engines.node {expression:?} is not supported")
             })?;
-            let upper = version_floor(&upper_parts).ok_or_else(|| {
-                format!("package.json engines.node {expression:?} is not supported")
-            })?;
-            let partial_at = upper_parts
-                .iter()
-                .position(Option::is_none)
-                .or((upper_parts.len() < 3).then_some(upper_parts.len()));
-            let below_upper = if partial_at == Some(1) {
-                actual
-                    < (
-                        upper.0.checked_add(1).ok_or_else(|| {
-                            format!("package.json engines.node {expression:?} overflows")
-                        })?,
-                        0,
-                        0,
-                    )
-            } else if partial_at == Some(2) {
-                actual
-                    < (
-                        upper.0,
-                        upper.1.checked_add(1).ok_or_else(|| {
-                            format!("package.json engines.node {expression:?} overflows")
-                        })?,
-                        0,
-                    )
+            let below_upper = if upper_parts.first().is_some_and(Option::is_none) {
+                true
             } else {
-                actual <= upper
+                let upper = version_floor(&upper_parts).ok_or_else(|| {
+                    format!("package.json engines.node {expression:?} is not supported")
+                })?;
+                let partial_at = upper_parts
+                    .iter()
+                    .position(Option::is_none)
+                    .or((upper_parts.len() < 3).then_some(upper_parts.len()));
+                if partial_at == Some(1) {
+                    actual
+                        < (
+                            upper.0.checked_add(1).ok_or_else(|| {
+                                format!("package.json engines.node {expression:?} overflows")
+                            })?,
+                            0,
+                            0,
+                        )
+                } else if partial_at == Some(2) {
+                    actual
+                        < (
+                            upper.0,
+                            upper.1.checked_add(1).ok_or_else(|| {
+                                format!("package.json engines.node {expression:?} overflows")
+                            })?,
+                            0,
+                        )
+                } else {
+                    actual <= upper
+                }
             };
-            if actual >= lower && below_upper {
+            if lower.is_none_or(|lower| actual >= lower) && below_upper {
                 return Ok(true);
             }
             continue;
@@ -1081,6 +1091,27 @@ fn select_node_installation(
     ))
 }
 
+#[cfg(windows)]
+fn default_runner_for_codebase(
+    _codebase: &crate::config::FunctionsCodebase,
+) -> Result<Vec<String>, String> {
+    let script = locate_runner()?;
+    let program = if let Some(program) = std::env::var_os("FIREEMU_NODE") {
+        let program = PathBuf::from(program);
+        if !program.is_absolute() || !program.is_file() {
+            return Err(format!(
+                "FIREEMU_NODE names {}, which is not an executable file",
+                program.display()
+            ));
+        }
+        program.display().to_string()
+    } else {
+        "node".to_owned()
+    };
+    Ok(vec![program, script.path.display().to_string()])
+}
+
+#[cfg(not(windows))]
 fn default_runner_for_codebase(
     codebase: &crate::config::FunctionsCodebase,
 ) -> Result<Vec<String>, String> {
@@ -1927,6 +1958,8 @@ mod tests {
         assert!(node_engine_matches("<=20.x", (20, 19, 5)).unwrap());
         assert!(!node_engine_matches(">20.x", (20, 19, 5)).unwrap());
         assert!(node_engine_matches("20 - 22.x", (22, 11, 0)).unwrap());
+        assert!(node_engine_matches("20 - x", (99, 0, 0)).unwrap());
+        assert!(node_engine_matches("x - 22", (1, 0, 0)).unwrap());
         assert!(node_engine_matches("", (20, 19, 5)).is_err());
         assert!(node_engine_matches("not-semver", (20, 19, 5)).is_err());
     }

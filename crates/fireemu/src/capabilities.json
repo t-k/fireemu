@@ -788,7 +788,7 @@
       "every codebase declared in a firebase.json `functions` array is loaded, one runner process per codebase, behind one runtime and one functions port; --only functions:<codebase> selects one",
       "a function name two codebases both export is refused, naming both",
       "`source`, `codebase`, `runtime` and `ignore` are read; a codebase whose runtime is not nodejs* is refused with the language named",
-      "the bundled runner selects Node before loading user code: functions.runner is an exact override, FIREEMU_NODE is an exact executable override, package.json engines.node chooses a matching executable from PATH or VOLTA_HOME, and without that constraint the first usable PATH Node is used with any firebase runtime mismatch reported",
+      "the bundled runner selects Node before loading user code: functions.runner is an exact override; on Unix FIREEMU_NODE is an exact executable override, package.json engines.node chooses a matching executable from PATH or VOLTA_HOME, and without that constraint the first usable PATH Node is used with any firebase runtime mismatch reported; on Windows FIREEMU_NODE or the first PATH Node preserves the previous runner behavior",
       "source, compiled output, dotenv, local-secret and runtime-config changes start a fresh discovery runner and atomically replace the old generation only when its trigger manifest is unchanged"
     ],
     "unimplemented": [

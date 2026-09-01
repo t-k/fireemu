@@ -163,14 +163,31 @@ impl Harness {
     }
 
     async fn call(&self, function: &str, headers: &[(&str, &str)]) -> (u16, Value) {
+        let response = self.request("POST", function, headers).await;
+        (
+            response.status,
+            serde_json::from_slice(&response.body).unwrap_or(Value::Null),
+        )
+    }
+
+    async fn request(
+        &self,
+        method: &str,
+        function: &str,
+        headers: &[(&str, &str)],
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
         use std::fmt::Write as _;
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let mut request = format!("POST /{PROJECT}/us-central1/{function} HTTP/1.1\r\n");
+        let mut request = format!("{method} /{PROJECT}/us-central1/{function} HTTP/1.1\r\n");
         for (k, v) in headers {
             let _ = write!(request, "{k}: {v}\r\n");
         }
-        let body = br#"{"data":{"a":2,"b":3}}"#;
+        let body = if method == "POST" {
+            br#"{"data":{"a":2,"b":3}}"#.as_slice()
+        } else {
+            &[]
+        };
         let _ = write!(
             request,
             "host: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
@@ -191,13 +208,42 @@ impl Harness {
             .read_to_end(&mut raw)
             .await
             .expect("the response is read");
-        let response = fireemu_adapter_functions::http::parse_response(&raw, "POST")
-            .expect("a well-formed response");
-        (
-            response.status,
-            serde_json::from_slice(&response.body).unwrap_or(Value::Null),
-        )
+        fireemu_adapter_functions::http::parse_response(&raw, method)
+            .expect("a well-formed response")
     }
+
+    async fn guarded_request_with_a_delayed_body(&self) -> std::io::Result<u16> {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let body = vec![b'x'; 4 * 1024 * 1024];
+        let head = format!(
+            "POST /{PROJECT}/us-central1/guarded HTTP/1.1\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            self.addr,
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(self.addr).await?;
+        stream.write_all(head.as_bytes()).await?;
+        stream.flush().await?;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        stream.write_all(&body).await?;
+        stream.flush().await?;
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await?;
+        fireemu_adapter_functions::http::parse_response(&raw, "POST")
+            .map(|response| response.status)
+            .map_err(std::io::Error::other)
+    }
+}
+
+fn response_header<'a>(
+    response: &'a fireemu_adapter_functions::http::ProxiedResponse,
+    name: &str,
+) -> Option<&'a str> {
+    response
+        .headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 /// Every value of one header the runner received, in wire order.
@@ -311,6 +357,149 @@ async fn an_enforced_callable_rejects_a_missing_app_check_token_before_invoking_
     let (status, body) = h.call("guarded", &[("x-firebase-appcheck", &token)]).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(echoed(&body, "x-firebase-appcheck"), vec![token]);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn a_callable_denial_drains_a_body_that_arrives_after_its_headers() {
+    let h = start(true).await;
+    let status = h
+        .guarded_request_with_a_delayed_body()
+        .await
+        .expect("the client receives a complete denial without a connection reset");
+    assert_eq!(status, 401);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn an_enforced_callable_answers_a_genuine_local_preflight_without_admission_or_invocation() {
+    let h = start(true).await;
+    let response = h
+        .request(
+            "OPTIONS",
+            "guarded",
+            &[
+                ("origin", "http://127.0.0.1:5173"),
+                ("access-control-request-method", "POST"),
+                (
+                    "access-control-request-headers",
+                    "authorization,content-type,x-firebase-appcheck",
+                ),
+                ("sec-fetch-site", "same-site"),
+                ("sec-fetch-mode", "cors"),
+            ],
+        )
+        .await;
+    assert_eq!(response.status, 204);
+    assert_eq!(
+        response_header(&response, "access-control-allow-origin"),
+        Some("http://127.0.0.1:5173")
+    );
+    assert_eq!(
+        response_header(&response, "access-control-allow-methods"),
+        Some("POST")
+    );
+    assert_eq!(
+        response_header(&response, "access-control-allow-headers"),
+        Some("authorization,content-type,x-firebase-appcheck")
+    );
+    assert_eq!(
+        response_header(&response, "vary"),
+        Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode")
+    );
+    assert!(response.body.is_empty());
+    assert!(
+        h.gate
+            .registry()
+            .read()
+            .unwrap()
+            .observations(PROJECT)
+            .is_empty(),
+        "a preflight is not an App Check admission"
+    );
+
+    let token = h.token();
+    let (_, bearer) = h.user("preflight@example.com");
+    let (status, body) = h
+        .call(
+            "guarded",
+            &[
+                ("origin", "http://127.0.0.1:5173"),
+                ("authorization", &bearer),
+                ("x-firebase-appcheck", &token),
+            ],
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(echoed(&body, "authorization"), vec![bearer]);
+    assert_eq!(echoed(&body, "x-firebase-appcheck"), vec![token]);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn callable_preflight_rejects_nonlocal_or_malformed_browser_requests() {
+    let h = start(true).await;
+    for headers in [
+        vec![("access-control-request-method", "POST")],
+        vec![("origin", "http://localhost:5173")],
+        vec![
+            ("origin", "https://attacker.example"),
+            ("access-control-request-method", "POST"),
+        ],
+        vec![
+            ("origin", "null"),
+            ("access-control-request-method", "POST"),
+        ],
+        vec![
+            ("origin", "http://localhost:5173"),
+            ("access-control-request-method", "PUT"),
+        ],
+        vec![
+            ("origin", "http://localhost:5173"),
+            ("access-control-request-method", "POST"),
+            ("access-control-request-headers", "x-fireemu-runner-secret"),
+        ],
+        vec![
+            ("origin", "http://localhost:5173"),
+            ("access-control-request-method", "POST"),
+            ("sec-fetch-site", "cross-site"),
+        ],
+        vec![
+            ("origin", "http://localhost:5173"),
+            ("access-control-request-method", "POST"),
+            ("sec-fetch-mode", "navigate"),
+        ],
+        vec![
+            ("origin", "http://localhost:5173"),
+            ("access-control-request-method", "POST"),
+            ("access-control-request-method", "POST"),
+        ],
+        vec![
+            ("origin", "http://localhost:5173"),
+            ("access-control-request-method", "POST"),
+            ("access-control-request-headers", "content-type"),
+            ("access-control-request-headers", "authorization"),
+        ],
+        vec![
+            ("origin", "http://localhost:5173"),
+            ("origin", "http://127.0.0.1:5173"),
+            ("access-control-request-method", "POST"),
+        ],
+    ] {
+        let response = h.request("OPTIONS", "guarded", &headers).await;
+        assert_ne!(response.status, 204, "{headers:?}");
+        assert!(
+            response_header(&response, "access-control-allow-origin").is_none(),
+            "a refused preflight has no CORS grant: {headers:?}"
+        );
+    }
+    assert!(h
+        .gate
+        .registry()
+        .read()
+        .unwrap()
+        .observations(PROJECT)
+        .is_empty());
     h.stop().await;
 }
 

@@ -416,6 +416,26 @@ async fn collect_body(body: Incoming) -> Result<Bytes, Refusal> {
     }
 }
 
+/// Drains a refused request without retaining its body. Hyper closes the read side when an
+/// `Incoming` is dropped before the body has arrived; a client that is still writing then sees
+/// a timing-dependent connection reset instead of the callable's stable error envelope.
+async fn drain_refused_body(mut body: Incoming) {
+    let mut remaining = MAX_FUNCTION_BODY_BYTES;
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else {
+            return;
+        };
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        let len = data.len();
+        if len > remaining {
+            return;
+        }
+        remaining -= len;
+    }
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
@@ -428,11 +448,11 @@ async fn respond(
     // the internet can POST to a developer's callable and read the result. That is the one
     // documented divergence of this port, recorded in
     // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
-    let origin = req
-        .headers()
-        .get("origin")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+    let origins = field_values(req.headers(), "origin");
+    if origins.len() > 1 {
+        return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
+    }
+    let origin = origins.first().cloned();
     if let Some(origin) = &origin {
         if !origin_is_local(origin) {
             return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
@@ -468,6 +488,10 @@ async fn respond(
     // loopback origins this port serves. A callable answers its own preflight (v2 `onCall`
     // enables CORS itself, and the recorded oracle shows `POST` where an `onRequest` shows the
     // whole method list), so a callable's request is forwarded untouched.
+    let callable = matches!(
+        runtime.manifest().get(function).map(|f| &f.trigger),
+        Some(fireemu_core_functions::manifest::Trigger::Http { callable: true, .. })
+    );
     let plain_http = matches!(
         runtime.manifest().get(function).map(|f| &f.trigger),
         Some(fireemu_core_functions::manifest::Trigger::Http {
@@ -475,6 +499,12 @@ async fn respond(
             ..
         })
     );
+    if callable && method == "OPTIONS" {
+        return Ok(match callable_preflight(req.headers()) {
+            Some(answer) => answer,
+            None => simple(StatusCode::FORBIDDEN, "forbidden callable preflight"),
+        });
+    }
     if plain_http && method == "OPTIONS" {
         if let Some(origin) = &origin {
             if req.headers().contains_key("access-control-request-method") {
@@ -493,7 +523,10 @@ async fn respond(
         .collect();
     let headers = match sanitize_credentials(&runtime, function, req.headers(), headers) {
         Ok(headers) => headers,
-        Err(denial) => return Ok(*denial),
+        Err(denial) => {
+            drain_refused_body(req.into_body()).await;
+            return Ok(*denial);
+        }
     };
     let body = match collect_body(req.into_body()).await {
         Ok(body) => body,
@@ -573,6 +606,82 @@ fn preflight_answer(origin: &str, headers: &hyper::HeaderMap) -> Response<Full<B
     builder
         .body(Full::new(Bytes::new()))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
+/// A proxy-owned callable preflight response.
+///
+/// Callable preflights never reach Auth/App Check admission or the runner. Unlike the
+/// compatibility response for `onRequest`, this accepts only the callable protocol's method
+/// and request headers instead of reflecting browser input as authority.
+fn callable_preflight(headers: &hyper::HeaderMap) -> Option<Response<Full<Bytes>>> {
+    let origins = field_values(headers, "origin");
+    let [origin] = origins.as_slice() else {
+        return None;
+    };
+    if !origin_is_local(origin) {
+        return None;
+    }
+    let requested_method = field_values(headers, "access-control-request-method");
+    if requested_method.len() != 1 || !requested_method[0].eq_ignore_ascii_case("POST") {
+        return None;
+    }
+    let fetch_site = field_values(headers, "sec-fetch-site");
+    if fetch_site.len() > 1
+        || fetch_site.first().is_some_and(|site| {
+            !matches!(
+                site.to_ascii_lowercase().as_str(),
+                "same-origin" | "same-site" | "none"
+            )
+        })
+    {
+        return None;
+    }
+    let fetch_mode = field_values(headers, "sec-fetch-mode");
+    if fetch_mode.len() > 1
+        || fetch_mode
+            .first()
+            .is_some_and(|mode| !mode.eq_ignore_ascii_case("cors"))
+    {
+        return None;
+    }
+
+    let requested_fields = field_values(headers, "access-control-request-headers");
+    if requested_fields.len() > 1 {
+        return None;
+    }
+    let mut admitted = Vec::new();
+    if let Some(fields) = requested_fields.first() {
+        for field in fields.split(',') {
+            let field = field.trim().to_ascii_lowercase();
+            if field.is_empty()
+                || !matches!(
+                    field.as_str(),
+                    "authorization"
+                        | "content-type"
+                        | "firebase-instance-id-token"
+                        | "x-firebase-appcheck"
+                )
+                || admitted.contains(&field)
+            {
+                return None;
+            }
+            admitted.push(field);
+        }
+    }
+
+    let mut builder = Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header("access-control-allow-origin", origin)
+        .header("access-control-allow-methods", "POST")
+        .header(
+            "vary",
+            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode",
+        )
+        .header("content-length", "0");
+    if !admitted.is_empty() {
+        builder = builder.header("access-control-allow-headers", admitted.join(","));
+    }
+    builder.body(Full::new(Bytes::new())).ok()
 }
 
 /// Whether a browser `Origin` is a loopback origin.

@@ -434,11 +434,8 @@ fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
     ) else {
         return set_rules_error("Each rules file must contain string 'name' and 'content' fields");
     };
-    let loaded = match LoadedRules::from_source(content) {
-        Ok(loaded) => loaded,
-        Err(_) => {
-            return set_rules_error("There was an error updating rules, see logs for more details")
-        }
+    let Ok(loaded) = LoadedRules::from_source(content) else {
+        return set_rules_error("There was an error updating rules, see logs for more details");
     };
     match state.rules.write() {
         Ok(mut active) => *active = loaded,

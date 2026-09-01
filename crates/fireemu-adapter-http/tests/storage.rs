@@ -585,7 +585,7 @@ fn rules_unit_testing_set_rules_rejects_invalid_updates_without_replacing_rules(
         ("empty body", Vec::new()),
         ("malformed JSON", b"{".to_vec()),
         ("JSON null", b"null".to_vec()),
-        ("missing rules", br#"{}"#.to_vec()),
+        ("missing rules", br"{}".to_vec()),
         ("missing files", br#"{"rules":{}}"#.to_vec()),
         ("non-array files", br#"{"rules":{"files":{}}}"#.to_vec()),
         ("empty files", br#"{"rules":{"files":[]}}"#.to_vec()),

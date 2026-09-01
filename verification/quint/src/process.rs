@@ -177,7 +177,7 @@ pub enum CheckerOutcome {
 }
 
 /// Property-specific outcome for one waited mutation checker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum MutationOutcome {
     /// A state invariant killed the mutation.
     KilledSafety,
@@ -203,14 +203,6 @@ pub struct MutationResult {
     pub outcome: MutationOutcome,
     /// Bounded checker diagnostic.
     pub diagnostic: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MutationReport {
-    schema_version: u32,
-    model: &'static str,
-    mutations: Vec<MutationResult>,
 }
 
 impl MutationOutcome {
@@ -282,6 +274,13 @@ pub fn classify_mutation_execution(
         CheckerOutcome::Counterexample => {
             let diagnostic =
                 format!("{}\n{}", execution.stdout, execution.stderr).to_ascii_lowercase();
+            let quint_counterexample = execution.stderr.lines().any(|line| {
+                line.trim()
+                    .eq_ignore_ascii_case("error: found a counterexample")
+            });
+            if execution.status.code() != Some(1) || !quint_counterexample {
+                return MutationOutcome::ToolError;
+            }
             let temporal = has_temporal_counterexample(&diagnostic);
             let safety = has_safety_counterexample(&diagnostic);
             match (expects_temporal, temporal, safety) {
@@ -294,14 +293,16 @@ pub fn classify_mutation_execution(
 }
 
 fn has_safety_counterexample(diagnostic: &str) -> bool {
-    diagnostic.contains("invariant violated")
-        || (diagnostic.contains("invariant ") && diagnostic.contains(" violated"))
+    diagnostic.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("error: invariant ") && line.ends_with(" is violated.")
+    })
 }
 
 fn has_temporal_counterexample(diagnostic: &str) -> bool {
-    diagnostic.contains("temporal properties were violated")
-        || diagnostic.contains("temporal property violated")
-        || (diagnostic.contains("temporal property") && diagnostic.contains(" violated"))
+    diagnostic
+        .lines()
+        .any(|line| line.trim() == "error: temporal properties were violated.")
 }
 
 /// Runs all required `EventDelivery` source mutations with the guarded Quint/TLC checker.
@@ -358,16 +359,7 @@ pub fn mutate_event_delivery(
     }
 
     if let Some(path) = evidence_path {
-        let report = MutationReport {
-            schema_version: 1,
-            model: "EventDelivery",
-            mutations: results.clone(),
-        };
-        let mut json = serde_json::to_string_pretty(&report)
-            .map_err(|error| format!("cannot serialize mutation report: {error}"))?;
-        json.push('\n');
-        fs::write(path, json)
-            .map_err(|error| format!("cannot write mutation report {}: {error}", path.display()))?;
+        crate::evidence::write_evidence(repository_root, path, &results)?;
     }
     Ok(results)
 }
@@ -573,7 +565,7 @@ mod tests {
             CheckerOutcome::Passed
         );
         assert_eq!(
-            classify_execution(&execution(124, "Error: Invariant violated", "")),
+            classify_execution(&execution(124, "Error: Invariant q_inv is violated.", "")),
             CheckerOutcome::Timeout
         );
         assert_eq!(
@@ -581,18 +573,26 @@ mod tests {
             CheckerOutcome::ToolError
         );
         assert_eq!(
-            classify_execution(&execution(1, "Error: Invariant violated", "")),
+            classify_execution(&execution(1, "Error: Invariant q_inv is violated.", "")),
             CheckerOutcome::Counterexample
         );
         assert_eq!(
-            classify_execution(&execution(1, "", "Temporal properties were violated")),
+            classify_execution(&execution(
+                1,
+                "Error: Temporal properties were violated.",
+                ""
+            )),
             CheckerOutcome::Counterexample
         );
     }
 
     #[test]
     fn mutation_classifier_requires_expected_counterexample_evidence() {
-        let safety = execution(1, "Error: Invariant LegalStateTransitions violated", "");
+        let safety = execution(
+            1,
+            "Error: Invariant LegalStateTransitions is violated.",
+            "error: found a counterexample",
+        );
         assert_eq!(
             classify_mutation_execution(&safety, false),
             MutationOutcome::KilledSafety
@@ -602,7 +602,11 @@ mod tests {
             MutationOutcome::ToolError
         );
 
-        let temporal = execution(1, "Temporal property was violated", "");
+        let temporal = execution(
+            1,
+            "Error: Temporal properties were violated.",
+            "error: found a counterexample",
+        );
         assert_eq!(
             classify_mutation_execution(&temporal, true),
             MutationOutcome::KilledTemporal
@@ -612,12 +616,23 @@ mod tests {
             MutationOutcome::Survived
         );
         assert_eq!(
-            classify_mutation_execution(&execution(124, "Error: Invariant X violated", ""), false),
+            classify_mutation_execution(
+                &execution(
+                    124,
+                    "Error: Invariant X is violated.",
+                    "error: found a counterexample",
+                ),
+                false,
+            ),
             MutationOutcome::Timeout
         );
         assert_eq!(
             classify_mutation_execution(
-                &execution(1, "Error: Invariant X violated", "translation failed"),
+                &execution(
+                    1,
+                    "Error: Invariant X is violated.",
+                    "translation failed\nerror: found a counterexample",
+                ),
                 false
             ),
             MutationOutcome::ToolError

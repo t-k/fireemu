@@ -197,6 +197,11 @@ fn cli_declares_verify_model_command() {
             .contains("mutate-event-delivery [--root PATH] [--evidence PATH]"),
         "help must declare the mutation contract"
     );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("verify-evidence [--root PATH] [--evidence PATH]"),
+        "help must declare the evidence contract"
+    );
 }
 
 #[test]

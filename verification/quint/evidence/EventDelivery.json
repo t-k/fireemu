@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "model": "EventDelivery",
+  "tools": {
+    "quint": "0.32.0",
+    "quintConnect": "0.1.2",
+    "tlc": "2.19 of 08 August 2024",
+    "backend": "tlc"
+  },
+  "digests": {
+    "Cargo.lock": "a953223c918ab7ea9f532f37e06ba8d0761d405ba5f7d763aa6e650788164bae",
+    "verification/quint/mutations/EventDelivery.json": "4940b874140b9762f2306c0e144ae06f72e17f376009b1c4578aaaad64dc6dd1",
+    "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
+    "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
+    "verification/quint/specs/EventDelivery.qnt": "72df70c59770ebc8340fc573be32e8e6918e60a9807fc48d94ad3f9b3eea9c15",
+    "verification/quint/specs/tlc-config.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7"
+  },
+  "invariants": [
+    "TypeOK",
+    "AttemptsBounded",
+    "DeadLetterOnlyAfterExhaustion",
+    "LegalStateTransitions",
+    "AttemptsChangeOnlyOnStart",
+    "StaleDiscardRequiresOlderEpoch"
+  ],
+  "temporalProperties": [
+    "NoTerminalRegression",
+    "EventEventuallyTerminates"
+  ],
+  "mutations": [
+    {
+      "id": "M-TLA-EVENT-TERMINAL-001",
+      "property": "NoTerminalRegression",
+      "outcome": "KilledSafety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-TLA-EVENT-LIVENESS-001",
+      "property": "EventEventuallyTerminates",
+      "outcome": "KilledTemporal",
+      "diagnostic": "TLC temporal property violation"
+    },
+    {
+      "id": "M-TLA-EVENT-LEGAL-001",
+      "property": "LegalStateTransitions",
+      "outcome": "KilledSafety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-TLA-EVENT-ATTEMPTS-001",
+      "property": "AttemptsChangeOnlyOnStart",
+      "outcome": "KilledSafety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-TLA-EVENT-STALE-001",
+      "property": "StaleDiscardRequiresOlderEpoch",
+      "outcome": "KilledSafety",
+      "diagnostic": "TLC invariant violation"
+    }
+  ],
+  "scenarios": [
+    "success",
+    "retryExhaustion",
+    "staleDiscard",
+    "cancel"
+  ],
+  "actions": [
+    "Lease",
+    "Start",
+    "Succeed",
+    "Fail",
+    "RetryDue",
+    "Cancel",
+    "Reset",
+    "DiscardStale"
+  ],
+  "projectionFields": [
+    "state",
+    "attempts",
+    "maxAttempts",
+    "capturedEpoch",
+    "currentEpoch",
+    "terminal",
+    "cancelled",
+    "stale"
+  ],
+  "simulation": {
+    "seeds": [
+      "0x1",
+      "0x2",
+      "0x3",
+      "0x4"
+    ],
+    "tracesPerSeed": 100,
+    "maxSteps": 20
+  }
+}

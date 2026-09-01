@@ -1184,11 +1184,32 @@ fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
     assert_eq!(looked["users"][0]["validSince"], "1788005000");
     assert_eq!(looked["users"][0]["displayName"], "applied");
 
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": "revoked-user",
+            "validSince": 1_788_005_001_i64,
+            "displayName": "numeric-applied"
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["revoked-user"]}),
+    );
+    assert_eq!(looked["users"][0]["validSince"], "1788005001");
+    assert_eq!(looked["users"][0]["displayName"], "numeric-applied");
+
     for invalid in [
         json!("-1"),
         json!("1.5"),
         json!("9223372036854775808"),
-        json!(1_788_005_001_i64),
+        json!(-1_i64),
+        json!(1.5_f64),
         Value::Null,
     ] {
         let (status, _) = admin(
@@ -1216,8 +1237,8 @@ fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": ["revoked-user"]}),
     );
-    assert_eq!(looked["users"][0]["validSince"], "1788005000");
-    assert_eq!(looked["users"][0]["displayName"], "applied");
+    assert_eq!(looked["users"][0]["validSince"], "1788005001");
+    assert_eq!(looked["users"][0]["displayName"], "numeric-applied");
 }
 
 // ------------------------------------------------------------------------------------------

@@ -2394,10 +2394,22 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
                 .map_err(|_| error(400, "INVALID_ARGUMENT : validSince is out of range"))?;
             Some(LogicalInstant::from_unix_seconds(seconds))
         }
+        Some(Value::Number(seconds)) => {
+            let seconds = seconds
+                .as_i64()
+                .filter(|seconds| *seconds >= 0)
+                .ok_or_else(|| {
+                    error(
+                        400,
+                        "INVALID_ARGUMENT : validSince must be a non-negative whole second",
+                    )
+                })?;
+            Some(LogicalInstant::from_unix_seconds(seconds))
+        }
         Some(_) => {
             return Err(error(
                 400,
-                "INVALID_ARGUMENT : validSince must be a non-negative whole-second string",
+                "INVALID_ARGUMENT : validSince must be a non-negative whole second",
             ))
         }
     };

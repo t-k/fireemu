@@ -212,9 +212,9 @@
         },
         {
           "key": "rules.idTokenVerification",
-          "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the project and a signed token still verified",
+          "profileValue": "unsigned mock tokens are admitted, with the audience still bound to the routed Firestore resource project or Storage bucket project and a signed token still verified",
           "emulatorValue": "no verification at all: the token is decoded and request.auth is built from whatever it carries",
-          "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The firebase profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. Both are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
+          "note": "Measured against the pinned suite on 2026-08-31 with an unsigned token whose sub names no user: the Firestore emulator admitted it, admitted an exp of 3600 seconds after the epoch, admitted a token with no exp and no iss, admitted one whose aud named another project, and admitted one whose RS256 signature was garbage; the Storage emulator behaves the same way by construction (firebase-tools/lib/emulator/storage/rules/runtime.js calls jwt.decode). The firebase profile reproduces the part @firebase/rules-unit-testing depends on -- an unsigned token for an unknown subject with an expiry nobody reads -- and keeps two checks the official emulators skip: the audience must name the routed Firestore resource project or Storage bucket project, so a token cannot cross a session or project boundary, and a signed token must still verify, so a forged RS256 token never becomes an identity. An unregistered Firestore project owned by the default session is a valid routed namespace and is not replaced by the configured Auth project for this comparison. Both checks are refusals of requests the official emulator admits, which is why they are recorded here rather than left implicit."
         },
         {
           "key": "auth.transientCredentialLifecycle",
@@ -599,7 +599,9 @@
               "prop_rules_set_operations_are_set_theoretic",
               "prop_rules_slice_is_in_range_exactly_where_the_official_runtime_says",
               "the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admits",
+              "the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project",
               "the_firebase_profile_keeps_the_project_binding_and_the_signature_it_can_check",
+              "rest_binds_unknown_mock_tokens_to_the_requested_project",
               "the_profile_decides_whether_rest_admits_a_mock_token",
               "the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify"
             ],

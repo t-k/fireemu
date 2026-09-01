@@ -235,7 +235,7 @@
     "notes": [
       "request.auth from verified ID tokens on every Firestore surface; Bearer owner bypasses",
       "the compatibility profile decides how much verification a caller's token must survive: under firebase the unsigned mock tokens the official emulators admit are admitted too (an unknown sub, an exp nobody reads), so @firebase/rules-unit-testing works unchanged; under strict the issuer, audience, virtual-clock expiry, subject and revocation are all checked",
-      "two checks stay on in both profiles, and spec/compatibility/contract.json records them as deliberate divergences of the firebase profile: the audience must name the project, and a token that claims to be signed must verify against the session key"
+      "two checks stay on in both profiles, and spec/compatibility/contract.json records them as deliberate divergences of the firebase profile: the audience must name the routed Firestore resource project or Storage bucket project, and a token that claims to be signed must verify against the session key"
     ],
     "status": "implemented"
   },

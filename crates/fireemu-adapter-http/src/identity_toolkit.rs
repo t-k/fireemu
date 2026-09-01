@@ -1831,6 +1831,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     }
     json!({
         "localId": u.local_id.as_str(),
+        "tenantId": store.tenant_id(),
         "email": u.email,
         "displayName": u.display_name,
         "photoUrl": u.photo_url,
@@ -2583,7 +2584,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
     }
     JsonResponse {
         status: 200,
-        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email}),
+        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email, "tenantId": store.tenant_id()}),
     }
 }
 

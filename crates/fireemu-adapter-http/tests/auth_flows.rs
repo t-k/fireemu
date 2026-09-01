@@ -1030,8 +1030,10 @@ fn tenant_admin_routes_use_an_isolated_namespace_and_issue_tenant_tokens() {
     let mut s = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    registry.ensure_tenant("demo-app", "customer-b").unwrap();
     s.registry = Some(registry.clone());
     let tenant = format!("{V1}/projects/demo-app/tenants/customer-a");
+    let other_tenant = format!("{V1}/projects/demo-app/tenants/customer-b");
 
     let (status, created) = admin(
         &s,
@@ -1039,12 +1041,21 @@ fn tenant_admin_routes_use_an_isolated_namespace_and_issue_tenant_tokens() {
         &json!({"localId": "same-uid", "email": "tenant@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{created}");
+    assert_eq!(created["tenantId"], "customer-a");
+    let (status, other_created) = admin(
+        &s,
+        &format!("{other_tenant}/accounts"),
+        &json!({"localId": "same-uid", "email": "other@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{other_created}");
+    assert_eq!(other_created["tenantId"], "customer-b");
     let (status, default_created) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts"),
         &json!({"localId": "same-uid", "email": "default@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{default_created}");
+    assert!(default_created.get("tenantId").is_none());
 
     let (_, tenant_users) = admin(
         &s,
@@ -1052,12 +1063,44 @@ fn tenant_admin_routes_use_an_isolated_namespace_and_issue_tenant_tokens() {
         &json!({"localId": ["same-uid"]}),
     );
     assert_eq!(tenant_users["users"][0]["email"], "tenant@example.com");
+    assert_eq!(tenant_users["users"][0]["tenantId"], "customer-a");
+    let (_, tenant_users_by_email) = admin(
+        &s,
+        &format!("{tenant}/accounts:lookup"),
+        &json!({"email": ["tenant@example.com"]}),
+    );
+    assert_eq!(tenant_users_by_email["users"][0]["tenantId"], "customer-a");
+    let listed = handle_with(
+        &s,
+        "GET",
+        &format!("{tenant}/accounts:batchGet?maxResults=1000"),
+        &owner(),
+        &json!({}),
+    );
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert_eq!(listed.body["users"][0]["tenantId"], "customer-a");
+    let (_, other_users) = admin(
+        &s,
+        &format!("{other_tenant}/accounts:lookup"),
+        &json!({"localId": ["same-uid"]}),
+    );
+    assert_eq!(other_users["users"][0]["email"], "other@example.com");
+    assert_eq!(other_users["users"][0]["tenantId"], "customer-b");
     let (_, default_users) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:lookup"),
         &json!({"localId": ["same-uid"]}),
     );
     assert_eq!(default_users["users"][0]["email"], "default@example.com");
+    assert!(default_users["users"][0].get("tenantId").is_none());
+
+    let (status, mismatch) = admin(
+        &s,
+        &format!("{tenant}/accounts"),
+        &json!({"tenantId": "customer-b", "email": "mismatch@example.com"}),
+    );
+    assert_eq!(status, 400, "{mismatch}");
+    assert_eq!(mismatch["error"]["message"], "TENANT_ID_MISMATCH");
 
     let tenant_store = registry.tenant_store("demo-app", "customer-a").unwrap();
     let tenant_store = tenant_store.lock().unwrap();

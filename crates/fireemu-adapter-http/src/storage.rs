@@ -416,11 +416,23 @@ fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
         Ok(value) => value,
         Err(_) => return set_rules_error("Request body must be valid JSON"),
     };
-    let Some(content) = parsed
-        .pointer("/rules/files/0/content")
-        .and_then(Value::as_str)
-    else {
-        return set_rules_error("Request body must include a rules file");
+    let Some(files) = parsed.pointer("/rules/files").and_then(Value::as_array) else {
+        return set_rules_error("Request body must include 'rules.files' array");
+    };
+    if files.is_empty() {
+        return set_rules_error("Request body must include 'rules.files' array");
+    }
+    if files.len() != 1 {
+        return set_rules_error("Request body must include exactly one rules file");
+    }
+    let Some(file) = files[0].as_object() else {
+        return set_rules_error("Each rules file must contain string 'name' and 'content' fields");
+    };
+    let (Some(_name), Some(content)) = (
+        file.get("name").and_then(Value::as_str),
+        file.get("content").and_then(Value::as_str),
+    ) else {
+        return set_rules_error("Each rules file must contain string 'name' and 'content' fields");
     };
     let loaded = match LoadedRules::from_source(content) {
         Ok(loaded) => loaded,
@@ -1834,8 +1846,12 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let Ok(route) = route(&req.method, &req.path) else {
         return plain_status(400);
     };
-    // Internal rules activation is admitted with the session, but it is not a bucket data
-    // operation and therefore does not pass through client App Check, Auth or fault plans.
+    // Admitted for the whole request, before the fault plan is consulted and the token is
+    // verified: a reset waits for it, a fault is counted only for a request that runs, and
+    // a request cannot verify against the old Auth store and then write into the new
+    // session. Requests are synchronous, so the admission is short-lived. Internal rules
+    // activation shares the barrier but is not a bucket data operation, so it returns before
+    // client App Check, Auth and fault plans.
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if matches!(route, Route::SetRules) {
         return set_rules(state, &req.body);

@@ -110,6 +110,25 @@ fn multipart(meta: &Value, ct: &str, data: &[u8]) -> (String, Vec<u8>) {
     (format!("multipart/related; boundary={boundary}"), body)
 }
 
+fn anonymous_multipart_upload(
+    s: &StorageState,
+    name: &str,
+) -> fireemu_adapter_http::storage::StorageResponse {
+    let (content_type, body) = multipart(&json!({}), "text/plain", b"content");
+    handle(
+        s,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name={name}&uploadType=multipart"),
+            &[
+                ("content-type", &content_type),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
+            &body,
+        ),
+    )
+}
+
 #[test]
 fn firebase_protocol_upload_download_list_update_delete() {
     let s = state(None);
@@ -521,23 +540,7 @@ service firebase.storage {
   }
 }",
     ));
-    let upload = |name: &str| {
-        let (content_type, body) = multipart(&json!({}), "text/plain", b"content");
-        handle(
-            &s,
-            req(
-                "POST",
-                &format!("/v0/b/{BUCKET}/o?name={name}&uploadType=multipart"),
-                &[
-                    ("content-type", &content_type),
-                    ("x-goog-upload-protocol", "multipart"),
-                ],
-                &body,
-            ),
-        )
-    };
-
-    assert_eq!(upload("before.txt").status, 403);
+    assert_eq!(anonymous_multipart_upload(&s, "before.txt").status, 403);
 
     let update = json!({
         "rules": {
@@ -571,7 +574,97 @@ service firebase.storage {
         json_body(&response),
         json!({"message": "Rules updated successfully"})
     );
-    assert_eq!(upload("after.txt").status, 200);
+    assert_eq!(anonymous_multipart_upload(&s, "after.txt").status, 200);
+}
+
+#[test]
+fn rules_unit_testing_set_rules_rejects_invalid_updates_without_replacing_rules() {
+    const DENY_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    const ALLOW_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
+    let cases = [
+        ("empty body", Vec::new()),
+        ("malformed JSON", b"{".to_vec()),
+        ("JSON null", b"null".to_vec()),
+        ("missing rules", br#"{}"#.to_vec()),
+        ("missing files", br#"{"rules":{}}"#.to_vec()),
+        ("non-array files", br#"{"rules":{"files":{}}}"#.to_vec()),
+        ("empty files", br#"{"rules":{"files":[]}}"#.to_vec()),
+        ("non-object file", br#"{"rules":{"files":[null]}}"#.to_vec()),
+        (
+            "missing name",
+            serde_json::to_vec(&json!({"rules":{"files":[{"content":ALLOW_ALL}]}})).unwrap(),
+        ),
+        (
+            "non-string name",
+            serde_json::to_vec(&json!({"rules":{"files":[{"name":1,"content":ALLOW_ALL}]}}))
+                .unwrap(),
+        ),
+        (
+            "missing content",
+            br#"{"rules":{"files":[{"name":"storage.rules"}]}}"#.to_vec(),
+        ),
+        (
+            "non-string content",
+            br#"{"rules":{"files":[{"name":"storage.rules","content":1}]}}"#.to_vec(),
+        ),
+        (
+            "multiple files",
+            serde_json::to_vec(&json!({"rules":{"files":[
+                {"name":"storage.rules","content":ALLOW_ALL},
+                {"name":"other.rules","content":ALLOW_ALL}
+            ]}}))
+            .unwrap(),
+        ),
+        (
+            "invalid rules",
+            br#"{"rules":{"files":[{"name":"storage.rules","content":"not rules"}]}}"#.to_vec(),
+        ),
+    ];
+
+    for (label, body) in cases {
+        let s = state(Some(DENY_ALL));
+        let response = handle(
+            &s,
+            req(
+                "PUT",
+                "/internal/setRules",
+                &[("content-type", "application/json")],
+                &body,
+            ),
+        );
+        assert_eq!(
+            response.status,
+            400,
+            "{label}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(
+            header(&response, "content-type"),
+            Some("application/json; charset=utf-8"),
+            "{label}"
+        );
+        assert!(
+            json_body(&response)["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty()),
+            "{label}"
+        );
+        assert_eq!(
+            anonymous_multipart_upload(&s, &format!("{label}.txt")).status,
+            403,
+            "{label}"
+        );
+    }
+
+    let s = state(Some(DENY_ALL));
+    assert_eq!(
+        handle(&s, req("POST", "/internal/setRules", &[], b""),).status,
+        501
+    );
+    assert_eq!(
+        handle(&s, req("PUT", "/internal/setRule", &[], b""),).status,
+        501
+    );
 }
 
 #[test]
@@ -1867,6 +1960,59 @@ async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     String::from_utf8_lossy(&response).into_owned()
+}
+
+#[tokio::test]
+async fn set_rules_over_http_changes_later_storage_authorization() {
+    use tokio::io::AsyncWriteExt;
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let shared = Arc::new(state(Some(
+        "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }",
+    )));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    let send_upload = |name: &'static str| async move {
+        let (content_type, body) = multipart(&json!({}), "text/plain", b"content");
+        let head = format!(
+            "POST /v0/b/{BUCKET}/o?name={name}&uploadType=multipart HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: {content_type}\r\nX-Goog-Upload-Protocol: multipart\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(&body).await.unwrap();
+        read_response(&mut stream).await
+    };
+
+    let denied = send_upload("before.txt").await;
+    assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+
+    let update = serde_json::to_vec(&json!({
+        "rules": {"files": [{
+            "name": "storage.rules",
+            "content": "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }"
+        }]}
+    }))
+    .unwrap();
+    let head = format!(
+        "PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        update.len()
+    );
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&update).await.unwrap();
+    let activated = read_response(&mut stream).await;
+    assert!(activated.starts_with("HTTP/1.1 200"), "{activated}");
+    assert!(
+        activated.contains("{\"message\":\"Rules updated successfully\"}"),
+        "{activated}"
+    );
+
+    let allowed = send_upload("after.txt").await;
+    assert!(allowed.starts_with("HTTP/1.1 200"), "{allowed}");
+    server.abort();
 }
 
 #[tokio::test]

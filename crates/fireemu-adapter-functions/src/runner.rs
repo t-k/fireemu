@@ -8,8 +8,13 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+#[cfg(not(windows))]
+use tokio::process::Child;
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex as AsyncMutex};
+
+#[cfg(windows)]
+use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommandWrap};
 
 use crate::protocol::{read_frame, write_frame};
 
@@ -85,9 +90,7 @@ pub struct SpawnSpec {
 
 /// A running runner.
 pub struct Runner {
-    child: AsyncMutex<Option<Child>>,
-    #[cfg(windows)]
-    job: Mutex<Option<win32job::Job>>,
+    child: AsyncMutex<Option<RunnerChild>>,
     stdin: AsyncMutex<Option<ChildStdin>>,
     hello: Hello,
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
@@ -96,18 +99,30 @@ pub struct Runner {
     alive: Arc<AtomicBool>,
 }
 
+#[cfg(not(windows))]
+type RunnerChild = Child;
+
 #[cfg(windows)]
-fn create_runner_job(child: &Child) -> Result<win32job::Job, String> {
-    let mut limits = win32job::ExtendedLimitInfo::new();
-    limits.limit_kill_on_job_close();
-    let job = win32job::Job::create_with_limit_info(&limits)
-        .map_err(|error| format!("functions runner: cannot create Windows Job Object: {error}"))?;
-    let handle = child
-        .raw_handle()
-        .ok_or_else(|| "functions runner: child process handle is unavailable".to_owned())?;
-    job.assign_process(handle as isize)
-        .map_err(|error| format!("functions runner: cannot join Windows Job Object: {error}"))?;
-    Ok(job)
+type RunnerChild = Box<dyn TokioChildWrapper>;
+
+#[cfg(not(windows))]
+async fn wait_child(child: &mut RunnerChild) -> std::io::Result<std::process::ExitStatus> {
+    child.wait().await
+}
+
+#[cfg(windows)]
+async fn wait_child(child: &mut RunnerChild) -> std::io::Result<std::process::ExitStatus> {
+    Box::into_pin(child.wait()).await
+}
+
+#[cfg(not(windows))]
+async fn kill_child(child: &mut RunnerChild) -> std::io::Result<()> {
+    child.kill().await
+}
+
+#[cfg(windows)]
+async fn kill_child(child: &mut RunnerChild) -> std::io::Result<()> {
+    Box::into_pin(child.kill()).await
 }
 
 /// The environment of a runner child: the inherited allowlist, then `extra` (emulator
@@ -166,10 +181,6 @@ impl Runner {
     /// into the reset state). Waiters learn it through the reader task's exit.
     pub fn kill_now(&self) {
         self.alive.store(false, Ordering::SeqCst);
-        #[cfg(windows)]
-        if let Ok(mut job) = self.job.try_lock() {
-            job.take();
-        }
         if let Ok(mut slot) = self.child.try_lock() {
             if let Some(mut child) = slot.take() {
                 let _ = child.start_kill();
@@ -178,7 +189,7 @@ impl Runner {
                 // Reaped in the background: a killed runner must not linger as a zombie.
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
-                        let _ = child.wait().await;
+                        let _ = wait_child(&mut child).await;
                     });
                 }
             }
@@ -216,27 +227,46 @@ impl Runner {
         for (k, v) in child_env(env) {
             cmd.env(k, v);
         }
+        #[cfg(not(windows))]
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?;
         #[cfg(windows)]
-        let job = match create_runner_job(&child) {
-            Ok(job) => job,
-            Err(error) => {
-                let _ = child.kill().await;
-                return Err(error);
-            }
+        let mut child = {
+            let mut wrapped = TokioCommandWrap::from(cmd);
+            wrapped.wrap(JobObject).wrap(KillOnDrop);
+            wrapped
+                .spawn()
+                .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?
         };
+        #[cfg(not(windows))]
         let stdin = child
             .stdin
             .take()
             .ok_or_else(|| "functions runner: no stdin".to_owned())?;
+        #[cfg(windows)]
+        let stdin = child
+            .stdin()
+            .take()
+            .ok_or_else(|| "functions runner: no stdin".to_owned())?;
+        #[cfg(not(windows))]
         let stdout = child
             .stdout
             .take()
             .ok_or_else(|| "functions runner: no stdout".to_owned())?;
+        #[cfg(windows)]
+        let stdout = child
+            .stdout()
+            .take()
+            .ok_or_else(|| "functions runner: no stdout".to_owned())?;
+        #[cfg(not(windows))]
         let stderr = child
             .stderr
+            .take()
+            .ok_or_else(|| "functions runner: no stderr".to_owned())?;
+        #[cfg(windows)]
+        let stderr = child
+            .stderr()
             .take()
             .ok_or_else(|| "functions runner: no stderr".to_owned())?;
         // The codebase, when the command names one, so a multi-codebase project can tell
@@ -370,13 +400,13 @@ impl Runner {
             Ok(Err(_)) => {
                 #[cfg(unix)]
                 kill_process_group(child.id());
-                let _ = child.kill().await;
+                let _ = kill_child(&mut child).await;
                 return Err("functions runner exited before its hello".to_owned());
             }
             Err(_) => {
                 #[cfg(unix)]
                 kill_process_group(child.id());
-                let _ = child.kill().await;
+                let _ = kill_child(&mut child).await;
                 return Err(format!(
                     "functions runner sent no hello within {}s",
                     hello_timeout.as_secs()
@@ -385,8 +415,6 @@ impl Runner {
         };
         Ok(Self {
             child: AsyncMutex::new(Some(child)),
-            #[cfg(windows)]
-            job: Mutex::new(Some(job)),
             stdin: AsyncMutex::new(Some(stdin)),
             hello,
             waiters,
@@ -500,18 +528,14 @@ impl Runner {
             .await
             .ok()
             .and_then(|mut slot| slot.take());
-        #[cfg(windows)]
-        if let Ok(mut job) = self.job.lock() {
-            job.take();
-        }
         if let Some(mut child) = child {
             #[cfg(unix)]
             let pid = child.id();
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
-            let _ = child.kill().await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
+            let _ = kill_child(&mut child).await;
             #[cfg(unix)]
             kill_process_group(pid);
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
         }
         eprintln!("{} stopped", self.label);
     }

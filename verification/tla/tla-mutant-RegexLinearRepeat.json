@@ -7,12 +7,15 @@
   "properties": [
     "TypeOK",
     "AtomicProgressDoesNotIncreaseDepth",
-    "MatchedImpliesEveryCharacterAccepted",
     "ForbiddenCharacterNeverMatches",
+    "MatchedImpliesEveryCharacterAccepted",
     "WorkIsCharged",
+    "EveryAtomicBranchProbeIsCharged",
+    "ExhaustionStartsOnlyFromRunning",
     "BudgetExhaustionNeverMatches",
     "NonAtomicFallsBack",
     "AtomicConsumeAdvancesOneChargedCharacter",
+    "AtomicProbeMissAdvancesOneChargedProbe",
     "AtomicRejectIsOneChargedBoundedProbe",
     "FallbackAdvancesOneChargedFrame",
     "ExhaustionRequiresABudgetBoundary"

@@ -485,7 +485,7 @@
     },
     {
       "id": "INV-RULES-005",
-      "statement": "A repeated capture-free alternative whose branches each consume one character advances at constant match depth, charges every branch probe, rejects forbidden characters and never turns budget exhaustion into allow.",
+      "statement": "A repeated capture-free alternative whose branches each consume one character advances at constant match depth independent of subject length.",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "implemented",
@@ -499,6 +499,40 @@
           "crates/fireemu-core-rules/tests/regex.rs",
           "crates/fireemu-core-rules/tests/eval.rs",
           "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "verification/property/tests/rules.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-RULES-006",
+      "statement": "Every attempted branch of an iterated capture-free one-character alternative is charged to the regular expression step budget, including failed branches before the selected branch.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "RegexLinearRepeat.tla::EveryAtomicBranchProbeIsCharged",
+        "mutation": [
+          "M-TLA-RULES-REGEX-LINEAR-006"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/regex.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-RULES-007",
+      "statement": "An iterated capture-free one-character alternative never matches a character rejected by every branch.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "RegexLinearRepeat.tla::ForbiddenCharacterNeverMatches",
+        "property": "prop_rules_regex_linear_control_filter_matches_the_character_predicate",
+        "mutation": [
+          "M-TLA-RULES-REGEX-LINEAR-002"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/regex.rs",
           "verification/property/tests/rules.rs"
         ]
       }

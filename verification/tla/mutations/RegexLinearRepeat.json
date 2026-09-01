@@ -12,9 +12,9 @@
     {
       "id": "M-TLA-RULES-REGEX-LINEAR-002",
       "property": "ForbiddenCharacterNeverMatches",
-      "operator": "consume-a-forbidden-character",
-      "from": "/\\ steps < StepMaximum\n    /\\ currentAccepted\n    /\\ position' = position + 1",
-      "to": "/\\ steps < StepMaximum\n    /\\ TRUE\n    /\\ position' = position + 1"
+      "operator": "accept-a-forbidden-character",
+      "from": "/\\ acceptedPrefix' = FALSE\n    /\\ outcome' = \"NotMatched\"\n    /\\ lastAction' = \"AtomicReject\"",
+      "to": "/\\ acceptedPrefix' = FALSE\n    /\\ outcome' = \"Matched\"\n    /\\ lastAction' = \"AtomicReject\""
     },
     {
       "id": "M-TLA-RULES-REGEX-LINEAR-003",
@@ -34,8 +34,15 @@
       "id": "M-TLA-RULES-REGEX-LINEAR-005",
       "property": "BudgetExhaustionNeverMatches",
       "operator": "turn-exhaustion-into-a-match",
-      "from": "Exhaust ==\n    /\\ outcome = \"Running\"\n    /\\ steps = StepMaximum \\/ depth = DepthMaximum\n    /\\ outcome' = \"Exhausted\"",
-      "to": "Exhaust ==\n    /\\ outcome = \"Running\"\n    /\\ steps = StepMaximum \\/ depth = DepthMaximum\n    /\\ outcome' = \"Matched\""
+      "from": "Exhaust ==\n    /\\ outcome = \"Running\"\n    /\\ steps = StepMaximum \\/ depth = DepthMaximum\n    /\\ exhaustSourceOutcome' = outcome\n    /\\ outcome' = \"Exhausted\"",
+      "to": "Exhaust ==\n    /\\ outcome = \"Running\"\n    /\\ steps = StepMaximum \\/ depth = DepthMaximum\n    /\\ exhaustSourceOutcome' = outcome\n    /\\ outcome' = \"Matched\""
+    },
+    {
+      "id": "M-TLA-RULES-REGEX-LINEAR-006",
+      "property": "EveryAtomicBranchProbeIsCharged",
+      "operator": "omit-failed-alternative-probe-charge",
+      "from": "/\\ steps' = steps + 1\n    /\\ attemptedProbes' = attemptedProbes + 1\n    /\\ chargedProbes' = chargedProbes + 1\n    /\\ probesForCharacter' = probesForCharacter + 1\n    /\\ probe' = probe + 1",
+      "to": "/\\ steps' = steps\n    /\\ attemptedProbes' = attemptedProbes + 1\n    /\\ chargedProbes' = chargedProbes\n    /\\ probesForCharacter' = probesForCharacter + 1\n    /\\ probe' = probe + 1"
     }
   ]
 }

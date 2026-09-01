@@ -1,15 +1,57 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "model": "EventDelivery",
+  "spec": "specs/EventDelivery.qnt",
+  "main": "EventDeliveryProof",
+  "config": "specs/tlc-config.json",
+  "mutationManifest": "mutations/EventDelivery.json",
   "tools": {
     "quint": "0.32.0",
     "quintConnect": "0.1.2",
     "tlc": "2.19 of 08 August 2024",
     "backend": "tlc"
   },
+  "bounds": {
+    "Events": "{e1,e2}",
+    "MaxAttempts": "3",
+    "MaxEpoch": "1"
+  },
+  "boundInputs": [
+    ".github/workflows/ci.yml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/fireemu-core-events/Cargo.toml",
+    "crates/fireemu-core-events/src/event.rs",
+    "crates/fireemu-core-events/src/retry.rs",
+    "crates/fireemu-core-events/src/state.rs",
+    "crates/fireemu-core-types/Cargo.toml",
+    "crates/fireemu-core-types/src/ids.rs",
+    "crates/fireemu-core-types/src/time.rs",
+    "verification/quint/Cargo.toml",
+    "verification/quint/README.md",
+    "verification/quint/bin/process-group",
+    "verification/quint/bin/quint",
+    "verification/quint/mutations/EventDelivery.json",
+    "verification/quint/package.json",
+    "verification/quint/pnpm-lock.yaml",
+    "verification/quint/run-pilot.sh",
+    "verification/quint/specs/EventDelivery.qnt",
+    "verification/quint/specs/tlc-config.json",
+    "verification/quint/src/event_delivery.rs",
+    "verification/quint/src/evidence.rs",
+    "verification/quint/src/lib.rs",
+    "verification/quint/src/main.rs",
+    "verification/quint/src/model.rs",
+    "verification/quint/src/process.rs",
+    "verification/quint/tests/cli_contract.rs",
+    "verification/quint/tests/event_delivery_connect.rs",
+    "verification/quint/tests/event_delivery_evidence.rs",
+    "verification/quint/tests/evidence_contract.rs",
+    "verification/quint/tests/model_registry.rs"
+  ],
   "digests": {
     ".github/workflows/ci.yml": "e813033b9f67c87d9ce61a9295ce4594573fbe06a8be170c1e94499be7e96a08",
-    "Cargo.lock": "a953223c918ab7ea9f532f37e06ba8d0761d405ba5f7d763aa6e650788164bae",
+    "Cargo.lock": "973085d41b1d859f6c78f599a244746b7f66d4c4c054820bbc41f0cb4f3b279f",
     "Cargo.toml": "ec24bf216c16dfceacefc39dcf386ae21b7b1a2209dd9f5837814a5e2ba0feb3",
     "crates/fireemu-core-events/Cargo.toml": "f4a7f9291d54fba70779c03ada2ba585cdaf72b2a2da12a5d531196d081b6b4d",
     "crates/fireemu-core-events/src/event.rs": "f5fb898db805daa69155c20da7c2d16d4254dcdc538138b20f63c81d77942c59",
@@ -29,14 +71,15 @@
     "verification/quint/specs/EventDelivery.qnt": "72df70c59770ebc8340fc573be32e8e6918e60a9807fc48d94ad3f9b3eea9c15",
     "verification/quint/specs/tlc-config.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
     "verification/quint/src/event_delivery.rs": "57eb1334fc623aa8d306883eb3ec89c17c013752329bf66d3c727cfe2b34b351",
-    "verification/quint/src/evidence.rs": "b66cb5dfb4c9a0a48db2a7dd3cd74c1a6ad4f06188815d33dc490fbec4774e59",
+    "verification/quint/src/evidence.rs": "206166ece32f6241d35918f447f05203aac72efc280f7da6c6001644de508307",
     "verification/quint/src/lib.rs": "c614b0e6c62130090ceccfa19a453723ea312199acf1bfc26bfe45fa88257b8d",
-    "verification/quint/src/main.rs": "92c8c8e2426018d31116983c0c64dc6ae80b78f01eed9dbec304a9504dac268a",
-    "verification/quint/src/model.rs": "5e7b2bbe3b11d8cb50af0e2abbe4f7bda56a9597130f39fba66e9518f5f2b284",
-    "verification/quint/src/process.rs": "6705f7f21f6dab53b0b469bd7e05864d9d14b7417ecc6e0b08bb0395a6610ca2",
+    "verification/quint/src/main.rs": "daa7c3ace8c42b14e73b2d876d16bf53a25068b923fe9642a1ca843d8d600537",
+    "verification/quint/src/model.rs": "72197d5ccd3544d37ff8ced57f4547165c90410f7ccd2bd5144684bbcd1591a2",
+    "verification/quint/src/process.rs": "d736ff91da8904ca9562b819cdc4ede1400a17733550877382b9d566b230611e",
     "verification/quint/tests/cli_contract.rs": "4a9318bec11d4b243b1b5a93975d54a0eea0b5ae5adb5b39ba65675bd548f60f",
+    "verification/quint/tests/evidence_contract.rs": "4832f9d4bc4a7fb297ba679454294dc53dfe87ecde0300b0363487618751d631",
     "verification/quint/tests/event_delivery_connect.rs": "6dc21810bf9e6f7dc85d502ff41c7eb2e6b0b811107b275cd536662c23ee4820",
-    "verification/quint/tests/event_delivery_evidence.rs": "579ef15d96c65e52d4baa5c07857d3a6251cdcec2237199e30b05b06e4bf8634",
+    "verification/quint/tests/event_delivery_evidence.rs": "3f9323ad98edc54a90c4add45ba210744ff6a1ab02fd4f328080ebe82c4b6ab7",
     "verification/quint/tests/model_registry.rs": "5b45606854388ad3dc4ded732cd7fec986928f7c7c34051020e783dd08ee6a84"
   },
   "invariants": [
@@ -55,31 +98,31 @@
     {
       "id": "M-TLA-EVENT-TERMINAL-001",
       "property": "NoTerminalRegression",
-      "outcome": "KilledSafety",
+      "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
       "id": "M-TLA-EVENT-LIVENESS-001",
       "property": "EventEventuallyTerminates",
-      "outcome": "KilledTemporal",
+      "outcome": "killed_temporal",
       "diagnostic": "TLC temporal property violation"
     },
     {
       "id": "M-TLA-EVENT-LEGAL-001",
       "property": "LegalStateTransitions",
-      "outcome": "KilledSafety",
+      "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
       "id": "M-TLA-EVENT-ATTEMPTS-001",
       "property": "AttemptsChangeOnlyOnStart",
-      "outcome": "KilledSafety",
+      "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
       "id": "M-TLA-EVENT-STALE-001",
       "property": "StaleDiscardRequiresOlderEpoch",
-      "outcome": "KilledSafety",
+      "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
   ],

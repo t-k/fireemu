@@ -125,6 +125,30 @@ impl Fixture {
             &evidence.to_string(),
         );
     }
+
+    fn copy_event_delivery_quint_authority(&self) {
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let evidence_relative = "verification/quint/evidence/EventDelivery.json";
+        let evidence_text =
+            fs::read_to_string(source_root.join(evidence_relative)).expect("source Quint evidence");
+        let evidence: Value = serde_json::from_str(&evidence_text).expect("Quint evidence JSON");
+        for relative in evidence["boundInputs"]
+            .as_array()
+            .expect("bound Quint inputs")
+            .iter()
+            .map(|value| value.as_str().expect("bound input path"))
+        {
+            let contents = fs::read(source_root.join(relative)).expect("read bound Quint input");
+            let destination = self.root.join(relative);
+            fs::create_dir_all(destination.parent().expect("bound input parent"))
+                .expect("create bound input parent");
+            fs::write(destination, contents).expect("copy bound Quint input");
+        }
+        self.write(evidence_relative, &evidence_text);
+    }
 }
 
 impl Drop for Fixture {
@@ -598,6 +622,185 @@ fn tla_backed_requirements_need_fresh_killed_property_mutations() {
                 "verification/tla/Model.cfg",
                 "INVARIANT Safe\n\\* changed\n",
             );
+        }
+
+        let report = check(&fixture.root);
+        match case.expected {
+            None => assert!(
+                report.problems.is_empty(),
+                "case {}: {:?}",
+                case.name,
+                report.problems
+            ),
+            Some(expected) => assert!(
+                report
+                    .problems
+                    .iter()
+                    .any(|problem| problem.contains(expected)),
+                "case {}: expected {expected:?}, got {:?}",
+                case.name,
+                report.problems
+            ),
+        }
+    }
+}
+
+#[test]
+fn quint_backed_requirements_need_safe_fresh_killed_property_evidence() {
+    #[derive(Clone, Copy)]
+    enum Change {
+        None,
+        MissingSpec,
+        MissingEvidence,
+        StaleSpec,
+        StaleManifest,
+        Survived,
+        PropertyMismatch,
+        UnknownEvidenceField,
+    }
+
+    struct EvidenceCase {
+        name: &'static str,
+        reference: &'static str,
+        mutation_ids: &'static [&'static str],
+        change: Change,
+        expected: Option<&'static str>,
+    }
+
+    let cases = [
+        EvidenceCase {
+            name: "quint-evidence-valid",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::None,
+            expected: None,
+        },
+        EvidenceCase {
+            name: "quint-unsafe-path",
+            reference: "../EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::None,
+            expected: Some("quint artifact must be Model.qnt::Property"),
+        },
+        EvidenceCase {
+            name: "quint-property-unregistered",
+            reference: "EventDelivery.qnt::UnknownProperty",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::None,
+            expected: Some("does not register UnknownProperty"),
+        },
+        EvidenceCase {
+            name: "quint-spec-missing",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::MissingSpec,
+            expected: Some("Quint spec EventDelivery.qnt is missing"),
+        },
+        EvidenceCase {
+            name: "quint-evidence-missing",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::MissingEvidence,
+            expected: Some("Quint evidence for EventDelivery is invalid"),
+        },
+        EvidenceCase {
+            name: "quint-spec-stale",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::StaleSpec,
+            expected: Some("digest mismatch for verification/quint/specs/EventDelivery.qnt"),
+        },
+        EvidenceCase {
+            name: "quint-manifest-stale",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::StaleManifest,
+            expected: Some("mutation manifest"),
+        },
+        EvidenceCase {
+            name: "quint-mutant-survived",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::Survived,
+            expected: Some("is not killed"),
+        },
+        EvidenceCase {
+            name: "quint-property-mismatch",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::PropertyMismatch,
+            expected: Some("mutation evidence mismatch"),
+        },
+        EvidenceCase {
+            name: "quint-unknown-evidence-field",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            change: Change::UnknownEvidenceField,
+            expected: Some("unknown field"),
+        },
+        EvidenceCase {
+            name: "quint-unreferenced-kill",
+            reference: "EventDelivery.qnt::LegalStateTransitions",
+            mutation_ids: &["M-FIX-001"],
+            change: Change::None,
+            expected: Some(
+                "no referenced killed Quint mutation for property LegalStateTransitions",
+            ),
+        },
+    ];
+
+    for case in cases {
+        let fixture = Fixture::new(case.name);
+        fixture.copy_event_delivery_quint_authority();
+        let requirement = json!({
+            "id": "FIX-001",
+            "statement": "fixture statement",
+            "criticality": "critical",
+            "owner": "fixtures",
+            "status": "implemented",
+            "artifacts": {
+                "quint": case.reference,
+                "mutation": case.mutation_ids,
+                "integration": ["verification/quint/tests/event_delivery_connect.rs"],
+            },
+        });
+        fixture.write_ledger_only(&requirement);
+
+        let spec = fixture
+            .root
+            .join("verification/quint/specs/EventDelivery.qnt");
+        let manifest = fixture
+            .root
+            .join("verification/quint/mutations/EventDelivery.json");
+        let evidence_path = fixture
+            .root
+            .join("verification/quint/evidence/EventDelivery.json");
+        match case.change {
+            Change::None => {}
+            Change::MissingSpec => fs::remove_file(spec).expect("remove owned spec"),
+            Change::MissingEvidence => {
+                fs::remove_file(evidence_path).expect("remove owned evidence");
+            }
+            Change::StaleSpec => fs::write(spec, "// stale\n").expect("change owned spec"),
+            Change::StaleManifest => {
+                fs::write(manifest, "{}\n").expect("change owned manifest");
+            }
+            Change::Survived | Change::PropertyMismatch | Change::UnknownEvidenceField => {
+                let text = fs::read_to_string(&evidence_path).expect("read owned evidence");
+                let mut evidence: Value = serde_json::from_str(&text).expect("evidence JSON");
+                match case.change {
+                    Change::Survived => evidence["mutations"][2]["outcome"] = "survived".into(),
+                    Change::PropertyMismatch => {
+                        evidence["mutations"][2]["property"] = "AttemptsBounded".into();
+                    }
+                    Change::UnknownEvidenceField => evidence["unknown"] = true.into(),
+                    _ => unreachable!(),
+                }
+                fixture.write(
+                    "verification/quint/evidence/EventDelivery.json",
+                    &evidence.to_string(),
+                );
+            }
         }
 
         let report = check(&fixture.root);

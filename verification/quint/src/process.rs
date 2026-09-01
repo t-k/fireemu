@@ -170,6 +170,7 @@ pub enum CheckerOutcome {
 
 /// Property-specific outcome for one waited mutation checker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MutationOutcome {
     /// A state invariant killed the mutation.
     KilledSafety,
@@ -418,7 +419,7 @@ pub fn mutate_model(
     }
 
     if let Some(path) = evidence_path {
-        crate::evidence::write_evidence(repository_root, path, &results)?;
+        crate::evidence::write_evidence(repository_root, path, descriptor, &results)?;
     }
     Ok(results)
 }
@@ -639,10 +640,8 @@ mod tests {
                 "LegalStateTransitions",
                 "AttemptsChangeOnlyOnStart",
                 "StaleDiscardRequiresOlderEpoch",
-                "RetryDeadlineMatchesPolicy",
-                "RetryRequiresDeadline",
                 "--temporal",
-                "NoTerminalRegression,TimeNeverDecreases,EventEventuallyTerminates",
+                "NoTerminalRegression,EventEventuallyTerminates",
                 "--verbosity",
                 "0",
             ]

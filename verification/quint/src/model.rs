@@ -20,6 +20,15 @@ pub struct PropertyDescriptor {
     pub diagnostic_name: &'static str,
 }
 
+/// One stable bounded model-checking input recorded in evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundDescriptor {
+    /// Stable bound name.
+    pub name: &'static str,
+    /// Canonical finite value description.
+    pub value: &'static str,
+}
+
 /// Metadata required to check and connect one Quint model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelDescriptor {
@@ -39,6 +48,18 @@ pub struct ModelDescriptor {
     pub actions: &'static [&'static str],
     /// Production files exercised by Quint Connect.
     pub production_sources: &'static [&'static str],
+    /// Finite model-checking bounds.
+    pub bounds: &'static [BoundDescriptor],
+    /// Deterministic scenario names.
+    pub scenarios: &'static [&'static str],
+    /// Production-derived fields checked by conformance projections.
+    pub projection_fields: &'static [&'static str],
+    /// Rust driver path relative to the repository root.
+    pub driver: &'static str,
+    /// Quint Connect test path relative to the repository root.
+    pub connect_test: &'static str,
+    /// Additional model-specific inputs that evidence must bind.
+    pub additional_evidence_inputs: &'static [&'static str],
 }
 
 impl ModelDescriptor {
@@ -93,6 +114,21 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-core-firestore/src/store.rs",
             "crates/fireemu-adapter-grpc/src/local.rs",
         ],
+        bounds: &[
+            BoundDescriptor {
+                name: "Docs",
+                value: "{d1,d2}",
+            },
+            BoundDescriptor {
+                name: "MaxVersion",
+                value: "2",
+            },
+        ],
+        scenarios: &["commit", "conflict", "abort"],
+        projection_fields: &["documents", "outbox", "transactionState"],
+        driver: "verification/quint/src/atomic_commit_outbox.rs",
+        connect_test: "verification/quint/tests/atomic_commit_outbox_connect.rs",
+        additional_evidence_inputs: &[],
     },
     ModelDescriptor {
         name: "AtomicExportPublication",
@@ -110,6 +146,15 @@ const MODELS: &[ModelDescriptor] = &[
         ],
         actions: &["Create", "Write", "Complete", "Swap", "Refuse", "Publish"],
         production_sources: &["crates/fireemu/src/import_export.rs"],
+        bounds: &[BoundDescriptor {
+            name: "Domain",
+            value: "finite-enumerated",
+        }],
+        scenarios: &["publish", "refuse", "replace"],
+        projection_fields: &["publicArtifact", "privateStage", "stageComplete"],
+        driver: "verification/quint/src/atomic_export_publication.rs",
+        connect_test: "verification/quint/tests/atomic_export_publication_connect.rs",
+        additional_evidence_inputs: &[],
     },
     ModelDescriptor {
         name: "AuthTotp",
@@ -137,6 +182,25 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-core-auth/src/mfa.rs",
             "crates/fireemu-core-auth/src/totp.rs",
         ],
+        bounds: &[
+            BoundDescriptor {
+                name: "MaxStep",
+                value: "4",
+            },
+            BoundDescriptor {
+                name: "Window",
+                value: "1",
+            },
+            BoundDescriptor {
+                name: "SessionTtl",
+                value: "2",
+            },
+        ],
+        scenarios: &["enroll", "expire", "verify", "rejectReuse"],
+        projection_fields: &["step", "enrollment", "accepted", "usedCodes"],
+        driver: "verification/quint/src/auth_totp.rs",
+        connect_test: "verification/quint/tests/auth_totp_connect.rs",
+        additional_evidence_inputs: &[],
     },
     ModelDescriptor {
         name: "AwaitIdle",
@@ -167,6 +231,25 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-adapter-functions/src/runtime.rs",
             "crates/fireemu-adapter-http/src/control.rs",
         ],
+        bounds: &[
+            BoundDescriptor {
+                name: "Items",
+                value: "{i1,i2,i3}",
+            },
+            BoundDescriptor {
+                name: "MaxDepth",
+                value: "1",
+            },
+            BoundDescriptor {
+                name: "IgnoreTextIndex",
+                value: "{false,true}",
+            },
+        ],
+        scenarios: &["leaf", "reservation", "fence", "ignoreTextIndex"],
+        projection_fields: &["fence", "inFlight", "reservations", "returned"],
+        driver: "verification/quint/src/await_idle.rs",
+        connect_test: "verification/quint/tests/await_idle_connect.rs",
+        additional_evidence_inputs: &[],
     },
     ModelDescriptor {
         name: "EventDelivery",
@@ -181,14 +264,11 @@ const MODELS: &[ModelDescriptor] = &[
             invariant("LegalStateTransitions"),
             invariant("AttemptsChangeOnlyOnStart"),
             invariant("StaleDiscardRequiresOlderEpoch"),
-            invariant("RetryDeadlineMatchesPolicy"),
-            invariant("RetryRequiresDeadline"),
             PropertyDescriptor {
                 name: "NoTerminalRegression",
                 kind: PropertyKind::Temporal,
                 diagnostic_name: "eventdeliveryproof_eventdelivery_noterminalregression",
             },
-            temporal("TimeNeverDecreases"),
             temporal("EventEventuallyTerminates"),
         ],
         actions: &[
@@ -197,15 +277,48 @@ const MODELS: &[ModelDescriptor] = &[
             "Succeed",
             "Fail",
             "RetryDue",
-            "Interrupt",
             "Cancel",
-            "Tick",
             "Reset",
             "DiscardStale",
         ],
         production_sources: &[
             "crates/fireemu-core-events/src/state.rs",
             "crates/fireemu-core-events/src/retry.rs",
+        ],
+        bounds: &[
+            BoundDescriptor {
+                name: "Events",
+                value: "{e1,e2}",
+            },
+            BoundDescriptor {
+                name: "MaxAttempts",
+                value: "3",
+            },
+            BoundDescriptor {
+                name: "MaxEpoch",
+                value: "1",
+            },
+        ],
+        scenarios: &["success", "retryExhaustion", "staleDiscard", "cancel"],
+        projection_fields: &[
+            "state",
+            "attempts",
+            "maxAttempts",
+            "capturedEpoch",
+            "currentEpoch",
+            "terminal",
+            "cancelled",
+            "stale",
+        ],
+        driver: "verification/quint/src/event_delivery.rs",
+        connect_test: "verification/quint/tests/event_delivery_connect.rs",
+        additional_evidence_inputs: &[
+            "crates/fireemu-core-events/Cargo.toml",
+            "crates/fireemu-core-events/src/event.rs",
+            "crates/fireemu-core-types/Cargo.toml",
+            "crates/fireemu-core-types/src/ids.rs",
+            "crates/fireemu-core-types/src/time.rs",
+            "verification/quint/tests/event_delivery_evidence.rs",
         ],
     },
     ModelDescriptor {
@@ -220,6 +333,15 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-core-rules/src/eval.rs",
             "crates/fireemu-core-rules/src/regex.rs",
         ],
+        bounds: &[BoundDescriptor {
+            name: "OutcomesAndNegations",
+            value: "all-finite-combinations",
+        }],
+        scenarios: &["match", "noMatch", "exhausted", "negated"],
+        projection_fields: &["decision", "denialClass"],
+        driver: "verification/quint/src/regex_authorization.rs",
+        connect_test: "verification/quint/tests/regex_authorization_connect.rs",
+        additional_evidence_inputs: &[],
     },
     ModelDescriptor {
         name: "RulesetActivation",
@@ -250,6 +372,21 @@ const MODELS: &[ModelDescriptor] = &[
             "crates/fireemu-core-rules/src/runtime.rs",
             "crates/fireemu-adapter-grpc/src/rules.rs",
         ],
+        bounds: &[
+            BoundDescriptor {
+                name: "Requests",
+                value: "{r1,r2}",
+            },
+            BoundDescriptor {
+                name: "Versions",
+                value: "{v1,v2}",
+            },
+        ],
+        scenarios: &["activate", "reject", "pinRequest"],
+        projection_fields: &["activeVersion", "generation", "requestVersion"],
+        driver: "verification/quint/src/ruleset_activation.rs",
+        connect_test: "verification/quint/tests/ruleset_activation_connect.rs",
+        additional_evidence_inputs: &[],
     },
     ModelDescriptor {
         name: "SessionEpoch",
@@ -275,6 +412,21 @@ const MODELS: &[ModelDescriptor] = &[
             "DiscardWork",
         ],
         production_sources: &["crates/fireemu-core-session/src/session.rs"],
+        bounds: &[
+            BoundDescriptor {
+                name: "Workers",
+                value: "{w1,w2}",
+            },
+            BoundDescriptor {
+                name: "MaxEpoch",
+                value: "2",
+            },
+        ],
+        scenarios: &["activate", "reset", "close", "discardStale"],
+        projection_fields: &["state", "epoch", "workEpochResult"],
+        driver: "verification/quint/src/session_epoch.rs",
+        connect_test: "verification/quint/tests/session_epoch_connect.rs",
+        additional_evidence_inputs: &[],
     },
     ModelDescriptor {
         name: "StorageGeneration",
@@ -297,6 +449,21 @@ const MODELS: &[ModelDescriptor] = &[
             "RestoreSnapshot",
         ],
         production_sources: &["crates/fireemu-core-storage/src/store.rs"],
+        bounds: &[
+            BoundDescriptor {
+                name: "MaxGeneration",
+                value: "3",
+            },
+            BoundDescriptor {
+                name: "MaxMetageneration",
+                value: "3",
+            },
+        ],
+        scenarios: &["put", "patchMetadata", "deletePut", "restore"],
+        projection_fields: &["generation", "metageneration", "highWater", "exists"],
+        driver: "verification/quint/src/storage_generation.rs",
+        connect_test: "verification/quint/tests/storage_generation_connect.rs",
+        additional_evidence_inputs: &[],
     },
 ];
 

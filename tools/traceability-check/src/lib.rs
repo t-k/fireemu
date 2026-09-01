@@ -4,7 +4,7 @@
 //!
 //! - `verification/mutants/catalog.json` has unique IDs (single source of truth, spec 27.5);
 //! - `verification/loom/scenarios.json` has unique names (spec 23.3);
-//! - every requirement references only defined mutant IDs, Loom scenarios, TLA+ modules and
+//! - every requirement references only defined mutant IDs, Loom scenarios, TLA+/Quint models and
 //!   integration test files;
 //! - every critical mutant is referenced by at least one critical requirement;
 //! - every critical requirement with status `implemented` has a dynamic test, a formal or
@@ -12,8 +12,8 @@
 //! - every artifact of a requirement with status `implemented` or `partial` resolves to a real
 //!   repository artifact: a `#[kani::proof]` function under `verification/kani`, a test function
 //!   under a `tests/` directory, a `fuzz/fuzz_targets/<name>.rs` file, an existing conformance
-//!   path, a Loom function under `verification/loom/src`, a property in the named TLA+ module,
-//!   or an existing integration test file.
+//!   path, a Loom function under `verification/loom/src`, a property in the named TLA+ or Quint
+//!   model, or an existing integration test file.
 //!
 //! An artifact that is planned but not written yet is written as `pending:<name>` (see
 //! `docs/verification-ledger.md`). A pending artifact is never resolved and never counts as
@@ -23,6 +23,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use fireemu_verification_quint::evidence::validate_evidence_file as validate_quint_evidence_file;
+use fireemu_verification_quint::model::{model as quint_model, ModelDescriptor};
 use serde::Deserialize;
 use tla_verification::{sha256_file, verify_evidence_with_jar_digest, TLA2TOOLS_1_8_0_SHA256};
 
@@ -86,6 +88,8 @@ struct Requirement {
 struct Artifacts {
     #[serde(default)]
     tla: Option<String>,
+    #[serde(default)]
+    quint: Option<String>,
     #[serde(default)]
     loom: Vec<String>,
     #[serde(default)]
@@ -184,6 +188,25 @@ fn safe_tla_reference(reference: &str) -> Option<(&str, &str)> {
         || !path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("tla"))
+        || !path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(is_tla_identifier)
+    {
+        return None;
+    }
+    Some((module, property))
+}
+
+fn safe_quint_reference(reference: &str) -> Option<(&str, &str)> {
+    let (module, property) = reference.split_once("::")?;
+    if property.contains("::") || !is_tla_identifier(property) {
+        return None;
+    }
+    let path = Path::new(module);
+    let file_name = path.file_name()?.to_str()?;
+    if file_name != module
+        || path.extension() != Some(std::ffi::OsStr::new("qnt"))
         || !path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -445,6 +468,7 @@ fn read_dir_sources(dir: &Path) -> String {
 #[allow(clippy::struct_excessive_bools)]
 struct Evidence {
     tla: bool,
+    quint: bool,
     loom: bool,
     kani: bool,
     property: bool,
@@ -552,6 +576,7 @@ pub fn check(root: &Path) -> Report {
         let mut have = Evidence::default();
         let mut unresolved_mutants = Vec::new();
         let mut resolved_tla = None;
+        let mut resolved_quint: Option<(&'static ModelDescriptor, &str)> = None;
 
         for m in &a.mutation {
             if mutant_ids.contains_key(m) {
@@ -635,7 +660,62 @@ pub fn check(root: &Path) -> Report {
             }
         }
 
-        let mut tla_mutant_ids = BTreeSet::new();
+        if let Some(quint) = &a.quint {
+            match artifact_ref(quint) {
+                ArtifactRef::Empty => {
+                    problems.push(format!("requirement {id}: empty quint artifact"));
+                }
+                ArtifactRef::Pending(name) => {
+                    report.pending.push(format!("{id}: quint {name}"));
+                }
+                ArtifactRef::Named(name) => match safe_quint_reference(name) {
+                    Some((module, property)) => {
+                        if resolve {
+                            let model_name = Path::new(module)
+                                .file_stem()
+                                .and_then(|stem| stem.to_str())
+                                .expect("safe Quint reference has a UTF-8 stem");
+                            match quint_model(model_name) {
+                                Ok(descriptor) if descriptor.property(property).is_ok() => {
+                                    let expected_module = Path::new(descriptor.spec)
+                                        .file_name()
+                                        .and_then(|file| file.to_str());
+                                    if expected_module != Some(module) {
+                                        problems.push(format!(
+                                            "requirement {id}: Quint registry path for {model_name} does not match {module}"
+                                        ));
+                                    } else if !root
+                                        .join("verification/quint/specs")
+                                        .join(module)
+                                        .is_file()
+                                    {
+                                        problems.push(format!(
+                                            "requirement {id}: Quint spec {module} is missing"
+                                        ));
+                                    } else {
+                                        have.quint = true;
+                                        resolved_quint = Some((descriptor, property));
+                                    }
+                                }
+                                Ok(_) => problems.push(format!(
+                                    "requirement {id}: Quint model {model_name} does not register {property}"
+                                )),
+                                Err(_) => problems.push(format!(
+                                    "requirement {id}: Quint model {model_name} is not registered"
+                                )),
+                            }
+                        } else {
+                            have.quint = true;
+                        }
+                    }
+                    None => problems.push(format!(
+                        "requirement {id}: quint artifact must be Model.qnt::Property"
+                    )),
+                },
+            }
+        }
+
+        let mut formal_mutant_ids = BTreeSet::new();
         if resolve {
             if let Some((module, property)) = resolved_tla {
                 let model = Path::new(module)
@@ -663,7 +743,7 @@ pub fn check(root: &Path) -> Report {
                     Ok(verified) => {
                         let mut matching_property_mutation = false;
                         for result in verified.results {
-                            tla_mutant_ids.insert(result.id.clone());
+                            formal_mutant_ids.insert(result.id.clone());
                             if a.mutation.contains(&result.id)
                                 && result.property == property
                                 && result.outcome.is_killed()
@@ -683,9 +763,40 @@ pub fn check(root: &Path) -> Report {
                     )),
                 }
             }
+
+            if let Some((descriptor, property)) = resolved_quint {
+                let quint_root = root.join("verification/quint");
+                let evidence_path = quint_root
+                    .join("evidence")
+                    .join(format!("{}.json", descriptor.name));
+                match validate_quint_evidence_file(root, &evidence_path, descriptor) {
+                    Ok(verified) => {
+                        let mut matching_property_mutation = false;
+                        for result in verified.mutations {
+                            formal_mutant_ids.insert(result.id.clone());
+                            if a.mutation.contains(&result.id)
+                                && result.property == property
+                                && result.outcome.is_killed()
+                            {
+                                matching_property_mutation = true;
+                                have.mutation = true;
+                            }
+                        }
+                        if !matching_property_mutation {
+                            problems.push(format!(
+                                "requirement {id}: no referenced killed Quint mutation for property {property}"
+                            ));
+                        }
+                    }
+                    Err(error) => problems.push(format!(
+                        "requirement {id}: Quint evidence for {} is invalid: {error}",
+                        descriptor.name
+                    )),
+                }
+            }
         }
         for mutation in unresolved_mutants {
-            if !tla_mutant_ids.contains(mutation) {
+            if !formal_mutant_ids.contains(mutation) {
                 problems.push(format!(
                     "requirement {id}: references undefined mutant {mutation}"
                 ));
@@ -804,7 +915,8 @@ pub fn check(root: &Path) -> Report {
 
         if r.criticality == "critical" && r.status == "implemented" {
             let dynamic = have.integration || have.property;
-            let formal = have.tla || have.kani || have.loom || have.property || have.fuzz;
+            let formal =
+                have.tla || have.quint || have.kani || have.loom || have.property || have.fuzz;
             let mutation = have.mutation || have.conformance;
             if !dynamic {
                 problems.push(format!(

@@ -12,7 +12,7 @@ use fireemu_verification_quint::process::{
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 30] = [
+const BOUND_INPUTS: [&str; 31] = [
     ".github/workflows/ci.yml",
     "Cargo.toml",
     "Cargo.lock",
@@ -40,6 +40,7 @@ const BOUND_INPUTS: [&str; 30] = [
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
     "verification/quint/tests/cli_contract.rs",
+    "verification/quint/tests/evidence_contract.rs",
     "verification/quint/tests/event_delivery_connect.rs",
     "verification/quint/tests/event_delivery_evidence.rs",
     "verification/quint/tests/model_registry.rs",
@@ -54,21 +55,23 @@ fn repository_root() -> PathBuf {
 }
 
 fn parse_manifest(json: &str) -> Result<MutationManifest, String> {
-    MutationManifest::parse(
-        json,
-        model("EventDelivery").expect("EventDelivery must remain registered"),
-    )
+    MutationManifest::parse(json, descriptor())
+}
+
+fn descriptor() -> &'static fireemu_verification_quint::model::ModelDescriptor {
+    model("EventDelivery").expect("EventDelivery must remain registered")
 }
 
 #[test]
 fn evidence_schema_rejects_missing_and_unknown_fields() {
-    assert!(validate_evidence_json("{}", None).is_err());
-    assert!(validate_evidence_json("{\"unknown\":true}", None).is_err());
+    assert!(validate_evidence_json("{}", descriptor(), None).is_err());
+    assert!(validate_evidence_json("{\"unknown\":true}", descriptor(), None).is_err());
 }
 
 #[test]
 fn checked_in_evidence_rejects_each_bound_input_tamper() {
-    validate_evidence_json(EVIDENCE, Some(&repository_root())).expect("checked-in evidence");
+    validate_evidence_json(EVIDENCE, descriptor(), Some(&repository_root()))
+        .expect("checked-in evidence");
 
     for relative in BOUND_INPUTS {
         let temporary = OwnedTestRepository::copy_bound_inputs().expect("copy bound inputs");
@@ -76,7 +79,7 @@ fn checked_in_evidence_rejects_each_bound_input_tamper() {
         let mut bytes = fs::read(&path).expect("read copied bound input");
         bytes.push(b'!');
         fs::write(&path, bytes).expect("tamper copied bound input");
-        let error = validate_evidence_json(EVIDENCE, Some(&temporary.path))
+        let error = validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path))
             .expect_err("tampered input must invalidate evidence");
         assert!(error.contains(relative), "{relative}: {error}");
         temporary.close().expect("remove owned test repository");
@@ -92,7 +95,7 @@ fn evidence_rejects_coverage_and_outcome_tampering() {
     changed_tool["tools"]["quint"] = "0.33.0".into();
     variants.push(changed_tool);
 
-    for outcome in ["Survived", "Timeout", "ToolError"] {
+    for outcome in ["survived", "timeout", "tool_error"] {
         let mut changed = baseline.clone();
         changed["mutations"][0]["outcome"] = outcome.into();
         variants.push(changed);
@@ -118,7 +121,7 @@ fn evidence_rejects_coverage_and_outcome_tampering() {
     for changed in variants {
         let json = serde_json::to_string(&changed).expect("serialize tampered evidence");
         assert!(
-            validate_evidence_json(&json, Some(&repository_root())).is_err(),
+            validate_evidence_json(&json, descriptor(), Some(&repository_root())).is_err(),
             "tampered evidence unexpectedly validated"
         );
     }

@@ -80,7 +80,7 @@ fn verify_evidence(arguments: &[String]) -> Result<(), String> {
             options.descriptor.name
         ))
     });
-    let validated = validate_evidence_file(&options.root, &evidence)?;
+    let validated = validate_evidence_file(&options.root, &evidence, options.descriptor)?;
     if validated.model != options.descriptor.name {
         return Err(format!(
             "evidence model {} does not match requested model {}",

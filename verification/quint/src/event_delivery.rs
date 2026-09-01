@@ -83,10 +83,45 @@ pub struct EventDeliveryState {
     pub stale: BTreeMap<String, bool>,
 }
 
+/// Test-only perturbation applied after extracting normal production state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum ProjectionFault {
+pub enum ProjectionFault {
+    /// No perturbation.
     #[default]
     None,
+    /// Change only the lifecycle map.
+    State,
+    /// Change only the attempt map.
+    Attempts,
+    /// Change only the maximum attempt count.
+    MaxAttempts,
+    /// Change only the captured-epoch map.
+    CapturedEpoch,
+    /// Change only the current epoch.
+    CurrentEpoch,
+    /// Change only the terminal map.
+    Terminal,
+    /// Change only the cancellation map.
+    Cancelled,
+    /// Change only the stale-discard map.
+    Stale,
+}
+
+impl ProjectionFault {
+    /// JSON field changed by this fault.
+    pub const fn field_name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::State => "state",
+            Self::Attempts => "attempts",
+            Self::MaxAttempts => "maxAttempts",
+            Self::CapturedEpoch => "capturedEpoch",
+            Self::CurrentEpoch => "currentEpoch",
+            Self::Terminal => "terminal",
+            Self::Cancelled => "cancelled",
+            Self::Stale => "stale",
+        }
+    }
 }
 
 /// Thin driver that dispatches Quint actions to real `EventRecord` operations.
@@ -137,6 +172,18 @@ impl EventDeliveryDriver {
     pub fn with_action_recorder(mut self, recorder: Arc<Mutex<BTreeSet<String>>>) -> Self {
         self.action_recorder = Some(recorder);
         self
+    }
+
+    /// Applies a projection-only fault for a negative conformance test.
+    #[must_use]
+    pub const fn with_projection_fault(mut self, fault: ProjectionFault) -> Self {
+        self.projection_fault = fault;
+        self
+    }
+
+    /// Replaces the projection-only fault without changing domain state.
+    pub fn set_projection_fault(&mut self, fault: ProjectionFault) {
+        self.projection_fault = fault;
     }
 
     /// Recreates all event records in the model's initial state.
@@ -290,7 +337,7 @@ impl State<EventDeliveryDriver> for EventDeliveryState {
             );
         }
 
-        let projected = Self {
+        let mut projected = Self {
             state: lifecycle_by_event,
             attempts,
             max_attempts: driver.max_attempts,
@@ -301,8 +348,32 @@ impl State<EventDeliveryDriver> for EventDeliveryState {
             stale: stale_by_event,
         };
         match driver.projection_fault {
-            ProjectionFault::None => Ok(projected),
+            ProjectionFault::None => {}
+            ProjectionFault::State => {
+                *projected
+                    .state
+                    .values_mut()
+                    .next()
+                    .ok_or_else(|| invalid_data("state projection is empty"))? =
+                    EventLifecycle::Cancelled;
+            }
+            ProjectionFault::Attempts => {
+                increment_first_u32(&mut projected.attempts, "attempts")?;
+            }
+            ProjectionFault::MaxAttempts => {
+                projected.max_attempts = projected.max_attempts.saturating_add(1);
+            }
+            ProjectionFault::CapturedEpoch => {
+                increment_first_u64(&mut projected.captured_epoch, "capturedEpoch")?;
+            }
+            ProjectionFault::CurrentEpoch => {
+                projected.current_epoch = projected.current_epoch.saturating_add(1);
+            }
+            ProjectionFault::Terminal => toggle_first(&mut projected.terminal, "terminal")?,
+            ProjectionFault::Cancelled => toggle_first(&mut projected.cancelled, "cancelled")?,
+            ProjectionFault::Stale => toggle_first(&mut projected.stale, "stale")?,
         }
+        Ok(projected)
     }
 }
 
@@ -333,4 +404,31 @@ impl Driver for EventDeliveryDriver {
 
 fn invalid_data(message: &str) -> anyhow::Error {
     anyhow::Error::new(io::Error::new(io::ErrorKind::InvalidData, message))
+}
+
+fn increment_first_u32(values: &mut BTreeMap<String, u32>, field: &str) -> Result {
+    let value = values
+        .values_mut()
+        .next()
+        .ok_or_else(|| invalid_data(&format!("{field} projection is empty")))?;
+    *value = value.saturating_add(1);
+    Ok(())
+}
+
+fn increment_first_u64(values: &mut BTreeMap<String, u64>, field: &str) -> Result {
+    let value = values
+        .values_mut()
+        .next()
+        .ok_or_else(|| invalid_data(&format!("{field} projection is empty")))?;
+    *value = value.saturating_add(1);
+    Ok(())
+}
+
+fn toggle_first(values: &mut BTreeMap<String, bool>, field: &str) -> Result {
+    let value = values
+        .values_mut()
+        .next()
+        .ok_or_else(|| invalid_data(&format!("{field} projection is empty")))?;
+    *value = !*value;
+    Ok(())
 }

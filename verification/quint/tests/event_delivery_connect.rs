@@ -1,11 +1,14 @@
 //! Conformance boundary tests for the Quint event-delivery driver.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use fireemu_verification_quint::event_delivery::{
-    EventDeliveryDriver, EventDeliveryState, EventLifecycle, MODELED_ACTIONS,
+    EventDeliveryDriver, EventDeliveryState, EventLifecycle, ProjectionFault, MODELED_ACTIONS,
 };
 use quint_connect::runner::{run_test, Config as RunnerConfig, TestConfig};
 
@@ -159,4 +162,151 @@ fn deterministic_scenarios_cover_all_actions() {
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     assert_eq!(actual, expected);
+}
+
+const PROJECTION_FAULTS: [ProjectionFault; 8] = [
+    ProjectionFault::State,
+    ProjectionFault::Attempts,
+    ProjectionFault::MaxAttempts,
+    ProjectionFault::CapturedEpoch,
+    ProjectionFault::CurrentEpoch,
+    ProjectionFault::Terminal,
+    ProjectionFault::Cancelled,
+    ProjectionFault::Stale,
+];
+
+#[test]
+fn projection_fault_changes_exactly_one_field() {
+    for fault in PROJECTION_FAULTS {
+        let mut driver = driver();
+        driver.init().expect("initialize projection fixture");
+        let baseline = driver.project().expect("baseline projection");
+        driver.set_projection_fault(fault);
+        let perturbed = driver.project().expect("perturbed projection");
+
+        let changed = [
+            ("state", baseline.state != perturbed.state),
+            ("attempts", baseline.attempts != perturbed.attempts),
+            (
+                "maxAttempts",
+                baseline.max_attempts != perturbed.max_attempts,
+            ),
+            (
+                "capturedEpoch",
+                baseline.captured_epoch != perturbed.captured_epoch,
+            ),
+            (
+                "currentEpoch",
+                baseline.current_epoch != perturbed.current_epoch,
+            ),
+            ("terminal", baseline.terminal != perturbed.terminal),
+            ("cancelled", baseline.cancelled != perturbed.cancelled),
+            ("stale", baseline.stale != perturbed.stale),
+        ]
+        .into_iter()
+        .filter_map(|(field, differs)| differs.then_some(field))
+        .collect::<Vec<_>>();
+
+        assert_eq!(changed, vec![fault.field_name()], "fault {fault:?}");
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned local Quint CLI"]
+fn each_projection_field_detects_drift() {
+    for fault in PROJECTION_FAULTS {
+        let driver = driver().with_projection_fault(fault);
+        let config = RunnerConfig {
+            test_name: format!("EventDelivery projection fault {fault:?}"),
+            gen_config: TestConfig {
+                spec: absolute_spec_path().to_string_lossy().into_owned(),
+                main: Some("EventDeliveryScenarios".to_owned()),
+                test: "success".to_owned(),
+                max_samples: Some(1),
+                seed: "0x1".to_owned(),
+            },
+        };
+        let error = run_test(driver, config)
+            .expect_err("a perturbed projection must fail Quint Connect comparison");
+        assert!(
+            error.to_string().contains("State invariant failed"),
+            "scenario success, seed 0x1, fault {fault:?}: {error:#}"
+        );
+    }
+
+    let temporary = OwnedDirectory::create("fireemu-quint-malformed")
+        .expect("create owned malformed-spec directory");
+    let source = fs::read_to_string(absolute_spec_path()).expect("read EventDelivery spec");
+    let malformed = source
+        .replace("maxAttempts: int,", "maxAttempts: str,")
+        .replace("maxAttempts: MAX_ATTEMPTS,", "maxAttempts: \"invalid\",")
+        .replace(
+            "observable.maxAttempts == MAX_ATTEMPTS",
+            "observable.maxAttempts == \"invalid\"",
+        )
+        .replace(
+            "previousObservable.maxAttempts == MAX_ATTEMPTS",
+            "previousObservable.maxAttempts == \"invalid\"",
+        );
+    assert_ne!(malformed, source, "malformed fixture mutation must apply");
+    let malformed_path = temporary.path().join("EventDelivery.qnt");
+    fs::write(&malformed_path, malformed).expect("write malformed EventDelivery spec");
+
+    let config = RunnerConfig {
+        test_name: "EventDelivery malformed maxAttempts projection".to_owned(),
+        gen_config: TestConfig {
+            spec: malformed_path.to_string_lossy().into_owned(),
+            main: Some("EventDeliveryScenarios".to_owned()),
+            test: "success".to_owned(),
+            max_samples: Some(1),
+            seed: "0x1".to_owned(),
+        },
+    };
+    let error = run_test(driver(), config)
+        .expect_err("an incompatible ITF field type must fail Quint Connect decoding");
+    assert!(
+        format!("{error:#}").contains("Failed to deserialize specification's state"),
+        "scenario success, seed 0x1, malformed maxAttempts: {error:#}"
+    );
+    temporary
+        .close()
+        .expect("remove owned malformed-spec directory");
+}
+
+struct OwnedDirectory {
+    path: PathBuf,
+    closed: bool,
+}
+
+impl OwnedDirectory {
+    fn create(prefix: &str) -> io::Result<Self> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
+        fs::create_dir(&path)?;
+        Ok(Self {
+            path,
+            closed: false,
+        })
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    fn close(mut self) -> io::Result<()> {
+        fs::remove_dir_all(&self.path)?;
+        self.closed = true;
+        Ok(())
+    }
+}
+
+impl Drop for OwnedDirectory {
+    fn drop(&mut self) {
+        if !self.closed {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }

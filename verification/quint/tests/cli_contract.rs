@@ -192,6 +192,11 @@ fn cli_declares_verify_model_command() {
         String::from_utf8_lossy(&output.stdout).contains("verify-model [--root PATH]"),
         "help must declare the verify-model contract"
     );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("mutate-event-delivery [--root PATH] [--evidence PATH]"),
+        "help must declare the mutation contract"
+    );
 }
 
 #[test]

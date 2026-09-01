@@ -4,3 +4,4 @@ pub mod event_delivery;
 pub mod evidence;
 pub mod model;
 pub mod process;
+pub mod regex_authorization;

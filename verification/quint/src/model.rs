@@ -366,13 +366,22 @@ const MODELS: &[ModelDescriptor] = &[
         actions: &["Evaluate"],
         production_sources: &[
             "crates/fireemu-core-rules/src/eval.rs",
+            "crates/fireemu-core-rules/src/parse.rs",
             "crates/fireemu-core-rules/src/regex.rs",
+            "crates/fireemu-core-rules/src/value.rs",
         ],
         bounds: &[BoundDescriptor {
             name: "OutcomesAndNegations",
             value: "all-finite-combinations",
         }],
-        scenarios: &["match", "noMatch", "exhausted", "negated"],
+        scenarios: &[
+            "matched",
+            "notMatched",
+            "stepExhausted",
+            "depthExhausted",
+            "parentNegated",
+            "nestedNegated",
+        ],
         projection_fields: &["decision", "denialClass"],
         driver: "verification/quint/src/regex_authorization.rs",
         connect_test: "verification/quint/tests/regex_authorization_connect.rs",

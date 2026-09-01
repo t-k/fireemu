@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "model": "RegexAuthorization",
+  "mutations": [
+    {
+      "id": "M-FORMAL-RULES-REGEX-001",
+      "property": "ExhaustionNeverAllows",
+      "operator": "prefer-nested-allow-over-regex-exhaustion",
+      "from": "if (parent == Exhausted or nested == Exhausted) Exhausted\n    else if (parent == Matched or nested == Matched) Matched",
+      "to": "if (parent == Matched or nested == Matched) Matched\n    else if (parent == Exhausted or nested == Exhausted) Exhausted"
+    }
+  ]
+}

@@ -784,6 +784,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fireemu-core-events",
+ "fireemu-core-rules",
  "fireemu-core-types",
  "quint-connect",
  "serde",

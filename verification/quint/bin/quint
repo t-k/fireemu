@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+: "${QUINT_REAL_BIN:?QUINT_REAL_BIN must point to the pinned Quint executable}"
+case "$QUINT_REAL_BIN" in
+  /*) ;;
+  *)
+    echo "error: QUINT_REAL_BIN must be absolute" >&2
+    exit 126
+    ;;
+esac
+
+if [ ! -x "$QUINT_REAL_BIN" ]; then
+  echo "error: QUINT_REAL_BIN is not executable" >&2
+  exit 126
+fi
+
+timeout_seconds="${QUINT_TIMEOUT_SECONDS:-120}"
+case "$timeout_seconds" in
+  ''|*[!0-9]*|0)
+    echo "error: QUINT_TIMEOUT_SECONDS must be a positive integer" >&2
+    exit 126
+    ;;
+esac
+
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "error: GNU timeout is required" >&2
+  exit 126
+fi
+
+set +e
+timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" "$QUINT_REAL_BIN" "$@"
+status=$?
+set -e
+
+case "$status" in
+  124|137) exit 124 ;;
+  *) exit "$status" ;;
+esac

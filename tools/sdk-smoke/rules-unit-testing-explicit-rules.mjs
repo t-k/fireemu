@@ -27,7 +27,9 @@ async function main() {
     new URL("./rules-unit-testing.storage.rules", import.meta.url),
     "utf8",
   );
+  const workerProjectId = `${process.env.GCLOUD_PROJECT}-w0`;
   const env = await initializeTestEnvironment({
+    projectId: workerProjectId,
     firestore: { rules: firestoreRules },
     storage: { rules: storageRules },
   });

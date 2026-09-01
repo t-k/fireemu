@@ -2174,15 +2174,26 @@ fn mock_user_token(sub: &str, project: &str) -> String {
     format!("{header}.{payload}.")
 }
 
+fn mock_tenant_token(sub: &str, project: &str, tenant: &str) -> String {
+    let header = base64url_encode(br#"{"alg":"none","type":"JWT"}"#);
+    let payload = base64url_encode(
+        format!(
+            r#"{{"iss":"https://securetoken.google.com/{project}","aud":"{project}","iat":0,"exp":3600,"auth_time":0,"sub":"{sub}","user_id":"{sub}","firebase":{{"tenant":"{tenant}"}}}}"#
+        )
+        .as_bytes(),
+    );
+    format!("{header}.{payload}.")
+}
+
 const OWNED_STORAGE_RULES: &str = "rules_version = '2';\nservice firebase.storage { match /b/{bucket}/o { match /owned/{uid}/{file=**} { allow read, write: if request.auth != null && request.auth.uid == uid; } } }";
 
-fn upload_as(s: &StorageState, path: &str, authorization: &str) -> u16 {
+fn upload_to_bucket_as(s: &StorageState, bucket: &str, path: &str, authorization: &str) -> u16 {
     handle(
         s,
         req(
             "POST",
             &format!(
-                "/v0/b/{BUCKET}/o?name={}&uploadType=media",
+                "/v0/b/{bucket}/o?name={}&uploadType=media",
                 path.replace('/', "%2F")
             ),
             &[
@@ -2193,6 +2204,10 @@ fn upload_as(s: &StorageState, path: &str, authorization: &str) -> u16 {
         ),
     )
     .status
+}
+
+fn upload_as(s: &StorageState, path: &str, authorization: &str) -> u16 {
+    upload_to_bucket_as(s, BUCKET, path, authorization)
 }
 
 #[test]
@@ -2243,6 +2258,188 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
         upload_as(&strict, "owned/alice/x.txt", &bearer),
         401,
         "under strict the token names no user of the Auth store, so the caller is refused"
+    );
+}
+
+#[test]
+fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
+    let worker_0 = "demo-app-w0";
+    let worker_1 = "demo-app-w1";
+    let token_0 = format!("Firebase {}", mock_user_token("alice", worker_0));
+    let token_1 = format!("Firebase {}", mock_user_token("alice", worker_1));
+    let firebase = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::EmulatorMock);
+    let auth_projects_before = firebase.auth.projects();
+
+    assert_eq!(
+        upload_to_bucket_as(&firebase, worker_0, "owned/alice/x.txt", &token_0),
+        200
+    );
+    assert_eq!(
+        upload_to_bucket_as(&firebase, worker_0, "owned/bob/x.txt", &token_0),
+        403
+    );
+    for (bucket, token) in [(worker_0, &token_1), (worker_1, &token_0)] {
+        assert_eq!(
+            upload_to_bucket_as(&firebase, bucket, "owned/alice/x.txt", token),
+            401
+        );
+    }
+    let tenant = format!(
+        "Firebase {}",
+        mock_tenant_token("alice", worker_0, "customer-a")
+    );
+    assert_eq!(
+        upload_to_bucket_as(&firebase, worker_0, "owned/alice/x.txt", &tenant),
+        401
+    );
+    assert_eq!(firebase.auth.projects(), auth_projects_before);
+
+    let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
+    assert_eq!(
+        upload_to_bucket_as(&strict, worker_0, "owned/alice/x.txt", &token_0),
+        401
+    );
+
+    let mut scoped = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::EmulatorMock);
+    let mut tenancy = fireemu_core_session::tenancy::Tenancy::new("demo-app");
+    tenancy
+        .register("demo-team", &["team-files".to_owned()], &[])
+        .unwrap();
+    let registered_before = tenancy.registered();
+    scoped.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    assert!(scoped.auth.register(
+        "demo-team",
+        AuthStore::new("demo-team", SplitMix64::new(4), TotpPolicy::default())
+    ));
+    let scoped_projects_before = scoped.auth.projects();
+    let default_token = format!("Firebase {}", mock_user_token("alice", "demo-app"));
+    let team_token = format!("Firebase {}", mock_user_token("alice", "demo-team"));
+    let guest_token = format!("Firebase {}", mock_user_token("alice", "demo-guest"));
+
+    assert_eq!(
+        upload_to_bucket_as(
+            &scoped,
+            "demo-app.appspot.com",
+            "owned/alice/x.txt",
+            &default_token,
+        ),
+        200
+    );
+    assert_eq!(
+        upload_to_bucket_as(
+            &scoped,
+            "demo-team.appspot.com",
+            "owned/alice/x.txt",
+            &team_token,
+        ),
+        200
+    );
+    assert_eq!(
+        upload_to_bucket_as(&scoped, "team-files", "owned/alice/x.txt", &team_token,),
+        200
+    );
+    assert_eq!(
+        upload_to_bucket_as(&scoped, "demo-team", "owned/alice/x.txt", &team_token,),
+        401
+    );
+    assert_eq!(
+        upload_to_bucket_as(
+            &scoped,
+            "demo-guest.appspot.com",
+            "owned/alice/x.txt",
+            &guest_token,
+        ),
+        401
+    );
+    assert_eq!(scoped.auth.projects(), scoped_projects_before);
+    assert_eq!(
+        scoped
+            .tenancy
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap()
+            .registered(),
+        registered_before
+    );
+}
+
+#[test]
+fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
+    let bucket = "demo-app-w0";
+    let matching = format!("Firebase {}", mock_user_token("alice", bucket));
+    let foreign = format!("Firebase {}", mock_user_token("alice", "demo-app-w1"));
+    let firebase = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::EmulatorMock);
+    let start_path = format!("/v0/b/{bucket}/o?name=owned%2Falice%2Fresumable.txt");
+    let started = handle(
+        &firebase,
+        req(
+            "POST",
+            &start_path,
+            &[
+                ("authorization", &matching),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(
+        started.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&started.body)
+    );
+    let session = header(&started, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+    let finalized = handle(
+        &firebase,
+        req(
+            "POST",
+            &session,
+            &[
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "0"),
+            ],
+            b"hello",
+        ),
+    );
+    assert_eq!(
+        finalized.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&finalized.body)
+    );
+
+    let foreign_start = handle(
+        &firebase,
+        req(
+            "POST",
+            &format!("/v0/b/{bucket}/o?name=owned%2Falice%2Fforeign.txt"),
+            &[
+                ("authorization", &foreign),
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(foreign_start.status, 401);
+    assert_eq!(
+        handle(
+            &firebase,
+            req(
+                "GET",
+                &format!("/v0/b/{bucket}/o/owned%2Falice%2Fforeign.txt"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        )
+        .status,
+        404
     );
 }
 

@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_auth::jwt::{verify_rules_token, TokenAcceptance};
+use fireemu_core_auth::jwt::{verify_rules_token_for_project, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
 };
@@ -45,6 +45,7 @@ use fireemu_core_storage::store::{
     UploadPhase,
 };
 use fireemu_core_types::determinism::Clock;
+use fireemu_core_types::ids::ProjectId;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
 
@@ -140,6 +141,31 @@ impl StorageState {
                 || self.project.clone(),
                 |t| t.project_of_bucket(bucket).to_owned(),
             )
+    }
+
+    /// The audience an unsigned Rules mock token must name for this request. A valid bare
+    /// project bucket that remains in the default session can carry its own SDK worker
+    /// audience without changing the bucket's owner or creating registry state.
+    fn rules_project_of_bucket(&self, bucket: &str, owner_project: &str) -> Result<String, String> {
+        if self.token_acceptance != TokenAcceptance::EmulatorMock {
+            return Ok(owner_project.to_owned());
+        }
+        let Ok(project) = ProjectId::try_new(bucket.to_owned()) else {
+            return Ok(owner_project.to_owned());
+        };
+        let default_owned_and_unregistered = match &self.tenancy {
+            Some(tenancy) => {
+                let tenancy = tenancy.read().map_err(|_| "tenancy poisoned".to_owned())?;
+                tenancy.project_of_bucket(bucket) == tenancy.default_project()
+                    && !tenancy.is_registered(project.as_str())
+            }
+            None => true,
+        };
+        if default_owned_and_unregistered {
+            Ok(project.as_str().to_owned())
+        } else {
+            Ok(owner_project.to_owned())
+        }
     }
 }
 
@@ -1184,8 +1210,8 @@ impl StorageState {
     }
 
     /// The caller of a request on `bucket`: an end-user token is verified against the
-    /// store of its audience, which must be the bucket's project (production Storage
-    /// accepts only tokens minted for its own project).
+    /// bucket owner's store. The Firebase profile also admits a mock audience for an
+    /// eligible default-owned bare project bucket without changing that ownership.
     ///
     /// Under the `firebase` profile a value that does not even decode as a JWT is an
     /// anonymous caller, as the official emulator's `jwt.decode` answers; a token that
@@ -1205,11 +1231,11 @@ impl StorageState {
         if token == "owner" {
             return Ok(Principal::Owner);
         }
-        let project = self.project_of_bucket(bucket);
-        let store_arc = self
-            .auth
-            .store_for(&project)
-            .ok_or_else(|| format!("invalid ID token: no Auth store for project {project:?}"))?;
+        let owner_project = self.project_of_bucket(bucket);
+        let expected_rules_project = self.rules_project_of_bucket(bucket, &owner_project)?;
+        let store_arc = self.auth.store_for(&owner_project).ok_or_else(|| {
+            format!("invalid ID token: no Auth store for project {owner_project:?}")
+        })?;
         let parent = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
@@ -1229,9 +1255,9 @@ impl StorageState {
             .and_then(fireemu_core_types::json::JsonValue::as_str)
             .unwrap_or_default()
             .to_owned();
-        if aud != project {
+        if aud != expected_rules_project {
             return Err(format!(
-                "invalid ID token: audience {aud:?} does not match the bucket's project {project:?}"
+                "invalid ID token: audience {aud:?} does not match the bucket's rules project {expected_rules_project:?}"
             ));
         }
         let tenant = decoded_token
@@ -1241,18 +1267,27 @@ impl StorageState {
             .and_then(fireemu_core_types::json::JsonValue::as_str)
             .map(str::to_owned);
         drop(parent);
+        if tenant.is_some() && expected_rules_project != owner_project {
+            return Err("invalid ID token: tenant claims require a registered project".to_owned());
+        }
         let store_arc = match tenant {
             Some(tenant) => self
                 .auth
-                .tenant_store(&project, &tenant)
+                .tenant_store(&owner_project, &tenant)
                 .ok_or_else(|| format!("invalid ID token: unknown tenant {tenant:?}"))?,
             None => store_arc,
         };
         let store = store_arc
             .lock()
             .map_err(|_| "auth store poisoned".to_owned())?;
-        let decoded = verify_rules_token(token, &store, self.now(), self.token_acceptance)
-            .map_err(|e| format!("invalid ID token: {e}"))?;
+        let decoded = verify_rules_token_for_project(
+            token,
+            &store,
+            self.now(),
+            self.token_acceptance,
+            &expected_rules_project,
+        )
+        .map_err(|e| format!("invalid ID token: {e}"))?;
         drop(store);
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
             .map_err(|e| format!("invalid ID token claims: {e}"))?;

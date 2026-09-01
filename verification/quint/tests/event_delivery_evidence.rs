@@ -11,13 +11,33 @@ use fireemu_verification_quint::process::{
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 6] = [
+const BOUND_INPUTS: [&str; 26] = [
+    ".github/workflows/ci.yml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/fireemu-core-events/Cargo.toml",
+    "crates/fireemu-core-events/src/event.rs",
+    "crates/fireemu-core-events/src/retry.rs",
+    "crates/fireemu-core-events/src/state.rs",
+    "crates/fireemu-core-types/Cargo.toml",
+    "crates/fireemu-core-types/src/ids.rs",
+    "crates/fireemu-core-types/src/time.rs",
+    "verification/quint/Cargo.toml",
+    "verification/quint/bin/quint",
+    "verification/quint/run-pilot.sh",
     "verification/quint/specs/EventDelivery.qnt",
     "verification/quint/specs/tlc-config.json",
     "verification/quint/mutations/EventDelivery.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
-    "Cargo.lock",
+    "verification/quint/src/event_delivery.rs",
+    "verification/quint/src/evidence.rs",
+    "verification/quint/src/lib.rs",
+    "verification/quint/src/main.rs",
+    "verification/quint/src/process.rs",
+    "verification/quint/tests/cli_contract.rs",
+    "verification/quint/tests/event_delivery_connect.rs",
+    "verification/quint/tests/event_delivery_evidence.rs",
 ];
 
 fn repository_root() -> PathBuf {

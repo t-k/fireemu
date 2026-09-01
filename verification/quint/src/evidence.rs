@@ -14,13 +14,33 @@ const QUINT_VERSION: &str = "0.32.0";
 const QUINT_CONNECT_VERSION: &str = "0.1.2";
 const TLC_VERSION: &str = "2.19 of 08 August 2024";
 const BACKEND: &str = "tlc";
-const DIGEST_PATHS: [&str; 6] = [
+const DIGEST_PATHS: [&str; 26] = [
+    ".github/workflows/ci.yml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/fireemu-core-events/Cargo.toml",
+    "crates/fireemu-core-events/src/event.rs",
+    "crates/fireemu-core-events/src/retry.rs",
+    "crates/fireemu-core-events/src/state.rs",
+    "crates/fireemu-core-types/Cargo.toml",
+    "crates/fireemu-core-types/src/ids.rs",
+    "crates/fireemu-core-types/src/time.rs",
+    "verification/quint/Cargo.toml",
+    "verification/quint/bin/quint",
+    "verification/quint/run-pilot.sh",
     "verification/quint/specs/EventDelivery.qnt",
     "verification/quint/specs/tlc-config.json",
     "verification/quint/mutations/EventDelivery.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
-    "Cargo.lock",
+    "verification/quint/src/event_delivery.rs",
+    "verification/quint/src/evidence.rs",
+    "verification/quint/src/lib.rs",
+    "verification/quint/src/main.rs",
+    "verification/quint/src/process.rs",
+    "verification/quint/tests/cli_contract.rs",
+    "verification/quint/tests/event_delivery_connect.rs",
+    "verification/quint/tests/event_delivery_evidence.rs",
 ];
 const INVARIANTS: [&str; 6] = [
     "TypeOK",

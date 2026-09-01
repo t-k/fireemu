@@ -103,7 +103,9 @@ Storage emulators do. Running the same script under `"profile": "strict"` fails 
 This focused smoke keeps Hub discovery but supplies explicit Firestore and Storage rule strings
 to `initializeTestEnvironment()`. The real package installs them through Firestore's
 `:securityRules` route and Storage's `/internal/setRules` route, then proves that both services
-enforce owner-only access. It needs only Firestore and Storage:
+enforce owner-only access. The Storage checks use the valid bare worker-project bucket
+`demo-app-w0`, proving that its mock token is bound to the routed project without registering a
+session for it. It needs only Firestore and Storage:
 
 ```sh
 ./target/debug/fireemu exec --config tools/sdk-smoke/fireemu.rules-unit-testing.json \

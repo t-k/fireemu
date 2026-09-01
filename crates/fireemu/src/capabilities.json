@@ -235,7 +235,8 @@
     "notes": [
       "request.auth from verified ID tokens on every Firestore surface; Bearer owner bypasses",
       "the compatibility profile decides how much verification a caller's token must survive: under firebase the unsigned mock tokens the official emulators admit are admitted too (an unknown sub, an exp nobody reads), so @firebase/rules-unit-testing works unchanged; under strict the issuer, audience, virtual-clock expiry, subject and revocation are all checked",
-      "two checks stay on in both profiles, and spec/compatibility/contract.json records them as deliberate divergences of the firebase profile: the audience must name the routed Firestore resource project or Storage bucket project, and a token that claims to be signed must verify against the session key"
+      "two checks stay on in both profiles, and spec/compatibility/contract.json records them as deliberate divergences of the firebase profile: the audience must name the routed Firestore resource project or Storage bucket project, and a token that claims to be signed must verify against the session key",
+      "a valid bare Storage bucket routed through the default session binds firebase-profile mock tokens to that bucket's project namespace without changing object ownership, tenancy, App Check, fault injection or resumable-upload routing, and without registering a session"
     ],
     "status": "implemented"
   },
@@ -533,6 +534,7 @@
       "the principal request.auth is built from follows the compatibility profile on both the Firestore and the Storage Rules surfaces (see AUTH-RULES-1); the rules themselves are evaluated identically under both profiles",
       "request.query.orderBy is a map from field path to \"ASC\" / \"DESC\", request.query.limit is null without a limit, and request.resource and request.query are absent rather than null on a request that has neither",
       "string.matches() / replace(): the RE2 surface the official runtime has -- capturing groups with $0 / $1 expansion, the inline flags (?i) (?s) (?m), POSIX and Unicode classes, hex escapes -- and, as in RE2, no lookarounds and no backreferences; a literal pattern is compiled while the ruleset is, so an unusable one fails the load",
+      "capture-free alternatives whose branches each consume one character repeat iteratively at constant match depth; every attempted branch remains charged to the regex step budget, and patterns with captures or multi-character branches keep the general matcher",
       "a recursive call and a call chain of more than twenty calls are compile errors, with the official compiler's messages",
       "three language rows are documented divergences, all the same one: the official compiler's static type checker rejects at load what fireemu raises at evaluation; the request decision is the same",
       "conformance: firestore/rules-decisions (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"

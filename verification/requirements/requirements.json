@@ -484,6 +484,26 @@
       }
     },
     {
+      "id": "INV-RULES-005",
+      "statement": "A repeated capture-free alternative whose branches each consume one character advances at constant match depth, charges every branch probe, rejects forbidden characters and never turns budget exhaustion into allow.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "RegexLinearRepeat.tla::AtomicProgressDoesNotIncreaseDepth",
+        "property": "prop_rules_regex_linear_control_filter_matches_the_character_predicate",
+        "mutation": [
+          "M-TLA-RULES-REGEX-LINEAR-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/regex.rs",
+          "crates/fireemu-core-rules/tests/eval.rs",
+          "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "verification/property/tests/rules.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-TEXT-001",
       "statement": "A READY Text Index represents every document version its visibility policy and watermark require.",
       "criticality": "critical",
@@ -1350,13 +1370,14 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "implemented",
-      "note": "Measured, not asserted: conformance/src/rules-probe installs bounded Rules programs into the official Firestore emulator and into fireemu through the same route and compares the verdict of each. 680 claims, 260 of them generated from a seed and shrunk on mismatch; three rows are documented divergences where the official compiler rejects statically what fireemu raises at evaluation.",
+      "note": "Measured, not asserted: conformance/src/rules-probe installs bounded Rules programs into the official Firestore emulator and into fireemu through the same route and compares the verdict of each. 680 claims, 260 of them generated from a seed and shrunk on mismatch; three rows are documented divergences where the official compiler rejects statically what fireemu raises at evaluation. A property test independently checks repeated one-character control-filter alternatives against the corresponding character predicate across generated subjects.",
       "artifacts": {
         "integration": [
           "crates/fireemu-core-rules/tests/eval.rs",
           "crates/fireemu-core-rules/tests/namespaces.rs",
           "crates/fireemu-core-rules/tests/regex.rs",
-          "crates/fireemu-core-rules/tests/mutants.rs"
+          "crates/fireemu-core-rules/tests/mutants.rs",
+          "verification/property/tests/rules.rs"
         ],
         "conformance": "conformance/rules-matrix.json",
         "property": "prop_rules_slice_is_in_range_exactly_where_the_official_runtime_says"
@@ -1414,7 +1435,7 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "partial",
-      "note": "The library's documented flows run with no explicit host anywhere. tools/sdk-smoke/rules-unit-testing.mjs covers the established discovery and state-management flow, while tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs supplies both rule strings and proves decisions on Firestore and Storage. Its coverage-report helpers are served by the :ruleCoverage endpoints; the library's own assertion helpers over that report are not exercised yet.",
+      "note": "The library's documented flows run with no explicit host anywhere. tools/sdk-smoke/rules-unit-testing.mjs covers the established discovery and state-management flow, while tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs supplies both rule strings and proves decisions on Firestore and Storage, including a generic isolated worker project whose Storage bucket is routed by project name without a session registration. Its coverage-report helpers are served by the :ruleCoverage endpoints; the library's own assertion helpers over that report are not exercised yet.",
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rest.rs",

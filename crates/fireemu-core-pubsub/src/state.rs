@@ -70,6 +70,23 @@ impl PubSubState {
         self.ack_rng = SplitMix64::new(self.seed ^ 0x5053_5542_4143_4b5f);
     }
 
+    /// Drops one project's topics and subscriptions without disturbing other sessions.
+    pub fn clear_project(&mut self, project: &str) {
+        let subscriptions = self
+            .subscriptions
+            .values()
+            .filter(|state| state.config().name.project() == project)
+            .map(|state| state.config().name.clone())
+            .collect::<Vec<_>>();
+        for subscription in subscriptions {
+            let _ = self.delete_subscription(&subscription);
+        }
+        self.topics
+            .retain(|_, entry| entry.name.project() != project);
+        self.topic_subs
+            .retain(|topic, _| TopicName::parse(topic).is_ok_and(|name| name.project() != project));
+    }
+
     // --- Topics -----------------------------------------------------------------------------
 
     /// Creates a topic. Returns `ALREADY_EXISTS` if one is present under that name.
@@ -489,6 +506,30 @@ mod tests {
         assert!(state.pull(&subscription, 10, now).unwrap().is_empty());
         state.delete_subscription(&subscription).unwrap();
         assert!(state.subscription_config(&subscription).is_err());
+    }
+
+    #[test]
+    fn clearing_one_project_preserves_other_project_resources() {
+        let mut state = PubSubState::new(42);
+        for project in ["demo-a", "demo-b"] {
+            state
+                .create_topic(topic(project, "orders"), BTreeMap::new())
+                .unwrap();
+            state
+                .create_subscription(sub_cfg(project, "orders-sub", "orders", Filter::always()))
+                .unwrap();
+        }
+
+        state.clear_project("demo-a");
+
+        assert!(!state.topic_exists(&topic("demo-a", "orders")));
+        assert!(state.topic_exists(&topic("demo-b", "orders")));
+        assert!(state
+            .subscription_config(&SubscriptionName::new("demo-a", "orders-sub").unwrap())
+            .is_err());
+        assert!(state
+            .subscription_config(&SubscriptionName::new("demo-b", "orders-sub").unwrap())
+            .is_ok());
     }
 
     #[test]

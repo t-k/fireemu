@@ -684,9 +684,13 @@ impl FirestoreState {
     }
 
     fn prune_transactions(&mut self, now: LogicalInstant) {
-        let ttl = transaction_ttl();
-        self.transactions
-            .retain(|_, transaction| elapsed(now, transaction.started_at) <= ttl);
+        let total_ttl = transaction_ttl();
+        let idle_ttl = transaction_idle_ttl();
+        self.transactions.retain(|_, transaction| {
+            elapsed(now, transaction.started_at) < total_ttl
+                && (transaction.state != TransactionState::Active
+                    || elapsed(now, transaction.last_activity) < idle_ttl)
+        });
     }
 
     fn ensure_transaction_capacity(&self) -> Result<(), FirestoreError> {

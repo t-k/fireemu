@@ -763,11 +763,19 @@ fn version_floor(parts: &[Option<u32>]) -> Option<(u32, u32, u32)> {
 fn node_engine_token_matches(token: &str, actual: (u32, u32, u32)) -> Option<bool> {
     for operator in [">=", "<=", ">", "<"] {
         if let Some(version) = token.strip_prefix(operator) {
-            let expected = version_floor(&requirement_parts(version)?)?;
+            let parts = requirement_parts(version)?;
+            let expected = version_floor(&parts)?;
+            let next_partial = if parts.len() == 1 {
+                Some((expected.0.checked_add(1)?, 0, 0))
+            } else if parts.len() == 2 {
+                Some((expected.0, expected.1.checked_add(1)?, 0))
+            } else {
+                None
+            };
             return Some(match operator {
                 ">=" => actual >= expected,
-                "<=" => actual <= expected,
-                ">" => actual > expected,
+                "<=" => next_partial.map_or(actual <= expected, |upper| actual < upper),
+                ">" => next_partial.map_or(actual > expected, |upper| actual >= upper),
                 "<" => actual < expected,
                 _ => unreachable!(),
             });
@@ -829,11 +837,34 @@ fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool
                 format!("package.json engines.node {expression:?} is not supported")
             })?)
             .ok_or_else(|| format!("package.json engines.node {expression:?} is not supported"))?;
-            let upper = version_floor(&requirement_parts(upper).ok_or_else(|| {
+            let upper_parts = requirement_parts(upper).ok_or_else(|| {
                 format!("package.json engines.node {expression:?} is not supported")
-            })?)
-            .ok_or_else(|| format!("package.json engines.node {expression:?} is not supported"))?;
-            if actual >= lower && actual <= upper {
+            })?;
+            let upper = version_floor(&upper_parts).ok_or_else(|| {
+                format!("package.json engines.node {expression:?} is not supported")
+            })?;
+            let below_upper = if upper_parts.len() == 1 {
+                actual
+                    < (
+                        upper.0.checked_add(1).ok_or_else(|| {
+                            format!("package.json engines.node {expression:?} overflows")
+                        })?,
+                        0,
+                        0,
+                    )
+            } else if upper_parts.len() == 2 {
+                actual
+                    < (
+                        upper.0,
+                        upper.1.checked_add(1).ok_or_else(|| {
+                            format!("package.json engines.node {expression:?} overflows")
+                        })?,
+                        0,
+                    )
+            } else {
+                actual <= upper
+            };
+            if actual >= lower && below_upper {
                 return Ok(true);
             }
             continue;
@@ -905,6 +936,20 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
             push_node_candidate(&mut candidates, directory.join("node.exe"));
         }
     }
+    if let Some(home) = std::env::var_os("VOLTA_HOME") {
+        let root = PathBuf::from(home).join("tools/image/node");
+        if root.is_absolute() {
+            if let Ok(entries) = std::fs::read_dir(root) {
+                let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+                entries.sort_by_key(std::fs::DirEntry::file_name);
+                for entry in entries.into_iter().take(64) {
+                    push_node_candidate(&mut candidates, entry.path().join("bin/node"));
+                    #[cfg(windows)]
+                    push_node_candidate(&mut candidates, entry.path().join("node.exe"));
+                }
+            }
+        }
+    }
     candidates.truncate(16);
     Ok((candidates, false))
 }
@@ -931,10 +976,11 @@ fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
         .stdout
         .take()
         .ok_or_else(|| "Node stdout unavailable".to_owned())?;
-    let reader = std::thread::spawn(move || {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = stdout.take(257).read_to_end(&mut bytes);
-        bytes
+        let _ = sender.send(bytes);
     });
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let status = loop {
@@ -955,14 +1001,22 @@ fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
                 .status();
             let _ = child.kill();
             let _ = child.wait();
-            let _ = reader.join();
             return Err("Node --version timed out".to_owned());
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    let output = reader
-        .join()
-        .map_err(|_| "Node version reader failed".to_owned())?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let output = receiver.recv_timeout(remaining).map_err(|_| {
+        #[cfg(unix)]
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        "Node --version timed out".to_owned()
+    })?;
     if !status.success() {
         return Err(format!("Node --version exited with {status}"));
     }
@@ -1781,10 +1835,12 @@ fn base64_encode(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
 
     use super::{
         check_callable_app_check, function_pubsub_resources, functions_source_signature,
-        node_engine_matches, package_node_engine, parse_node_version,
+        node_engine_matches, package_node_engine, parse_node_version, probe_node,
         provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
         NodeInstallation,
     };
@@ -1847,8 +1903,43 @@ mod tests {
         assert!(!node_engine_matches("20.19.5", (20, 19, 6)).unwrap());
         assert!(node_engine_matches("^0.2.3", (0, 2, 9)).unwrap());
         assert!(node_engine_matches("~20.19.0", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("<=20", (20, 19, 5)).unwrap());
+        assert!(!node_engine_matches(">20", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("20 - 22", (22, 11, 0)).unwrap());
         assert!(node_engine_matches("", (20, 19, 5)).is_err());
         assert!(node_engine_matches("not-semver", (20, 19, 5)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_times_out_when_a_descendant_keeps_stdout_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-probe-timeout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        let pid_file = root.join("descendant.pid");
+        let script = format!(
+            "#!/bin/sh\n(/bin/sleep 30) &\necho $! > '{}'\necho v22.11.0\n",
+            pid_file.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = Instant::now();
+        let error = probe_node(&program).unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .status()
+            .unwrap()
+            .success());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

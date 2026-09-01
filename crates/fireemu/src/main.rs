@@ -1719,9 +1719,10 @@ fn control_state(
     }
     let pubsub = pubsub.clone();
     let pubsub_resources = pubsub_resources.to_vec();
+    let pubsub_project = cfg.auth_project.clone();
     reset_hooks.push(Arc::new(move || {
         if let Ok(mut state) = pubsub.lock() {
-            state.clear();
+            state.clear_project(&pubsub_project);
             functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
                 .expect("validated Functions Pub/Sub resources reprovision after reset");
         }

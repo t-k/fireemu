@@ -616,7 +616,9 @@ impl Hub {
             Err(response) => return response,
         };
         let principal = match &self.state.rules {
-            Some(r) => match r.principal_from_authorization(authorization.as_deref()) {
+            Some(r) => match r
+                .principal_from_authorization_for_project(authorization.as_deref(), &project)
+            {
                 Ok(p) => p,
                 Err(e) => return error_chunk(&e),
             },

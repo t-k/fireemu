@@ -94,14 +94,16 @@ pub struct StreamContext {
 
 impl StreamContext {
     /// Re-resolves the caller and checks the session epoch before serving anything.
-    fn refresh_principal(&self) -> Result<Principal, Status> {
+    fn refresh_principal(&self, project: &str) -> Result<Principal, Status> {
         if self.local.epoch() != self.epoch {
             return Err(Status::aborted(
                 "the session was reset; streams opened before the reset are closed",
             ));
         }
         match &self.rules {
-            Some(r) => r.principal_from_authorization(self.authorization.as_deref()),
+            Some(r) => {
+                r.principal_from_authorization_for_project(self.authorization.as_deref(), project)
+            }
             None => Ok(self.principal.clone()),
         }
     }
@@ -256,7 +258,7 @@ fn handle_write_request(
     for w in &writes {
         LocalBackend::check_database(parent, &w.op.path().resource_name())?;
     }
-    let principal = ctx.refresh_principal()?;
+    let principal = ctx.refresh_principal(parent.project.as_str())?;
     let guard = write_guard(ctx.rules.as_ref(), &principal);
     // The epoch is re-checked inside the commit critical section: a reset that starts
     // after the check above cannot be raced by this write.
@@ -553,7 +555,7 @@ fn refresh_all(
     let Some(parent) = parent else { return Ok(()) };
     // Authentication / reset failures end the stream (every target is removed with the
     // cause first, so the client learns why).
-    let principal = match ctx.refresh_principal() {
+    let principal = match ctx.refresh_principal(parent.project.as_str()) {
         Ok(p) => p,
         Err(e) => {
             for id in targets.keys() {

@@ -6,6 +6,7 @@
 
 use core::fmt;
 
+use fireemu_core_types::ids::ProjectId;
 use fireemu_core_types::json::{parse, JsonValue};
 use fireemu_core_types::time::LogicalInstant;
 
@@ -370,6 +371,42 @@ pub fn verify_rules_token(
     now: LogicalInstant,
     acceptance: TokenAcceptance,
 ) -> Result<DecodedToken, JwtError> {
+    verify_rules_token_with_expected_project(token, store, now, acceptance, store.project_id())
+}
+
+/// Verifies a token for a Security Rules request whose routed project may be an
+/// unregistered Firestore namespace owned by the default session.
+///
+/// Verified tokens still use the selected [`AuthStore`] exactly as
+/// [`verify_rules_token`] does. Only the unsigned [`TokenAcceptance::EmulatorMock`]
+/// fallback binds its audience to `expected_project` instead of the store's configured
+/// project. Callers must still enforce the same routed-project binding on the resulting
+/// principal before evaluating rules.
+pub fn verify_rules_token_for_project(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    acceptance: TokenAcceptance,
+    expected_project: &str,
+) -> Result<DecodedToken, JwtError> {
+    let expected_project =
+        ProjectId::try_new(expected_project.to_owned()).map_err(|_| JwtError::Malformed)?;
+    verify_rules_token_with_expected_project(
+        token,
+        store,
+        now,
+        acceptance,
+        expected_project.as_str(),
+    )
+}
+
+fn verify_rules_token_with_expected_project(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    acceptance: TokenAcceptance,
+    expected_project: &str,
+) -> Result<DecodedToken, JwtError> {
     match verify_id_token_decoded(token, store, now) {
         Ok((_, decoded)) => Ok(decoded),
         Err(verified_error) => {
@@ -384,9 +421,9 @@ pub fn verify_rules_token(
             // `RS256` token fails here rather than becoming an identity.
             let decoded = decode_token(token, None)?;
             let aud = decoded.string("aud").ok_or(JwtError::Malformed)?;
-            if aud != store.project_id() {
+            if aud != expected_project {
                 return Err(JwtError::WrongAudience {
-                    expected: store.project_id().to_owned(),
+                    expected: expected_project.to_owned(),
                     actual: aud.to_owned(),
                 });
             }

@@ -253,10 +253,10 @@ impl RestState {
         rules::check_audience(&caller.principal, parent.project.as_str())
     }
 
-    fn principal(&self, authorization: Option<&str>) -> Result<Caller, Status> {
+    fn principal(&self, authorization: Option<&str>, project: &str) -> Result<Caller, Status> {
         let epoch = self.local.barrier().epoch();
         let principal = match &self.rules {
-            Some(r) => r.principal_from_authorization(authorization)?,
+            Some(r) => r.principal_from_authorization_for_project(authorization, project)?,
             None => Principal::Owner,
         };
         Ok(Caller { principal, epoch })
@@ -504,7 +504,10 @@ impl RestState {
         // App Check, once the route and the target project are resolved and before the
         // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
         self.admit_app_check(req, path, action)?;
-        let principal = self.principal(req.authorization.as_deref())?;
+        let principal = self.principal(
+            req.authorization.as_deref(),
+            crate::service::project_of_resource(path),
+        )?;
         if let Some(action) = action {
             if req.method != "POST" {
                 return Ok(not_found_text());

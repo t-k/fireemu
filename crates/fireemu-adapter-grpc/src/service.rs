@@ -93,6 +93,17 @@ impl GatewayService {
         }
     }
 
+    fn principal_for_project(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+        project: &str,
+    ) -> Result<Principal, Status> {
+        match &self.rules {
+            Some(r) => r.principal_for_project(metadata, project),
+            None => Ok(Principal::Owner),
+        }
+    }
+
     /// The caller of a unary request: its principal plus the reset epoch it started in.
     /// The epoch is read before the token is verified, so a reset that clears the Auth
     /// store between verification and admission is detected by the guards.
@@ -110,7 +121,7 @@ impl GatewayService {
         let epoch = self.local_backend().map_or(0, |l| l.barrier().epoch());
         self.admit_app_check(metadata, resource, operation)?;
         Ok(Caller {
-            principal: self.principal(metadata)?,
+            principal: self.principal_for_project(metadata, project_of_resource(resource))?,
             epoch,
         })
     }

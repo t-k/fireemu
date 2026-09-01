@@ -405,6 +405,41 @@ fn the_profile_decides_whether_rest_admits_a_mock_token() {
     assert_eq!(status, 401, "{body}");
 }
 
+#[test]
+fn rest_binds_unknown_mock_tokens_to_the_requested_project() {
+    let write = json!({"fields": {"v": {"integerValue": "1"}}});
+    let bearer = format!("Bearer {}", mock_user_token("alice", "demo-app-w0"));
+    let worker_docs = "/v1/projects/demo-app-w0/databases/(default)/documents";
+
+    let firebase = state_with(Some(OWNER_RULES), TokenAcceptance::EmulatorMock);
+    let (status, body) = call_as(
+        &firebase,
+        "PATCH",
+        &format!("{worker_docs}/owned/alice"),
+        write.clone(),
+        Some(&bearer),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call_as(
+        &firebase,
+        "PATCH",
+        &format!("{DOCS}/owned/alice"),
+        write.clone(),
+        Some(&bearer),
+    );
+    assert_eq!(status, 401, "{body}");
+
+    let strict = state_with(Some(OWNER_RULES), TokenAcceptance::Verified);
+    let (status, body) = call_as(
+        &strict,
+        "PATCH",
+        &format!("{worker_docs}/owned/alice"),
+        write,
+        Some(&bearer),
+    );
+    assert_eq!(status, 401, "{body}");
+}
+
 const EMULATOR: &str = "/emulator/v1/projects/demo-app";
 
 fn put_rules(s: &RestState, source: &str) -> (u16, Value) {

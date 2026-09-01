@@ -36,7 +36,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
-use fireemu_core_auth::jwt::{verify_rules_token, TokenAcceptance};
+use fireemu_core_auth::jwt::{verify_rules_token, verify_rules_token_for_project, TokenAcceptance};
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
@@ -456,8 +456,41 @@ impl RulesEnforcer {
         self.principal_from_authorization(Some(value))
     }
 
+    /// Resolves the caller and binds an unsigned Firebase-profile mock token to the project
+    /// named by the routed Firestore resource.
+    pub fn principal_for_project(
+        &self,
+        metadata: &MetadataMap,
+        expected_project: &str,
+    ) -> Result<Principal, Status> {
+        let Some(value) = metadata.get("authorization") else {
+            return Ok(Principal::Anonymous);
+        };
+        let value = value
+            .to_str()
+            .map_err(|_| Status::unauthenticated("malformed authorization metadata"))?;
+        self.principal_from_authorization_for_project(Some(value), expected_project)
+    }
+
     /// Resolves the caller from an `Authorization` header value.
     pub fn principal_from_authorization(&self, value: Option<&str>) -> Result<Principal, Status> {
+        self.principal_from_authorization_with_project(value, None)
+    }
+
+    /// Resolves an `Authorization` header for a routed Firestore project.
+    pub fn principal_from_authorization_for_project(
+        &self,
+        value: Option<&str>,
+        expected_project: &str,
+    ) -> Result<Principal, Status> {
+        self.principal_from_authorization_with_project(value, Some(expected_project))
+    }
+
+    fn principal_from_authorization_with_project(
+        &self,
+        value: Option<&str>,
+        expected_project: Option<&str>,
+    ) -> Result<Principal, Status> {
         let Some(value) = value else {
             return Ok(Principal::Anonymous);
         };
@@ -504,8 +537,13 @@ impl RulesEnforcer {
         let store = store_arc
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
-        let decoded = verify_rules_token(token, &store, now, self.acceptance)
-            .map_err(|e| Status::unauthenticated(format!("invalid ID token: {e}")))?;
+        let decoded = match expected_project {
+            Some(project) => {
+                verify_rules_token_for_project(token, &store, now, self.acceptance, project)
+            }
+            None => verify_rules_token(token, &store, now, self.acceptance),
+        }
+        .map_err(|e| Status::unauthenticated(format!("invalid ID token: {e}")))?;
         drop(store);
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
             .map_err(|e| Status::unauthenticated(format!("invalid ID token claims: {e}")))?;

@@ -2,7 +2,8 @@
 
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
 use fireemu_core_auth::jwt::{
-    decode_unsigned, encode_unsigned, verify_id_token, JwtError, SigningMode, TokenVerification,
+    base64url_encode, decode_unsigned, encode_unsigned, verify_id_token, verify_rules_token,
+    verify_rules_token_for_project, JwtError, SigningMode, TokenAcceptance, TokenVerification,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
@@ -11,6 +12,52 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 fn t0() -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_004_860)
+}
+
+fn mock_user_token(sub: &str, project: &str) -> String {
+    let header = base64url_encode(br#"{"alg":"none","type":"JWT"}"#);
+    let payload = base64url_encode(
+        format!(r#"{{"aud":"{project}","exp":3600,"iat":0,"sub":"{sub}","user_id":"{sub}"}}"#)
+            .as_bytes(),
+    );
+    format!("{header}.{payload}.")
+}
+
+#[test]
+fn firebase_rules_mock_tokens_bind_to_the_routed_project() {
+    let store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let token = mock_user_token("alice", "demo-app-w0");
+
+    assert!(matches!(
+        verify_rules_token(&token, &store, t0(), TokenAcceptance::EmulatorMock),
+        Err(JwtError::WrongAudience { .. })
+    ));
+    assert!(verify_rules_token_for_project(
+        &token,
+        &store,
+        t0(),
+        TokenAcceptance::EmulatorMock,
+        "demo-app-w0",
+    )
+    .is_ok());
+    assert!(matches!(
+        verify_rules_token_for_project(
+            &token,
+            &store,
+            t0(),
+            TokenAcceptance::EmulatorMock,
+            "demo-app-w1",
+        ),
+        Err(JwtError::WrongAudience { .. })
+    ));
+    assert!(verify_rules_token_for_project(
+        &token,
+        &store,
+        t0(),
+        TokenAcceptance::Verified,
+        "demo-app-w0",
+    )
+    .is_err());
 }
 
 #[test]

@@ -1447,6 +1447,59 @@ async fn the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admit
 }
 
 #[tokio::test]
+async fn the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project() {
+    let worker = "demo-app-w0";
+    let worker_db = format!("projects/{worker}/databases/(default)");
+    let worker_docs = format!("{worker_db}/documents");
+    let token = mock_user_token("alice", worker);
+    let write = |project_docs: &str| pb::Write {
+        operation: Some(pb::write::Operation::Update(pb::Document {
+            name: format!("{project_docs}/profiles/alice"),
+            fields: [("name".to_owned(), s("A name"))].into_iter().collect(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    let mut firebase = start_with(TokenAcceptance::EmulatorMock).await;
+    firebase
+        .client
+        .commit(with_bearer(
+            pb::CommitRequest {
+                database: worker_db.clone(),
+                writes: vec![write(&worker_docs)],
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .expect("the mock token audience equals the routed worker project");
+    let err = firebase
+        .client
+        .commit(with_bearer(profile_write("alice"), &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    firebase.handle.abort();
+
+    let mut strict = start_with(TokenAcceptance::Verified).await;
+    let err = strict
+        .client
+        .commit(with_bearer(
+            pb::CommitRequest {
+                database: worker_db,
+                writes: vec![write(&worker_docs)],
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    strict.handle.abort();
+}
+
+#[tokio::test]
 async fn the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify() {
     let mut h = start_with(TokenAcceptance::Verified).await;
     let err = h

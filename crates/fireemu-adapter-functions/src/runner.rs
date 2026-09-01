@@ -86,12 +86,28 @@ pub struct SpawnSpec {
 /// A running runner.
 pub struct Runner {
     child: AsyncMutex<Option<Child>>,
+    #[cfg(windows)]
+    job: Mutex<Option<win32job::Job>>,
     stdin: AsyncMutex<Option<ChildStdin>>,
     hello: Hello,
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
     logs: Arc<Mutex<Vec<String>>>,
     label: String,
     alive: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+fn create_runner_job(child: &Child) -> Result<win32job::Job, String> {
+    let mut limits = win32job::ExtendedLimitInfo::new();
+    limits.limit_kill_on_job_close();
+    let job = win32job::Job::create_with_limit_info(&limits)
+        .map_err(|error| format!("functions runner: cannot create Windows Job Object: {error}"))?;
+    let handle = child
+        .raw_handle()
+        .ok_or_else(|| "functions runner: child process handle is unavailable".to_owned())?;
+    job.assign_process(handle as isize)
+        .map_err(|error| format!("functions runner: cannot join Windows Job Object: {error}"))?;
+    Ok(job)
 }
 
 /// The environment of a runner child: the inherited allowlist, then `extra` (emulator
@@ -150,9 +166,14 @@ impl Runner {
     /// into the reset state). Waiters learn it through the reader task's exit.
     pub fn kill_now(&self) {
         self.alive.store(false, Ordering::SeqCst);
+        #[cfg(windows)]
+        if let Ok(mut job) = self.job.try_lock() {
+            job.take();
+        }
         if let Ok(mut slot) = self.child.try_lock() {
             if let Some(mut child) = slot.take() {
                 let _ = child.start_kill();
+                #[cfg(unix)]
                 kill_process_group(child.id());
                 // Reaped in the background: a killed runner must not linger as a zombie.
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -198,6 +219,14 @@ impl Runner {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?;
+        #[cfg(windows)]
+        let job = match create_runner_job(&child) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = child.kill().await;
+                return Err(error);
+            }
+        };
         let stdin = child
             .stdin
             .take()
@@ -339,11 +368,13 @@ impl Runner {
         let hello = match tokio::time::timeout(hello_timeout, hello_rx).await {
             Ok(Ok(h)) => h,
             Ok(Err(_)) => {
+                #[cfg(unix)]
                 kill_process_group(child.id());
                 let _ = child.kill().await;
                 return Err("functions runner exited before its hello".to_owned());
             }
             Err(_) => {
+                #[cfg(unix)]
                 kill_process_group(child.id());
                 let _ = child.kill().await;
                 return Err(format!(
@@ -354,6 +385,8 @@ impl Runner {
         };
         Ok(Self {
             child: AsyncMutex::new(Some(child)),
+            #[cfg(windows)]
+            job: Mutex::new(Some(job)),
             stdin: AsyncMutex::new(Some(stdin)),
             hello,
             waiters,
@@ -467,10 +500,16 @@ impl Runner {
             .await
             .ok()
             .and_then(|mut slot| slot.take());
+        #[cfg(windows)]
+        if let Ok(mut job) = self.job.lock() {
+            job.take();
+        }
         if let Some(mut child) = child {
+            #[cfg(unix)]
             let pid = child.id();
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             let _ = child.kill().await;
+            #[cfg(unix)]
             kill_process_group(pid);
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         }
@@ -481,6 +520,7 @@ impl Runner {
 /// Kills the process group the runner leads (`process_group(0)`: its id is the runner's
 /// pid), taking the subprocesses of handlers with it. Best effort, through `kill(1)` (the
 /// core forbids unsafe code, so no direct `killpg`).
+#[cfg(unix)]
 fn kill_process_group(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;

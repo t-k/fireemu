@@ -27,6 +27,9 @@ bytes = "1"
 chrono-tz = "0.10"
 chrono = "0.4"
 
+[target.'cfg(windows)'.dependencies]
+win32job = "2.0.3"
+
 [lints]
 workspace = true
 

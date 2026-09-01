@@ -4,9 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(windows))]
+use std::time::Instant;
 
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
@@ -721,6 +724,7 @@ pub fn locate_runner() -> Result<RunnerScript, String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(not(windows), test))]
 struct NodeInstallation {
     program: PathBuf,
     version: String,
@@ -729,6 +733,7 @@ struct NodeInstallation {
     patch: u32,
 }
 
+#[cfg(any(not(windows), test))]
 fn parse_node_version(text: &str) -> Option<(String, u32, u32, u32)> {
     let version = text.trim().strip_prefix('v').unwrap_or(text.trim());
     let core = version.split_once('-').map_or(version, |(core, _)| core);
@@ -739,6 +744,7 @@ fn parse_node_version(text: &str) -> Option<(String, u32, u32, u32)> {
     Some((version.to_owned(), major, minor, patch))
 }
 
+#[cfg(any(not(windows), test))]
 fn requirement_parts(text: &str) -> Option<Vec<Option<u32>>> {
     let text = text.trim().trim_start_matches('v');
     if text.is_empty() {
@@ -752,6 +758,7 @@ fn requirement_parts(text: &str) -> Option<Vec<Option<u32>>> {
         .collect()
 }
 
+#[cfg(any(not(windows), test))]
 fn version_floor(parts: &[Option<u32>]) -> Option<(u32, u32, u32)> {
     Some((
         parts.first().copied().flatten()?,
@@ -760,6 +767,7 @@ fn version_floor(parts: &[Option<u32>]) -> Option<(u32, u32, u32)> {
     ))
 }
 
+#[cfg(any(not(windows), test))]
 fn node_engine_token_matches(token: &str, actual: (u32, u32, u32)) -> Option<bool> {
     for operator in [">=", "<=", ">", "<"] {
         if let Some(version) = token.strip_prefix(operator) {
@@ -824,6 +832,7 @@ fn node_engine_token_matches(token: &str, actual: (u32, u32, u32)) -> Option<boo
     Some(actual == lower)
 }
 
+#[cfg(any(not(windows), test))]
 fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool, String> {
     let expression = expression.trim();
     if expression.is_empty() {
@@ -904,6 +913,7 @@ fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool
     Ok(false)
 }
 
+#[cfg(any(not(windows), test))]
 fn package_node_engine(source: &Path) -> Result<Option<String>, String> {
     let path = source.join("package.json");
     if !path.is_file() {
@@ -980,16 +990,8 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
     Ok((candidates, false))
 }
 
-#[cfg_attr(windows, allow(unreachable_code))]
+#[cfg(not(windows))]
 fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
-    #[cfg(windows)]
-    {
-        let _ = program;
-        return Err(
-            "automatic Node probing is unavailable on Windows; configure functions.runner explicitly"
-                .to_owned(),
-        );
-    }
     const MAX_VERSION_BYTES: usize = 256;
     const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
     let mut command = Command::new(program);
@@ -1070,6 +1072,7 @@ fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
     })
 }
 
+#[cfg(any(not(windows), test))]
 fn select_node_installation(
     engines: Option<&str>,
     installations: &[NodeInstallation],
@@ -1886,14 +1889,18 @@ fn base64_encode(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    #[cfg(unix)]
     use std::process::Command;
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     #[cfg(windows)]
     use super::path_node_candidates;
+    #[cfg(unix)]
+    use super::probe_node;
     use super::{
         check_callable_app_check, function_pubsub_resources, functions_source_signature,
-        node_engine_matches, package_node_engine, parse_node_version, probe_node,
+        node_engine_matches, package_node_engine, parse_node_version,
         provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
         NodeInstallation,
     };

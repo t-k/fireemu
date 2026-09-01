@@ -343,17 +343,17 @@ pub fn decode_structured_query(
             ))
         }
     };
-    let collection_id = CollectionId::try_new(from.collection_id.as_str())
-        .map_err(|e| DecodeError::InvalidQuery(format!("collection id: {e}")))?;
-    let scope = if from.all_descendants {
-        // Under a parent document the group is every collection with that id below it.
-        QueryScope {
-            parent: parent.document.clone(),
-            collection_id,
-            all_descendants: true,
-        }
+    let scope = if from.collection_id.is_empty() && from.all_descendants {
+        QueryScope::kindless_all_descendants(parent.document.clone())
     } else {
-        QueryScope::collection(parent.document.clone(), collection_id)
+        let collection_id = CollectionId::try_new(from.collection_id.as_str())
+            .map_err(|e| DecodeError::InvalidQuery(format!("collection id: {e}")))?;
+        if from.all_descendants {
+            // Under a parent document the group is every collection with that id below it.
+            QueryScope::collection_group_under(parent.document.clone(), collection_id)
+        } else {
+            QueryScope::collection(parent.document.clone(), collection_id)
+        }
     };
     let mut q = Query::new(scope);
     if let Some(w) = &query.r#where {

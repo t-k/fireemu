@@ -13,34 +13,95 @@ use crate::value::Value;
 
 /// Where a query reads from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueryScope {
-    /// Parent document; `None` for a root collection or a collection group.
-    pub parent: Option<DocumentPath>,
-    /// Collection ID.
-    pub collection_id: CollectionId,
-    /// `true` for a collection-group query.
-    pub all_descendants: bool,
+pub enum QueryScope {
+    /// One named collection directly under a parent.
+    Collection {
+        /// Parent document; `None` for a root collection.
+        parent: Option<DocumentPath>,
+        /// Collection ID.
+        collection_id: CollectionId,
+    },
+    /// Every collection of one name below a parent.
+    CollectionGroup {
+        /// Parent document; `None` for the whole database.
+        parent: Option<DocumentPath>,
+        /// Collection ID.
+        collection_id: CollectionId,
+    },
+    /// Every descendant document below a parent, regardless of collection name.
+    KindlessAllDescendants {
+        /// Parent document; `None` for the whole database.
+        parent: Option<DocumentPath>,
+    },
 }
 
 impl QueryScope {
     /// A single collection under `parent` (root when `None`).
     #[must_use]
     pub const fn collection(parent: Option<DocumentPath>, collection_id: CollectionId) -> Self {
-        Self {
+        Self::Collection {
             parent,
             collection_id,
-            all_descendants: false,
         }
     }
 
     /// A collection-group query.
     #[must_use]
     pub const fn collection_group(collection_id: CollectionId) -> Self {
-        Self {
+        Self::CollectionGroup {
             parent: None,
             collection_id,
-            all_descendants: true,
         }
+    }
+
+    /// A collection-group query scoped below `parent`.
+    #[must_use]
+    pub const fn collection_group_under(
+        parent: Option<DocumentPath>,
+        collection_id: CollectionId,
+    ) -> Self {
+        Self::CollectionGroup {
+            parent,
+            collection_id,
+        }
+    }
+
+    /// The kindless all-descendants query used for recursive deletion.
+    #[must_use]
+    pub const fn kindless_all_descendants(parent: Option<DocumentPath>) -> Self {
+        Self::KindlessAllDescendants { parent }
+    }
+
+    /// Parent document, when the query is scoped below one.
+    #[must_use]
+    pub const fn parent(&self) -> Option<&DocumentPath> {
+        match self {
+            Self::Collection { parent, .. }
+            | Self::CollectionGroup { parent, .. }
+            | Self::KindlessAllDescendants { parent } => parent.as_ref(),
+        }
+    }
+
+    /// Named collection selector, absent only for a kindless scan.
+    #[must_use]
+    pub const fn collection_id(&self) -> Option<&CollectionId> {
+        match self {
+            Self::Collection { collection_id, .. }
+            | Self::CollectionGroup { collection_id, .. } => Some(collection_id),
+            Self::KindlessAllDescendants { .. } => None,
+        }
+    }
+
+    /// Whether descendants, rather than one direct collection, are selected.
+    #[must_use]
+    pub const fn all_descendants(&self) -> bool {
+        !matches!(self, Self::Collection { .. })
+    }
+
+    /// Whether collection names are ignored.
+    #[must_use]
+    pub const fn is_kindless(&self) -> bool {
+        matches!(self, Self::KindlessAllDescendants { .. })
     }
 }
 
@@ -432,7 +493,7 @@ impl Query {
             self.dnf().iter().map(|d| d.len() as u64).sum()
         };
         let orders = self.order_by.len() as u64;
-        let parent_path = u64::from(self.scope.parent.is_some());
+        let parent_path = u64::from(self.scope.parent().is_some());
         ComponentCount {
             filters,
             orders,

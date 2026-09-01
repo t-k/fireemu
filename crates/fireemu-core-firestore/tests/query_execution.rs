@@ -167,19 +167,27 @@ fn reference_set_field(fields: &mut BTreeMap<String, Value>, path: &FieldPath, v
 /// cursors, the offset, the limit and the projection are applied.
 fn reference_run(corpus: &[Document], query: &Query) -> Vec<Document> {
     let scope = &query.scope;
-    let parent_len = scope.parent.as_ref().map_or(0, |p| p.pairs().len());
+    let parent_len = scope.parent().map_or(0, |p| p.pairs().len());
     let order = query.effective_order_by();
     let mut rows: Vec<(Vec<Value>, Document)> = Vec::new();
     for doc in corpus {
-        let in_scope = if scope.all_descendants {
-            doc.path.collection_id() == &scope.collection_id
-        } else {
-            doc.path.pairs().len() == parent_len + 1
-                && doc.path.collection_id() == &scope.collection_id
-                && scope
-                    .parent
-                    .as_ref()
-                    .is_none_or(|p| doc.path.pairs()[..parent_len] == *p.pairs())
+        let in_scope = match scope {
+            QueryScope::Collection {
+                parent,
+                collection_id,
+            } => {
+                doc.path.pairs().len() == parent_len + 1
+                    && doc.path.collection_id() == collection_id
+                    && parent
+                        .as_ref()
+                        .is_none_or(|p| doc.path.pairs()[..parent_len] == *p.pairs())
+            }
+            QueryScope::CollectionGroup { collection_id, .. } => {
+                doc.path.collection_id() == collection_id
+            }
+            QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|p| {
+                doc.path.pairs().len() > parent_len && doc.path.pairs()[..parent_len] == *p.pairs()
+            }),
         };
         if !in_scope {
             continue;
@@ -385,26 +393,10 @@ impl Gen {
 
     fn query(&mut self, corpus: &[Document]) -> Query {
         let scope = match self.below(4) {
-            0 => QueryScope {
-                parent: Some(path("items/d01")),
-                collection_id: collection("sub"),
-                all_descendants: false,
-            },
-            1 => QueryScope {
-                parent: None,
-                collection_id: collection("sub"),
-                all_descendants: true,
-            },
-            2 => QueryScope {
-                parent: None,
-                collection_id: collection("other"),
-                all_descendants: false,
-            },
-            _ => QueryScope {
-                parent: None,
-                collection_id: collection("items"),
-                all_descendants: false,
-            },
+            0 => QueryScope::collection(Some(path("items/d01")), collection("sub")),
+            1 => QueryScope::collection_group(collection("sub")),
+            2 => QueryScope::collection(None, collection("other")),
+            _ => QueryScope::collection(None, collection("items")),
         };
         let mut q = Query::new(scope);
         q.order_by = self.order();
@@ -606,15 +598,11 @@ fn large_collection(documents: usize) -> FirestoreState {
 #[test]
 fn a_finite_limit_bounds_candidates_and_only_selected_documents_are_cloned() {
     let db = large_collection(500);
-    let base = Query::new(QueryScope {
-        parent: None,
-        collection_id: collection("items"),
-        all_descendants: false,
-    })
-    .with_order(OrderClause {
-        field: fp("n"),
-        direction: Direction::Ascending,
-    });
+    let base =
+        Query::new(QueryScope::collection(None, collection("items"))).with_order(OrderClause {
+            field: fp("n"),
+            direction: Direction::Ascending,
+        });
 
     let mut top_one = base.clone();
     top_one.limit = Some(1);
@@ -771,11 +759,7 @@ fn streaming_aggregations_agree_with_the_materializing_reference() {
 #[test]
 fn scalar_aggregations_retain_no_document_payload() {
     let db = large_collection(500);
-    let base = Query::new(QueryScope {
-        parent: None,
-        collection_id: collection("items"),
-        all_descendants: false,
-    });
+    let base = Query::new(QueryScope::collection(None, collection("items")));
     let aggregations = [
         Aggregation::Count { up_to: None },
         Aggregation::Sum(fp("n")),

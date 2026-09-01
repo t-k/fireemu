@@ -1186,12 +1186,31 @@ pub fn rules_path(path: &DocumentPath) -> String {
 /// (its collection, id undetermined); a collection-group query prepends the "any prefix"
 /// marker that only a recursive wildcard rule can cover, as production requires.
 pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentPath>, Status> {
-    let collection_id = query.scope.collection_id.as_str();
-    let relative = match (&query.scope.parent, query.scope.all_descendants) {
-        (Some(p), false) => format!("{}/{collection_id}/{ABSTRACT_SEGMENT}", p.relative()),
-        (_, false) => format!("{collection_id}/{ABSTRACT_SEGMENT}"),
-        (_, true) => {
+    use fireemu_core_firestore::query::QueryScope;
+    let relative = match &query.scope {
+        QueryScope::Collection {
+            parent: Some(parent),
+            collection_id,
+        } => format!(
+            "{}/{}/{ABSTRACT_SEGMENT}",
+            parent.relative(),
+            collection_id.as_str()
+        ),
+        QueryScope::Collection {
+            parent: None,
+            collection_id,
+        } => format!("{}/{ABSTRACT_SEGMENT}", collection_id.as_str()),
+        QueryScope::CollectionGroup { collection_id, .. } => {
             format!("{ABSTRACT_PREFIX}/{ABSTRACT_PREFIX}/{collection_id}/{ABSTRACT_SEGMENT}")
+        }
+        QueryScope::KindlessAllDescendants {
+            parent: Some(parent),
+        } => format!(
+            "{}/{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}/{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}",
+            parent.relative()
+        ),
+        QueryScope::KindlessAllDescendants { parent: None } => {
+            format!("{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}/{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}")
         }
     };
     let path = DocumentPath::parse(&parent.project, &parent.database, &relative)

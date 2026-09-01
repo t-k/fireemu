@@ -952,8 +952,10 @@ impl LocalBackend {
             o.field.is_document_name()
                 && o.direction == fireemu_core_firestore::query::Direction::Ascending
         });
-        if !query.scope.all_descendants
-            || query.filter.is_some()
+        if !matches!(
+            query.scope,
+            fireemu_core_firestore::query::QueryScope::CollectionGroup { .. }
+        ) || query.filter.is_some()
             || !name_ascending_only
             || query.limit.is_some()
             || query.offset != 0
@@ -983,7 +985,11 @@ impl LocalBackend {
             let text = format!(
                 "{}|{}|{}|{:?}|{}|{}",
                 req.parent,
-                query.scope.collection_id.as_str(),
+                query
+                    .scope
+                    .collection_id()
+                    .expect("collection-group checked above")
+                    .as_str(),
                 partition_count,
                 read_time.map(fireemu_core_types::time::LogicalInstant::as_nanos),
                 self.epoch(),

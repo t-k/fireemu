@@ -168,6 +168,82 @@ async fn collect_docs(
 }
 
 #[tokio::test]
+async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
+    let (mut client, _, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: [
+                "roots/target",
+                "roots/target/children/a",
+                "roots/target/children/a/grandchildren/b",
+                "roots/sibling/children/c",
+            ]
+            .into_iter()
+            .map(|name| update_write(name, &[("value", i(1))]))
+            .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let descendants = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: format!("{DOCS}/roots/target"),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    select: Some(sq::Projection {
+                        fields: vec![sq::FieldReference {
+                            field_path: "__name__".to_owned(),
+                        }],
+                    }),
+                    from: vec![sq::CollectionSelector {
+                        collection_id: String::new(),
+                        all_descendants: true,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        descendants
+            .iter()
+            .map(|document| document.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            format!("{DOCS}/roots/target/children/a"),
+            format!("{DOCS}/roots/target/children/a/grandchildren/b"),
+        ]
+    );
+    assert!(descendants
+        .iter()
+        .all(|document| document.fields.is_empty()));
+
+    let err = client
+        .run_query(pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: String::new(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    handle.abort();
+}
+
+#[tokio::test]
 async fn commit_get_query_and_delete_round_trip() {
     let (mut client, clock, handle) = start().await;
     let commit = client

@@ -196,6 +196,8 @@ pub enum IndexDecision {
         /// The index production would require.
         requirement: IndexDefinition,
     },
+    /// Internal kindless descendant query; no collection-specific index can represent it.
+    KindlessScan,
     /// The query uses an operator the validator does not model; never treated as index-free.
     Unsupported {
         /// Feature.
@@ -218,6 +220,7 @@ impl fmt::Display for IndexDecision {
                     describe(requirement)
                 )
             }
+            Self::KindlessScan => write!(f, "kindless descendant scan"),
             Self::Unsupported { feature } => write!(f, "unsupported: {feature}"),
         }
     }
@@ -448,8 +451,10 @@ fn composite_serves(
 /// Decides how a canonical query is served.
 #[must_use]
 pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> IndexDecision {
-    let collection = &query.scope.collection_id;
-    let group = query.scope.all_descendants;
+    let Some(collection) = query.scope.collection_id() else {
+        return IndexDecision::KindlessScan;
+    };
+    let group = query.scope.all_descendants();
     let effective_order = query.effective_order_by();
     let mut chosen: Option<IndexDefinition> = None;
     let mut assumed: Option<IndexDefinition> = None;

@@ -410,15 +410,28 @@ fn transaction_expiry(t: &Transaction) -> LogicalInstant {
 /// transaction's query holds a lock, so that a phantom write into a scanned collection
 /// contends with the transaction that scanned it.
 fn scope_covers(scope: &crate::query::QueryScope, path: &DocumentPath) -> bool {
-    if scope.all_descendants {
-        let in_group = path.pairs().iter().any(|(c, _)| *c == scope.collection_id);
-        match &scope.parent {
-            Some(parent) => in_group && path_has_prefix(path, parent),
-            None => in_group,
+    use crate::query::QueryScope;
+    match scope {
+        QueryScope::Collection {
+            parent,
+            collection_id,
+        } => {
+            path.parent_document().as_ref() == parent.as_ref()
+                && path.collection_id() == collection_id
         }
-    } else {
-        path.parent_document().as_ref() == scope.parent.as_ref()
-            && *path.collection_id() == scope.collection_id
+        QueryScope::CollectionGroup {
+            parent,
+            collection_id,
+        } => {
+            let in_group = path.pairs().iter().any(|(c, _)| c == collection_id);
+            parent
+                .as_ref()
+                .is_none_or(|parent| in_group && path_has_prefix(path, parent))
+                && in_group
+        }
+        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|parent| {
+            path.pairs().len() > parent.pairs().len() && path_has_prefix(path, parent)
+        }),
     }
 }
 
@@ -1298,7 +1311,7 @@ impl FirestoreState {
         mut sink: F,
     ) -> Result<QueryStats, FirestoreError> {
         let scope = &query.scope;
-        let parent_len = scope.parent.as_ref().map_or(0, |p| p.pairs().len());
+        let parent_len = scope.parent().map_or(0, |p| p.pairs().len());
         let order = query.effective_order_by();
         let offset = usize::try_from(query.offset).unwrap_or(usize::MAX);
         // `offset + limit` rows are enough to answer a query with a finite limit: everything
@@ -1312,21 +1325,33 @@ impl FirestoreState {
         let mut rows: Vec<Candidate<'a, '_>> = Vec::new();
         for doc in self.live_documents(version) {
             stats.scanned += 1;
-            let in_scope = if scope.all_descendants {
-                // A collection group under a parent document: every document of a
-                // collection with that id anywhere below the parent.
-                doc.path.collection_id() == &scope.collection_id
-                    && scope.parent.as_ref().is_none_or(|p| {
+            let in_scope = match scope {
+                crate::query::QueryScope::Collection {
+                    parent,
+                    collection_id,
+                } => {
+                    doc.path.pairs().len() == parent_len + 1
+                        && doc.path.collection_id() == collection_id
+                        && parent
+                            .as_ref()
+                            .is_none_or(|p| doc.path.pairs()[..parent_len] == *p.pairs())
+                }
+                crate::query::QueryScope::CollectionGroup {
+                    parent,
+                    collection_id,
+                } => {
+                    doc.path.collection_id() == collection_id
+                        && parent.as_ref().is_none_or(|p| {
+                            doc.path.pairs().len() > parent_len
+                                && doc.path.pairs()[..parent_len] == *p.pairs()
+                        })
+                }
+                crate::query::QueryScope::KindlessAllDescendants { parent } => {
+                    parent.as_ref().is_none_or(|p| {
                         doc.path.pairs().len() > parent_len
                             && doc.path.pairs()[..parent_len] == *p.pairs()
                     })
-            } else {
-                doc.path.pairs().len() == parent_len + 1
-                    && doc.path.collection_id() == &scope.collection_id
-                    && scope
-                        .parent
-                        .as_ref()
-                        .is_none_or(|p| doc.path.pairs()[..parent_len] == *p.pairs())
+                }
             };
             if !in_scope {
                 continue;

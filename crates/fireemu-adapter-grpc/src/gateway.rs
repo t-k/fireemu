@@ -149,6 +149,7 @@ impl Gateway {
             IndexDecision::FullScanAllowed { plan } => {
                 warnings.extend(plan.diagnostics.iter().map(|d| (*d).to_owned()));
             }
+            IndexDecision::KindlessScan => {}
             IndexDecision::MissingRequired { requirement } => {
                 return Err(Rejection::MissingIndex {
                     fragment: requirement.indexes_json_fragment(),

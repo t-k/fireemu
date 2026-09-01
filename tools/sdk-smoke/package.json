@@ -12,7 +12,8 @@
     "smoke:pubsub": "node pubsub.mjs",
     "smoke:appcheck": "node appcheck.mjs",
     "smoke:missing-index": "node missing-index.mjs",
-    "smoke:rules-unit-testing": "node rules-unit-testing.mjs"
+    "smoke:rules-unit-testing": "node rules-unit-testing.mjs",
+    "smoke:rules-unit-testing-explicit-rules": "node rules-unit-testing-explicit-rules.mjs"
   },
   "dependencies": {
     "firebase": "^12",

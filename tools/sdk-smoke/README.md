@@ -97,3 +97,17 @@ unsigned mock tokens `createMockUserToken` mints -- `iat: 0`, so `exp` is an hou
 epoch, and a `sub` naming a user nobody created -- exactly as the official Firestore and
 Storage emulators do. Running the same script under `"profile": "strict"` fails at the first
 `authenticatedContext` call, which is the point of the two profiles.
+
+## `rules-unit-testing-explicit-rules.mjs`
+
+This focused smoke keeps Hub discovery but supplies explicit Firestore and Storage rule strings
+to `initializeTestEnvironment()`. The real package installs them through Firestore's
+`:securityRules` route and Storage's `/internal/setRules` route, then proves that both services
+enforce owner-only access. It needs only Firestore and Storage:
+
+```sh
+./target/debug/fireemu exec --config tools/sdk-smoke/fireemu.rules-unit-testing.json \
+  --project demo-app --only firestore,storage --firestore-port 0 --http-port 0 \
+  --storage-port 0 --ui-port 0 --hub-port 24400 \
+  -- sh -c 'cd tools/sdk-smoke && node rules-unit-testing-explicit-rules.mjs'
+```

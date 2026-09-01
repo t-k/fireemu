@@ -665,6 +665,29 @@ fn rules_unit_testing_set_rules_rejects_invalid_updates_without_replacing_rules(
         handle(&s, req("PUT", "/internal/setRule", &[], b""),).status,
         501
     );
+
+    let valid_update = serde_json::to_vec(&json!({
+        "rules": {"files": [{"name": "storage.rules", "content": ALLOW_ALL}]}
+    }))
+    .unwrap();
+    for path in [
+        "internal/setRules",
+        "//internal/setRules",
+        "/internal/setRules/",
+        "///internal/setRules//",
+    ] {
+        let s = state(Some(DENY_ALL));
+        assert_eq!(
+            handle(&s, req("PUT", path, &[], &valid_update)).status,
+            501,
+            "{path}"
+        );
+        assert_eq!(
+            anonymous_multipart_upload(&s, "noncanonical-route.txt").status,
+            403,
+            "{path}"
+        );
+    }
 }
 
 #[test]

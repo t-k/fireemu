@@ -1372,6 +1372,9 @@ enum Route {
 
 #[allow(clippy::too_many_lines)]
 fn route(method: &str, path: &str) -> Result<Route, String> {
+    if method == "PUT" && path == "/internal/setRules" {
+        return Ok(Route::SetRules);
+    }
     let mut segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     while segments.last() == Some(&"") {
         segments.pop();
@@ -1395,7 +1398,6 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
         }
     }
     match (method, segments.as_slice()) {
-        ("PUT", ["internal", "setRules"]) => Ok(Route::SetRules),
         ("GET", ["b"]) => Ok(Route::GcsListBuckets),
         ("GET", ["b", b, "o"] | ["storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsList { bucket: d(b)? })

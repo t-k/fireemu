@@ -372,6 +372,7 @@ impl Parser<'_> {
                 negated: false,
                 items: vec![ClassItem::Named(self.parse_unicode_class()?, e == 'p')],
             },
+            '0' => Node::Char('\0'),
             // A digit after a backslash is a backreference, which RE2 does not have.
             '1'..='9' => return Err(RegexError("backreferences are not supported".into())),
             'b' | 'B' | 'A' | 'z' => {

@@ -378,8 +378,7 @@ impl Parser<'_> {
                         match self.bump() {
                             Some('i') => self.flags.case_insensitive = !negate,
                             Some('s') => self.flags.dot_all = !negate,
-                            Some('m') => {}
-                            Some('U') => {}
+                            Some('m' | 'U') => {}
                             Some('-') => negate = true,
                             Some(':') => break,
                             Some(')') => return Ok(Node::Seq(Vec::new())),
@@ -695,7 +694,6 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
     let mut index = 0;
     let mut depth = 0u64;
     let mut in_class = false;
-    let mut in_posix_class = false;
     let mut class_first = false;
     while let Some(character) = characters.get(index).copied() {
         if character == '\\' {
@@ -706,23 +704,13 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
             continue;
         }
         if in_class {
-            if in_posix_class {
-                if character == ':' && characters.get(index + 1) == Some(&']') {
-                    in_posix_class = false;
-                    index = index.saturating_add(2);
-                } else {
-                    index = index.saturating_add(1);
-                }
-                continue;
-            }
             if class_first && character == '^' {
                 index = index.saturating_add(1);
                 continue;
             }
-            if character == '[' && characters.get(index + 1) == Some(&':') {
-                in_posix_class = true;
+            if let Some(after_member) = posix_class_end(&characters, index) {
                 class_first = false;
-                index = index.saturating_add(2);
+                index = after_member;
                 continue;
             }
             if character == ']' && !class_first {
@@ -749,6 +737,24 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
         index = index.saturating_add(1);
     }
     Ok(())
+}
+
+fn posix_class_end(characters: &[char], start: usize) -> Option<usize> {
+    if characters.get(start) != Some(&'[') || characters.get(start + 1) != Some(&':') {
+        return None;
+    }
+    let mut index = start.saturating_add(2);
+    if characters.get(index) == Some(&'^') {
+        index = index.saturating_add(1);
+    }
+    while characters
+        .get(index)
+        .is_some_and(char::is_ascii_alphanumeric)
+    {
+        index = index.saturating_add(1);
+    }
+    (characters.get(index) == Some(&':') && characters.get(index + 1) == Some(&']'))
+        .then_some(index.saturating_add(2))
 }
 
 /// Expands `$0` (the whole match), `$1` .. `$9` (groups) and `$$` (a literal `$`).

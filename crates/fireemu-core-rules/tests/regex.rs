@@ -345,7 +345,13 @@ fn compile_nesting_preflight_ignores_escaped_and_class_parentheses() {
         .is_full_match("a")
         .unwrap());
 
-    for class in ["[^]x]", r"[\]]", "[[:alpha:]]", "[abcdefghij[:alpha:]]"] {
+    for class in [
+        "[^]x]",
+        r"[\]]",
+        "[[:alpha:]]",
+        "[abcdefghij[:alpha:]]",
+        "[[:alpha]",
+    ] {
         let above_limit = format!("{class}{}a{}", "(".repeat(9), ")".repeat(9));
         assert_eq!(
             Regex::new(&above_limit).unwrap_err().to_string(),
@@ -357,6 +363,12 @@ fn compile_nesting_preflight_ignores_escaped_and_class_parentheses() {
     assert!(Regex::new(&nested_non_capturing)
         .unwrap()
         .is_full_match("a")
+        .unwrap());
+
+    let sequential = "(a)".repeat(9);
+    assert!(Regex::new(&sequential)
+        .unwrap()
+        .is_full_match(&"a".repeat(9))
         .unwrap());
 }
 

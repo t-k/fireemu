@@ -108,7 +108,53 @@ fn prop_rules_regex_exhaustion_never_allows() {
 
 const CALL_DEPTH_MAXIMUM: usize = 20;
 
+fn allowed_linear_control(character: char) -> bool {
+    matches!(character, '\t' | '\n' | '\r') || !character.is_control()
+}
+
+fn linear_control_character() -> impl Strategy<Value = char> {
+    prop_oneof![
+        any::<char>().prop_filter("ordinary noncontrol character", |character| {
+            !character.is_control()
+        }),
+        Just('\t'),
+        Just('\n'),
+        Just('\r'),
+        (0_u32..=0x9f).prop_filter_map("C0 or C1 control", |value| {
+            char::from_u32(value).filter(|character| character.is_control())
+        }),
+    ]
+}
+
 proptest! {
+    /// REQ-RULES-PARITY-01: a capture-free one-character alternative repeat makes the
+    /// same decision as its Unicode character predicate for every generated subject.
+    #[test]
+    fn prop_rules_regex_linear_control_filter_matches_the_character_predicate(
+        characters in prop::collection::vec(linear_control_character(), 0..256),
+    ) {
+        let source = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /messages/{id} {
+      allow create: if request.resource.data.content.matches('^(?:[\\t\\n\\r]|[^\\\\p{Cc}])*$');
+    }
+  }
+}";
+        let parsed = parse_ruleset(source).unwrap();
+        let subject = characters.iter().collect::<String>();
+        let mut request = ctx();
+        request.method = Method::Create;
+        request.path = "/databases/(default)/documents/messages/m1".to_owned();
+        request.request_resource = Some(document([(
+            "content".to_owned(),
+            RulesValue::String(subject),
+        )]));
+        let actual = matches!(evaluate_request(&parsed, &request).decision, Decision::Allow);
+        let expected = characters.iter().copied().all(allowed_linear_control);
+        prop_assert_eq!(actual, expected);
+    }
+
     /// REQ-RULES-PARITY-01: after Rules string decoding, regex `\0` matches U+0000 and
     /// never ASCII `0` or the two-character backslash-zero spelling, for arbitrary safe
     /// surrounding text.

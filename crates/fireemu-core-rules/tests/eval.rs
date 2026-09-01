@@ -688,6 +688,35 @@ service firebase.storage {
 }
 
 #[test]
+fn linear_regex_repeats_decide_normally_in_rules() {
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /messages/{id} {
+      allow create: if request.resource.data.content.matches('^(?:[\\t\\n\\r]|[^\\\\p{Cc}])*$');
+    }
+  }
+}";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let decide = |content: String| {
+        let mut request = ctx(
+            Method::Create,
+            "/databases/(default)/documents/messages/m1",
+            None,
+        );
+        request.request_resource = Some(doc(&[("content", RulesValue::String(content))]));
+        evaluate_request(&ruleset, &request).decision
+    };
+
+    assert!(matches!(decide("a".repeat(3_000)), Decision::Allow));
+    assert!(matches!(decide("a\tb\nc\r".to_owned()), Decision::Allow));
+    assert!(matches!(
+        decide("ok\u{0007}no".to_owned()),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+}
+
+#[test]
 fn range_values_decide_comparisons_only_when_every_member_agrees() {
     use fireemu_core_rules::value::{RangeBound, ValueRange};
     let rules = |cond: &str| {

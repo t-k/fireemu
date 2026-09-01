@@ -6,8 +6,86 @@
 
 use fireemu_core_rules::regex::{Regex, RegexRuntimeError};
 
+const LINEAR_CONTROL_FILTER: &str = r"^(?:[\t\n\r]|[^\p{Cc}])*$";
+
 fn full(p: &str, s: &str) -> bool {
     Regex::new(p).unwrap().is_full_match(s).unwrap()
+}
+
+#[test]
+fn character_class_alternative_repeats_do_not_spend_subject_length_as_match_depth() {
+    let regex = Regex::new(LINEAR_CONTROL_FILTER).unwrap();
+    for length in [0, 1, 6, 7, 32, 33, 3_000] {
+        let subject = "a".repeat(length);
+        assert_eq!(regex.is_full_match(&subject), Ok(true), "length={length}");
+    }
+    for allowed in ["\t", "\n", "\r", "a\tb\nc\r", "日本語\ntext"] {
+        assert_eq!(regex.is_full_match(allowed), Ok(true), "{allowed:?}");
+    }
+    for forbidden in [
+        '\0', '\u{0007}', '\u{000b}', '\u{000c}', '\u{007f}', '\u{0085}',
+    ] {
+        assert_eq!(
+            regex.is_full_match(&format!("ok{forbidden}no")),
+            Ok(false),
+            "{forbidden:?}"
+        );
+    }
+}
+
+#[test]
+fn linear_character_alternative_repeat_uses_constant_native_stack() {
+    let result = std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            Regex::new(LINEAR_CONTROL_FILTER)
+                .unwrap()
+                .is_full_match(&"x".repeat(10_000))
+        })
+        .unwrap()
+        .join()
+        .expect("the matcher must not overflow the small stack");
+    assert_eq!(result, Ok(true));
+}
+
+#[test]
+fn fixed_width_alternative_branch_probes_are_step_bounded() {
+    let mut branches = (0..80)
+        .map(|index| format!("[\\x{{{:x}}}]", 0x100 + index))
+        .collect::<Vec<_>>();
+    branches.push("[z]".to_owned());
+    let regex = Regex::new(&format!("(?:{})*", branches.join("|"))).unwrap();
+    assert!(matches!(
+        regex.is_full_match(&"z".repeat(3_000)),
+        Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
+            if current > maximum
+    ));
+}
+
+#[test]
+fn fixed_width_alternatives_preserve_capture_and_fallback_semantics() {
+    assert_eq!(
+        Regex::new("((?:[a]|[b]))+")
+            .unwrap()
+            .replace_all("ab", "<$1>")
+            .unwrap(),
+        "<b>"
+    );
+    assert_eq!(
+        Regex::new("([a])|([a])")
+            .unwrap()
+            .replace_all("a", "<$1:$2>")
+            .unwrap(),
+        "<a:>"
+    );
+    assert!(Regex::new("(?:[a]|[a-z])+")
+        .unwrap()
+        .is_full_match("az")
+        .unwrap());
+    assert!(Regex::new("(?:ab|c)+")
+        .unwrap()
+        .is_full_match("abc")
+        .unwrap());
 }
 
 #[test]

@@ -263,6 +263,47 @@ fn list(collection: &str) -> pb::RunQueryRequest {
 }
 
 #[tokio::test]
+async fn linear_regex_repeats_allow_valid_long_writes_without_depth_exhaustion() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /messages/{id} {
+      allow create: if request.resource.data.content.matches('^(?:[\\t\\n\\r]|[^\\\\p{Cc}])*$');
+    }
+  }
+}",
+    )
+    .unwrap();
+
+    let long = "a".repeat(3_000);
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("messages/long", &[("content", s(&long))])]),
+            &alice_token,
+        ))
+        .await
+        .unwrap();
+
+    let error = h
+        .client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "messages/control",
+                &[("content", s("ok\u{0007}no"))],
+            )]),
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    assert!(!error.message().contains("FIREEMU-REGEX"), "{error}");
+    h.handle.abort();
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn owner_bypasses_rules_and_users_are_checked_per_method() {
     let mut h = start().await;

@@ -909,38 +909,35 @@ fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> 
     }
 }
 
-fn literal_alternative(node: &Node) -> Option<char> {
+fn single_character_leaf(node: &Node) -> Option<&Node> {
     match node {
-        Node::Char(character) => Some(*character),
-        Node::Seq(items) if items.len() == 1 => literal_alternative(&items[0]),
-        Node::Group(None, inner) => literal_alternative(inner),
-        _ => None,
+        Node::Char(_) | Node::Any | Node::Class { .. } => Some(node),
+        Node::Seq(items) if items.len() == 1 => single_character_leaf(&items[0]),
+        Node::Group(None, inner) => single_character_leaf(inner),
+        Node::Seq(_)
+        | Node::Group(Some(_), _)
+        | Node::Start
+        | Node::End
+        | Node::Alt(_)
+        | Node::Repeat { .. } => None,
     }
 }
 
-fn disjoint_literal_alternatives(branches: &[Node], flags: Flags) -> bool {
-    let Some(literals) = branches
-        .iter()
-        .map(literal_alternative)
-        .collect::<Option<Vec<_>>>()
-    else {
-        return false;
-    };
-    literals.iter().enumerate().all(|(index, left)| {
-        literals[index + 1..]
+fn has_single_character_branches(branches: &[Node]) -> bool {
+    !branches.is_empty()
+        && branches
             .iter()
-            .all(|right| !chars_equal(*left, *right, flags))
-    })
+            .all(|branch| single_character_leaf(branch).is_some())
 }
 
-fn is_deterministic(node: &Node, flags: Flags) -> bool {
+fn is_deterministic(node: &Node, _flags: Flags) -> bool {
     let mut pending = vec![node];
     while let Some(node) = pending.pop() {
         match node {
             Node::Char(_) | Node::Any | Node::Class { .. } | Node::Start | Node::End => {}
             Node::Group(_, inner) => pending.push(inner),
             Node::Seq(items) => pending.extend(items),
-            Node::Alt(branches) if disjoint_literal_alternatives(branches, flags) => {
+            Node::Alt(branches) if has_single_character_branches(branches) => {
                 pending.extend(branches);
             }
             Node::Alt(_) | Node::Repeat { .. } => return false,
@@ -993,13 +990,16 @@ fn deterministic_end(
                         pending.extend(items.iter().rev().map(DeterministicTask::Match));
                     }
                     Node::Alt(branches) => {
-                        let selected = branches.iter().find(|branch| {
-                            literal_alternative(branch).is_some_and(|expected| {
-                                ctx.chars
-                                    .get(end)
-                                    .is_some_and(|actual| chars_equal(*actual, expected, ctx.flags))
-                            })
-                        });
+                        let mut selected = None;
+                        for branch in branches {
+                            charge_step(ctx)?;
+                            let leaf = single_character_leaf(branch)
+                                .expect("deterministic alternatives have one-character branches");
+                            if atomic_end(leaf, ctx, end).is_some() {
+                                selected = Some(branch);
+                                break;
+                            }
+                        }
                         let Some(selected) = selected else {
                             *ctx.caps.borrow_mut() = original_captures;
                             return Ok(None);

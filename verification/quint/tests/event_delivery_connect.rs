@@ -1,10 +1,13 @@
 //! Conformance boundary tests for the Quint event-delivery driver.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use fireemu_verification_quint::event_delivery::{
     EventDeliveryDriver, EventDeliveryState, EventLifecycle, MODELED_ACTIONS,
 };
+use quint_connect::runner::{run_test, Config as RunnerConfig, TestConfig};
 
 fn one_event_state(
     lifecycle: EventLifecycle,
@@ -34,6 +37,10 @@ fn one_event_state(
 
 fn driver() -> EventDeliveryDriver {
     EventDeliveryDriver::try_new(vec!["e1".to_owned()], 2).expect("valid driver")
+}
+
+fn absolute_spec_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("specs/EventDelivery.qnt")
 }
 
 #[test]
@@ -123,4 +130,33 @@ fn modeled_actions_exclude_the_rust_only_interrupt_transition() {
             "DiscardStale",
         ]
     );
+}
+
+#[test]
+#[ignore = "requires the pinned local Quint CLI"]
+fn deterministic_scenarios_cover_all_actions() {
+    let recorded = Arc::new(Mutex::new(BTreeSet::new()));
+
+    for scenario in ["success", "retryExhaustion", "staleDiscard", "cancel"] {
+        let driver = driver().with_action_recorder(Arc::clone(&recorded));
+        let config = RunnerConfig {
+            test_name: format!("EventDelivery scenario {scenario}"),
+            gen_config: TestConfig {
+                spec: absolute_spec_path().to_string_lossy().into_owned(),
+                main: Some("EventDeliveryScenarios".to_owned()),
+                test: scenario.to_owned(),
+                max_samples: Some(1),
+                seed: "0x1".to_owned(),
+            },
+        };
+        run_test(driver, config)
+            .unwrap_or_else(|error| panic!("scenario {scenario} failed: {error:#}"));
+    }
+
+    let actual = recorded.lock().expect("action recorder lock").clone();
+    let expected = MODELED_ACTIONS
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual, expected);
 }

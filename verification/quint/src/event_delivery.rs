@@ -311,8 +311,8 @@ impl Driver for EventDeliveryDriver {
 
     fn config() -> Config {
         Config {
-            state: &["observable"],
-            ..Config::default()
+            state: &["EventDeliveryScenarios::EventDelivery::observable"],
+            nondet: &["EventDeliveryScenarios::EventDelivery::actionTaken"],
         }
     }
 

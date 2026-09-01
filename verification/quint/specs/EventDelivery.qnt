@@ -27,10 +27,15 @@ module EventDelivery {
     stale: str -> bool,
   }
 
+  // Quint Connect 0.1.2 does not request Quint's built-in MBT metadata for
+  // named `quint test` runs, so the pilot records the equivalent boundary explicitly.
+  type ActionTaken = { tag: str, value: { event: str } }
+
   var observable: Observable
   var previousObservable: Observable
   var lastAction: str
   var lastTarget: Set[str]
+  var actionTaken: ActionTaken
 
   pure val TERMINAL = Set(Succeeded, DeadLettered, Cancelled, DiscardedStaleEpoch)
   pure val NON_TERMINAL = Set(Pending, Leased, Running, RetryWaiting)
@@ -65,10 +70,14 @@ module EventDelivery {
     stale: EVENTS.mapBy(event => state.get(event) == DiscardedStaleEpoch),
   }
 
-  action record(actionName, target, state, attempts, capturedEpoch, currentEpoch) = all {
+  action record(actionName, event, target, state, attempts, capturedEpoch, currentEpoch) = all {
     previousObservable' = observable,
     lastAction' = actionName,
     lastTarget' = target,
+    actionTaken' = {
+      tag: actionName,
+      value: { event: event },
+    },
     observable' = makeObservable(state, attempts, capturedEpoch, currentEpoch),
   }
 
@@ -82,6 +91,7 @@ module EventDelivery {
       previousObservable' = initial,
       lastAction' = "Init",
       lastTarget' = Set(),
+      actionTaken' = { tag: "init", value: { event: "" } },
     }
   }
 
@@ -89,6 +99,7 @@ module EventDelivery {
     observable.state.get(event) == Pending,
     record(
       "Lease",
+      event,
       Set(event),
       observable.state.set(event, Leased),
       observable.attempts,
@@ -102,6 +113,7 @@ module EventDelivery {
     observable.attempts.get(event) < MAX_ATTEMPTS,
     record(
       "Start",
+      event,
       Set(event),
       observable.state.set(event, Running),
       observable.attempts.set(event, observable.attempts.get(event) + 1),
@@ -114,6 +126,7 @@ module EventDelivery {
     observable.state.get(event) == Running,
     record(
       "Succeed",
+      event,
       Set(event),
       observable.state.set(event, Succeeded),
       observable.attempts,
@@ -126,6 +139,7 @@ module EventDelivery {
     observable.state.get(event) == Running,
     record(
       "Fail",
+      event,
       Set(event),
       observable.state.set(
         event,
@@ -141,6 +155,7 @@ module EventDelivery {
     observable.state.get(event) == RetryWaiting,
     record(
       "RetryDue",
+      event,
       Set(event),
       observable.state.set(event, Pending),
       observable.attempts,
@@ -153,6 +168,7 @@ module EventDelivery {
     observable.state.get(event).in(NON_TERMINAL),
     record(
       "Cancel",
+      event,
       Set(event),
       observable.state.set(event, Cancelled),
       observable.attempts,
@@ -165,6 +181,7 @@ module EventDelivery {
     observable.currentEpoch < MAX_EPOCH,
     record(
       "Reset",
+      "",
       Set(),
       observable.state,
       observable.attempts,
@@ -178,6 +195,7 @@ module EventDelivery {
     observable.capturedEpoch.get(event) < observable.currentEpoch,
     record(
       "DiscardStale",
+      event,
       Set(event),
       observable.state.set(event, DiscardedStaleEpoch),
       observable.attempts,

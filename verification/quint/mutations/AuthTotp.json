@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "model": "AuthTotp",
+  "mutations": [
+    {
+      "id": "M-FORMAL-AUTH-REUSE-001",
+      "property": "NoTotpCodeReuse",
+      "operator": "remove-replay-guard",
+      "from": "val fresh = observable.lastAcceptedStep == NO_STEP or codeStep > observable.lastAcceptedStep",
+      "to": "val fresh = true"
+    },
+    {
+      "id": "M-FORMAL-AUTH-ENROLLMENT-001",
+      "property": "NoSecondFactorWithoutEnrollment",
+      "operator": "issue-second-factor-claim-without-enrollment",
+      "from": "secondFactorClaim: if (acceptedCode) \"ValidTotp\" else \"None\",",
+      "to": "secondFactorClaim: \"ValidTotp\","
+    },
+    {
+      "id": "M-FORMAL-AUTH-LIVENESS-001",
+      "property": "EnrollmentEventuallyFinalizesOrExpires",
+      "operator": "remove-enrollment-fairness",
+      "from": "temporal EnrollmentProgressFairness = and {\n    Tick.weakFair((observable, previousObservable, clock, lifecycle, sessionEnd, accepted,\n      acceptedAt, enrollmentAcceptedAt, lastAction, lastCodeStep)),\n    ExpireEnrollment.weakFair((observable, previousObservable, clock, lifecycle, sessionEnd, accepted,\n      acceptedAt, enrollmentAcceptedAt, lastAction, lastCodeStep)),\n    finalizeEnrollment(clock).weakFair((observable, previousObservable, clock, lifecycle, sessionEnd,\n      accepted, acceptedAt, enrollmentAcceptedAt, lastAction, lastCodeStep)),\n  }",
+      "to": "temporal EnrollmentProgressFairness = true"
+    },
+    {
+      "id": "M-FORMAL-AUTH-WINDOW-FINALIZE-001",
+      "property": "AcceptedOnlyWithinWindow",
+      "operator": "finalize-with-any-totp-step",
+      "from": "val acceptedCode = inWindowAt(codeStep, clock)\n    all {\n      lifecycle == \"EnrollmentStarted\",",
+      "to": "val acceptedCode = true\n    all {\n      lifecycle == \"EnrollmentStarted\","
+    },
+    {
+      "id": "M-FORMAL-AUTH-WINDOW-VERIFY-001",
+      "property": "AcceptedOnlyWithinWindow",
+      "operator": "verify-with-any-totp-step",
+      "from": "val acceptedCode = hasFactor and inWindow and fresh",
+      "to": "val acceptedCode = hasFactor and fresh"
+    },
+    {
+      "id": "M-FORMAL-AUTH-EXPIRY-001",
+      "property": "EnrollmentAcceptedBeforeExpiry",
+      "operator": "finalize-expired-enrollment",
+      "from": "clock <= sessionEnd,\n      codeStep.in(STEPS),",
+      "to": "true,\n      codeStep.in(STEPS),"
+    }
+  ]
+}

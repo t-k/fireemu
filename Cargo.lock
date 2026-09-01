@@ -783,6 +783,7 @@ name = "fireemu-verification-quint"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fireemu-core-auth",
  "fireemu-core-events",
  "fireemu-core-rules",
  "fireemu-core-session",

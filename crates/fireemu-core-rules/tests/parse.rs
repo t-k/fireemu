@@ -126,6 +126,36 @@ fn list_literals_reject_missing_expressions() {
 }
 
 #[test]
+fn final_return_statement_accepts_optional_semicolon() {
+    for expression in [
+        "true",
+        "request.auth != null\n      && request.auth.uid == 'owner'",
+        "[\n      'one',\n      'two',\n    ]",
+    ] {
+        for terminator in ["", ";"] {
+            let src = format!(
+                "service cloud.firestore {{\n  function allowed() {{\n    return {expression}{terminator}\n  }}\n}}"
+            );
+            parse_ruleset(&src)
+                .unwrap_or_else(|error| panic!("rejected {expression:?}{terminator}: {error}"));
+        }
+    }
+}
+
+#[test]
+fn final_return_statement_does_not_weaken_other_separators() {
+    for body in [
+        "let value = true\n    return value;",
+        "return true\n    let value = false;",
+        "return true\n    return false;",
+    ] {
+        let src =
+            format!("service cloud.firestore {{\n  function invalid() {{\n    {body}\n  }}\n}}");
+        assert!(parse_ruleset(&src).is_err(), "accepted {body:?}");
+    }
+}
+
+#[test]
 fn path_literals_with_bindings_parse_in_expressions() {
     let src = "service cloud.firestore {\n  match /a/{b} {\n    allow read: if exists(/databases/$(database)/documents/x/$(b + 'y'));\n  }\n}";
     let ruleset = parse_ruleset(src).unwrap();

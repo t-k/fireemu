@@ -630,7 +630,10 @@ impl<'a> Parser<'a> {
                 });
             } else if self.eat_ident("return")? {
                 let body = self.expr()?;
-                self.expect_punct(";")?;
+                let save = self.pos;
+                if self.next()? != Token::Punct(";") {
+                    self.pos = save;
+                }
                 self.expect_punct("}")?;
                 return Ok(FunctionDecl {
                     name,

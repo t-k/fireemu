@@ -185,6 +185,10 @@ fn inline_flags_and_named_classes_behave_as_the_official_runtime_records_them() 
     assert!(!full("abc", "ABC"));
     assert!(full("(?i)[a-z]+", "ABC"), "case folding reaches classes");
     assert!(full("(?s)a.b", "a\nb"));
+    assert!(Regex::new("(?m)a").is_ok());
+    assert!(Regex::new("(?U)a").is_ok());
+    assert!(full("(?i:a)", "A"));
+    assert!(!full("(?i-i:a)", "A"));
     assert!(!full("a.b", "a\nb"));
     assert!(full("[[:digit:]]+", "123"));
     assert!(!full("[[:digit:]]+", "abc"));
@@ -332,6 +336,14 @@ fn compile_nesting_preflight_ignores_escaped_and_class_parentheses() {
         .is_full_match(&"(".repeat(20))
         .unwrap());
     assert!(Regex::new("[[:alpha:](((((((((]").is_ok());
+    assert!(Regex::new("[](((((((((]")
+        .unwrap()
+        .is_full_match("]")
+        .unwrap());
+    assert!(Regex::new("[^](((((((((]")
+        .unwrap()
+        .is_full_match("a")
+        .unwrap());
 
     let nested_non_capturing = format!("{}a{}", "(?:".repeat(8), ")".repeat(8));
     assert!(Regex::new(&nested_non_capturing)

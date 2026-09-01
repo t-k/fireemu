@@ -210,9 +210,6 @@ struct Flags {
     case_insensitive: bool,
     /// `s`: `.` also matches a newline.
     dot_all: bool,
-    /// `m`: `^` and `$` match at line boundaries. Accepted and, because `matches()` is a
-    /// whole-string match, without effect on the answer.
-    multi_line: bool,
 }
 
 /// The span of each capturing group in the current match attempt, indexed 1-based.
@@ -381,7 +378,7 @@ impl Parser<'_> {
                         match self.bump() {
                             Some('i') => self.flags.case_insensitive = !negate,
                             Some('s') => self.flags.dot_all = !negate,
-                            Some('m') => self.flags.multi_line = !negate,
+                            Some('m') => {}
                             Some('U') => {}
                             Some('-') => negate = true,
                             Some(':') => break,
@@ -699,14 +696,23 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
     let mut depth = 0u64;
     let mut in_class = false;
     let mut in_posix_class = false;
+    let mut class_first = false;
     while let Some(character) = characters.get(index).copied() {
         if character == '\\' {
+            if in_class {
+                class_first = false;
+            }
             index = index.saturating_add(2);
             continue;
         }
         if in_class {
+            if class_first && character == '^' {
+                index += 1;
+                continue;
+            }
             if !in_posix_class && character == '[' && characters.get(index + 1) == Some(&':') {
                 in_posix_class = true;
+                class_first = false;
                 index += 2;
                 continue;
             }
@@ -715,14 +721,18 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
                 index += 2;
                 continue;
             }
-            if !in_posix_class && character == ']' {
+            if !in_posix_class && character == ']' && !class_first {
                 in_class = false;
             }
+            class_first = false;
             index += 1;
             continue;
         }
         match character {
-            '[' => in_class = true,
+            '[' => {
+                in_class = true;
+                class_first = true;
+            }
             '(' => {
                 depth = depth.saturating_add(1);
                 if depth > PARSE_DEPTH_BUDGET {

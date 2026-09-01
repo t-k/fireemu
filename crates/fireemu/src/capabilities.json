@@ -670,9 +670,11 @@
       "the locator file <temp dir>/hub-<project>.json written at start with version, origins and pid, and removed at exit only while it still names this process; a live locator from another suite is left alone with a notice",
       "FIREBASE_EMULATOR_HUB exported to the exec command as a bare host:port",
       "@firebase/rules-unit-testing 5.0.2 discovers the suite with no explicit host: tools/sdk-smoke/rules-unit-testing.mjs runs initializeTestEnvironment with an empty configuration and exercises the rules decisions, withSecurityRulesDisabled, clearFirestore and a trigger-suppressed write",
+      "tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs supplies explicit Firestore and Storage rules while still discovering both services through the Hub, then exercises authenticated and unauthenticated decisions on both products",
       "DELETE /emulator/v1/projects/{project}/databases/{database}/documents on the Firestore port, which is what clearFirestore() calls",
       "POST /_admin/export with the official body {\"path\", \"initiatedBy\"}, refusing a request that carries an Origin header exactly as upstream does; it is what fireemu emulators:export drives after finding the suite through its locator file",
-      "PUT /emulator/v1/projects/{project}:securityRules on the Firestore port, which is what loading rules from a test environment calls (see RULES-DIAG-1)"
+      "PUT /emulator/v1/projects/{project}:securityRules on the Firestore port, which is what loading rules from a test environment calls (see RULES-DIAG-1)",
+      "PUT /internal/setRules on the Storage port accepts the one-file rules-unit-testing body, activates a valid candidate atomically and preserves the previous rules after malformed JSON, an invalid file shape or invalid rules"
     ],
     "unimplemented": [
       "POST /dataconnect/clearData: fireemu serves no Data Connect emulator"

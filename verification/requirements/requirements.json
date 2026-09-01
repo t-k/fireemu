@@ -1410,15 +1410,17 @@
     },
     {
       "id": "REQ-RULES-PARITY-05",
-      "statement": "@firebase/rules-unit-testing runs unmodified against fireemu: Hub discovery, authenticated and unauthenticated contexts, withSecurityRulesDisabled, clear operations, trigger suppression and loading rules through the emulator's own securityRules route.",
+      "statement": "@firebase/rules-unit-testing runs against fireemu with Hub discovery, authenticated and unauthenticated contexts, withSecurityRulesDisabled, clear operations, trigger suppression and explicit rule loading through Firestore's :securityRules route and Storage's /internal/setRules route.",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "partial",
-      "note": "The library's documented flows run with no explicit host anywhere (tools/sdk-smoke/rules-unit-testing.mjs). Its coverage-report helpers are served by the :ruleCoverage endpoints; the library's own assertion helpers over that report are not exercised yet.",
+      "note": "The library's documented flows run with no explicit host anywhere. tools/sdk-smoke/rules-unit-testing.mjs covers the established discovery and state-management flow, while tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs supplies both rule strings and proves decisions on Firestore and Storage. Its coverage-report helpers are served by the :ruleCoverage endpoints; the library's own assertion helpers over that report are not exercised yet.",
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rest.rs",
-          "crates/fireemu-adapter-grpc/tests/rules.rs"
+          "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu-adapter-http/tests/storage.rs",
+          "tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs"
         ]
       }
     },

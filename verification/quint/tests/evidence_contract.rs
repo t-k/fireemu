@@ -14,7 +14,7 @@ const TAMPER_TARGETS: [&str; 9] = [
     "crates/fireemu-core-events/src/state.rs",
     "verification/quint/run-pilot.sh",
     "verification/quint/specs/EventDelivery.qnt",
-    "verification/quint/specs/tlc-config.json",
+    "verification/quint/configs/EventDelivery.json",
     "verification/quint/mutations/EventDelivery.json",
     "verification/quint/src/event_delivery.rs",
     "verification/quint/tests/event_delivery_connect.rs",

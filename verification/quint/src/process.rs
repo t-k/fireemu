@@ -326,7 +326,9 @@ pub fn classify_model_mutation_execution(
 fn has_safety_counterexample(diagnostic: &str) -> bool {
     diagnostic.lines().any(|line| {
         let line = line.trim();
-        line.starts_with("error: invariant ") && line.ends_with(" is violated.")
+        line.starts_with("error: invariant ")
+            && (line.ends_with(" is violated.")
+                || line.ends_with(" is violated by the initial state:"))
     })
 }
 
@@ -342,11 +344,18 @@ fn has_expected_safety_counterexample(diagnostic: &str, expected_property: &str)
 }
 
 fn has_named_safety_counterexample(diagnostic: &str, invariant: &str) -> bool {
-    let expected = format!(
+    let violated = format!(
         "error: invariant {} is violated.",
         invariant.to_ascii_lowercase()
     );
-    diagnostic.lines().any(|line| line.trim() == expected)
+    let violated_initially = format!(
+        "error: invariant {} is violated by the initial state:",
+        invariant.to_ascii_lowercase()
+    );
+    diagnostic.lines().any(|line| {
+        let line = line.trim();
+        line == violated || line == violated_initially
+    })
 }
 
 fn has_temporal_counterexample(diagnostic: &str) -> bool {
@@ -632,7 +641,7 @@ mod tests {
                 "--backend",
                 "tlc",
                 "--tlc-config",
-                "specs/tlc-config.json",
+                "configs/EventDelivery.json",
                 "--invariants",
                 "TypeOK",
                 "AttemptsBounded",
@@ -640,8 +649,10 @@ mod tests {
                 "LegalStateTransitions",
                 "AttemptsChangeOnlyOnStart",
                 "StaleDiscardRequiresOlderEpoch",
+                "RetryDeadlineMatchesPolicy",
+                "RetryRequiresDeadline",
                 "--temporal",
-                "NoTerminalRegression,EventEventuallyTerminates",
+                "NoTerminalRegression,TimeNeverDecreases,EventEventuallyTerminates",
                 "--verbosity",
                 "0",
             ]
@@ -756,6 +767,17 @@ mod tests {
             MutationOutcome::KilledSafety
         );
 
+        let initial_state_counterexample = execution(
+            1,
+            "Error: Invariant q_inv is violated by the initial state:",
+            "error: found a counterexample",
+        );
+        assert_eq!(
+            classify_model_mutation_execution(&initial_state_counterexample, legal),
+            MutationOutcome::KilledSafety,
+            "an exact initial-state counterexample is valid kill evidence"
+        );
+
         let terminal = descriptor
             .property("NoTerminalRegression")
             .expect("registered property");
@@ -770,6 +792,19 @@ mod tests {
         );
         assert_eq!(
             classify_model_mutation_execution(&exact_terminal, terminal),
+            MutationOutcome::KilledSafety
+        );
+
+        let time = descriptor
+            .property("TimeNeverDecreases")
+            .expect("registered property");
+        let exact_time = execution(
+            1,
+            "Error: Invariant EventDeliveryProof_EventDelivery_TimeNeverDecreases is violated.",
+            "error: found a counterexample",
+        );
+        assert_eq!(
+            classify_model_mutation_execution(&exact_time, time),
             MutationOutcome::KilledSafety
         );
 

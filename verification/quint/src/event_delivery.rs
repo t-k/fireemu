@@ -6,20 +6,22 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_core_events::event::{EventSource, EventType, LogicalEvent};
 use fireemu_core_events::retry::RetryPolicy;
-use fireemu_core_events::state::{EventRecord, EventState, FailureOutcome};
+use fireemu_core_events::state::{EventRecord, EventState};
 use fireemu_core_types::ids::{CorrelationId, Epoch, EventId, SessionId};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use quint_connect::{switch, Config, Driver, Result, State, Step};
 use serde::Deserialize;
 
-/// Actions covered by the Quint model. `EventRecord::interrupt` is intentionally excluded.
-pub const MODELED_ACTIONS: [&str; 8] = [
+/// Actions covered by the Quint model and exercised through production APIs.
+pub const MODELED_ACTIONS: [&str; 10] = [
     "Lease",
     "Start",
     "Succeed",
     "Fail",
     "RetryDue",
+    "Interrupt",
     "Cancel",
+    "Tick",
     "Reset",
     "DiscardStale",
 ];
@@ -84,6 +86,14 @@ pub struct EventDeliveryState {
     pub cancelled: BTreeMap<String, bool>,
     /// Stale-discard flag by model event name.
     pub stale: BTreeMap<String, bool>,
+    /// Current logical time in whole seconds since the Unix epoch.
+    pub now: i64,
+    /// Retry deadline by event, or `-1` when no retry is scheduled.
+    pub retry_at: BTreeMap<String, i64>,
+    /// Production retry policy's base backoff in whole seconds.
+    pub base_backoff: i64,
+    /// Production retry policy's maximum backoff in whole seconds.
+    pub max_backoff: i64,
 }
 
 /// Test-only perturbation applied after extracting normal production state.
@@ -108,6 +118,14 @@ pub enum ProjectionFault {
     Cancelled,
     /// Change only the stale-discard map.
     Stale,
+    /// Change only the logical clock.
+    Now,
+    /// Change only the retry-deadline map.
+    RetryAt,
+    /// Change only the base backoff.
+    BaseBackoff,
+    /// Change only the maximum backoff.
+    MaxBackoff,
 }
 
 impl ProjectionFault {
@@ -123,6 +141,10 @@ impl ProjectionFault {
             Self::Terminal => "terminal",
             Self::Cancelled => "cancelled",
             Self::Stale => "stale",
+            Self::Now => "now",
+            Self::RetryAt => "retryAt",
+            Self::BaseBackoff => "baseBackoff",
+            Self::MaxBackoff => "maxBackoff",
         }
     }
 }
@@ -131,8 +153,9 @@ impl ProjectionFault {
 pub struct EventDeliveryDriver {
     records: BTreeMap<String, EventRecord>,
     retry_policy: RetryPolicy,
-    retry_deadlines: BTreeMap<String, Option<LogicalInstant>>,
     current_epoch: Epoch,
+    initial_now: LogicalInstant,
+    now: LogicalInstant,
     event_names: Vec<String>,
     max_attempts: u32,
     action_recorder: Option<Arc<Mutex<BTreeSet<String>>>>,
@@ -142,6 +165,24 @@ pub struct EventDeliveryDriver {
 impl EventDeliveryDriver {
     /// Builds an uninitialized driver for the named model events.
     pub fn try_new(event_names: Vec<String>, max_attempts: u32) -> Result<Self> {
+        let retry_policy = RetryPolicy::try_new(
+            max_attempts,
+            LogicalDuration::from_seconds(1),
+            LogicalDuration::from_seconds(4),
+        )?;
+        Self::try_with_policy(
+            event_names,
+            retry_policy,
+            LogicalInstant::from_unix_seconds(100),
+        )
+    }
+
+    /// Builds a driver with an explicit production retry policy and initial logical time.
+    pub fn try_with_policy(
+        event_names: Vec<String>,
+        retry_policy: RetryPolicy,
+        initial_now: LogicalInstant,
+    ) -> Result<Self> {
         let unique_names = event_names.iter().collect::<BTreeSet<_>>();
         if unique_names.len() != event_names.len() || event_names.is_empty() {
             return Err(invalid_data("event names must be non-empty and unique"));
@@ -152,19 +193,14 @@ impl EventDeliveryDriver {
         {
             return Err(invalid_data("the pilot supports only e1 and e2"));
         }
-
-        let retry_policy = RetryPolicy::try_new(
-            max_attempts,
-            LogicalDuration::from_seconds(1),
-            LogicalDuration::from_seconds(60),
-        )?;
         Ok(Self {
             records: BTreeMap::new(),
             retry_policy,
-            retry_deadlines: BTreeMap::new(),
             current_epoch: Epoch::initial(),
+            initial_now,
+            now: initial_now,
             event_names,
-            max_attempts,
+            max_attempts: retry_policy.max_attempts(),
             action_recorder: None,
             projection_fault: ProjectionFault::None,
         })
@@ -192,8 +228,8 @@ impl EventDeliveryDriver {
     /// Recreates all event records in the model's initial state.
     pub fn init(&mut self) -> Result {
         self.current_epoch = Epoch::initial();
+        self.now = self.initial_now;
         self.records.clear();
-        self.retry_deadlines.clear();
 
         for name in &self.event_names {
             let event_id = match name.as_str() {
@@ -208,13 +244,12 @@ impl EventDeliveryDriver {
                 source: EventSource::Manual,
                 event_type: EventType::try_new("fireemu.verification.event")?,
                 subject: format!("verification/{name}"),
-                logical_time: LogicalInstant::UNIX_EPOCH,
+                logical_time: self.initial_now,
                 causation_id: None,
                 correlation_id: CorrelationId::new(1),
                 payload: Vec::new(),
             });
             self.records.insert(name.clone(), record);
-            self.retry_deadlines.insert(name.clone(), None);
         }
         Ok(())
     }
@@ -240,34 +275,37 @@ impl EventDeliveryDriver {
     /// Applies the modeled failure action using the real retry policy.
     pub fn fail(&mut self, event: &str) -> Result {
         let retry_policy = self.retry_policy;
-        let outcome = self
-            .record_mut(event)?
-            .fail(&retry_policy, LogicalInstant::UNIX_EPOCH)?;
-        let deadline = match outcome {
-            FailureOutcome::RetryScheduled { retry_at } => Some(retry_at),
-            FailureOutcome::DeadLettered => None,
-        };
-        *self.deadline_mut(event)? = deadline;
+        let now = self.now;
+        self.record_mut(event)?.fail(&retry_policy, now)?;
         self.record_action("Fail")
     }
 
-    /// Applies the modeled retry-due action at the recorded deadline.
+    /// Applies the modeled retry-due action at the current logical time.
     pub fn retry_due(&mut self, event: &str) -> Result {
-        let deadline = self
-            .retry_deadlines
-            .get(event)
-            .copied()
-            .flatten()
-            .ok_or_else(|| invalid_data("retry deadline is missing"))?;
-        self.record_mut(event)?.retry_due(deadline)?;
-        *self.deadline_mut(event)? = None;
+        let now = self.now;
+        self.record_mut(event)?.retry_due(now)?;
         self.record_action("RetryDue")
+    }
+
+    /// Applies the real runner-interruption transition.
+    pub fn interrupt(&mut self, event: &str) -> Result {
+        self.record_mut(event)?.interrupt()?;
+        self.record_action("Interrupt")
     }
 
     /// Applies the modeled cancellation action.
     pub fn cancel(&mut self, event: &str) -> Result {
         self.record_mut(event)?.cancel()?;
         self.record_action("Cancel")
+    }
+
+    /// Advances the environmental logical clock by one second.
+    pub fn tick(&mut self) -> Result {
+        self.now = self
+            .now
+            .checked_add(LogicalDuration::from_seconds(1))
+            .ok_or_else(|| invalid_data("logical clock overflowed"))?;
+        self.record_action("Tick")
     }
 
     /// Applies the modeled reset action by advancing the current epoch.
@@ -297,12 +335,6 @@ impl EventDeliveryDriver {
             .ok_or_else(|| invalid_data(&format!("unknown or uninitialized event {event}")))
     }
 
-    fn deadline_mut(&mut self, event: &str) -> Result<&mut Option<LogicalInstant>> {
-        self.retry_deadlines
-            .get_mut(event)
-            .ok_or_else(|| invalid_data(&format!("unknown or uninitialized event {event}")))
-    }
-
     fn record_action(&self, action: &str) -> Result {
         if let Some(recorder) = &self.action_recorder {
             recorder
@@ -322,6 +354,7 @@ impl State<EventDeliveryDriver> for EventDeliveryState {
         let mut terminal = BTreeMap::new();
         let mut cancelled = BTreeMap::new();
         let mut stale_by_event = BTreeMap::new();
+        let mut retry_at = BTreeMap::new();
 
         for event in &driver.event_names {
             let record = driver
@@ -338,6 +371,13 @@ impl State<EventDeliveryDriver> for EventDeliveryState {
                 event.clone(),
                 lifecycle == EventLifecycle::DiscardedStaleEpoch,
             );
+            retry_at.insert(
+                event.clone(),
+                match record.state() {
+                    EventState::RetryWaiting { retry_at } => seconds(*retry_at)?,
+                    _ => -1,
+                },
+            );
         }
 
         let mut projected = Self {
@@ -349,6 +389,10 @@ impl State<EventDeliveryDriver> for EventDeliveryState {
             terminal,
             cancelled,
             stale: stale_by_event,
+            now: seconds(driver.now)?,
+            retry_at,
+            base_backoff: duration_seconds(driver.retry_policy.base_backoff())?,
+            max_backoff: duration_seconds(driver.retry_policy.max_backoff())?,
         };
         match driver.projection_fault {
             ProjectionFault::None => {}
@@ -375,6 +419,14 @@ impl State<EventDeliveryDriver> for EventDeliveryState {
             ProjectionFault::Terminal => toggle_first(&mut projected.terminal, "terminal")?,
             ProjectionFault::Cancelled => toggle_first(&mut projected.cancelled, "cancelled")?,
             ProjectionFault::Stale => toggle_first(&mut projected.stale, "stale")?,
+            ProjectionFault::Now => projected.now = projected.now.saturating_add(1),
+            ProjectionFault::RetryAt => increment_first_i64(&mut projected.retry_at, "retryAt")?,
+            ProjectionFault::BaseBackoff => {
+                projected.base_backoff = projected.base_backoff.saturating_add(1);
+            }
+            ProjectionFault::MaxBackoff => {
+                projected.max_backoff = projected.max_backoff.saturating_add(1);
+            }
         }
         Ok(projected)
     }
@@ -398,7 +450,9 @@ impl Driver for EventDeliveryDriver {
             Succeed(event: String) => self.succeed(&event)?,
             Fail(event: String) => self.fail(&event)?,
             RetryDue(event: String) => self.retry_due(&event)?,
+            Interrupt(event: String) => self.interrupt(&event)?,
             Cancel(event: String) => self.cancel(&event)?,
+            Tick => self.tick()?,
             Reset => self.reset()?,
             DiscardStale(event: String) => self.discard_stale(&event)?,
         })
@@ -467,6 +521,25 @@ fn increment_first_u64(values: &mut BTreeMap<String, u64>, field: &str) -> Resul
         .ok_or_else(|| invalid_data(&format!("{field} projection is empty")))?;
     *value = value.saturating_add(1);
     Ok(())
+}
+
+fn increment_first_i64(values: &mut BTreeMap<String, i64>, field: &str) -> Result {
+    let value = values
+        .values_mut()
+        .next()
+        .ok_or_else(|| invalid_data(&format!("{field} projection is empty")))?;
+    *value = value.saturating_add(1);
+    Ok(())
+}
+
+fn seconds(instant: LogicalInstant) -> Result<i64> {
+    i64::try_from(instant.as_nanos() / 1_000_000_000)
+        .map_err(|_| invalid_data("logical instant does not fit whole seconds"))
+}
+
+fn duration_seconds(duration: LogicalDuration) -> Result<i64> {
+    i64::try_from(duration.as_seconds())
+        .map_err(|_| invalid_data("logical duration does not fit whole seconds"))
 }
 
 fn toggle_first(values: &mut BTreeMap<String, bool>, field: &str) -> Result {

@@ -99,12 +99,12 @@ while [ "$pass" -le "$passes" ]; do
 
   run_gate tla-model verification/tla/run-tlc.sh EventDelivery
   run_gate tla-replay cargo run -p tla-verification -- check-eventdelivery
-  run_gate quint-model cargo run -p fireemu-verification-quint -- verify-model
+  run_gate quint-model cargo run -p fireemu-verification-quint -- verify-model --model EventDelivery
   run_gate quint-scenarios cargo test -p fireemu-verification-quint --test event_delivery_connect deterministic_scenarios_cover_all_actions -- --ignored --exact
   run_gate quint-generated cargo test -p fireemu-verification-quint --test event_delivery_connect generated_traces_match_rust -- --ignored --exact
   run_gate quint-projection-negative cargo test -p fireemu-verification-quint --test event_delivery_connect each_projection_field_detects_drift -- --ignored --exact
-  run_gate quint-mutations cargo run -p fireemu-verification-quint -- mutate-event-delivery --evidence "$mutation_evidence"
-  run_gate quint-evidence cargo run -p fireemu-verification-quint -- verify-evidence
+  run_gate quint-mutations cargo run -p fireemu-verification-quint -- mutate-model --model EventDelivery --evidence "$mutation_evidence"
+  run_gate quint-evidence cargo run -p fireemu-verification-quint -- verify-evidence --model EventDelivery
   run_gate traceability cargo run -p traceability-check
 
   pass=$((pass + 1))

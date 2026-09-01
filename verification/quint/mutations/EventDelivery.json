@@ -3,39 +3,74 @@
   "model": "EventDelivery",
   "mutations": [
     {
-      "id": "M-TLA-EVENT-TERMINAL-001",
+      "id": "M-FORMAL-EVENT-TERMINAL-001",
       "property": "NoTerminalRegression",
       "operator": "allow-cancel-from-terminal-state",
       "from": "action cancelEvent(event) = all {\n    observable.state.get(event).in(NON_TERMINAL),",
       "to": "action cancelEvent(event) = all {\n    observable.state.get(event).in(STATES),"
     },
     {
-      "id": "M-TLA-EVENT-LIVENESS-001",
+      "id": "M-FORMAL-EVENT-LIVENESS-001",
       "property": "EventEventuallyTerminates",
       "operator": "remove-worker-fairness",
-      "from": "temporal Fairness = EVENTS.forall(event =>\n    progress(event).weakFair((observable, previousObservable, lastAction, lastTarget))\n  )",
+      "from": "temporal Fairness = EVENTS.forall(event => and {\n    nonRunningProgress(event).weakFair((observable, previousObservable, lastAction, lastTarget)),\n    finishAttempt(event).strongFair((observable, previousObservable, lastAction, lastTarget)),\n    advanceRetryClock(event).weakFair((observable, previousObservable, lastAction, lastTarget)),\n  })",
       "to": "temporal Fairness = true"
     },
     {
-      "id": "M-TLA-EVENT-LEGAL-001",
+      "id": "M-FORMAL-EVENT-LEGAL-001",
       "property": "LegalStateTransitions",
       "operator": "retry-due-from-leased",
-      "from": "action retryEvent(event) = all {\n    observable.state.get(event) == RetryWaiting,",
-      "to": "action retryEvent(event) = all {\n    observable.state.get(event) == Leased,"
+      "from": "action retryEvent(event) = all {\n    observable.state.get(event) == RetryWaiting,\n    observable.retryAt.get(event) >= 0,",
+      "to": "action retryEvent(event) = all {\n    observable.state.get(event) == Leased,\n    true,"
     },
     {
-      "id": "M-TLA-EVENT-ATTEMPTS-001",
+      "id": "M-FORMAL-EVENT-ATTEMPTS-001",
       "property": "AttemptsChangeOnlyOnStart",
       "operator": "start-without-incrementing-attempts",
       "from": "observable.attempts.set(event, observable.attempts.get(event) + 1),",
       "to": "observable.attempts,"
     },
     {
-      "id": "M-TLA-EVENT-STALE-001",
+      "id": "M-FORMAL-EVENT-STALE-001",
       "property": "StaleDiscardRequiresOlderEpoch",
       "operator": "discard-current-epoch-event",
-      "from": "action discardEvent(event) = all {\n    observable.state.get(event).in(NON_TERMINAL),\n    observable.capturedEpoch.get(event) < observable.currentEpoch,",
-      "to": "action discardEvent(event) = all {\n    observable.state.get(event).in(NON_TERMINAL),\n    observable.capturedEpoch.get(event) <= observable.currentEpoch,"
+      "from": "observable.capturedEpoch.get(event) < observable.currentEpoch,",
+      "to": "observable.capturedEpoch.get(event) <= observable.currentEpoch,"
+    },
+    {
+      "id": "M-FORMAL-EVENT-RETRY-EARLY-001",
+      "property": "RetryRequiresDeadline",
+      "operator": "allow-premature-retry",
+      "from": "observable.now >= observable.retryAt.get(event),",
+      "to": "true,"
+    },
+    {
+      "id": "M-FORMAL-EVENT-BACKOFF-EXPONENTIAL-001",
+      "property": "RetryDeadlineMatchesPolicy",
+      "operator": "replace-exponential-backoff-with-linear",
+      "from": "val exponential = BASE_BACKOFF * 2.ipow(attempt - 1)",
+      "to": "val exponential = BASE_BACKOFF * attempt"
+    },
+    {
+      "id": "M-FORMAL-EVENT-BACKOFF-CAP-001",
+      "property": "RetryDeadlineMatchesPolicy",
+      "operator": "omit-maximum-backoff-cap",
+      "from": "if (exponential < MAX_BACKOFF) exponential else MAX_BACKOFF",
+      "to": "exponential"
+    },
+    {
+      "id": "M-FORMAL-EVENT-TIME-MONOTONIC-001",
+      "property": "TimeNeverDecreases",
+      "operator": "regress-logical-time",
+      "from": "observable.now + 1,",
+      "to": "observable.now - 1,"
+    },
+    {
+      "id": "M-FORMAL-EVENT-INTERRUPT-ATTEMPT-001",
+      "property": "AttemptsChangeOnlyOnStart",
+      "operator": "charge-interrupted-attempt",
+      "from": "observable.attempts.set(event, observable.attempts.get(event) - 1),",
+      "to": "observable.attempts.set(event, observable.attempts.get(event) + 1),"
     }
   ]
 }

@@ -3,7 +3,7 @@
   "model": "EventDelivery",
   "spec": "specs/EventDelivery.qnt",
   "main": "EventDeliveryProof",
-  "config": "specs/tlc-config.json",
+  "config": "configs/EventDelivery.json",
   "mutationManifest": "mutations/EventDelivery.json",
   "tools": {
     "quint": "0.32.0",
@@ -12,9 +12,13 @@
     "backend": "tlc"
   },
   "bounds": {
+    "BaseBackoff": "1",
     "Events": "{e1,e2}",
+    "InitialTime": "100",
     "MaxAttempts": "3",
-    "MaxEpoch": "1"
+    "MaxBackoff": "4",
+    "MaxEpoch": "1",
+    "MaxTime": "120"
   },
   "boundInputs": [
     ".github/workflows/ci.yml",
@@ -31,12 +35,12 @@
     "verification/quint/README.md",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
+    "verification/quint/configs/EventDelivery.json",
     "verification/quint/mutations/EventDelivery.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-pilot.sh",
     "verification/quint/specs/EventDelivery.qnt",
-    "verification/quint/specs/tlc-config.json",
     "verification/quint/src/event_delivery.rs",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
@@ -61,25 +65,25 @@
     "crates/fireemu-core-types/src/ids.rs": "33fdc1fab6d21378fed206d5d0c8464c36aa29b52c38d60084eee4ddcb29325b",
     "crates/fireemu-core-types/src/time.rs": "4cd903658584928a5fca3de6208e2777a51a117ef783b56972e92bcfb2e66c66",
     "verification/quint/Cargo.toml": "c3295e67ba6cdd23138b11d28abc71fb6e8d5b5d9d3328db9aaf0db084b94162",
-    "verification/quint/README.md": "4d9328a45d092787d6fda868da8a2f8feda1acda3ceb5ddebb1f11b0f2fca8d8",
+    "verification/quint/README.md": "8c94c58608b4c1580dcd9a6162235a9828fc030f70b0cc932932978c9f6c22b7",
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
-    "verification/quint/mutations/EventDelivery.json": "4940b874140b9762f2306c0e144ae06f72e17f376009b1c4578aaaad64dc6dd1",
+    "verification/quint/configs/EventDelivery.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
+    "verification/quint/mutations/EventDelivery.json": "b095eaf61605746849ed10d8f89e8729cd95393d9bf85039999f4bbf5b01293d",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
-    "verification/quint/run-pilot.sh": "9b82f118b8a6a00ed9ced7076779def6195a5188c95e96ee83864131c84721bb",
-    "verification/quint/specs/EventDelivery.qnt": "72df70c59770ebc8340fc573be32e8e6918e60a9807fc48d94ad3f9b3eea9c15",
-    "verification/quint/specs/tlc-config.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/src/event_delivery.rs": "57eb1334fc623aa8d306883eb3ec89c17c013752329bf66d3c727cfe2b34b351",
+    "verification/quint/run-pilot.sh": "c5d389f864a17516a30c921872b49133fbfd8e41f06dffd698ea859c3cc06151",
+    "verification/quint/specs/EventDelivery.qnt": "459a2851be04742e6ec2f545451782a47b8597a7e764b49efbd0d498671e760f",
+    "verification/quint/src/event_delivery.rs": "763954a9333f1860610967750ba8ed0711c81a23791dbbe5e4f115e15e68f325",
     "verification/quint/src/evidence.rs": "206166ece32f6241d35918f447f05203aac72efc280f7da6c6001644de508307",
     "verification/quint/src/lib.rs": "c614b0e6c62130090ceccfa19a453723ea312199acf1bfc26bfe45fa88257b8d",
     "verification/quint/src/main.rs": "daa7c3ace8c42b14e73b2d876d16bf53a25068b923fe9642a1ca843d8d600537",
-    "verification/quint/src/model.rs": "72197d5ccd3544d37ff8ced57f4547165c90410f7ccd2bd5144684bbcd1591a2",
-    "verification/quint/src/process.rs": "d736ff91da8904ca9562b819cdc4ede1400a17733550877382b9d566b230611e",
-    "verification/quint/tests/cli_contract.rs": "4a9318bec11d4b243b1b5a93975d54a0eea0b5ae5adb5b39ba65675bd548f60f",
-    "verification/quint/tests/evidence_contract.rs": "4832f9d4bc4a7fb297ba679454294dc53dfe87ecde0300b0363487618751d631",
-    "verification/quint/tests/event_delivery_connect.rs": "6dc21810bf9e6f7dc85d502ff41c7eb2e6b0b811107b275cd536662c23ee4820",
-    "verification/quint/tests/event_delivery_evidence.rs": "3f9323ad98edc54a90c4add45ba210744ff6a1ab02fd4f328080ebe82c4b6ab7",
+    "verification/quint/src/model.rs": "00a96b01a19b19502d4238a68e446626cdaf3c365f18ff60f68ede3f376568dc",
+    "verification/quint/src/process.rs": "897bb2a565d5be2ed6a0f95e431a46852c208e653c3e84acbb5805a6f6f3815a",
+    "verification/quint/tests/cli_contract.rs": "6ca66cd92b83b837742bc902cd043eca4b5fc80efebdf56e85d9cb0cbee404ac",
+    "verification/quint/tests/event_delivery_connect.rs": "0eb339f64b94d309b8c06279b2e7c3bb7cf288b6fc63ca531a75d00e4d35b366",
+    "verification/quint/tests/event_delivery_evidence.rs": "9e803d7e95104084275739b39958f926fb62ef81dc32f96a3b16f31ad6db10c4",
+    "verification/quint/tests/evidence_contract.rs": "1079e61e4c648132c46b590c534c5a732970cf356aaf4fe1ba380bcc1b3a188f",
     "verification/quint/tests/model_registry.rs": "5b45606854388ad3dc4ded732cd7fec986928f7c7c34051020e783dd08ee6a84"
   },
   "invariants": [
@@ -88,47 +92,81 @@
     "DeadLetterOnlyAfterExhaustion",
     "LegalStateTransitions",
     "AttemptsChangeOnlyOnStart",
-    "StaleDiscardRequiresOlderEpoch"
+    "StaleDiscardRequiresOlderEpoch",
+    "RetryDeadlineMatchesPolicy",
+    "RetryRequiresDeadline"
   ],
   "temporalProperties": [
     "NoTerminalRegression",
+    "TimeNeverDecreases",
     "EventEventuallyTerminates"
   ],
   "mutations": [
     {
-      "id": "M-TLA-EVENT-TERMINAL-001",
+      "id": "M-FORMAL-EVENT-TERMINAL-001",
       "property": "NoTerminalRegression",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-TLA-EVENT-LIVENESS-001",
+      "id": "M-FORMAL-EVENT-LIVENESS-001",
       "property": "EventEventuallyTerminates",
       "outcome": "killed_temporal",
       "diagnostic": "TLC temporal property violation"
     },
     {
-      "id": "M-TLA-EVENT-LEGAL-001",
+      "id": "M-FORMAL-EVENT-LEGAL-001",
       "property": "LegalStateTransitions",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-TLA-EVENT-ATTEMPTS-001",
+      "id": "M-FORMAL-EVENT-ATTEMPTS-001",
       "property": "AttemptsChangeOnlyOnStart",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-TLA-EVENT-STALE-001",
+      "id": "M-FORMAL-EVENT-STALE-001",
       "property": "StaleDiscardRequiresOlderEpoch",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-EVENT-RETRY-EARLY-001",
+      "property": "RetryRequiresDeadline",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-EVENT-BACKOFF-EXPONENTIAL-001",
+      "property": "RetryDeadlineMatchesPolicy",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-EVENT-BACKOFF-CAP-001",
+      "property": "RetryDeadlineMatchesPolicy",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-EVENT-TIME-MONOTONIC-001",
+      "property": "TimeNeverDecreases",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-EVENT-INTERRUPT-ATTEMPT-001",
+      "property": "AttemptsChangeOnlyOnStart",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
     "success",
-    "retryExhaustion",
+    "retryTiming",
+    "interrupt",
     "staleDiscard",
     "cancel"
   ],
@@ -138,7 +176,9 @@
     "Succeed",
     "Fail",
     "RetryDue",
+    "Interrupt",
     "Cancel",
+    "Tick",
     "Reset",
     "DiscardStale"
   ],
@@ -150,7 +190,11 @@
     "currentEpoch",
     "terminal",
     "cancelled",
-    "stale"
+    "stale",
+    "now",
+    "retryAt",
+    "baseBackoff",
+    "maxBackoff"
   ],
   "simulation": {
     "seeds": [

@@ -29,7 +29,7 @@ const BOUND_INPUTS: [&str; 31] = [
     "verification/quint/bin/process-group",
     "verification/quint/run-pilot.sh",
     "verification/quint/specs/EventDelivery.qnt",
-    "verification/quint/specs/tlc-config.json",
+    "verification/quint/configs/EventDelivery.json",
     "verification/quint/mutations/EventDelivery.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
@@ -66,6 +66,19 @@ fn descriptor() -> &'static fireemu_verification_quint::model::ModelDescriptor {
 fn evidence_schema_rejects_missing_and_unknown_fields() {
     assert!(validate_evidence_json("{}", descriptor(), None).is_err());
     assert!(validate_evidence_json("{\"unknown\":true}", descriptor(), None).is_err());
+}
+
+#[test]
+fn descriptor_binds_retry_timing_model_limits() {
+    let bounds = descriptor()
+        .bounds
+        .iter()
+        .map(|bound| (bound.name, bound.value))
+        .collect::<Vec<_>>();
+    assert!(bounds.contains(&("InitialTime", "100")));
+    assert!(bounds.contains(&("MaxTime", "120")));
+    assert!(bounds.contains(&("BaseBackoff", "1")));
+    assert!(bounds.contains(&("MaxBackoff", "4")));
 }
 
 #[test]
@@ -128,7 +141,7 @@ fn evidence_rejects_coverage_and_outcome_tampering() {
 }
 
 #[test]
-fn mutation_manifest_preserves_legacy_ids_and_properties() {
+fn mutation_manifest_covers_event_delivery_risks_and_properties() {
     let manifest = parse_manifest(MANIFEST).expect("valid checked-in manifest");
     let mappings = manifest
         .mutations
@@ -138,11 +151,25 @@ fn mutation_manifest_preserves_legacy_ids_and_properties() {
     assert_eq!(
         mappings,
         [
-            ("M-TLA-EVENT-TERMINAL-001", "NoTerminalRegression"),
-            ("M-TLA-EVENT-LIVENESS-001", "EventEventuallyTerminates"),
-            ("M-TLA-EVENT-LEGAL-001", "LegalStateTransitions"),
-            ("M-TLA-EVENT-ATTEMPTS-001", "AttemptsChangeOnlyOnStart"),
-            ("M-TLA-EVENT-STALE-001", "StaleDiscardRequiresOlderEpoch"),
+            ("M-FORMAL-EVENT-TERMINAL-001", "NoTerminalRegression"),
+            ("M-FORMAL-EVENT-LIVENESS-001", "EventEventuallyTerminates"),
+            ("M-FORMAL-EVENT-LEGAL-001", "LegalStateTransitions"),
+            ("M-FORMAL-EVENT-ATTEMPTS-001", "AttemptsChangeOnlyOnStart"),
+            ("M-FORMAL-EVENT-STALE-001", "StaleDiscardRequiresOlderEpoch"),
+            ("M-FORMAL-EVENT-RETRY-EARLY-001", "RetryRequiresDeadline"),
+            (
+                "M-FORMAL-EVENT-BACKOFF-EXPONENTIAL-001",
+                "RetryDeadlineMatchesPolicy",
+            ),
+            (
+                "M-FORMAL-EVENT-BACKOFF-CAP-001",
+                "RetryDeadlineMatchesPolicy",
+            ),
+            ("M-FORMAL-EVENT-TIME-MONOTONIC-001", "TimeNeverDecreases"),
+            (
+                "M-FORMAL-EVENT-INTERRUPT-ATTEMPT-001",
+                "AttemptsChangeOnlyOnStart",
+            ),
         ]
     );
 }
@@ -152,7 +179,11 @@ fn mutation_manifest_rejects_ambiguous_or_invalid_intents() {
     let unknown = MANIFEST.replacen("\"model\":", "\"unknown\": true, \"model\":", 1);
     assert!(parse_manifest(&unknown).is_err());
 
-    let duplicate_id = MANIFEST.replacen("M-TLA-EVENT-LIVENESS-001", "M-TLA-EVENT-TERMINAL-001", 1);
+    let duplicate_id = MANIFEST.replacen(
+        "M-FORMAL-EVENT-LIVENESS-001",
+        "M-FORMAL-EVENT-TERMINAL-001",
+        1,
+    );
     assert!(parse_manifest(&duplicate_id).is_err());
 
     let duplicate_intent = MANIFEST.replacen(
@@ -196,7 +227,7 @@ fn source_replacement_requires_exactly_one_occurrence() {
 fn real_tlc_kills_all_required_mutants() {
     let root = repository_root();
     let results = mutate_event_delivery(&root, None).expect("all required mutants must be killed");
-    assert_eq!(results.len(), 5);
+    assert_eq!(results.len(), 10);
     assert_eq!(results[0].outcome, MutationOutcome::KilledSafety);
     assert_eq!(results[1].outcome, MutationOutcome::KilledTemporal);
     assert!(results.iter().all(|result| result.outcome.is_killed()));

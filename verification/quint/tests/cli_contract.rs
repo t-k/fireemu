@@ -348,7 +348,7 @@ fn event_delivery_named_scenarios_pass() {
             "--main",
             "EventDeliveryScenarios",
             "--match",
-            "^(success|retryExhaustion|staleDiscard|cancel)$",
+            "^(success|retryTiming|interrupt|staleDiscard|cancel)$",
             "--max-samples",
             "1",
             "--seed",
@@ -362,7 +362,13 @@ fn event_delivery_named_scenarios_pass() {
         output.status.success(),
         "Quint scenarios failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    for scenario in ["success", "retryExhaustion", "staleDiscard", "cancel"] {
+    for scenario in [
+        "success",
+        "retryTiming",
+        "interrupt",
+        "staleDiscard",
+        "cancel",
+    ] {
         assert!(
             stdout.contains(scenario),
             "Quint output did not execute {scenario}:\n{stdout}\n{stderr}"
@@ -412,12 +418,12 @@ fn pilot_script_declares_ordered_dual_run_gates() {
     let gates = [
         "verification/tla/run-tlc.sh EventDelivery",
         "cargo run -p tla-verification -- check-eventdelivery",
-        "verify-model",
+        "verify-model --model EventDelivery",
         "deterministic_scenarios_cover_all_actions",
         "generated_traces_match_rust",
         "each_projection_field_detects_drift",
-        "mutate-event-delivery",
-        "verify-evidence",
+        "mutate-model --model EventDelivery",
+        "verify-evidence --model EventDelivery",
         "cargo run -p traceability-check",
     ];
     let mut offset = 0;
@@ -447,10 +453,10 @@ fn pilot_script_declares_ordered_dual_run_gates() {
 }
 
 #[test]
-fn readme_declares_every_non_modeled_production_behavior() {
+fn readme_declares_interrupt_and_retry_timing_conformance() {
     let readme = fs::read_to_string(readme_path()).expect("pilot README must exist");
-    assert!(readme.contains("`Interrupt` transition is explicit non-modeled debt"));
-    assert!(readme.contains("Time and backoff behavior is explicit non-modeled debt"));
+    assert!(readme.contains("`Interrupt` gives the in-flight attempt back"));
+    assert!(readme.contains("retry deadline, exponential delay, and maximum-delay cap"));
 }
 
 #[cfg(unix)]

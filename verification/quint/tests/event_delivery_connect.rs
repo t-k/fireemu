@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fireemu_core_events::retry::RetryPolicy;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use fireemu_verification_quint::event_delivery::{
     EventDeliveryConnectDriver, EventDeliveryDriver, EventDeliveryState, EventLifecycle,
     ProjectionFault, GENERATED_TRACE_SEEDS, MODELED_ACTIONS,
@@ -36,6 +38,10 @@ fn one_event_state(
         terminal: BTreeMap::from([("e1".to_owned(), terminal)]),
         cancelled: BTreeMap::from([("e1".to_owned(), cancelled)]),
         stale: BTreeMap::from([("e1".to_owned(), stale)]),
+        now: 100,
+        retry_at: BTreeMap::from([("e1".to_owned(), -1)]),
+        base_backoff: 1,
+        max_backoff: 4,
     }
 }
 
@@ -69,24 +75,35 @@ fn project_real_event_record_lifecycle() {
     );
 
     driver.fail("e1").expect("schedule retry");
-    assert_eq!(
-        driver.project().expect("project retry wait"),
-        one_event_state(EventLifecycle::RetryWaiting, 1, 0)
-    );
+    let mut retry_wait = one_event_state(EventLifecycle::RetryWaiting, 1, 0);
+    retry_wait.retry_at.insert("e1".to_owned(), 101);
+    assert_eq!(driver.project().expect("project retry wait"), retry_wait);
 
+    assert!(
+        driver.retry_due("e1").is_err(),
+        "retry at time 100 is premature"
+    );
+    driver.tick().expect("advance to retry deadline");
+    let mut due = one_event_state(EventLifecycle::RetryWaiting, 1, 0);
+    due.now = 101;
+    due.retry_at.insert("e1".to_owned(), 101);
+    assert_eq!(driver.project().expect("project due retry"), due);
     driver.retry_due("e1").expect("release retry");
+    let mut pending_retry = one_event_state(EventLifecycle::Pending, 1, 0);
+    pending_retry.now = 101;
     assert_eq!(
         driver.project().expect("project pending retry"),
-        one_event_state(EventLifecycle::Pending, 1, 0)
+        pending_retry
     );
 
     driver.lease("e1").expect("lease second attempt");
     driver.start("e1").expect("start second attempt");
     driver.fail("e1").expect("exhaust retries");
-    assert_eq!(
-        driver.project().expect("project dead letter"),
-        one_event_state(EventLifecycle::DeadLettered, 2, 0)
-    );
+    assert_eq!(driver.project().expect("project dead letter"), {
+        let mut state = one_event_state(EventLifecycle::DeadLettered, 2, 0);
+        state.now = 101;
+        state
+    });
 }
 
 #[test]
@@ -120,7 +137,51 @@ fn project_success_cancel_and_stale_terminals() {
 }
 
 #[test]
-fn modeled_actions_exclude_the_rust_only_interrupt_transition() {
+fn interrupt_and_retry_timing_are_modeled_through_real_apis() {
+    let policy = RetryPolicy::try_new(
+        5,
+        LogicalDuration::from_seconds(1),
+        LogicalDuration::from_seconds(4),
+    )
+    .expect("valid retry policy");
+    let mut driver = EventDeliveryDriver::try_with_policy(
+        vec!["e1".to_owned()],
+        policy,
+        LogicalInstant::from_unix_seconds(100),
+    )
+    .expect("valid driver");
+    driver.init().expect("initialize record");
+
+    driver.lease("e1").expect("lease interrupted attempt");
+    driver.start("e1").expect("start interrupted attempt");
+    driver.interrupt("e1").expect("interrupt running attempt");
+    let mut interrupted = one_event_state(EventLifecycle::Pending, 0, 0);
+    interrupted.max_attempts = 5;
+    assert_eq!(
+        driver.project().expect("project interrupted attempt"),
+        interrupted
+    );
+
+    for (attempt, expected_deadline) in [(1, 101), (2, 103), (3, 107), (4, 111)] {
+        driver.lease("e1").expect("lease retry attempt");
+        driver.start("e1").expect("start retry attempt");
+        driver.fail("e1").expect("schedule retry attempt");
+        let projected = driver.project().expect("project retry deadline");
+        assert_eq!(projected.attempts["e1"], attempt);
+        assert_eq!(projected.retry_at["e1"], expected_deadline);
+        assert!(
+            driver.retry_due("e1").is_err(),
+            "attempt {attempt} is premature"
+        );
+        while driver.project().expect("project clock").now < expected_deadline {
+            driver.tick().expect("advance logical clock");
+        }
+        driver.retry_due("e1").expect("release due retry");
+    }
+}
+
+#[test]
+fn modeled_actions_include_interrupt_and_time() {
     assert_eq!(
         MODELED_ACTIONS,
         [
@@ -129,7 +190,9 @@ fn modeled_actions_exclude_the_rust_only_interrupt_transition() {
             "Succeed",
             "Fail",
             "RetryDue",
+            "Interrupt",
             "Cancel",
+            "Tick",
             "Reset",
             "DiscardStale",
         ]
@@ -141,7 +204,13 @@ fn modeled_actions_exclude_the_rust_only_interrupt_transition() {
 fn deterministic_scenarios_cover_all_actions() {
     let recorded = Arc::new(Mutex::new(BTreeSet::new()));
 
-    for scenario in ["success", "retryExhaustion", "staleDiscard", "cancel"] {
+    for scenario in [
+        "success",
+        "retryTiming",
+        "interrupt",
+        "staleDiscard",
+        "cancel",
+    ] {
         let driver = driver().with_action_recorder(Arc::clone(&recorded));
         let config = RunnerConfig {
             test_name: format!("EventDelivery scenario {scenario}"),
@@ -165,7 +234,7 @@ fn deterministic_scenarios_cover_all_actions() {
     assert_eq!(actual, expected);
 }
 
-const PROJECTION_FAULTS: [ProjectionFault; 8] = [
+const PROJECTION_FAULTS: [ProjectionFault; 12] = [
     ProjectionFault::State,
     ProjectionFault::Attempts,
     ProjectionFault::MaxAttempts,
@@ -174,6 +243,10 @@ const PROJECTION_FAULTS: [ProjectionFault; 8] = [
     ProjectionFault::Terminal,
     ProjectionFault::Cancelled,
     ProjectionFault::Stale,
+    ProjectionFault::Now,
+    ProjectionFault::RetryAt,
+    ProjectionFault::BaseBackoff,
+    ProjectionFault::MaxBackoff,
 ];
 
 #[test]
@@ -203,6 +276,13 @@ fn projection_fault_changes_exactly_one_field() {
             ("terminal", baseline.terminal != perturbed.terminal),
             ("cancelled", baseline.cancelled != perturbed.cancelled),
             ("stale", baseline.stale != perturbed.stale),
+            ("now", baseline.now != perturbed.now),
+            ("retryAt", baseline.retry_at != perturbed.retry_at),
+            (
+                "baseBackoff",
+                baseline.base_backoff != perturbed.base_backoff,
+            ),
+            ("maxBackoff", baseline.max_backoff != perturbed.max_backoff),
         ]
         .into_iter()
         .filter_map(|(field, differs)| differs.then_some(field))

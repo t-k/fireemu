@@ -424,7 +424,7 @@ impl Parser<'_> {
             else {
                 break;
             };
-            self.pos += 1;
+            let _ = self.bump();
             value = value * 8 + digit.to_digit(8).unwrap_or(0);
         }
         char::from_u32(value).ok_or_else(|| RegexError("octal escape names no character".into()))

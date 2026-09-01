@@ -237,6 +237,8 @@ fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
     // a routable name must not reach it by DNS rebinding.
     let (status, _) = request(port, "GET", "/emulators", "attacker.example");
     assert_eq!(status, 403);
+    let (status, _) = request(port, "GET", "/emulators", "127.attacker.example");
+    assert_eq!(status, 403);
 
     daemon.stop();
 }

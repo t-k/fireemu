@@ -282,12 +282,47 @@ fn local_origin(req: &Request<Incoming>) -> Option<&str> {
         return None;
     }
     let uri = origin.parse::<hyper::Uri>().ok()?;
-    if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.path() != "/" {
+    if !matches!(uri.scheme_str(), Some("http" | "https"))
+        || uri.path() != "/"
+        || uri.query().is_some()
+    {
         return None;
     }
-    let host = uri.host()?;
-    (matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127."))
-        .then_some(origin)
+    authority_is_loopback(uri.authority()?.as_str()).then_some(origin)
+}
+
+fn authority_is_loopback(authority: &str) -> bool {
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((host, suffix)) = rest.split_once(']') else {
+            return false;
+        };
+        if !suffix.is_empty()
+            && suffix
+                .strip_prefix(':')
+                .is_none_or(|port| port.parse::<u16>().is_err())
+        {
+            return false;
+        }
+        host
+    } else {
+        let mut parts = authority.split(':');
+        let Some(host) = parts.next() else {
+            return false;
+        };
+        if let Some(port) = parts.next() {
+            if parts.next().is_some() || port.parse::<u16>().is_err() {
+                return false;
+            }
+        }
+        host
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn fetch_metadata_allows(req: &Request<Incoming>) -> bool {
@@ -413,9 +448,7 @@ fn host_is_local(req: &Request<Incoming>) -> bool {
         // HTTP/1.0 without a Host header cannot be a browser request.
         return true;
     };
-    let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
-    let name = name.trim_start_matches('[').trim_end_matches(']');
-    matches!(name, "localhost" | "127.0.0.1" | "::1") || name.starts_with("127.")
+    authority_is_loopback(host)
 }
 
 async fn respond(

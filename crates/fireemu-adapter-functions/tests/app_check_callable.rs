@@ -353,6 +353,15 @@ async fn an_enforced_callable_rejects_a_missing_app_check_token_before_invoking_
         body.get("headers").is_none(),
         "the runner was never reached: {body}"
     );
+    let browser_denial = h
+        .request("POST", "guarded", &[("origin", "http://127.0.0.1:5173")])
+        .await;
+    assert_eq!(browser_denial.status, 401);
+    assert_eq!(
+        response_header(&browser_denial, "access-control-allow-origin"),
+        Some("http://127.0.0.1:5173")
+    );
+    assert_eq!(response_header(&browser_denial, "vary"), Some("Origin"));
     let token = h.token();
     let (status, body) = h.call("guarded", &[("x-firebase-appcheck", &token)]).await;
     assert_eq!(status, 200, "{body}");

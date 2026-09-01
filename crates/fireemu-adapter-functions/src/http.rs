@@ -41,6 +41,53 @@ fn typed(status: StatusCode, content_type: &str, text: &str) -> Response<Full<By
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
+fn with_local_cors(
+    mut response: Response<Full<Bytes>>,
+    origin: Option<&str>,
+) -> Response<Full<Bytes>> {
+    let Some(origin) = origin.and_then(|value| hyper::header::HeaderValue::from_str(value).ok())
+    else {
+        return response;
+    };
+    response
+        .headers_mut()
+        .insert(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    response.headers_mut().insert(
+        hyper::header::VARY,
+        hyper::header::HeaderValue::from_static("Origin"),
+    );
+    response
+}
+
+fn http_trigger_kinds(runtime: &FunctionsRuntime, function: &str) -> (bool, bool) {
+    let trigger = runtime.manifest().get(function).map(|entry| &entry.trigger);
+    (
+        matches!(
+            trigger,
+            Some(fireemu_core_functions::manifest::Trigger::Http { callable: true, .. })
+        ),
+        matches!(
+            trigger,
+            Some(fireemu_core_functions::manifest::Trigger::Http {
+                callable: false,
+                ..
+            })
+        ),
+    )
+}
+
+fn local_request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
+    let origins = field_values(headers, "origin");
+    if origins.len() > 1
+        || origins
+            .first()
+            .is_some_and(|origin| !origin_is_local(origin))
+    {
+        return Err(Box::new(simple(StatusCode::FORBIDDEN, "forbidden origin")));
+    }
+    Ok(origins.into_iter().next())
+}
+
 /// A forwarded response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxiedResponse {
@@ -448,16 +495,10 @@ async fn respond(
     // the internet can POST to a developer's callable and read the result. That is the one
     // documented divergence of this port, recorded in
     // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
-    let origins = field_values(req.headers(), "origin");
-    if origins.len() > 1 {
-        return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
-    }
-    let origin = origins.first().cloned();
-    if let Some(origin) = &origin {
-        if !origin_is_local(origin) {
-            return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
-        }
-    }
+    let origin = match local_request_origin(req.headers()) {
+        Ok(origin) => origin,
+        Err(refusal) => return Ok(*refusal),
+    };
     // Eventarc's `publishEvents` shares this port. The official suite gives Eventarc a port
     // of its own; a custom event has nowhere to go without functions, so fireemu serves the
     // route here and points `CLOUD_EVENTARC_EMULATOR_HOST` at this listener. The path forms
@@ -488,17 +529,7 @@ async fn respond(
     // loopback origins this port serves. A callable answers its own preflight (v2 `onCall`
     // enables CORS itself, and the recorded oracle shows `POST` where an `onRequest` shows the
     // whole method list), so a callable's request is forwarded untouched.
-    let callable = matches!(
-        runtime.manifest().get(function).map(|f| &f.trigger),
-        Some(fireemu_core_functions::manifest::Trigger::Http { callable: true, .. })
-    );
-    let plain_http = matches!(
-        runtime.manifest().get(function).map(|f| &f.trigger),
-        Some(fireemu_core_functions::manifest::Trigger::Http {
-            callable: false,
-            ..
-        })
-    );
+    let (callable, plain_http) = http_trigger_kinds(&runtime, function);
     if callable && method == "OPTIONS" {
         return Ok(match callable_preflight(req.headers()) {
             Some(answer) => answer,
@@ -525,7 +556,10 @@ async fn respond(
         Ok(headers) => headers,
         Err(denial) => {
             drain_refused_body(req.into_body()).await;
-            return Ok(*denial);
+            return Ok(with_local_cors(
+                *denial,
+                callable.then_some(origin.as_deref()).flatten(),
+            ));
         }
     };
     let body = match collect_body(req.into_body()).await {

@@ -183,11 +183,12 @@ impl Runner {
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // Its own process group, so a reset or shutdown takes the handlers' own
-            // subprocesses down with it.
-            .process_group(0)
-            .kill_on_drop(true);
+            .stderr(Stdio::piped());
+        // Its own process group, so a reset or shutdown takes the handlers' own
+        // subprocesses down with it.
+        #[cfg(unix)]
+        cmd.process_group(0);
+        cmd.kill_on_drop(true);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }

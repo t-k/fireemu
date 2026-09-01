@@ -970,6 +970,7 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::proce
         cmd.env_remove(name);
     }
     cmd.envs(env.iter().cloned());
+    #[cfg(unix)]
     if own_process_group() {
         cmd.process_group(0);
     }

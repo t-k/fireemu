@@ -930,6 +930,20 @@ fn push_node_candidate(out: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
+fn path_node_candidates(path: &std::ffi::OsStr) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for directory in std::env::split_paths(path)
+        .filter(|directory| directory.is_absolute())
+        .take(64)
+    {
+        #[cfg(not(windows))]
+        push_node_candidate(&mut candidates, directory.join("node"));
+        #[cfg(windows)]
+        push_node_candidate(&mut candidates, directory.join("node.exe"));
+    }
+    candidates
+}
+
 fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
     if let Some(program) = std::env::var_os("FIREEMU_NODE") {
         let program = PathBuf::from(program);
@@ -944,17 +958,9 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
         return Ok((candidates, true));
     }
 
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&path)
-            .filter(|directory| directory.is_absolute())
-            .take(64)
-        {
-            push_node_candidate(&mut candidates, directory.join("node"));
-            #[cfg(windows)]
-            push_node_candidate(&mut candidates, directory.join("node.exe"));
-        }
-    }
+    let mut candidates = std::env::var_os("PATH")
+        .map(|path| path_node_candidates(&path))
+        .unwrap_or_default();
     if let Some(home) = std::env::var_os("VOLTA_HOME") {
         let root = PathBuf::from(home).join("tools/image/node");
         if root.is_absolute() {
@@ -962,6 +968,7 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
                 let mut entries: Vec<_> = entries.filter_map(Result::ok).take(64).collect();
                 entries.sort_by_key(std::fs::DirEntry::file_name);
                 for entry in entries {
+                    #[cfg(not(windows))]
                     push_node_candidate(&mut candidates, entry.path().join("bin/node"));
                     #[cfg(windows)]
                     push_node_candidate(&mut candidates, entry.path().join("node.exe"));
@@ -1096,19 +1103,14 @@ fn default_runner_for_codebase(
     _codebase: &crate::config::FunctionsCodebase,
 ) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
-    let program = if let Some(program) = std::env::var_os("FIREEMU_NODE") {
-        let program = PathBuf::from(program);
-        if !program.is_absolute() || !program.is_file() {
-            return Err(format!(
-                "FIREEMU_NODE names {}, which is not an executable file",
-                program.display()
-            ));
-        }
-        program.display().to_string()
-    } else {
-        "node".to_owned()
-    };
-    Ok(vec![program, script.path.display().to_string()])
+    let (candidates, _) = node_candidates()?;
+    let program = candidates.first().ok_or_else(|| {
+        "no Node executable was found in an absolute PATH directory; set FIREEMU_NODE to an absolute executable or configure functions.runner explicitly".to_owned()
+    })?;
+    Ok(vec![
+        program.display().to_string(),
+        script.path.display().to_string(),
+    ])
 }
 
 #[cfg(not(windows))]
@@ -1887,6 +1889,8 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    #[cfg(windows)]
+    use super::path_node_candidates;
     use super::{
         check_callable_app_check, function_pubsub_resources, functions_source_signature,
         node_engine_matches, package_node_engine, parse_node_version, probe_node,
@@ -1993,6 +1997,31 @@ mod tests {
             .status()
             .unwrap()
             .success());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_node_discovery_uses_only_absolute_path_candidates() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-windows-node-discovery-{}",
+            std::process::id()
+        ));
+        let current = root.join("current");
+        let bin = root.join("bin");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        let current_node = current.join("node.exe");
+        let path_node = bin.join("node.exe");
+        std::fs::write(&current_node, b"current directory executable").unwrap();
+        std::fs::write(&path_node, b"PATH executable").unwrap();
+        let path = std::env::join_paths([&bin]).unwrap();
+
+        let candidates = path_node_candidates(&path);
+
+        assert_eq!(candidates, vec![std::fs::canonicalize(path_node).unwrap()]);
+        assert!(!candidates.contains(&std::fs::canonicalize(current_node).unwrap()));
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -78,6 +78,20 @@ fn claims(id_token: &str) -> Value {
     serde_json::from_str(&decode_unsigned(id_token).unwrap().payload_json).unwrap()
 }
 
+fn custom_token(uid: &str) -> String {
+    let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = json!({
+        "aud": "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit",
+        "iss": "firebase-auth-emulator@example.com",
+        "sub": "firebase-auth-emulator@example.com",
+        "uid": uid,
+        "iat": 1_788_004_860,
+        "exp": 1_788_008_460,
+    });
+    let payload = base64url_encode(payload.to_string().as_bytes());
+    format!("{header}.{payload}.")
+}
+
 /// Marks the address verified through the Admin route: the pinned official emulator refuses
 /// phone-factor enrollment for an unverified password user (`UNVERIFIED_EMAIL`).
 fn verify_email(state: &AuthState, local_id: &str) {
@@ -1103,6 +1117,66 @@ fn compatibility_profile_routes_unregistered_admin_projects_without_leaking_stat
     ));
     registry.clear_routed();
     assert_eq!(registry.routed_count(), 0);
+}
+
+#[test]
+fn compatibility_profile_routes_custom_token_exchanges_to_the_unique_existing_project() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    s.registry = Some(registry);
+    s.allow_routed_projects = true;
+
+    for (project, uid, email) in [
+        ("worker-alpha", "user-alpha", "alpha@example.com"),
+        ("worker-beta", "user-beta", "beta@example.com"),
+    ] {
+        let (status, created) = admin(
+            &s,
+            &format!("{V1}/projects/{project}/accounts"),
+            &json!({"localId": uid, "email": email}),
+        );
+        assert_eq!(status, 200, "{created}");
+
+        let (status, exchanged) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": custom_token(uid), "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{exchanged}");
+        assert_eq!(
+            claims(exchanged["idToken"].as_str().unwrap())["aud"],
+            project
+        );
+    }
+}
+
+#[test]
+fn compatibility_profile_rejects_ambiguous_custom_token_projects() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    s.registry = Some(registry);
+    s.allow_routed_projects = true;
+
+    for project in ["worker-alpha", "worker-beta"] {
+        let (status, created) = admin(
+            &s,
+            &format!("{V1}/projects/{project}/accounts"),
+            &json!({"localId": "shared-user", "email": format!("{project}@example.com")}),
+        );
+        assert_eq!(status, 200, "{created}");
+    }
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": custom_token("shared-user")}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "INVALID_CUSTOM_TOKEN");
 }
 
 #[test]

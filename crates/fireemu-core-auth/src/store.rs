@@ -2359,6 +2359,19 @@ pub enum RoutedStoreInstall {
     Capacity,
 }
 
+/// Result of resolving a project-less compatibility request from an existing user ID.
+#[derive(Debug, Clone)]
+pub enum CompatibilityUserStoreMatch {
+    /// No default or compatibility-routed namespace contains the user.
+    NotFound,
+    /// Exactly one namespace contains the user.
+    Unique(SharedAuthStore),
+    /// More than one namespace contains the user, so selecting one would cross a boundary.
+    Ambiguous,
+    /// A poisoned store or registry lock prevented a complete decision.
+    Unavailable,
+}
+
 /// The Auth stores of every project a daemon serves: the configured (default) project plus
 /// the projects created as sessions through the control API. Tokens name their project in
 /// `aud`, so a verifier picks the store by audience.
@@ -2511,6 +2524,43 @@ impl AuthRegistry {
         self.projects
             .lock()
             .map_or(0, |projects| projects.routed.len())
+    }
+
+    /// Finds a user in the default and compatibility-routed namespaces only when the match is
+    /// unique. Registered sessions and tenants require their explicit routing credentials.
+    #[must_use]
+    pub fn compatibility_store_for_unique_user(
+        &self,
+        local_id: &str,
+    ) -> CompatibilityUserStoreMatch {
+        let Ok(default) = self.default.lock() else {
+            return CompatibilityUserStoreMatch::Unavailable;
+        };
+        let mut found = default
+            .user_by_id(local_id)
+            .is_some()
+            .then(|| self.default.clone());
+        drop(default);
+
+        let Ok(projects) = self.projects.lock() else {
+            return CompatibilityUserStoreMatch::Unavailable;
+        };
+        for store in projects.routed.values() {
+            let Ok(candidate) = store.lock() else {
+                return CompatibilityUserStoreMatch::Unavailable;
+            };
+            if candidate.user_by_id(local_id).is_none() {
+                continue;
+            }
+            if found.is_some() {
+                return CompatibilityUserStoreMatch::Ambiguous;
+            }
+            found = Some(store.clone());
+        }
+        found.map_or(
+            CompatibilityUserStoreMatch::NotFound,
+            CompatibilityUserStoreMatch::Unique,
+        )
     }
 
     /// Registers a project's store; `false` when the project already has one.

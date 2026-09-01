@@ -949,7 +949,10 @@ pub fn handle_with(
         };
         store
     } else {
-        select_store(state, path, query, body)
+        match select_store(state, path, query, body, resolution) {
+            Ok(store) => store,
+            Err(response) => return response,
+        }
     };
     let operation_gate = if state.blocking.is_some()
         && matches!(
@@ -1539,16 +1542,17 @@ fn select_store(
     path: &str,
     query: Option<&str>,
     body: &Value,
-) -> Arc<Mutex<AuthStore>> {
+    resolution: routes::Resolution<'_>,
+) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
     let Some(registry) = &state.registry else {
-        return state.store.clone();
+        return Ok(state.store.clone());
     };
     if let Some((project, tenant)) = routes::scoped_target(path) {
-        return tenant
+        return Ok(tenant
             .and_then(|tenant| registry.tenant_store(project, tenant))
             .or_else(|| registry.store_for(project))
             .or_else(|| registry.routed_store_for(project))
-            .unwrap_or_else(|| state.store.clone());
+            .unwrap_or_else(|| state.store.clone()));
     }
     // Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode them.
     let api_key = query
@@ -1566,7 +1570,26 @@ fn select_store(
                 .and_then(|tenant| registry.tenant_store(&project, tenant))
                 .or_else(|| registry.store_for(&project))
             {
-                return store;
+                return Ok(store);
+            }
+        }
+    }
+    let exchanges_custom_token = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if route.handler == routes::Handler::SignInWithCustomToken
+    );
+    if state.allow_routed_projects && exchanges_custom_token {
+        if let Some(uid) = custom_token_uid(body) {
+            use fireemu_core_auth::store::CompatibilityUserStoreMatch;
+
+            match registry.compatibility_store_for_unique_user(&uid) {
+                CompatibilityUserStoreMatch::Unique(store) => return Ok(store),
+                CompatibilityUserStoreMatch::Ambiguous => {
+                    return Err(error(400, "INVALID_CUSTOM_TOKEN"));
+                }
+                CompatibilityUserStoreMatch::Unavailable => return Err(error(500, "INTERNAL")),
+                CompatibilityUserStoreMatch::NotFound => {}
             }
         }
     }
@@ -1595,21 +1618,40 @@ fn select_store(
                 .or_else(|| registry.store_for(&project))
                 .or_else(|| registry.routed_store_for(&project))
             {
-                return store;
+                return Ok(store);
             }
         }
     }
     if let Some(token) = str_field(body, "refresh_token") {
         if let Some(store) = registry.find(|s| s.refresh_session(token).is_ok()) {
-            return store;
+            return Ok(store);
         }
     }
     if let Some(tenant) = str_field(body, "tenantId") {
         if let Some(store) = registry.tenant_store(registry.default_project(), tenant) {
-            return store;
+            return Ok(store);
         }
     }
-    state.store.clone()
+    Ok(state.store.clone())
+}
+
+fn custom_token_uid(body: &Value) -> Option<String> {
+    let token = str_field(body, "token")?;
+    let payload = if token.trim_start().starts_with('{') {
+        fireemu_core_types::json::parse(token).ok()?
+    } else {
+        let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
+        (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
+            .then_some(decoded.payload)?
+    };
+    payload
+        .get("uid")
+        .or_else(|| payload.get("user_id"))
+        .and_then(|value| match value {
+            JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
+            JsonValue::Int(value) => Some(value.to_string()),
+            _ => None,
+        })
 }
 
 /// `%XX` sequences and `+` decoded (invalid sequences are kept as they are).

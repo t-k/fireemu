@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fireemu_verification_quint::event_delivery::{
-    EventDeliveryDriver, EventDeliveryState, EventLifecycle, ProjectionFault, MODELED_ACTIONS,
+    EventDeliveryConnectDriver, EventDeliveryDriver, EventDeliveryState, EventLifecycle,
+    ProjectionFault, GENERATED_TRACE_SEEDS, MODELED_ACTIONS,
 };
-use quint_connect::runner::{run_test, Config as RunnerConfig, TestConfig};
+use quint_connect::runner::{run_test, Config as RunnerConfig, RunConfig, TestConfig};
 
 fn one_event_state(
     lifecycle: EventLifecycle,
@@ -309,4 +310,46 @@ impl Drop for OwnedDirectory {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
+}
+
+fn run_generated(
+    seed: &str,
+    driver: EventDeliveryConnectDriver,
+    max_samples: usize,
+) -> Result<(), String> {
+    let config = RunnerConfig {
+        test_name: format!("EventDelivery generated seed {seed}"),
+        gen_config: RunConfig {
+            spec: absolute_spec_path().to_string_lossy().into_owned(),
+            main: Some("EventDeliveryConnect".to_owned()),
+            init: Some("init".to_owned()),
+            step: Some("step".to_owned()),
+            max_samples: Some(max_samples),
+            max_steps: Some(20),
+            seed: seed.to_owned(),
+        },
+    };
+    run_test(driver, config).map_err(|error| format!("seed {seed}: {error:#}"))
+}
+
+#[test]
+#[ignore = "requires the pinned local Quint CLI"]
+fn generated_traces_match_rust() {
+    for seed in GENERATED_TRACE_SEEDS {
+        let driver = EventDeliveryConnectDriver::try_new().expect("valid generated-trace driver");
+        run_generated(seed, driver, 100)
+            .unwrap_or_else(|diagnostic| panic!("generated campaign failed: {diagnostic}"));
+    }
+
+    let seed = GENERATED_TRACE_SEEDS[0];
+    let driver = EventDeliveryConnectDriver::try_new()
+        .expect("valid faulted generated-trace driver")
+        .with_projection_fault(ProjectionFault::MaxAttempts);
+    let diagnostic = run_generated(seed, driver, 1)
+        .expect_err("faulted generated campaign must report a reproducible mismatch");
+    assert!(
+        diagnostic.contains("State invariant failed"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains(seed), "{diagnostic}");
 }

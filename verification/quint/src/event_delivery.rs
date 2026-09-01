@@ -24,6 +24,9 @@ pub const MODELED_ACTIONS: [&str; 8] = [
     "DiscardStale",
 ];
 
+/// Reproducible seeds used by the bounded generated-trace campaigns.
+pub const GENERATED_TRACE_SEEDS: [&str; 4] = ["0x1", "0x2", "0x3", "0x4"];
+
 /// Lifecycle representation used at the Quint/Rust comparison boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "tag", deny_unknown_fields)]
@@ -176,7 +179,7 @@ impl EventDeliveryDriver {
 
     /// Applies a projection-only fault for a negative conformance test.
     #[must_use]
-    pub const fn with_projection_fault(mut self, fault: ProjectionFault) -> Self {
+    pub fn with_projection_fault(mut self, fault: ProjectionFault) -> Self {
         self.projection_fault = fault;
         self
     }
@@ -399,6 +402,48 @@ impl Driver for EventDeliveryDriver {
             Reset => self.reset()?,
             DiscardStale(event: String) => self.discard_stale(&event)?,
         })
+    }
+}
+
+/// Driver view configured for the two-event, three-attempt generated-trace instance.
+pub struct EventDeliveryConnectDriver {
+    inner: EventDeliveryDriver,
+}
+
+impl EventDeliveryConnectDriver {
+    /// Builds a fresh driver matching the `EventDeliveryConnect` Quint instance.
+    pub fn try_new() -> Result<Self> {
+        Ok(Self {
+            inner: EventDeliveryDriver::try_new(vec!["e1".to_owned(), "e2".to_owned()], 3)?,
+        })
+    }
+
+    /// Applies a projection-only fault for a generated-trace regression.
+    #[must_use]
+    pub fn with_projection_fault(mut self, fault: ProjectionFault) -> Self {
+        self.inner.set_projection_fault(fault);
+        self
+    }
+}
+
+impl State<EventDeliveryConnectDriver> for EventDeliveryState {
+    fn from_driver(driver: &EventDeliveryConnectDriver) -> Result<Self> {
+        driver.inner.project()
+    }
+}
+
+impl Driver for EventDeliveryConnectDriver {
+    type State = EventDeliveryState;
+
+    fn config() -> Config {
+        Config {
+            state: &["EventDeliveryConnect::EventDelivery::observable"],
+            nondet: &["EventDeliveryConnect::EventDelivery::actionTaken"],
+        }
+    }
+
+    fn step(&mut self, step: &Step) -> Result {
+        self.inner.step(step)
     }
 }
 

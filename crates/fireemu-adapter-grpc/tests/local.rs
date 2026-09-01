@@ -692,7 +692,8 @@ async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(counter.fields.get("value"), Some(&i(CLIENTS as i64)));
+    let expected_clients = i64::try_from(CLIENTS).expect("client count fits in i64");
+    assert_eq!(counter.fields.get("value"), Some(&i(expected_clients)));
     assert_eq!(
         collect_docs(&mut client, query("items", None)).await.len(),
         CLIENTS

@@ -110,10 +110,7 @@ const MODELS: &[ModelDescriptor] = &[
             "Commit",
             "Abort",
         ],
-        production_sources: &[
-            "crates/fireemu-core-firestore/src/store.rs",
-            "crates/fireemu-adapter-grpc/src/local.rs",
-        ],
+        production_sources: &["crates/fireemu-core-firestore/src/store.rs"],
         bounds: &[
             BoundDescriptor {
                 name: "Docs",

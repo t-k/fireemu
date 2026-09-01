@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
-  "model": "RegexAuthorization",
-  "spec": "specs/RegexAuthorization.qnt",
-  "main": "RegexAuthorizationProof",
-  "config": "configs/RegexAuthorization.json",
-  "mutationManifest": "mutations/RegexAuthorization.json",
+  "model": "AtomicCommitOutbox",
+  "spec": "specs/AtomicCommitOutbox.qnt",
+  "main": "AtomicCommitOutboxProof",
+  "config": "configs/AtomicCommitOutbox.json",
+  "mutationManifest": "mutations/AtomicCommitOutbox.json",
   "tools": {
     "quint": "0.32.0",
     "quintConnect": "0.1.2",
@@ -12,93 +12,112 @@
     "backend": "tlc"
   },
   "bounds": {
-    "OutcomesAndNegations": "all-finite-combinations"
+    "Docs": "{d1,d2}",
+    "MaxVersion": "2"
   },
   "boundInputs": [
     ".github/workflows/ci.yml",
     "Cargo.lock",
     "Cargo.toml",
-    "crates/fireemu-core-rules/src/eval.rs",
-    "crates/fireemu-core-rules/src/parse.rs",
-    "crates/fireemu-core-rules/src/regex.rs",
-    "crates/fireemu-core-rules/src/value.rs",
+    "crates/fireemu-core-firestore/src/store.rs",
     "verification/quint/Cargo.toml",
     "verification/quint/README.md",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
-    "verification/quint/configs/RegexAuthorization.json",
-    "verification/quint/mutations/RegexAuthorization.json",
+    "verification/quint/configs/AtomicCommitOutbox.json",
+    "verification/quint/mutations/AtomicCommitOutbox.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-pilot.sh",
-    "verification/quint/specs/RegexAuthorization.qnt",
+    "verification/quint/specs/AtomicCommitOutbox.qnt",
+    "verification/quint/src/atomic_commit_outbox.rs",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
-    "verification/quint/src/regex_authorization.rs",
+    "verification/quint/tests/atomic_commit_outbox_connect.rs",
     "verification/quint/tests/cli_contract.rs",
     "verification/quint/tests/evidence_contract.rs",
-    "verification/quint/tests/model_registry.rs",
-    "verification/quint/tests/regex_authorization_connect.rs"
+    "verification/quint/tests/model_registry.rs"
   ],
   "digests": {
     ".github/workflows/ci.yml": "e813033b9f67c87d9ce61a9295ce4594573fbe06a8be170c1e94499be7e96a08",
     "Cargo.lock": "89f77de5c9c4d9c390505114fbc482d7d1993c371ef82e193afd03792180db27",
     "Cargo.toml": "ec24bf216c16dfceacefc39dcf386ae21b7b1a2209dd9f5837814a5e2ba0feb3",
-    "crates/fireemu-core-rules/src/eval.rs": "9eb7f060e5d682a2c7ba33f2590ffb9ad0991c4e963b70ea763e0f15b334d6d4",
-    "crates/fireemu-core-rules/src/parse.rs": "f45947de69c4b72b12f904f1b442f81e5318da5d33f4375535b41db9b3d809d1",
-    "crates/fireemu-core-rules/src/regex.rs": "bf9431c903f0cfde3bf7a94c72ba6a431c37a90f42427f83e03acb4fb4adaeab",
-    "crates/fireemu-core-rules/src/value.rs": "9dc40e03b3c2fed0bedccece5630d557604cd4ccea03edb2b5f5d0fb6fbdfd61",
+    "crates/fireemu-core-firestore/src/store.rs": "c372595cc5abbb63e8aa7e4095aee26ead8518b8a1992125140d002e0ade72e1",
     "verification/quint/Cargo.toml": "4e9c1a0ea8fe009dc0123d4a5a1fa398032331bdf60aea1468e44270f025a163",
     "verification/quint/README.md": "8c94c58608b4c1580dcd9a6162235a9828fc030f70b0cc932932978c9f6c22b7",
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
-    "verification/quint/configs/RegexAuthorization.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/mutations/RegexAuthorization.json": "26b763730808eef896e693f082b49b01d685109064a5f6f034264fee437199cb",
+    "verification/quint/configs/AtomicCommitOutbox.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
+    "verification/quint/mutations/AtomicCommitOutbox.json": "378eddcc375f01e44ab3e7b13f11f41a5da4d2e2c6d1ac4f2379d665784a7458",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-pilot.sh": "c5d389f864a17516a30c921872b49133fbfd8e41f06dffd698ea859c3cc06151",
-    "verification/quint/specs/RegexAuthorization.qnt": "f834e65f52da3d74b89edcc25bb46ee4dc227118e2a6d0c4349fb7ec561c0c25",
+    "verification/quint/specs/AtomicCommitOutbox.qnt": "64a128c3f080e808898abb3344e45be42db4a9d81ee4f8c1d1816b6143948948",
+    "verification/quint/src/atomic_commit_outbox.rs": "82b667d160303a97a4e275857a636e5245b68bf7d6208538f9e6e4db0954e3e9",
     "verification/quint/src/evidence.rs": "206166ece32f6241d35918f447f05203aac72efc280f7da6c6001644de508307",
     "verification/quint/src/lib.rs": "5a1e6921956eaa868fe450295b41d62debebf8d21f8aacb0247d2620bb83bb0b",
     "verification/quint/src/main.rs": "daa7c3ace8c42b14e73b2d876d16bf53a25068b923fe9642a1ca843d8d600537",
     "verification/quint/src/model.rs": "f57be0c0fecb5b0ed5e30a13c5042117ee9628361064c83f022b740bd8c8987f",
     "verification/quint/src/process.rs": "897bb2a565d5be2ed6a0f95e431a46852c208e653c3e84acbb5805a6f6f3815a",
-    "verification/quint/src/regex_authorization.rs": "51fd6803d12e083784faf431cc884abc1aca619d6a5fc3b5694cf771aa39df84",
+    "verification/quint/tests/atomic_commit_outbox_connect.rs": "2aa5dfd9b468ac7a1105c12e2a6234c2f6e79a1f97ab78cb1c7c135827293f50",
     "verification/quint/tests/cli_contract.rs": "6ca66cd92b83b837742bc902cd043eca4b5fc80efebdf56e85d9cb0cbee404ac",
     "verification/quint/tests/evidence_contract.rs": "1079e61e4c648132c46b590c534c5a732970cf356aaf4fe1ba380bcc1b3a188f",
-    "verification/quint/tests/model_registry.rs": "5b45606854388ad3dc4ded732cd7fec986928f7c7c34051020e783dd08ee6a84",
-    "verification/quint/tests/regex_authorization_connect.rs": "f0ff044eb09b574f090f1779017e75195ac194a9a043e1208c7ecf5b2ce0c82e"
+    "verification/quint/tests/model_registry.rs": "5b45606854388ad3dc4ded732cd7fec986928f7c7c34051020e783dd08ee6a84"
   },
   "invariants": [
     "TypeOK",
-    "ExhaustionNeverAllows"
+    "AtomicCommit",
+    "OutboxCompleteness",
+    "NoPartialTransaction",
+    "ConflictNeverCommits"
   ],
   "temporalProperties": [],
   "mutations": [
     {
-      "id": "M-FORMAL-RULES-REGEX-001",
-      "property": "ExhaustionNeverAllows",
+      "id": "M-FORMAL-COMMIT-ATOMIC-001",
+      "property": "AtomicCommit",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-OUTBOX-COMPLETE-001",
+      "property": "OutboxCompleteness",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-TXN-PARTIAL-001",
+      "property": "NoPartialTransaction",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-TXN-CONFLICT-001",
+      "property": "ConflictNeverCommits",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
-    "matched",
-    "notMatched",
-    "stepExhausted",
-    "depthExhausted",
-    "parentNegated",
-    "nestedNegated"
+    "commit",
+    "conflict",
+    "abort"
   ],
   "actions": [
-    "Evaluate"
+    "Begin",
+    "StageWrite",
+    "StageOutbox",
+    "DetectConflict",
+    "Commit",
+    "Abort"
   ],
   "projectionFields": [
-    "decision",
-    "denialClass"
+    "documents",
+    "outbox",
+    "transactionState"
   ],
   "simulation": {
     "seeds": [

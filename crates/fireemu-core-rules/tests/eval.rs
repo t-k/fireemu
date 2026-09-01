@@ -876,3 +876,39 @@ service cloud.firestore {
         "{report:?}"
     );
 }
+
+#[test]
+fn regex_step_budget_exhaustion_cannot_be_overridden_by_a_nested_allow() {
+    let rules = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if resource.data.value.matches('(a+)+b|.*\\0.*') == false;
+      match /{rest=**} {
+        allow get: if true;
+      }
+    }
+  }
+}
+";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[(
+        "value",
+        RulesValue::String(format!("{}\0", "a".repeat(18))),
+    )]));
+
+    let report = evaluate_request(&ruleset, &request);
+    assert!(
+        matches!(
+            report.decision,
+            Decision::Deny(DenyReason::BudgetExceeded {
+                limit_id: "FIREEMU-REGEX-STEPS-PER-MATCH",
+                current,
+                maximum,
+            }) if current > maximum
+        ),
+        "{report:?}"
+    );
+}

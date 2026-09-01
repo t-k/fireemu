@@ -557,7 +557,7 @@ fn walk_match<'a>(
             *matched_any = true;
             result = evaluate_allows(&block.allows, ctx, ev);
         }
-        if !matches!(result, Ok(true)) {
+        if !matches!(result, Ok(true) | Err(EvalError::Budget { .. })) {
             let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
             result = match (result, nested) {
                 (_, Ok(true)) => Ok(true),

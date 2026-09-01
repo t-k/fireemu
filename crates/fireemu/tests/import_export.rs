@@ -524,7 +524,7 @@ fn a_sparse_firestore_output_is_refused_before_allocation_or_command_start() {
     let log = text(&output);
     assert_eq!(output.status.code(), Some(1), "{log}");
     assert!(
-        log.contains("output files exceed the 1073741824 byte import budget"),
+        log.contains("output files exceed the 1073741824 byte cumulative import limit"),
         "{log}"
     );
     assert!(!log.contains("running: "), "{log}");

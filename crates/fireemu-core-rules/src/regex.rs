@@ -708,9 +708,9 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
                 index = index.saturating_add(1);
                 continue;
             }
-            if let Some(after_member) = posix_class_end(&characters, index) {
+            if let Some(member_width) = posix_class_width(&characters, index) {
                 class_first = false;
-                index = after_member;
+                index = index.saturating_add(member_width.get());
                 continue;
             }
             if character == ']' && !class_first {
@@ -739,8 +739,11 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
     Ok(())
 }
 
-fn posix_class_end(characters: &[char], start: usize) -> Option<usize> {
-    if characters.get(start) != Some(&'[') || characters.get(start + 1) != Some(&':') {
+fn posix_class_width(characters: &[char], start: usize) -> Option<std::num::NonZeroUsize> {
+    if characters.get(start) != Some(&'[') {
+        return None;
+    }
+    if characters.get(start.saturating_add(1)) != Some(&':') {
         return None;
     }
     let mut index = start.saturating_add(2);
@@ -753,8 +756,51 @@ fn posix_class_end(characters: &[char], start: usize) -> Option<usize> {
     {
         index = index.saturating_add(1);
     }
-    (characters.get(index) == Some(&':') && characters.get(index + 1) == Some(&']'))
-        .then_some(index.saturating_add(2))
+    if characters.get(index) != Some(&':') {
+        return None;
+    }
+    if characters.get(index.saturating_add(1)) != Some(&']') {
+        return None;
+    }
+    index
+        .saturating_add(2)
+        .checked_sub(start)
+        .and_then(std::num::NonZeroUsize::new)
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use std::num::NonZeroUsize;
+
+    use super::posix_class_width;
+
+    fn chars(pattern: &str) -> Vec<char> {
+        pattern.chars().collect()
+    }
+
+    #[test]
+    fn posix_class_member_end_accepts_complete_members() {
+        assert_eq!(
+            posix_class_width(&chars("[:alpha:]"), 0),
+            NonZeroUsize::new(9)
+        );
+        assert_eq!(
+            posix_class_width(&chars("[:^alpha:]"), 0),
+            NonZeroUsize::new(10)
+        );
+    }
+
+    #[test]
+    fn posix_class_member_end_rejects_invalid_prefixes() {
+        assert_eq!(posix_class_width(&chars("x:alpha:]"), 0), None);
+        assert_eq!(posix_class_width(&chars("[xalpha:]"), 0), None);
+    }
+
+    #[test]
+    fn posix_class_member_end_rejects_invalid_closures() {
+        assert_eq!(posix_class_width(&chars("[:alpha:x"), 0), None);
+        assert_eq!(posix_class_width(&chars("[:alpha-]"), 0), None);
+    }
 }
 
 /// Expands `$0` (the whole match), `$1` .. `$9` (groups) and `$$` (a literal `$`).

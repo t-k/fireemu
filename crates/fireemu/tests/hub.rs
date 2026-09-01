@@ -407,6 +407,48 @@ fn the_hub_switches_background_triggers_and_says_so() {
     daemon.stop();
 }
 
+fn assert_hub_preflight_refused(port: u16, path: &str, label: &str, headers: &[(&str, &str)]) {
+    let (status, head, _) = request_with_headers(port, "OPTIONS", path, "127.0.0.1", headers, "");
+    assert_eq!(status, 403, "{label}: {head}");
+    assert!(
+        !head
+            .to_ascii_lowercase()
+            .contains("access-control-allow-origin"),
+        "{label}: {head}"
+    );
+}
+
+fn assert_hub_preflight_admitted(port: u16, path: &str, local_origin: &str) {
+    let (status, head, _) = request_with_headers(
+        port,
+        "OPTIONS",
+        path,
+        "127.0.0.1",
+        &[
+            ("Origin", local_origin),
+            ("Access-Control-Request-Method", "PUT"),
+            ("Access-Control-Request-Headers", "authorization"),
+            ("Sec-Fetch-Site", "same-site"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Access-Control-Request-Private-Network", "true"),
+        ],
+        "",
+    );
+    let lower = head.to_ascii_lowercase();
+    assert_eq!(status, 204, "{head}");
+    assert!(lower.contains(&format!("access-control-allow-origin: {local_origin}")));
+    assert!(
+        lower.contains("access-control-allow-methods: put"),
+        "{head}"
+    );
+    assert!(
+        lower.contains("access-control-allow-headers: authorization"),
+        "{head}"
+    );
+    assert!(lower.contains("access-control-allow-private-network: true"));
+    assert!(lower.contains("vary: origin, access-control-request-method, access-control-request-headers, access-control-request-private-network, sec-fetch-site, sec-fetch-mode"), "{head}");
+}
+
 #[test]
 fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
     let port = free_port();
@@ -457,46 +499,11 @@ fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
             ],
         ),
     ] {
-        let (status, head, _) =
-            request_with_headers(port, "OPTIONS", path, "127.0.0.1", &headers, "");
-        assert_eq!(status, 403, "{label}: {head}");
-        assert!(
-            !head
-                .to_ascii_lowercase()
-                .contains("access-control-allow-origin"),
-            "{label}: {head}"
-        );
+        assert_hub_preflight_refused(port, path, label, &headers);
     }
 
     let local_origin = "http://127.0.0.1:4000";
-    let (status, head, _) = request_with_headers(
-        port,
-        "OPTIONS",
-        path,
-        "127.0.0.1",
-        &[
-            ("Origin", local_origin),
-            ("Access-Control-Request-Method", "PUT"),
-            ("Access-Control-Request-Headers", "authorization"),
-            ("Sec-Fetch-Site", "same-site"),
-            ("Sec-Fetch-Mode", "cors"),
-            ("Access-Control-Request-Private-Network", "true"),
-        ],
-        "",
-    );
-    let lower = head.to_ascii_lowercase();
-    assert_eq!(status, 204, "{head}");
-    assert!(lower.contains(&format!("access-control-allow-origin: {local_origin}")));
-    assert!(
-        lower.contains("access-control-allow-methods: put"),
-        "{head}"
-    );
-    assert!(
-        lower.contains("access-control-allow-headers: authorization"),
-        "{head}"
-    );
-    assert!(lower.contains("access-control-allow-private-network: true"));
-    assert!(lower.contains("vary: origin, access-control-request-method, access-control-request-headers, access-control-request-private-network, sec-fetch-site, sec-fetch-mode"), "{head}");
+    assert_hub_preflight_admitted(port, path, local_origin);
 
     for (label, authorization) in [
         ("missing token", None),

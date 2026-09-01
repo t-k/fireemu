@@ -971,17 +971,21 @@ fn decode_base32(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
-    let section_dir = dir.join(&section.path);
+fn scan_storage_import_tree(dir: &Path, section_dir: &Path) -> Result<(), ArtifactError> {
     scan_import_tree(
         dir,
-        &section_dir,
+        section_dir,
         "storage",
         IMPORT_STORAGE_TOTAL_BYTES_LIMIT,
         IMPORT_STORAGE_ENTRY_COUNT_LIMIT,
         IMPORT_STORAGE_NESTING_DEPTH_LIMIT,
         None,
-    )?;
+    )
+}
+
+fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
+    let section_dir = dir.join(&section.path);
+    scan_storage_import_tree(dir, &section_dir)?;
     let buckets_path = section_dir.join(BUCKETS_FILE);
     let text = read_text_inside(dir, &buckets_path)
         .map_err(|e| ArtifactError::new("storage", &buckets_path, e))?;
@@ -1729,8 +1733,7 @@ fn create_export_stage(target: &Path) -> Result<PathBuf, String> {
     }
     let name = target
         .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_else(|| "export".into());
+        .map_or_else(|| "export".into(), |name| name.to_string_lossy());
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());

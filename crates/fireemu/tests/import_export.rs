@@ -742,7 +742,7 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
     let dir = scratch("sigint");
     let out = dir.join("out");
     let ready = dir.join("ready");
-    let child_pid = dir.join("child-pid");
+    let child_pid_path = dir.join("child-pid");
     let supervisor = ChildGuard::new(
         exec()
             .args(["--import"])
@@ -752,7 +752,7 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
             .args(["--", "sh", "-c"])
             .arg(format!(
                 "printf '%s' $$ > {}; touch {}; exec sleep 60",
-                child_pid.display(),
+                child_pid_path.display(),
                 ready.display()
             ))
             .spawn()
@@ -763,7 +763,7 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(ready.exists(), "the command started");
-    let child_pgid = std::fs::read_to_string(&child_pid)
+    let command_group = std::fs::read_to_string(&child_pid_path)
         .unwrap()
         .parse::<i32>()
         .unwrap();
@@ -779,7 +779,7 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
         "SIGINT still wrote the export: {log}"
     );
     census::assert_process_group_empty(
-        child_pgid,
+        command_group,
         "after the interrupted export",
         Duration::from_secs(10),
     );
@@ -790,7 +790,7 @@ fn the_export_runs_when_the_daemon_is_terminated() {
     let dir = scratch("sigterm");
     let out = dir.join("out");
     let ready = dir.join("ready");
-    let child_pid = dir.join("child-pid");
+    let child_pid_path = dir.join("child-pid");
     let supervisor = ChildGuard::new(
         exec()
             .args(["--import"])
@@ -800,7 +800,7 @@ fn the_export_runs_when_the_daemon_is_terminated() {
             .args(["--", "sh", "-c"])
             .arg(format!(
                 "printf '%s' $$ > {}; touch {}; exec sleep 60",
-                child_pid.display(),
+                child_pid_path.display(),
                 ready.display()
             ))
             .spawn()
@@ -811,7 +811,7 @@ fn the_export_runs_when_the_daemon_is_terminated() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(ready.exists(), "the command started");
-    let child_pgid = std::fs::read_to_string(&child_pid)
+    let command_group = std::fs::read_to_string(&child_pid_path)
         .unwrap()
         .parse::<i32>()
         .unwrap();
@@ -827,7 +827,7 @@ fn the_export_runs_when_the_daemon_is_terminated() {
         "SIGTERM still wrote the export: {log}"
     );
     census::assert_process_group_empty(
-        child_pgid,
+        command_group,
         "after the terminated export",
         Duration::from_secs(10),
     );

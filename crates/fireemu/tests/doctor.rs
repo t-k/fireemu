@@ -10,7 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 /// The runner sources shipped in a platform package.
-const RUNNER_FILES: [&str; 2] = ["index.mjs", "callable-app-check.mjs"];
+const RUNNER_FILES: [&str; 3] = [
+    "index.mjs",
+    "callable-app-check.mjs",
+    "callable-app-check-loader.mjs",
+];
 
 fn workspace_runner_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node")

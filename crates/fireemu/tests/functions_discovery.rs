@@ -321,3 +321,53 @@ async fn global_and_schedule_options_reach_the_runtime_manifest() {
     assert_eq!(schedule["trigger"]["retryConfig"]["maxDoublings"], 2);
     runner.shutdown().await;
 }
+
+#[tokio::test]
+async fn esm_callable_app_check_options_are_observed_by_the_loaded_module_graph() {
+    if !have_sdk() {
+        return;
+    }
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("app-check-esm");
+    let spec = SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![
+            ("GCLOUD_PROJECT".to_owned(), "demo-app-check-esm".to_owned()),
+            ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
+            ("FIREBASE_DEBUG_MODE".to_owned(), "true".to_owned()),
+            (
+                "FIREBASE_DEBUG_FEATURES".to_owned(),
+                r#"{"skipTokenVerification":true}"#.to_owned(),
+            ),
+        ],
+        hello_timeout: Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = runner.hello().manifest.as_ref().unwrap();
+    let functions = manifest["functions"].as_array().unwrap();
+    let guarded = functions
+        .iter()
+        .find(|function| function["name"] == "guarded")
+        .unwrap();
+    assert_eq!(guarded["trigger"]["enforceAppCheck"], true);
+    assert_eq!(guarded["trigger"]["consumeAppCheckToken"], "disabled");
+    let replay = functions
+        .iter()
+        .find(|function| function["name"] == "replayProtected")
+        .unwrap();
+    assert_eq!(replay["trigger"]["consumeAppCheckToken"], "enabled");
+    let report = runner.hello().app_check.as_ref().unwrap();
+    assert_eq!(report["instrumentation"], "ok");
+    assert_eq!(report["graphs"]["commonjs"], "instrumented");
+    assert_eq!(report["graphs"]["esm"], "instrumented");
+    runner.shutdown().await;
+}

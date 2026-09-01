@@ -32,7 +32,11 @@ import { DEV_VERSION, packageName, platformByName } from "./platforms.mjs";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** The runner sources every platform package ships. */
-export const RUNNER_FILES = ["index.mjs", "callable-app-check.mjs"];
+export const RUNNER_FILES = [
+  "index.mjs",
+  "callable-app-check.mjs",
+  "callable-app-check-loader.mjs",
+];
 
 function parseArgs(argv) {
   const out = {};

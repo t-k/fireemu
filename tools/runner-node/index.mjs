@@ -974,6 +974,7 @@ async function main() {
       debugFeatures: instrumentation.debugFeatures,
       debugMode: process.env.FIREBASE_DEBUG_MODE === "true",
       authHeaders: instrumentation.authHeaders,
+      graphs: instrumentation.graphs,
     },
   });
   readFrames(

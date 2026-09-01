@@ -24,8 +24,9 @@
 // daemon then refuses to start Functions with App Check enabled.
 
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, register } from "node:module";
 import { dirname, join, parse as parsePath } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /// `firebase-functions` majors whose callable internals this instrumentation is written for.
 const SUPPORTED_MAJORS = [6, 7];
@@ -40,6 +41,14 @@ const MODULES = {
   onInit: "lib/common/onInit.js",
   debug: "lib/common/debug.js",
 };
+
+const ESM_MODULES = {
+  commonHttps: "lib/esm/common/providers/https.mjs",
+  trace: "lib/esm/v2/trace.mjs",
+  onInit: "lib/esm/common/onInit.mjs",
+};
+
+const REGISTRY_SYMBOL = Symbol.for("fireemu.callableAppCheck");
 
 /// The directory of the `firebase-functions` package that owns `entry`.
 function packageRootOf(entry) {
@@ -66,6 +75,7 @@ function unsupported(reason) {
     debugFeatures: reason,
     authHeaders: [],
     optionsOf: () => undefined,
+    graphs: { commonjs: "unsupported", esm: "not-loaded" },
   };
 }
 
@@ -209,12 +219,66 @@ export function instrumentCallables(sourceDir) {
     return fn;
   };
 
+  const esmLoaded = new Set();
+  const esmFailed = new Map();
+  globalThis[REGISTRY_SYMBOL] = {
+    observe(fn, opts) {
+      if (typeof fn === "function") {
+        options.set(fn, {
+          enforceAppCheck: (opts ?? {}).enforceAppCheck === true,
+          consumeAppCheckToken: consumeState((opts ?? {}).consumeAppCheckToken),
+        });
+      }
+    },
+    carry,
+    moduleLoaded(name) {
+      esmLoaded.add(name);
+    },
+    moduleFailed(name, reason) {
+      esmFailed.set(name, reason);
+    },
+  };
+
+  const esmTargets = Object.fromEntries(
+    Object.entries(ESM_MODULES).map(([name, relative]) => [
+      pathToFileURL(join(root, relative)).href,
+      name,
+    ]),
+  );
+  register(new URL("./callable-app-check-loader.mjs", import.meta.url), {
+    data: { targets: esmTargets },
+  });
+
+  const esmStatus = () => {
+    if (esmFailed.size > 0) {
+      return `failed: ${[...esmFailed.entries()]
+        .map(([name, reason]) => `${name} (${reason})`)
+        .join(", ")}`;
+    }
+    if (esmLoaded.size === 0) return "not-loaded";
+    if (esmLoaded.size !== Object.keys(ESM_MODULES).length) {
+      return `partial: ${[...esmLoaded].sort().join(", ")}`;
+    }
+    return "instrumented";
+  };
+
   return {
-    supported: true,
-    reason: null,
+    get supported() {
+      const status = esmStatus();
+      return status === "not-loaded" || status === "instrumented";
+    },
+    get reason() {
+      const status = esmStatus();
+      return status === "not-loaded" || status === "instrumented"
+        ? null
+        : `firebase-functions ${version} ESM callable instrumentation ${status}`;
+    },
     version,
     debugFeatures,
     authHeaders,
     optionsOf: (fn) => options.get(fn),
+    get graphs() {
+      return { commonjs: "instrumented", esm: esmStatus() };
+    },
   };
 }

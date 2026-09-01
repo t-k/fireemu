@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-app-check-esm-fixture",
+  "private": true,
+  "type": "module",
+  "main": "index.js"
+}

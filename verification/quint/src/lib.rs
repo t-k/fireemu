@@ -5,3 +5,4 @@ pub mod evidence;
 pub mod model;
 pub mod process;
 pub mod regex_authorization;
+pub mod storage_generation;

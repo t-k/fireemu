@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "model": "StorageGeneration",
+  "mutations": [
+    {
+      "id": "M-FORMAL-STORAGE-REUSE-001",
+      "property": "GenerationNeverReused",
+      "operator": "reuse-first-generation-after-delete",
+      "from": "val allocatedGeneration = observable.highWater + 1",
+      "to": "val allocatedGeneration = if (not(observable.exists) and observable.highWater > 0) 1 else observable.highWater + 1"
+    },
+    {
+      "id": "M-FORMAL-STORAGE-METADATA-GENERATION-001",
+      "property": "MetadataOnlyPreservesGeneration",
+      "operator": "change-generation-on-metadata-patch",
+      "from": "val patchedGeneration = observable.generation",
+      "to": "val patchedGeneration = if (observable.generation < MAX_GENERATION) observable.generation + 1 else observable.generation - 1"
+    },
+    {
+      "id": "M-FORMAL-STORAGE-METAGENERATION-001",
+      "property": "MetadataOnlyPreservesGeneration",
+      "operator": "do-not-advance-metageneration",
+      "from": "val patchedMetageneration = observable.metageneration + 1",
+      "to": "val patchedMetageneration = observable.metageneration"
+    },
+    {
+      "id": "M-FORMAL-STORAGE-RESTORE-HIGH-WATER-001",
+      "property": "RestorePreservesGenerationHighWater",
+      "operator": "rewind-generation-high-water-on-restore",
+      "from": "val restoredHighWater = if (observable.highWater >= snapshotHighWater) observable.highWater else snapshotHighWater",
+      "to": "val restoredHighWater = snapshotHighWater"
+    },
+    {
+      "id": "M-FORMAL-STORAGE-MONOTONIC-001",
+      "property": "GenerationMonotonicity",
+      "operator": "rewind-generation-high-water-on-delete",
+      "from": "val deletedHighWater = observable.highWater",
+      "to": "val deletedHighWater = observable.highWater - 1"
+    }
+  ]
+}

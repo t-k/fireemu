@@ -501,6 +501,37 @@ fn a_storage_resource_limit_refuses_a_mixed_import_before_the_command_starts() {
 }
 
 #[test]
+fn a_sparse_firestore_output_is_refused_before_allocation_or_command_start() {
+    let dir = scratch("firestore-import-limit");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let sparse = export.join("firestore_export/all_namespaces/all_kinds/output-0");
+    std::fs::File::options()
+        .write(true)
+        .open(&sparse)
+        .unwrap()
+        .set_len(1024 * 1024 * 1024 + 1)
+        .unwrap();
+    let marker = dir.join("command-ran");
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "sh", "-c"])
+        .arg(format!("touch {}", marker.display()))
+        .output()
+        .unwrap();
+
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(
+        log.contains("output files exceed the 1073741824 byte import budget"),
+        "{log}"
+    );
+    assert!(!log.contains("running: "), "{log}");
+    assert!(!marker.exists());
+}
+
+#[test]
 fn a_missing_blob_refuses_the_whole_import() {
     let dir = scratch("missing-blob");
     let export = copy_fixture("official-multiproduct", &dir);
@@ -990,6 +1021,43 @@ fn replacing_an_export_preserves_unmanaged_regular_entries() {
     assert_eq!(
         std::fs::read_to_string(out.join("notes/local.txt")).unwrap(),
         "also keep me"
+    );
+}
+
+#[test]
+fn an_over_budget_unmanaged_entry_leaves_the_existing_export_unchanged() {
+    let dir = scratch("over-budget-unmanaged");
+    let out = copy_fixture("official-multiproduct", &dir);
+    let manifest = out.join("firebase-export-metadata.json");
+    let original_manifest = std::fs::read(&manifest).unwrap();
+    let sparse = out.join("large-local-note");
+    std::fs::File::create(&sparse)
+        .unwrap()
+        .set_len(1024 * 1024 * 1024 + 1)
+        .unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+
+    let log = text(&output);
+    assert!(
+        output.status.success(),
+        "the command's exit code is preserved: {log}"
+    );
+    assert!(
+        log.contains("1073741824 byte cumulative copy limit"),
+        "{log}"
+    );
+    assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
+    assert_eq!(
+        std::fs::metadata(&sparse).unwrap().len(),
+        1024 * 1024 * 1024 + 1
     );
 }
 

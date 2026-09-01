@@ -81,6 +81,10 @@ const IMPORT_STORAGE_TOTAL_BYTES_LIMIT: u64 = 1024 * 1024 * 1024;
 const IMPORT_STORAGE_OBJECT_COUNT_LIMIT: usize = 10_000;
 const IMPORT_STORAGE_ENTRY_COUNT_LIMIT: u64 = 25_000;
 const IMPORT_STORAGE_NESTING_DEPTH_LIMIT: u64 = 4;
+const IMPORT_METADATA_FILE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
+const EXPORT_UNMANAGED_TOTAL_BYTES_LIMIT: u64 = 1024 * 1024 * 1024;
+const EXPORT_UNMANAGED_ENTRY_COUNT_LIMIT: u64 = 25_000;
+const EXPORT_UNMANAGED_NESTING_DEPTH_LIMIT: u32 = 64;
 
 /// A failure of one product's section, with the path that caused it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,7 +285,8 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
         match product {
             Product::Firestore => {
                 let mut databases = BTreeMap::new();
-                let documents = read_firestore_section(dir, section)?;
+                let mut remaining_bytes = IMPORT_FIRESTORE_BYTES_BUDGET;
+                let documents = read_firestore_section(dir, section, &mut remaining_bytes)?;
                 collect_documents(
                     &mut databases,
                     documents,
@@ -290,7 +295,7 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
                     project,
                 )?;
                 for (database, named) in manifest.named_databases() {
-                    let documents = read_firestore_section(dir, named)?;
+                    let documents = read_firestore_section(dir, named, &mut remaining_bytes)?;
                     collect_documents(
                         &mut databases,
                         documents,
@@ -438,50 +443,113 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
 /// Bytes of Firestore output files one import may hold in memory at once.
 const IMPORT_FIRESTORE_BYTES_BUDGET: u64 = 1024 * 1024 * 1024;
 
-/// Reads a file the artifact names, refusing anything that resolves outside the export
-/// directory: a symlink inside a crafted export must never make an import read an arbitrary
-/// file on the host (and then serve it as an object).
-fn read_inside(root: &Path, path: &Path) -> Result<Vec<u8>, String> {
-    // A link inside the export is refused as well: the official CLI never writes one, and a
-    // link would let one file be named under many names past the per-name bounds. The
-    // canonicalized containment below stays, because this leaf check does not see a link
-    // in an intermediate directory component. Hard links and a concurrent swap between the
-    // check and the read are outside the threat model (a static, distributed artifact).
-    let metadata = std::fs::symlink_metadata(path).map_err(|e| format!("cannot read it: {e}"))?;
-    if metadata.file_type().is_symlink() {
-        return Err("it is a symlink, which an import never follows".to_owned());
+/// Opens one artifact file relative to a directory descriptor. Every path component is opened
+/// without following links, so validation and reading apply to the same file even if a hostile
+/// local process replaces directory entries concurrently.
+#[cfg(unix)]
+fn open_file_inside(root: &Path, path: &Path) -> Result<std::fs::File, String> {
+    use rustix::fs::{Mode, OFlags};
+
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "it is outside the export directory".to_owned())?;
+    let components: Vec<_> = relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(name) => Ok(name),
+            _ => Err("its path is not a normal path inside the export directory".to_owned()),
+        })
+        .collect::<Result<_, _>>()?;
+    let (leaf, directories) = components
+        .split_last()
+        .ok_or_else(|| "it does not name a file inside the export directory".to_owned())?;
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut directory = rustix::fs::open(root, directory_flags, Mode::empty())
+        .map_err(|e| format!("cannot open the export directory: {e}"))?;
+    for component in directories {
+        directory = rustix::fs::openat(&directory, *component, directory_flags, Mode::empty())
+            .map_err(|e| {
+                format!("cannot open a containing directory without following links: {e}")
+            })?;
     }
+    let descriptor = rustix::fs::openat(
+        &directory,
+        *leaf,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| format!("cannot read it without following links: {e}"))?;
+    let file = std::fs::File::from(descriptor);
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("cannot inspect the opened file: {e}"))?;
     if !metadata.file_type().is_file() {
         return Err("it is not a regular file".to_owned());
     }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_file_inside(root: &Path, path: &Path) -> Result<std::fs::File, String> {
     let root = std::fs::canonicalize(root).map_err(|e| format!("cannot resolve it: {e}"))?;
     let real = std::fs::canonicalize(path).map_err(|e| format!("cannot read it: {e}"))?;
     if !real.starts_with(&root) {
-        return Err(
-            "it resolves outside the export directory (a symlink?), which an import never follows"
-                .to_owned(),
-        );
+        return Err("it resolves outside the export directory".to_owned());
     }
-    std::fs::read(&real).map_err(|e| format!("cannot read it: {e}"))
-}
-
-fn read_text_inside(root: &Path, path: &Path) -> Result<String, String> {
-    let bytes = read_inside(root, path)?;
-    String::from_utf8(bytes).map_err(|_| "it is not UTF-8".to_owned())
-}
-
-fn read_text_inside_limited(root: &Path, path: &Path, limit: u64) -> Result<String, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|e| format!("cannot read it: {e}"))?;
-    if metadata.file_type().is_symlink() {
-        return Err("it is a symlink, which an import never follows".to_owned());
-    }
+    let file = std::fs::File::open(real).map_err(|e| format!("cannot read it: {e}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("cannot inspect the opened file: {e}"))?;
     if !metadata.file_type().is_file() {
         return Err("it is not a regular file".to_owned());
     }
-    if metadata.len() > limit {
+    Ok(file)
+}
+
+/// Reads at most `limit` bytes from the already validated descriptor. The descriptor length is
+/// checked before allocating, and the bounded read catches a file that grows after that check.
+fn read_inside_limited(root: &Path, path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+
+    let file = open_file_inside(root, path)?;
+    let len = file
+        .metadata()
+        .map_err(|e| format!("cannot inspect the opened file: {e}"))?
+        .len();
+    if len > limit {
         return Err(format!("it exceeds the {limit} byte per-file import limit"));
     }
-    read_text_inside(root, path)
+    let capacity = usize::try_from(len).unwrap_or(usize::MAX);
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("cannot read it: {e}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
+        return Err(format!("it exceeds the {limit} byte per-file import limit"));
+    }
+    Ok(bytes)
+}
+
+fn read_inside_budgeted(
+    root: &Path,
+    path: &Path,
+    remaining: &mut u64,
+    total: u64,
+) -> Result<Vec<u8>, String> {
+    let bytes = read_inside_limited(root, path, *remaining).map_err(|error| {
+        if error.contains("byte per-file import limit") {
+            format!("the output files exceed the {total} byte import budget")
+        } else {
+            error
+        }
+    })?;
+    *remaining = remaining.saturating_sub(bytes.len() as u64);
+    Ok(bytes)
+}
+
+fn read_text_inside_limited(root: &Path, path: &Path, limit: u64) -> Result<String, String> {
+    let bytes = read_inside_limited(root, path, limit)?;
+    String::from_utf8(bytes).map_err(|_| "it is not UTF-8".to_owned())
 }
 
 fn ensure_directory_inside(root: &Path, path: &Path) -> Result<(), String> {
@@ -606,20 +674,21 @@ fn refuse_symlink(product: &'static str, entry: &std::fs::DirEntry) -> Result<()
 fn read_firestore_section(
     dir: &Path,
     section: &Section,
+    remaining_bytes: &mut u64,
 ) -> Result<Vec<ExportDocument>, ArtifactError> {
     let metadata_file = section
         .metadata_file
         .clone()
         .unwrap_or_else(|| format!("{}/{FIRESTORE_OVERALL_METADATA}", section.path));
     let overall_path = dir.join(&metadata_file);
-    let bytes = read_inside(dir, &overall_path)
+    let bytes = read_inside_limited(dir, &overall_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
         .map_err(|e| ArtifactError::new("firestore", &overall_path, e))?;
     let overall = OverallMetadata::parse(&bytes)
         .map_err(|e| ArtifactError::new("firestore", &overall_path, e.to_string()))?;
 
     let section_dir = dir.join(&section.path);
     let partition_path = section_dir.join(&overall.metadata_file);
-    let bytes = read_inside(dir, &partition_path)
+    let bytes = read_inside_limited(dir, &partition_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
         .map_err(|e| ArtifactError::new("firestore", &partition_path, e))?;
     let partition = PartitionMetadata::parse(&bytes)
         .map_err(|e| ArtifactError::new("firestore", &partition_path, e.to_string()))?;
@@ -628,19 +697,15 @@ fn read_firestore_section(
         .parent()
         .map_or_else(|| section_dir.clone(), Path::to_path_buf);
     let mut documents = Vec::new();
-    let mut read_so_far: u64 = 0;
     for output in &partition.output_files {
         let output_path = partition_dir.join(output);
-        let bytes = read_inside(dir, &output_path)
-            .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
-        read_so_far = read_so_far.saturating_add(bytes.len() as u64);
-        if read_so_far > IMPORT_FIRESTORE_BYTES_BUDGET {
-            return Err(ArtifactError::new(
-                "firestore",
-                &output_path,
-                format!("the output files exceed the {IMPORT_FIRESTORE_BYTES_BUDGET} byte import budget"),
-            ));
-        }
+        let bytes = read_inside_budgeted(
+            dir,
+            &output_path,
+            remaining_bytes,
+            IMPORT_FIRESTORE_BYTES_BUDGET,
+        )
+        .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
         documents.extend(
             read_output(&bytes)
                 .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?,
@@ -761,7 +826,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
                     "the tenant accounts filename has an invalid tenant id",
                 ));
             }
-            let text = read_text_inside(dir, &entry.path())
+            let text = read_text_inside_limited(dir, &entry.path(), IMPORT_AUTH_FILE_BYTES_LIMIT)
                 .map_err(|e| ArtifactError::new("auth", entry.path(), e))?;
             let accounts = AccountsFile::parse(&text)
                 .map_err(|e| ArtifactError::new("auth", entry.path(), e.to_string()))?;
@@ -788,7 +853,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     }
 
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
-    let text = read_text_inside(dir, &accounts_path)
+    let text = read_text_inside_limited(dir, &accounts_path, IMPORT_AUTH_FILE_BYTES_LIMIT)
         .map_err(|e| ArtifactError::new("auth", &accounts_path, e))?;
     let accounts = AccountsFile::parse(&text)
         .map_err(|e| ArtifactError::new("auth", &accounts_path, e.to_string()))?;
@@ -987,7 +1052,7 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
     let section_dir = dir.join(&section.path);
     scan_storage_import_tree(dir, &section_dir)?;
     let buckets_path = section_dir.join(BUCKETS_FILE);
-    let text = read_text_inside(dir, &buckets_path)
+    let text = read_text_inside_limited(dir, &buckets_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
         .map_err(|e| ArtifactError::new("storage", &buckets_path, e))?;
     let buckets = BucketsFile::parse(&text)
         .map_err(|e| ArtifactError::new("storage", &buckets_path, e.to_string()))?;
@@ -1019,8 +1084,8 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
     enforce_storage_object_count(paths.len(), &metadata_dir)?;
     let mut identities = BTreeSet::new();
     for path in paths {
-        let text =
-            read_text_inside(dir, &path).map_err(|e| ArtifactError::new("storage", &path, e))?;
+        let text = read_text_inside_limited(dir, &path, IMPORT_METADATA_FILE_BYTES_LIMIT)
+            .map_err(|e| ArtifactError::new("storage", &path, e))?;
         let meta = ExportedObject::parse(&text)
             .map_err(|e| ArtifactError::new("storage", &path, e.to_string()))?;
         if !identities.insert((meta.bucket.clone(), meta.name.clone())) {
@@ -1070,7 +1135,12 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
                 ),
             ));
         }
-        let bytes = read_inside(dir, &blob_path).map_err(|e| {
+        let bytes = read_inside_limited(
+            dir,
+            &blob_path,
+            fireemu_core_storage::store::MAX_OBJECT_BYTES,
+        )
+        .map_err(|e| {
             ArtifactError::new(
                 "storage",
                 &blob_path,
@@ -1762,6 +1832,10 @@ fn export_owns(name: &str) -> bool {
 }
 
 fn copy_unmanaged_entries(source: &Path, destination: &Path) -> Result<(), String> {
+    let mut budget = UnmanagedCopyBudget::new(
+        EXPORT_UNMANAGED_TOTAL_BYTES_LIMIT,
+        EXPORT_UNMANAGED_ENTRY_COUNT_LIMIT,
+    );
     for entry in
         std::fs::read_dir(source).map_err(|e| format!("cannot read {}: {e}", source.display()))?
     {
@@ -1779,18 +1853,67 @@ fn copy_unmanaged_entries(source: &Path, destination: &Path) -> Result<(), Strin
         if name.to_str().is_some_and(export_owns) {
             continue;
         }
-        copy_unmanaged_entry(&entry.path(), &destination.join(name), 0)?;
+        copy_unmanaged_entry(&entry.path(), &destination.join(name), 0, &mut budget)?;
     }
     Ok(())
 }
 
-fn copy_unmanaged_entry(source: &Path, destination: &Path, depth: u32) -> Result<(), String> {
-    if depth > 64 {
+struct UnmanagedCopyBudget {
+    bytes_remaining: u64,
+    entries_remaining: u64,
+    byte_limit: u64,
+    entry_limit: u64,
+}
+
+impl UnmanagedCopyBudget {
+    const fn new(byte_limit: u64, entry_limit: u64) -> Self {
+        Self {
+            bytes_remaining: byte_limit,
+            entries_remaining: entry_limit,
+            byte_limit,
+            entry_limit,
+        }
+    }
+
+    fn claim_entry(&mut self, path: &Path) -> Result<(), String> {
+        if self.entries_remaining == 0 {
+            return Err(format!(
+                "unmanaged export entries exceed the {} entry copy limit at {}",
+                self.entry_limit,
+                path.display()
+            ));
+        }
+        self.entries_remaining -= 1;
+        Ok(())
+    }
+
+    fn claim_bytes(&mut self, bytes: u64, path: &Path) -> Result<(), String> {
+        if bytes > self.bytes_remaining {
+            return Err(format!(
+                "unmanaged export entries exceed the {} byte cumulative copy limit at {}",
+                self.byte_limit,
+                path.display()
+            ));
+        }
+        self.bytes_remaining -= bytes;
+        Ok(())
+    }
+}
+
+fn copy_unmanaged_entry(
+    source: &Path,
+    destination: &Path,
+    depth: u32,
+    budget: &mut UnmanagedCopyBudget,
+) -> Result<(), String> {
+    if depth > EXPORT_UNMANAGED_NESTING_DEPTH_LIMIT {
         return Err(format!(
-            "unmanaged export entry {} exceeds the 64 level copy depth limit",
-            source.display()
+            "unmanaged export entry {} exceeds the {} level copy depth limit",
+            source.display(),
+            EXPORT_UNMANAGED_NESTING_DEPTH_LIMIT
         ));
     }
+    budget.claim_entry(source)?;
     let metadata = std::fs::symlink_metadata(source)
         .map_err(|e| format!("cannot inspect {}: {e}", source.display()))?;
     if metadata.file_type().is_symlink() {
@@ -1809,6 +1932,7 @@ fn copy_unmanaged_entry(source: &Path, destination: &Path, depth: u32) -> Result
                 &entry.path(),
                 &destination.join(entry.file_name()),
                 depth + 1,
+                budget,
             )?;
         }
         return Ok(());
@@ -1819,14 +1943,15 @@ fn copy_unmanaged_entry(source: &Path, destination: &Path, depth: u32) -> Result
             source.display()
         ));
     }
-    copy_private_file(source, destination)
+    budget.claim_bytes(metadata.len(), source)?;
+    copy_private_file(source, destination, metadata.len())
 }
 
 #[cfg(unix)]
-fn copy_private_file(source: &Path, destination: &Path) -> Result<(), String> {
-    use std::io::Write as _;
+fn copy_private_file(source: &Path, destination: &Path, byte_limit: u64) -> Result<(), String> {
+    use std::io::{Read as _, Write as _};
     use std::os::unix::fs::OpenOptionsExt as _;
-    let mut input = std::fs::OpenOptions::new()
+    let input = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(source)
@@ -1837,18 +1962,41 @@ fn copy_private_file(source: &Path, destination: &Path) -> Result<(), String> {
         .mode(0o600)
         .open(destination)
         .map_err(|e| format!("cannot write {}: {e}", destination.display()))?;
-    std::io::copy(&mut input, &mut output)
+    let copied = std::io::copy(&mut input.take(byte_limit.saturating_add(1)), &mut output)
         .map_err(|e| format!("cannot copy {}: {e}", source.display()))?;
+    if copied > byte_limit {
+        return Err(format!(
+            "unmanaged export entry {} grew while it was copied and exceeded its reserved budget",
+            source.display()
+        ));
+    }
     output
         .flush()
         .map_err(|e| format!("cannot flush {}: {e}", destination.display()))
 }
 
 #[cfg(not(unix))]
-fn copy_private_file(source: &Path, destination: &Path) -> Result<(), String> {
-    std::fs::copy(source, destination)
-        .map(|_| ())
-        .map_err(|e| format!("cannot copy {}: {e}", source.display()))
+fn copy_private_file(source: &Path, destination: &Path, byte_limit: u64) -> Result<(), String> {
+    use std::io::{Read as _, Write as _};
+
+    let input = std::fs::File::open(source)
+        .map_err(|e| format!("cannot read {}: {e}", source.display()))?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|e| format!("cannot write {}: {e}", destination.display()))?;
+    let copied = std::io::copy(&mut input.take(byte_limit.saturating_add(1)), &mut output)
+        .map_err(|e| format!("cannot copy {}: {e}", source.display()))?;
+    if copied > byte_limit {
+        return Err(format!(
+            "unmanaged export entry {} grew while it was copied and exceeded its reserved budget",
+            source.display()
+        ));
+    }
+    output
+        .flush()
+        .map_err(|e| format!("cannot flush {}: {e}", destination.display()))
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -2028,8 +2176,9 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
 mod tests {
     use super::{
         atomic_publish, civil_from_days, create_export_stage, days_from_civil, decode_base32,
-        decode_base64, enforce_storage_object_count, may_overwrite, publish_stage, rfc3339_instant,
-        rfc3339_text, scan_import_tree, target_identity, verify_displaced_target_or_rollback,
+        decode_base64, enforce_storage_object_count, may_overwrite, publish_stage,
+        read_inside_budgeted, read_inside_limited, rfc3339_instant, rfc3339_text, scan_import_tree,
+        target_identity, verify_displaced_target_or_rollback, UnmanagedCopyBudget,
         IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
     use fireemu_core_types::time::LogicalInstant;
@@ -2057,6 +2206,69 @@ mod tests {
         assert!(per_file.message.contains("per-file import limit"));
         let cumulative = scan_import_tree(&root, &root, "test", 5, 2, 0, None).unwrap_err();
         assert!(cumulative.message.contains("cumulative import limit"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn descriptor_bound_reader_refuses_a_sparse_file_before_reading_it() {
+        let root = budget_dir("sparse-read");
+        let path = root.join("sparse");
+        std::fs::File::create(&path).unwrap().set_len(9).unwrap();
+
+        let error = read_inside_limited(&root, &path, 8).unwrap_err();
+
+        assert!(error.contains("8 byte per-file import limit"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn descriptor_bound_budget_is_shared_across_multiple_files() {
+        let root = budget_dir("shared-read-budget");
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::write(&first, b"123").unwrap();
+        std::fs::write(&second, b"456").unwrap();
+        let mut remaining = 5;
+
+        assert_eq!(
+            read_inside_budgeted(&root, &first, &mut remaining, 5).unwrap(),
+            b"123"
+        );
+        let error = read_inside_budgeted(&root, &second, &mut remaining, 5).unwrap_err();
+
+        assert!(error.contains("output files exceed the 5 byte import budget"));
+        assert_eq!(remaining, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unmanaged_copy_budget_is_checked_before_copying_the_next_file() {
+        let root = budget_dir("unmanaged-copy-budget");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(source.join("first"), b"123").unwrap();
+        std::fs::write(source.join("second"), b"456").unwrap();
+        let mut budget = UnmanagedCopyBudget::new(5, 2);
+
+        super::copy_unmanaged_entry(
+            &source.join("first"),
+            &destination.join("first"),
+            0,
+            &mut budget,
+        )
+        .unwrap();
+        let error = super::copy_unmanaged_entry(
+            &source.join("second"),
+            &destination.join("second"),
+            0,
+            &mut budget,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("5 byte cumulative copy limit"));
+        assert!(!destination.join("second").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

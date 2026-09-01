@@ -89,6 +89,9 @@ const STEP_BUDGET: u64 = 200_000;
 /// a linear match consumes a long subject without exhausting the step budget.
 const DEPTH_BUDGET: u64 = 32;
 
+/// Maximum nested groups accepted while compiling a pattern.
+const PARSE_DEPTH_BUDGET: u64 = 8;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Node {
     Char(char),
@@ -228,6 +231,7 @@ struct Parser<'a> {
     pos: usize,
     flags: Flags,
     groups: usize,
+    depth: u64,
     _src: &'a str,
 }
 
@@ -335,59 +339,69 @@ impl Parser<'_> {
             '.' => Node::Any,
             '^' => Node::Start,
             '$' => Node::End,
-            '(' => {
-                let mut index = Some(0);
-                if self.peek() == Some('?') {
-                    self.pos += 1;
-                    index = None;
-                    match self.peek() {
-                        Some(':') => {
-                            self.pos += 1;
-                        }
-                        // RE2 has neither lookaround nor named backreferences.
-                        Some('=' | '!' | '<' | '>' | 'P') => {
-                            return Err(RegexError("lookarounds are not supported".into()))
-                        }
-                        Some(_) => {
-                            // `(?flags)` sets them for the pattern, `(?flags:...)` opens a
-                            // non-capturing group. fireemu applies either to the whole
-                            // pattern, which is what every practical Rules pattern means.
-                            let mut negate = false;
-                            loop {
-                                match self.bump() {
-                                    Some('i') => self.flags.case_insensitive = !negate,
-                                    Some('s') => self.flags.dot_all = !negate,
-                                    Some('m') => self.flags.multi_line = !negate,
-                                    Some('U') => {}
-                                    Some('-') => negate = true,
-                                    Some(':') => break,
-                                    Some(')') => {
-                                        // `(?i)` on its own: no group, no atom.
-                                        return Ok(Node::Seq(Vec::new()));
-                                    }
-                                    _ => return Err(RegexError("bad group flags".into())),
-                                }
-                            }
-                        }
-                        None => return Err(RegexError("bad group".into())),
-                    }
-                }
-                if index.is_some() {
-                    self.groups += 1;
-                    index = Some(self.groups);
-                }
-                let inner = self.parse_alt()?;
-                if self.bump() != Some(')') {
-                    return Err(RegexError("unterminated group".into()));
-                }
-                Node::Group(index, Box::new(inner))
-            }
+            '(' => self.parse_group()?,
             ')' => return Err(RegexError("unmatched )".into())),
             '[' => self.parse_class()?,
             '\\' => self.parse_escape(false)?,
             '*' | '+' | '?' => return Err(RegexError(format!("nothing to repeat before {c}"))),
             other => Node::Char(other),
         })
+    }
+
+    fn parse_group(&mut self) -> Result<Node, RegexError> {
+        let current = self.depth.saturating_add(1);
+        if current > PARSE_DEPTH_BUDGET {
+            return Err(RegexError("pattern nesting too deep".into()));
+        }
+        self.depth = current;
+        let result = self.parse_group_inner();
+        self.depth = self.depth.saturating_sub(1);
+        result
+    }
+
+    fn parse_group_inner(&mut self) -> Result<Node, RegexError> {
+        let mut index = Some(0);
+        if self.peek() == Some('?') {
+            self.pos += 1;
+            index = None;
+            match self.peek() {
+                Some(':') => {
+                    self.pos += 1;
+                }
+                // RE2 has neither lookaround nor named backreferences.
+                Some('=' | '!' | '<' | '>' | 'P') => {
+                    return Err(RegexError("lookarounds are not supported".into()));
+                }
+                Some(_) => {
+                    // `(?flags)` sets them for the pattern, `(?flags:...)` opens a
+                    // non-capturing group. fireemu applies either to the whole
+                    // pattern, which is what every practical Rules pattern means.
+                    let mut negate = false;
+                    loop {
+                        match self.bump() {
+                            Some('i') => self.flags.case_insensitive = !negate,
+                            Some('s') => self.flags.dot_all = !negate,
+                            Some('m') => self.flags.multi_line = !negate,
+                            Some('U') => {}
+                            Some('-') => negate = true,
+                            Some(':') => break,
+                            Some(')') => return Ok(Node::Seq(Vec::new())),
+                            _ => return Err(RegexError("bad group flags".into())),
+                        }
+                    }
+                }
+                None => return Err(RegexError("bad group".into())),
+            }
+        }
+        if index.is_some() {
+            self.groups += 1;
+            index = Some(self.groups);
+        }
+        let inner = self.parse_alt()?;
+        if self.bump() != Some(')') {
+            return Err(RegexError("unterminated group".into()));
+        }
+        Ok(Node::Group(index, Box::new(inner)))
     }
 
     fn parse_escape(&mut self, in_class: bool) -> Result<Node, RegexError> {
@@ -596,11 +610,13 @@ impl Regex {
         if pattern.len() > 2048 {
             return Err(RegexError("pattern too long".into()));
         }
+        check_pattern_nesting(pattern)?;
         let mut p = Parser {
             chars: pattern.chars().collect(),
             pos: 0,
             flags: Flags::default(),
             groups: 0,
+            depth: 0,
             _src: pattern,
         };
         let node = p.parse_alt()?;
@@ -675,6 +691,50 @@ impl Regex {
         }
         Ok(out)
     }
+}
+
+fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
+    let characters: Vec<char> = pattern.chars().collect();
+    let mut index = 0;
+    let mut depth = 0u64;
+    let mut in_class = false;
+    let mut in_posix_class = false;
+    while let Some(character) = characters.get(index).copied() {
+        if character == '\\' {
+            index = index.saturating_add(2);
+            continue;
+        }
+        if in_class {
+            if !in_posix_class && character == '[' && characters.get(index + 1) == Some(&':') {
+                in_posix_class = true;
+                index += 2;
+                continue;
+            }
+            if in_posix_class && character == ':' && characters.get(index + 1) == Some(&']') {
+                in_posix_class = false;
+                index += 2;
+                continue;
+            }
+            if !in_posix_class && character == ']' {
+                in_class = false;
+            }
+            index += 1;
+            continue;
+        }
+        match character {
+            '[' => in_class = true,
+            '(' => {
+                depth = depth.saturating_add(1);
+                if depth > PARSE_DEPTH_BUDGET {
+                    return Err(RegexError("pattern nesting too deep".into()));
+                }
+            }
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 /// Expands `$0` (the whole match), `$1` .. `$9` (groups) and `$$` (a literal `$`).
@@ -808,13 +868,40 @@ fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> 
     }
 }
 
-fn is_deterministic(node: &Node) -> bool {
+fn literal_alternative(node: &Node) -> Option<char> {
+    match node {
+        Node::Char(character) => Some(*character),
+        Node::Seq(items) if items.len() == 1 => literal_alternative(&items[0]),
+        Node::Group(None, inner) => literal_alternative(inner),
+        _ => None,
+    }
+}
+
+fn disjoint_literal_alternatives(branches: &[Node], flags: Flags) -> bool {
+    let Some(literals) = branches
+        .iter()
+        .map(literal_alternative)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    literals.iter().enumerate().all(|(index, left)| {
+        literals[index + 1..]
+            .iter()
+            .all(|right| !chars_equal(*left, *right, flags))
+    })
+}
+
+fn is_deterministic(node: &Node, flags: Flags) -> bool {
     let mut pending = vec![node];
     while let Some(node) = pending.pop() {
         match node {
             Node::Char(_) | Node::Any | Node::Class { .. } | Node::Start | Node::End => {}
             Node::Group(_, inner) => pending.push(inner),
             Node::Seq(items) => pending.extend(items),
+            Node::Alt(branches) if disjoint_literal_alternatives(branches, flags) => {
+                pending.extend(branches);
+            }
             Node::Alt(_) | Node::Repeat { .. } => return false,
         }
     }
@@ -864,8 +951,22 @@ fn deterministic_end(
                     Node::Seq(items) => {
                         pending.extend(items.iter().rev().map(DeterministicTask::Match));
                     }
-                    Node::Alt(_) | Node::Repeat { .. } => {
-                        unreachable!("deterministic nodes contain no alternatives or repeats")
+                    Node::Alt(branches) => {
+                        let selected = branches.iter().find(|branch| {
+                            literal_alternative(branch).is_some_and(|expected| {
+                                ctx.chars
+                                    .get(end)
+                                    .is_some_and(|actual| chars_equal(*actual, expected, ctx.flags))
+                            })
+                        });
+                        let Some(selected) = selected else {
+                            *ctx.caps.borrow_mut() = original_captures;
+                            return Ok(None);
+                        };
+                        pending.push(DeterministicTask::Match(selected));
+                    }
+                    Node::Repeat { .. } => {
+                        unreachable!("deterministic nodes contain no repeats")
                     }
                 }
             }
@@ -888,24 +989,26 @@ fn match_node(
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
+    if is_deterministic(node, ctx.flags) {
+        let original_captures = ctx.caps.borrow().clone();
+        let end = match deterministic_end(node, ctx, pos) {
+            Ok(Some(end)) => end,
+            Ok(None) => return Ok(false),
+            Err(error) => {
+                *ctx.caps.borrow_mut() = original_captures;
+                return Err(error);
+            }
+        };
+        let result = k(end);
+        if !matches!(result, Ok(true)) {
+            *ctx.caps.borrow_mut() = original_captures;
+        }
+        return result;
+    }
     charge_step(ctx)?;
     match node {
-        Node::Char(_) | Node::Any | Node::Class { .. } => {
-            atomic_end(node, ctx, pos).map_or_else(|| Ok(false), k)
-        }
-        Node::Start => {
-            if pos == 0 {
-                k(pos)
-            } else {
-                Ok(false)
-            }
-        }
-        Node::End => {
-            if pos == ctx.chars.len() {
-                k(pos)
-            } else {
-                Ok(false)
-            }
+        Node::Char(_) | Node::Any | Node::Class { .. } | Node::Start | Node::End => {
+            unreachable!("deterministic nodes return before recursive matching")
         }
         Node::Group(None, inner) => match_node(inner, ctx, pos, k),
         Node::Group(Some(index), inner) => {
@@ -955,7 +1058,7 @@ fn match_seq(
     let mut remaining = items;
     let mut end = pos;
     while let Some((first, rest)) = remaining.split_first() {
-        if !is_deterministic(first) {
+        if !is_deterministic(first, ctx.flags) {
             break;
         }
         let next = match deterministic_end(first, ctx, end) {
@@ -997,7 +1100,7 @@ fn match_repeat(
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
     charge_step(ctx)?;
-    if is_deterministic(node) {
+    if is_deterministic(node, ctx.flags) {
         return match_deterministic_repeat(node, min, max, greedy, ctx, pos, count, k);
     }
     let can_stop = count >= min;

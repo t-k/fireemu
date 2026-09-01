@@ -135,6 +135,7 @@ fn matching_boundaries_and_replace_all_edge_cases() {
     assert!(re("[^a]").is_full_match("\n").unwrap());
     assert!(re("a|b|c").is_full_match("c").unwrap());
     assert!(re("^ab$").is_full_match("ab").unwrap());
+    assert!(!re("$a").is_full_match("a").unwrap());
     assert!(
         re("[a-c]+").is_full_match("cab").unwrap() && !re("[a-c]+").is_full_match("cad").unwrap()
     );
@@ -263,6 +264,19 @@ fn deep_linear_matches_fail_within_a_small_thread_stack() {
         let result = std::thread::Builder::new()
             .stack_size(64 * 1024)
             .spawn(|| {
+                let at_limit = format!("{}a{}", "(".repeat(8), ")".repeat(8));
+                assert!(Regex::new(&at_limit).unwrap().is_full_match("a").unwrap());
+                let above_limit = format!("{}a{}", "(".repeat(9), ")".repeat(9));
+                assert_eq!(
+                    Regex::new(&above_limit).unwrap_err().to_string(),
+                    "invalid regular expression: pattern nesting too deep"
+                );
+                let nested = format!("{}a{}", "(".repeat(1_000), ")".repeat(1_000));
+                assert_eq!(
+                    Regex::new(&nested).unwrap_err().to_string(),
+                    "invalid regular expression: pattern nesting too deep"
+                );
+
                 let input = "a".repeat(10_000);
                 assert!(Regex::new("a*").unwrap().is_full_match(&input).unwrap());
                 let literal = "a".repeat(1_000);
@@ -274,6 +288,7 @@ fn deep_linear_matches_fail_within_a_small_thread_stack() {
                     .unwrap()
                     .is_full_match(&"ab".repeat(1_000))
                     .unwrap());
+                assert!(Regex::new("(a|b)*").unwrap().is_full_match(&input).unwrap());
 
                 let matcher = Regex::new("(a|aa)*b").unwrap();
                 assert!(matches!(
@@ -311,6 +326,21 @@ fn deep_linear_matches_fail_within_a_small_thread_stack() {
 }
 
 #[test]
+fn compile_nesting_preflight_ignores_escaped_and_class_parentheses() {
+    assert!(Regex::new(&"\\(".repeat(20))
+        .unwrap()
+        .is_full_match(&"(".repeat(20))
+        .unwrap());
+    assert!(Regex::new("[[:alpha:](((((((((]").is_ok());
+
+    let nested_non_capturing = format!("{}a{}", "(?:".repeat(8), ")".repeat(8));
+    assert!(Regex::new(&nested_non_capturing)
+        .unwrap()
+        .is_full_match("a")
+        .unwrap());
+}
+
+#[test]
 fn deterministic_groups_and_lazy_repeats_avoid_recursive_or_eager_work() {
     let captures = Regex::new("(a)(b)(c)(d)(e)(f)(g)(h)").unwrap();
     assert_eq!(
@@ -319,6 +349,21 @@ fn deterministic_groups_and_lazy_repeats_avoid_recursive_or_eager_work() {
             .unwrap(),
         "hgfedcba"
     );
+    assert_eq!(
+        Regex::new("(a)(b|c)")
+            .unwrap()
+            .replace_all("ab", "$1$2")
+            .unwrap(),
+        "ab"
+    );
+    assert!(Regex::new("(a|b)*")
+        .unwrap()
+        .is_full_match(&"ab".repeat(500))
+        .unwrap());
+    assert!(!Regex::new("(a|aa){1,2}")
+        .unwrap()
+        .is_full_match("aaaaa")
+        .unwrap());
 
     let input = "a".repeat(1_000);
     let expected = format!("{}x", "xa".repeat(1_000));

@@ -397,6 +397,27 @@ fn deterministic_groups_and_lazy_repeats_avoid_recursive_or_eager_work() {
         Ok(true)
     );
     assert_eq!(Regex::new("a|").unwrap().is_full_match(""), Ok(true));
+    assert_eq!(
+        Regex::new("((a)|ab)c")
+            .unwrap()
+            .replace_all("abc", "<$1><$2>"),
+        Ok("<ab><>".to_owned())
+    );
+    assert_eq!(
+        Regex::new("(?:(a)(b|bb)d|abc)")
+            .unwrap()
+            .replace_all("abc", "<$1><$2>"),
+        Ok("<><>".to_owned())
+    );
+    assert_eq!(
+        Regex::new("(a|aa){1}").unwrap().replace_all("a", "X"),
+        Ok("X".to_owned())
+    );
+    assert_eq!(
+        Regex::new("(a|)*").unwrap().replace_all("", "X"),
+        Ok("X".to_owned())
+    );
+    assert_eq!(Regex::new("(a+)+?").unwrap().is_full_match(""), Ok(false));
     assert!(!Regex::new("(a|aa){1,2}")
         .unwrap()
         .is_full_match("aaaaa")

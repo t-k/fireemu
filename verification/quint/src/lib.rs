@@ -2,4 +2,5 @@
 
 pub mod event_delivery;
 pub mod evidence;
+pub mod model;
 pub mod process;

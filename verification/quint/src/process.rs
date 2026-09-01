@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::{model, ModelDescriptor, PropertyDescriptor, PropertyKind};
+
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 
 /// Strict source-mutation manifest.
@@ -24,10 +26,10 @@ pub struct MutationManifest {
 
 impl MutationManifest {
     /// Parses and validates a manifest without accepting ambiguous mutation intent.
-    pub fn parse(json: &str) -> Result<Self, String> {
+    pub fn parse(json: &str, descriptor: &ModelDescriptor) -> Result<Self, String> {
         let manifest: Self = serde_json::from_str(json)
             .map_err(|error| format!("invalid mutation manifest: {error}"))?;
-        if manifest.schema_version != 1 || manifest.model != "EventDelivery" {
+        if manifest.schema_version != 1 || manifest.model != descriptor.name {
             return Err("unsupported mutation manifest identity".to_owned());
         }
         if manifest.mutations.is_empty() {
@@ -56,25 +58,7 @@ impl MutationManifest {
             if !operators.insert(&mutation.operator) {
                 return Err(format!("duplicate mutation intent {}", mutation.operator));
             }
-        }
-        let actual = manifest
-            .mutations
-            .iter()
-            .map(|mutation| (mutation.id.as_str(), mutation.property.as_str()))
-            .collect::<BTreeSet<_>>();
-        let expected = [
-            ("M-TLA-EVENT-TERMINAL-001", "NoTerminalRegression"),
-            ("M-TLA-EVENT-LIVENESS-001", "EventEventuallyTerminates"),
-            ("M-TLA-EVENT-LEGAL-001", "LegalStateTransitions"),
-            ("M-TLA-EVENT-ATTEMPTS-001", "AttemptsChangeOnlyOnStart"),
-            ("M-TLA-EVENT-STALE-001", "StaleDiscardRequiresOlderEpoch"),
-        ]
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-        if actual != expected {
-            return Err(
-                "mutation IDs and property mappings do not match the required set".to_owned(),
-            );
+            descriptor.property(&mutation.property)?;
         }
         Ok(manifest)
     }
@@ -94,19 +78,6 @@ pub struct Mutation {
     pub from: String,
     /// Replacement source text.
     pub to: String,
-}
-
-impl Mutation {
-    fn is_temporal_property(&self) -> bool {
-        matches!(
-            self.property.as_str(),
-            "NoTerminalRegression" | "EventEventuallyTerminates"
-        )
-    }
-
-    fn requires_temporal_counterexample(&self) -> bool {
-        self.property == "EventEventuallyTerminates"
-    }
 }
 
 /// Applies an exact source mutation only when its source has one occurrence.
@@ -131,35 +102,56 @@ fn bound_diagnostic(bytes: &[u8]) -> String {
     bounded
 }
 
-/// The baseline `EventDelivery` TLC verification request.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct VerifyRequest;
+/// A bounded TLC verification request for one registered Quint model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyRequest {
+    descriptor: &'static ModelDescriptor,
+}
 
 impl VerifyRequest {
+    /// Creates a request for a registered model descriptor.
+    #[must_use]
+    pub const fn new(descriptor: &'static ModelDescriptor) -> Self {
+        Self { descriptor }
+    }
+
     /// Returns the stable Quint 0.32.0 command arguments.
     #[must_use]
-    pub fn arguments(self) -> Vec<&'static str> {
-        vec![
-            "verify",
-            "specs/EventDelivery.qnt",
-            "--main",
-            "EventDeliveryProof",
-            "--backend",
-            "tlc",
-            "--tlc-config",
-            "specs/tlc-config.json",
-            "--invariants",
-            "TypeOK",
-            "AttemptsBounded",
-            "DeadLetterOnlyAfterExhaustion",
-            "LegalStateTransitions",
-            "AttemptsChangeOnlyOnStart",
-            "StaleDiscardRequiresOlderEpoch",
-            "--temporal",
-            "NoTerminalRegression,EventEventuallyTerminates",
-            "--verbosity",
-            "0",
-        ]
+    pub fn arguments(self) -> Vec<String> {
+        let mut arguments = vec![
+            "verify".to_owned(),
+            self.descriptor.spec.to_owned(),
+            "--main".to_owned(),
+            self.descriptor.main.to_owned(),
+            "--backend".to_owned(),
+            "tlc".to_owned(),
+            "--tlc-config".to_owned(),
+            self.descriptor.config.to_owned(),
+        ];
+        let invariants = self
+            .descriptor
+            .properties
+            .iter()
+            .filter(|property| property.kind == PropertyKind::Invariant)
+            .map(|property| property.name)
+            .collect::<Vec<_>>();
+        if !invariants.is_empty() {
+            arguments.push("--invariants".to_owned());
+            arguments.extend(invariants.into_iter().map(str::to_owned));
+        }
+        let temporal = self
+            .descriptor
+            .properties
+            .iter()
+            .filter(|property| property.kind == PropertyKind::Temporal)
+            .map(|property| property.name)
+            .collect::<Vec<_>>();
+        if !temporal.is_empty() {
+            arguments.push("--temporal".to_owned());
+            arguments.push(temporal.join(","));
+        }
+        arguments.extend(["--verbosity".to_owned(), "0".to_owned()]);
+        arguments
     }
 }
 
@@ -294,6 +286,42 @@ pub fn classify_mutation_execution(
     }
 }
 
+/// Classifies a mutation against the exact diagnostic registered for its property.
+#[must_use]
+pub fn classify_model_mutation_execution(
+    execution: &Execution,
+    property: &PropertyDescriptor,
+) -> MutationOutcome {
+    match classify_execution(execution) {
+        CheckerOutcome::Passed => MutationOutcome::Survived,
+        CheckerOutcome::Timeout => MutationOutcome::Timeout,
+        CheckerOutcome::ToolError => MutationOutcome::ToolError,
+        CheckerOutcome::Counterexample => {
+            let diagnostic =
+                format!("{}\n{}", execution.stdout, execution.stderr).to_ascii_lowercase();
+            let quint_counterexample = execution.stderr.lines().any(|line| {
+                line.trim()
+                    .eq_ignore_ascii_case("error: found a counterexample")
+            });
+            if execution.status.code() != Some(1) || !quint_counterexample {
+                return MutationOutcome::ToolError;
+            }
+            if property.diagnostic_name == "temporal properties" {
+                return if has_temporal_counterexample(&diagnostic) {
+                    MutationOutcome::KilledTemporal
+                } else {
+                    MutationOutcome::ToolError
+                };
+            }
+            if has_named_safety_counterexample(&diagnostic, property.diagnostic_name) {
+                MutationOutcome::KilledSafety
+            } else {
+                MutationOutcome::ToolError
+            }
+        }
+    }
+}
+
 fn has_safety_counterexample(diagnostic: &str) -> bool {
     diagnostic.lines().any(|line| {
         let line = line.trim();
@@ -309,7 +337,14 @@ fn has_expected_safety_counterexample(diagnostic: &str, expected_property: &str)
         | "StaleDiscardRequiresOlderEpoch" => "q_inv",
         _ => return false,
     };
-    let expected = format!("error: invariant {invariant} is violated.");
+    has_named_safety_counterexample(diagnostic, invariant)
+}
+
+fn has_named_safety_counterexample(diagnostic: &str, invariant: &str) -> bool {
+    let expected = format!(
+        "error: invariant {} is violated.",
+        invariant.to_ascii_lowercase()
+    );
     diagnostic.lines().any(|line| line.trim() == expected)
 }
 
@@ -319,44 +354,51 @@ fn has_temporal_counterexample(diagnostic: &str) -> bool {
         .any(|line| line.trim() == "error: temporal properties were violated.")
 }
 
-/// Runs all required `EventDelivery` source mutations with the guarded Quint/TLC checker.
-pub fn mutate_event_delivery(
+/// Runs every declared source mutation for one registered Quint model.
+pub fn mutate_model(
     repository_root: &Path,
+    descriptor: &'static ModelDescriptor,
     evidence_path: Option<&Path>,
 ) -> Result<Vec<MutationResult>, String> {
     let workdir = repository_root.join("verification/quint");
-    let source_path = workdir.join("specs/EventDelivery.qnt");
-    let config_path = workdir.join("specs/tlc-config.json");
-    let manifest_path = workdir.join("mutations/EventDelivery.json");
+    let source_path = workdir.join(descriptor.spec);
+    let config_path = workdir.join(descriptor.config);
+    let manifest_path = workdir.join(descriptor.mutation_manifest);
     let source = fs::read_to_string(&source_path)
         .map_err(|error| format!("cannot read {}: {error}", source_path.display()))?;
     let config = fs::read(&config_path)
         .map_err(|error| format!("cannot read {}: {error}", config_path.display()))?;
     let manifest_json = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
-    let manifest = MutationManifest::parse(&manifest_json)?;
+    let manifest = MutationManifest::parse(&manifest_json, descriptor)?;
     let mut results = Vec::with_capacity(manifest.mutations.len());
 
     for (index, mutation) in manifest.mutations.iter().enumerate() {
         let mutated = apply_source_replacement(&source, mutation)?;
         let temporary = OwnedMutationDirectory::create(index)?;
-        let specs = temporary.path.join("specs");
-        fs::create_dir(&specs)
-            .map_err(|error| format!("cannot create {}: {error}", specs.display()))?;
-        fs::write(specs.join("EventDelivery.qnt"), mutated)
+        let temporary_source = temporary.path.join(descriptor.spec);
+        let source_parent = temporary_source
+            .parent()
+            .ok_or_else(|| format!("model source has no parent: {}", descriptor.spec))?;
+        fs::create_dir_all(source_parent)
+            .map_err(|error| format!("cannot create {}: {error}", source_parent.display()))?;
+        fs::write(&temporary_source, mutated)
             .map_err(|error| format!("cannot write mutated Quint model: {error}"))?;
-        fs::write(specs.join("tlc-config.json"), &config)
+        let temporary_config = temporary.path.join(descriptor.config);
+        let config_parent = temporary_config
+            .parent()
+            .ok_or_else(|| format!("model config has no parent: {}", descriptor.config))?;
+        fs::create_dir_all(config_parent)
+            .map_err(|error| format!("cannot create {}: {error}", config_parent.display()))?;
+        fs::write(&temporary_config, &config)
             .map_err(|error| format!("cannot write copied TLC config: {error}"))?;
 
-        let arguments = mutation_arguments(mutation);
+        let property = descriptor.property(&mutation.property)?;
+        let arguments = mutation_arguments(descriptor, mutation, property.kind);
         let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         let execution_result = execute_quint(&temporary.path, &argument_refs);
         let execution = execution_result?;
-        let outcome = classify_mutation_execution(
-            &execution,
-            &mutation.property,
-            mutation.requires_temporal_counterexample(),
-        );
+        let outcome = classify_model_mutation_execution(&execution, property);
         let diagnostic =
             bound_diagnostic(format!("{}\n{}", execution.stdout, execution.stderr).as_bytes());
         temporary.close()?;
@@ -381,18 +423,34 @@ pub fn mutate_event_delivery(
     Ok(results)
 }
 
-fn mutation_arguments(mutation: &Mutation) -> Vec<String> {
+/// Compatibility wrapper for the original EventDelivery pilot API.
+pub fn mutate_event_delivery(
+    repository_root: &Path,
+    evidence_path: Option<&Path>,
+) -> Result<Vec<MutationResult>, String> {
+    mutate_model(
+        repository_root,
+        model("EventDelivery").expect("EventDelivery must remain registered"),
+        evidence_path,
+    )
+}
+
+fn mutation_arguments(
+    descriptor: &ModelDescriptor,
+    mutation: &Mutation,
+    property_kind: PropertyKind,
+) -> Vec<String> {
     let mut arguments = vec![
         "verify".to_owned(),
-        "specs/EventDelivery.qnt".to_owned(),
+        descriptor.spec.to_owned(),
         "--main".to_owned(),
-        "EventDeliveryProof".to_owned(),
+        descriptor.main.to_owned(),
         "--backend".to_owned(),
         "tlc".to_owned(),
         "--tlc-config".to_owned(),
-        "specs/tlc-config.json".to_owned(),
+        descriptor.config.to_owned(),
     ];
-    if mutation.is_temporal_property() {
+    if property_kind == PropertyKind::Temporal {
         arguments.push("--temporal".to_owned());
     } else {
         arguments.push("--invariants".to_owned());
@@ -464,8 +522,11 @@ pub fn execute_quint(workdir: &Path, arguments: &[&str]) -> Result<Execution, St
     })
 }
 
-/// Verifies the baseline `EventDelivery` model with Quint's TLC backend.
-pub fn verify_event_delivery_model(repository_root: &Path) -> Result<Execution, String> {
+/// Verifies one registered model with Quint's TLC backend.
+pub fn verify_model(
+    repository_root: &Path,
+    descriptor: &'static ModelDescriptor,
+) -> Result<Execution, String> {
     let workdir = repository_root.join("verification/quint");
     if !workdir.is_dir() {
         return Err(format!(
@@ -480,25 +541,35 @@ pub fn verify_event_delivery_model(repository_root: &Path) -> Result<Execution, 
             checker_output.display()
         ));
     }
-    let execution_result = execute_quint(&workdir, &VerifyRequest.arguments());
+    let arguments = VerifyRequest::new(descriptor).arguments();
+    let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let execution_result = execute_quint(&workdir, &argument_refs);
     let cleanup_result = cleanup_checker_output(&checker_output);
     let execution = execution_result?;
     cleanup_result?;
     match classify_execution(&execution) {
         CheckerOutcome::Passed => Ok(execution),
         CheckerOutcome::Counterexample => Err(format!(
-            "EventDelivery baseline produced a counterexample after {:?}:\n{}\n{}",
-            execution.elapsed, execution.stdout, execution.stderr
+            "{} baseline produced a counterexample after {:?}:\n{}\n{}",
+            descriptor.name, execution.elapsed, execution.stdout, execution.stderr
         )),
         CheckerOutcome::Timeout => Err(format!(
-            "EventDelivery baseline timed out after {:?}:\n{}\n{}",
-            execution.elapsed, execution.stdout, execution.stderr
+            "{} baseline timed out after {:?}:\n{}\n{}",
+            descriptor.name, execution.elapsed, execution.stdout, execution.stderr
         )),
         CheckerOutcome::ToolError => Err(format!(
-            "EventDelivery baseline checker failed after {:?}:\n{}\n{}",
-            execution.elapsed, execution.stdout, execution.stderr
+            "{} baseline checker failed after {:?}:\n{}\n{}",
+            descriptor.name, execution.elapsed, execution.stdout, execution.stderr
         )),
     }
+}
+
+/// Compatibility wrapper for the original EventDelivery pilot API.
+pub fn verify_event_delivery_model(repository_root: &Path) -> Result<Execution, String> {
+    verify_model(
+        repository_root,
+        model("EventDelivery").expect("EventDelivery must remain registered"),
+    )
 }
 
 fn cleanup_checker_output(path: &Path) -> Result<(), String> {
@@ -530,8 +601,8 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        classify_execution, classify_mutation_execution, CheckerOutcome, Execution,
-        MutationOutcome, VerifyRequest,
+        classify_execution, classify_model_mutation_execution, classify_mutation_execution,
+        CheckerOutcome, Execution, MutationOutcome, VerifyRequest,
     };
 
     fn execution(code: i32, stdout: &str, stderr: &str) -> Execution {
@@ -549,8 +620,9 @@ mod tests {
 
     #[test]
     fn baseline_request_checks_every_registered_property_with_tlc() {
+        let descriptor = crate::model::model("EventDelivery").expect("registered model");
         assert_eq!(
-            VerifyRequest.arguments(),
+            VerifyRequest::new(descriptor).arguments(),
             [
                 "verify",
                 "specs/EventDelivery.qnt",
@@ -567,8 +639,10 @@ mod tests {
                 "LegalStateTransitions",
                 "AttemptsChangeOnlyOnStart",
                 "StaleDiscardRequiresOlderEpoch",
+                "RetryDeadlineMatchesPolicy",
+                "RetryRequiresDeadline",
                 "--temporal",
-                "NoTerminalRegression,EventEventuallyTerminates",
+                "NoTerminalRegression,TimeNeverDecreases,EventEventuallyTerminates",
                 "--verbosity",
                 "0",
             ]
@@ -664,6 +738,53 @@ mod tests {
                 false
             ),
             MutationOutcome::ToolError
+        );
+    }
+
+    #[test]
+    fn descriptor_classifier_rejects_a_counterexample_for_another_property() {
+        let descriptor = crate::model::model("EventDelivery").expect("registered model");
+        let legal = descriptor
+            .property("LegalStateTransitions")
+            .expect("registered property");
+        let expected = execution(
+            1,
+            "Error: Invariant q_inv is violated.",
+            "error: found a counterexample",
+        );
+        assert_eq!(
+            classify_model_mutation_execution(&expected, legal),
+            MutationOutcome::KilledSafety
+        );
+
+        let terminal = descriptor
+            .property("NoTerminalRegression")
+            .expect("registered property");
+        assert_eq!(
+            classify_model_mutation_execution(&expected, terminal),
+            MutationOutcome::ToolError
+        );
+        let exact_terminal = execution(
+            1,
+            "Error: Invariant EventDeliveryProof_EventDelivery_NoTerminalRegression is violated.",
+            "error: found a counterexample",
+        );
+        assert_eq!(
+            classify_model_mutation_execution(&exact_terminal, terminal),
+            MutationOutcome::KilledSafety
+        );
+
+        let eventual = descriptor
+            .property("EventEventuallyTerminates")
+            .expect("registered property");
+        let temporal = execution(
+            1,
+            "Error: Temporal properties were violated.",
+            "error: found a counterexample",
+        );
+        assert_eq!(
+            classify_model_mutation_execution(&temporal, eventual),
+            MutationOutcome::KilledTemporal
         );
     }
 

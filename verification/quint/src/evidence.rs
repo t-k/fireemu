@@ -14,7 +14,7 @@ const QUINT_VERSION: &str = "0.32.0";
 const QUINT_CONNECT_VERSION: &str = "0.1.2";
 const TLC_VERSION: &str = "2.19 of 08 August 2024";
 const BACKEND: &str = "tlc";
-const DIGEST_PATHS: [&str; 28] = [
+const DIGEST_PATHS: [&str; 30] = [
     ".github/workflows/ci.yml",
     "Cargo.toml",
     "Cargo.lock",
@@ -39,10 +39,12 @@ const DIGEST_PATHS: [&str; 28] = [
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
+    "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
     "verification/quint/tests/cli_contract.rs",
     "verification/quint/tests/event_delivery_connect.rs",
     "verification/quint/tests/event_delivery_evidence.rs",
+    "verification/quint/tests/model_registry.rs",
 ];
 const INVARIANTS: [&str; 6] = [
     "TypeOK",

@@ -5,13 +5,14 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fireemu_verification_quint::evidence::validate_evidence_json;
+use fireemu_verification_quint::model::model;
 use fireemu_verification_quint::process::{
     apply_source_replacement, mutate_event_delivery, MutationManifest, MutationOutcome,
 };
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 28] = [
+const BOUND_INPUTS: [&str; 30] = [
     ".github/workflows/ci.yml",
     "Cargo.toml",
     "Cargo.lock",
@@ -36,10 +37,12 @@ const BOUND_INPUTS: [&str; 28] = [
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
+    "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
     "verification/quint/tests/cli_contract.rs",
     "verification/quint/tests/event_delivery_connect.rs",
     "verification/quint/tests/event_delivery_evidence.rs",
+    "verification/quint/tests/model_registry.rs",
 ];
 
 fn repository_root() -> PathBuf {
@@ -48,6 +51,13 @@ fn repository_root() -> PathBuf {
         .and_then(|path| path.parent())
         .expect("verification/quint must have a repository parent")
         .to_path_buf()
+}
+
+fn parse_manifest(json: &str) -> Result<MutationManifest, String> {
+    MutationManifest::parse(
+        json,
+        model("EventDelivery").expect("EventDelivery must remain registered"),
+    )
 }
 
 #[test]
@@ -116,7 +126,7 @@ fn evidence_rejects_coverage_and_outcome_tampering() {
 
 #[test]
 fn mutation_manifest_preserves_legacy_ids_and_properties() {
-    let manifest = MutationManifest::parse(MANIFEST).expect("valid checked-in manifest");
+    let manifest = parse_manifest(MANIFEST).expect("valid checked-in manifest");
     let mappings = manifest
         .mutations
         .iter()
@@ -137,17 +147,23 @@ fn mutation_manifest_preserves_legacy_ids_and_properties() {
 #[test]
 fn mutation_manifest_rejects_ambiguous_or_invalid_intents() {
     let unknown = MANIFEST.replacen("\"model\":", "\"unknown\": true, \"model\":", 1);
-    assert!(MutationManifest::parse(&unknown).is_err());
+    assert!(parse_manifest(&unknown).is_err());
 
     let duplicate_id = MANIFEST.replacen("M-TLA-EVENT-LIVENESS-001", "M-TLA-EVENT-TERMINAL-001", 1);
-    assert!(MutationManifest::parse(&duplicate_id).is_err());
+    assert!(parse_manifest(&duplicate_id).is_err());
 
     let duplicate_intent = MANIFEST.replacen(
         "remove-worker-fairness",
         "allow-cancel-from-terminal-state",
         1,
     );
-    assert!(MutationManifest::parse(&duplicate_intent).is_err());
+    assert!(parse_manifest(&duplicate_intent).is_err());
+
+    let wrong_model = MANIFEST.replacen("EventDelivery", "SessionEpoch", 1);
+    assert!(parse_manifest(&wrong_model).is_err());
+
+    let wrong_property = MANIFEST.replacen("LegalStateTransitions", "UnknownProperty", 1);
+    assert!(parse_manifest(&wrong_property).is_err());
 
     for field in ["from", "to"] {
         let needle = format!("\"{field}\": \"");
@@ -155,13 +171,13 @@ fn mutation_manifest_rejects_ambiguous_or_invalid_intents() {
         let remaining = &MANIFEST[end..];
         let value_end = remaining.find('"').expect("field value ends");
         let invalid = format!("{}{}{}", &MANIFEST[..end], &remaining[value_end..], "");
-        assert!(MutationManifest::parse(&invalid).is_err(), "field {field}");
+        assert!(parse_manifest(&invalid).is_err(), "field {field}");
     }
 }
 
 #[test]
 fn source_replacement_requires_exactly_one_occurrence() {
-    let manifest = MutationManifest::parse(MANIFEST).expect("valid checked-in manifest");
+    let manifest = parse_manifest(MANIFEST).expect("valid checked-in manifest");
     let mutation = &manifest.mutations[0];
     assert!(apply_source_replacement("missing", mutation).is_err());
     let duplicated = format!("{}\n{}", mutation.from, mutation.from);

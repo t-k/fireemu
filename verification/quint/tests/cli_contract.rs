@@ -378,19 +378,32 @@ fn cli_declares_verify_model_command() {
         .expect("pilot CLI must launch");
     assert!(output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("verify-model [--root PATH]"),
+        String::from_utf8_lossy(&output.stdout)
+            .contains("verify-model --model MODEL [--root PATH]"),
         "help must declare the verify-model contract"
     );
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("mutate-event-delivery [--root PATH] [--evidence PATH]"),
+            .contains("mutate-model --model MODEL [--root PATH] [--evidence PATH]"),
         "help must declare the mutation contract"
     );
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("verify-evidence [--root PATH] [--evidence PATH]"),
+            .contains("verify-evidence --model MODEL [--root PATH] [--evidence PATH]"),
         "help must declare the evidence contract"
     );
+}
+
+#[test]
+fn cli_rejects_an_unknown_model_before_launching_a_checker() {
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .args(["verify-model", "--model", "UnknownModel"])
+        .env("PATH", "")
+        .output()
+        .expect("verification CLI must launch");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown Quint model UnknownModel"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("failed to launch"));
 }
 
 #[test]
@@ -651,6 +664,8 @@ fn verify_model_cli_checks_event_delivery_with_tlc() {
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
         .args([
             "verify-model",
+            "--model",
+            "EventDelivery",
             "--root",
             repository_root()
                 .to_str()

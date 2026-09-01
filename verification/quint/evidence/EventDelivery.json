@@ -29,13 +29,15 @@
     "verification/quint/specs/EventDelivery.qnt": "72df70c59770ebc8340fc573be32e8e6918e60a9807fc48d94ad3f9b3eea9c15",
     "verification/quint/specs/tlc-config.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
     "verification/quint/src/event_delivery.rs": "57eb1334fc623aa8d306883eb3ec89c17c013752329bf66d3c727cfe2b34b351",
-    "verification/quint/src/evidence.rs": "5eab496cc3d244149d7777f4a7c15488b0d2e9bf871fc58e9f6ca7c448116d02",
-    "verification/quint/src/lib.rs": "a1913f25707ad4c44dd5973858e3ceb949fd62df13331eb8a4abfb72c27d9cd0",
-    "verification/quint/src/main.rs": "f115612434e9f97501709c0866ec2d84c751f27a9ef9832306ae529f0fc3578d",
-    "verification/quint/src/process.rs": "e063f3d1bfbc4f71fb24051d84619263eeac78744febe75981b1d335c9626d35",
-    "verification/quint/tests/cli_contract.rs": "443028151fac677e3e3df3dfe464c7417a77f0a5e8fe5b64c1fce5f1c536f49a",
+    "verification/quint/src/evidence.rs": "b66cb5dfb4c9a0a48db2a7dd3cd74c1a6ad4f06188815d33dc490fbec4774e59",
+    "verification/quint/src/lib.rs": "c614b0e6c62130090ceccfa19a453723ea312199acf1bfc26bfe45fa88257b8d",
+    "verification/quint/src/main.rs": "92c8c8e2426018d31116983c0c64dc6ae80b78f01eed9dbec304a9504dac268a",
+    "verification/quint/src/model.rs": "5e7b2bbe3b11d8cb50af0e2abbe4f7bda56a9597130f39fba66e9518f5f2b284",
+    "verification/quint/src/process.rs": "6705f7f21f6dab53b0b469bd7e05864d9d14b7417ecc6e0b08bb0395a6610ca2",
+    "verification/quint/tests/cli_contract.rs": "4a9318bec11d4b243b1b5a93975d54a0eea0b5ae5adb5b39ba65675bd548f60f",
     "verification/quint/tests/event_delivery_connect.rs": "6dc21810bf9e6f7dc85d502ff41c7eb2e6b0b811107b275cd536662c23ee4820",
-    "verification/quint/tests/event_delivery_evidence.rs": "01e88841c98088654f92828f80b7ca267f8169943fc86909a8c349b49541d042"
+    "verification/quint/tests/event_delivery_evidence.rs": "579ef15d96c65e52d4baa5c07857d3a6251cdcec2237199e30b05b06e4bf8634",
+    "verification/quint/tests/model_registry.rs": "5b45606854388ad3dc4ded732cd7fec986928f7c7c34051020e783dd08ee6a84"
   },
   "invariants": [
     "TypeOK",

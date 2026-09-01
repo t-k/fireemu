@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: MIT
 //!
 //! Portions of this file are derived from the Firebase CLI:
-//! https://github.com/firebase/firebase-tools, version 15.28.2.
+//! <https://github.com/firebase/firebase-tools>, version 15.28.2.
 //!
 //! Copyright (c) 2015 Firebase
 //!

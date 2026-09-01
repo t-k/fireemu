@@ -6,7 +6,7 @@
 //!
 //! - **import** ([`prepare`] then [`apply`]) reads every section of the selected products
 //!   into memory first and only then installs them, all at once, under the exclusive
-//!   [`AdmissionBarrier`]. Nothing is written until every product has parsed, so a malformed
+//!   [`AdmissionBarrier`](fireemu_core_session::barrier::AdmissionBarrier). Nothing is written until every product has parsed, so a malformed
 //!   Storage section cannot leave a suite holding half an Auth import (`DATA-03`);
 //! - **export** ([`export`]) walks the live state and writes the directory with owner-only
 //!   permissions, because an Auth export carries password material (`DATA-05`).

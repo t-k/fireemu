@@ -1,17 +1,117 @@
 #!/usr/bin/env python3
-"""Executes one command as the leader of a new process group."""
+"""Supervises one command in an owned process group."""
+
+from __future__ import annotations
 
 import os
+import signal
+import subprocess
 import sys
+import time
+
+
+GRACE_SECONDS = 2.0
+POLL_SECONDS = 0.01
+
+
+def parse_arguments() -> tuple[dict[int, int], list[str]]:
+    arguments = sys.argv[1:]
+    exit_mapping: dict[int, int] = {}
+    if arguments[:1] == ["--map-exit"]:
+        if len(arguments) < 4 or arguments[2] != "--" or "=" not in arguments[1]:
+            raise ValueError("--map-exit requires FROM=TO followed by -- and a command")
+        source, destination = arguments[1].split("=", 1)
+        exit_mapping[int(source)] = int(destination)
+        arguments = arguments[3:]
+    if not arguments:
+        raise ValueError("process-group requires a command")
+    return exit_mapping, arguments
+
+
+def group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def wait_for_group_absence(child: subprocess.Popen[bytes], deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        child.poll()
+        if not group_exists(child.pid):
+            return True
+        time.sleep(POLL_SECONDS)
+    child.poll()
+    return not group_exists(child.pid)
+
+
+def terminate_group(child: subprocess.Popen[bytes], requested_signal: int) -> bool:
+    try:
+        os.killpg(child.pid, requested_signal)
+    except ProcessLookupError:
+        child.poll()
+        return True
+
+    if wait_for_group_absence(child, time.monotonic() + GRACE_SECONDS):
+        return True
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        child.wait(timeout=GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        return False
+    return wait_for_group_absence(child, time.monotonic() + GRACE_SECONDS)
+
+
+def normalized_status(return_code: int) -> int:
+    return 128 - return_code if return_code < 0 else return_code
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("error: process-group requires a command", file=sys.stderr)
+    try:
+        exit_mapping, command = parse_arguments()
+    except (ValueError, OverflowError) as error:
+        print(f"error: {error}", file=sys.stderr)
         return 126
-    os.setpgid(0, 0)
-    os.execvp(sys.argv[1], sys.argv[1:])
-    return 126
+
+    pending_signal = 0
+
+    def remember_signal(signum: int, _frame: object) -> None:
+        nonlocal pending_signal
+        if pending_signal == 0:
+            pending_signal = signum
+
+    supervised_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+    for supervised_signal in supervised_signals:
+        signal.signal(supervised_signal, remember_signal)
+
+    try:
+        child = subprocess.Popen(command, start_new_session=True)
+    except OSError as error:
+        print(f"error: cannot launch supervised command: {error}", file=sys.stderr)
+        return 126
+
+    while True:
+        if pending_signal:
+            if not terminate_group(child, pending_signal):
+                print("error: supervised process group did not terminate", file=sys.stderr)
+                return 125
+            return 128 + pending_signal
+        try:
+            return_code = child.wait(timeout=POLL_SECONDS)
+        except subprocess.TimeoutExpired:
+            continue
+
+        status = normalized_status(return_code)
+        if group_exists(child.pid) and not terminate_group(child, signal.SIGTERM):
+            print("error: supervised process group survived its leader", file=sys.stderr)
+            return 125
+        return exit_mapping.get(status, status)
 
 
 if __name__ == "__main__":

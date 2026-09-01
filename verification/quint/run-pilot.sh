@@ -31,63 +31,58 @@ fi
 
 owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-pilot.XXXXXX")
 active_pid=
-active_pgid=
+launching=0
+pending_signal=
 cleanup() {
   rm -rf -- "$owned_temp"
 }
 
 stop_active_gate() {
-  if [ -z "$active_pid" ] || [ -z "$active_pgid" ]; then
+  signal_name=$1
+  if [ -z "$active_pid" ]; then
     return
   fi
 
   pid=$active_pid
-  pgid=$active_pgid
-  kill -TERM -- "-$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-  (
-    sleep 2
-    kill -KILL -- "-$pgid" 2>/dev/null || true
-    kill -KILL "$pid" 2>/dev/null || true
-  ) &
-  escalation_pid=$!
-
+  kill "-$signal_name" "$pid" 2>/dev/null || true
   set +e
   wait "$pid" 2>/dev/null
   set -e
-  if kill -0 -- "-$pgid" 2>/dev/null; then
-    set +e
-    wait "$escalation_pid" 2>/dev/null
-    set -e
-  else
-    kill -TERM "$escalation_pid" 2>/dev/null || true
-    set +e
-    wait "$escalation_pid" 2>/dev/null
-    set -e
-  fi
   active_pid=
-  active_pgid=
 }
 
 handle_signal() {
-  status=$1
+  signal_name=$1
+  status=$2
+  if [ "$launching" -eq 1 ]; then
+    pending_signal="$signal_name:$status"
+    return
+  fi
   trap - EXIT HUP INT TERM
-  stop_active_gate
+  stop_active_gate "$signal_name"
   cleanup
   exit "$status"
 }
 
 trap cleanup EXIT
-trap 'handle_signal 129' HUP
-trap 'handle_signal 130' INT
-trap 'handle_signal 143' TERM
+trap 'handle_signal HUP 129' HUP
+trap 'handle_signal INT 130' INT
+trap 'handle_signal TERM 143' TERM
 
 run_gate() {
   gate=$1
   shift
   echo "gate: $gate"
+  launching=1
   "$group_launcher" "$@" &
   active_pid=$!
-  active_pgid=$active_pid
+  launching=0
+  if [ -n "$pending_signal" ]; then
+    signal_name=${pending_signal%%:*}
+    signal_status=${pending_signal#*:}
+    pending_signal=
+    handle_signal "$signal_name" "$signal_status"
+  fi
   set +e
   wait "$active_pid"
   status=$?

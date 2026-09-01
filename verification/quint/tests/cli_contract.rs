@@ -168,11 +168,129 @@ fn guarded_quint_wrapper_rejects_invalid_timeout_values() {
 #[test]
 fn guarded_quint_wrapper_declares_nested_group_signal_forwarding() {
     let wrapper = fs::read_to_string(wrapper_path()).expect("guarded wrapper must be readable");
-    assert!(wrapper.contains("timeout_pid=$!"));
-    assert!(wrapper.contains("kill -TERM -- \"-$timeout_pid\""));
-    assert!(wrapper.contains("kill -KILL -- \"-$timeout_pid\""));
-    assert!(wrapper.contains("trap 'handle_signal 143' TERM"));
-    assert!(wrapper.contains("wait \"$timeout_pid\""));
+    assert!(wrapper.contains("exec \"$group_supervisor\" --map-exit 137=124 -- timeout"));
+}
+
+#[cfg(unix)]
+#[test]
+fn process_group_supervisor_escalates_and_reaps_term_resistant_descendants() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for (signal_name, expected_status) in [("HUP", 129), ("INT", 130), ("TERM", 143)] {
+        let temporary = OwnedTestDirectory::create("group-supervisor");
+        let fixture = temporary.0.join("signal-resistant");
+        let pid_file = temporary.0.join("descendants.pid");
+        fs::write(
+            &fixture,
+            "#!/bin/sh\ntrap '' HUP INT TERM\n/bin/sh -c 'trap \"\" HUP INT TERM; while :; do sleep 1; done' &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$SUPERVISOR_PID_FILE\"\nwait \"$child\"\n",
+        )
+        .expect("signal-resistant fixture must be written");
+        let mut permissions = fs::metadata(&fixture)
+            .expect("fixture metadata must exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fixture, permissions).expect("fixture must be executable");
+
+        let mut supervisor = Command::new(process_group_launcher_path())
+            .arg(&fixture)
+            .env("SUPERVISOR_PID_FILE", &pid_file)
+            .spawn()
+            .expect("process-group supervisor must launch");
+        assert!(
+            wait_until(Duration::from_secs(30), || pid_file.exists()),
+            "supervised descendants must become ready"
+        );
+        let pids = fs::read_to_string(&pid_file).expect("supervised pid file must be readable");
+        let pids = pids
+            .split_whitespace()
+            .map(|pid| pid.parse::<u32>().expect("supervised pid must be numeric"))
+            .collect::<Vec<_>>();
+        assert_eq!(pids.len(), 2);
+
+        let signal = Command::new("/bin/kill")
+            .args([format!("-{signal_name}"), supervisor.id().to_string()])
+            .status()
+            .expect("signal command must launch");
+        assert!(signal.success());
+        let exited = wait_until(Duration::from_secs(6), || {
+            supervisor
+                .try_wait()
+                .expect("supervisor wait must succeed")
+                .is_some()
+        });
+        if !exited {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", &format!("-{}", supervisor.id())])
+                .status();
+            let _ = supervisor.wait();
+            panic!("supervisor must escalate {signal_name}-resistant descendants");
+        }
+        let status = supervisor.wait().expect("supervisor must be reaped");
+        assert_eq!(status.code(), Some(expected_status), "signal {signal_name}");
+        assert!(
+            pids.iter().all(|pid| !process_exists(*pid)),
+            "supervisor must not return before its group disappears after {signal_name}: {pids:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn process_group_supervisor_does_not_leak_during_the_launch_window() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = OwnedTestDirectory::create("group-launch-window");
+    let fixture = temporary.0.join("launch-window-child");
+    fs::write(
+        &fixture,
+        "#!/bin/sh\nsleep 30 &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$SUPERVISOR_PID_FILE\"\nwait \"$child\"\n",
+    )
+    .expect("launch-window fixture must be written");
+    let mut permissions = fs::metadata(&fixture)
+        .expect("fixture metadata must exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fixture, permissions).expect("fixture must be executable");
+
+    for iteration in 0..50 {
+        let pid_file = temporary.0.join(format!("launch-{iteration}.pid"));
+        let mut supervisor = Command::new(process_group_launcher_path())
+            .arg(&fixture)
+            .env("SUPERVISOR_PID_FILE", &pid_file)
+            .spawn()
+            .expect("process-group supervisor must launch");
+        let signal = Command::new("/bin/kill")
+            .args(["-TERM", &supervisor.id().to_string()])
+            .status()
+            .expect("TERM command must launch");
+        assert!(signal.success());
+        assert!(
+            wait_until(Duration::from_secs(6), || supervisor
+                .try_wait()
+                .expect("launch-window wait must succeed")
+                .is_some()),
+            "launch-window supervisor {iteration} must terminate"
+        );
+        let status = supervisor
+            .wait()
+            .expect("launch-window supervisor must be reaped");
+        assert!(
+            !status.success(),
+            "launch-window signal must stop the command"
+        );
+        if pid_file.exists() {
+            let pids = fs::read_to_string(&pid_file).expect("launch-window pids must be readable");
+            for pid in pids.split_whitespace() {
+                let pid = pid
+                    .parse::<u32>()
+                    .expect("launch-window pid must be numeric");
+                assert!(
+                    !process_exists(pid),
+                    "launch-window iteration {iteration} leaked process {pid}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -299,6 +417,20 @@ fn pilot_script_declares_ordered_dual_run_gates() {
     assert!(script.contains("PILOT_PASSES:-1"));
     assert!(script.contains("mktemp -d"));
     assert!(script.contains("trap cleanup"));
+    let launch_contract = [
+        "launching=1",
+        "\"$group_launcher\" \"$@\" &",
+        "active_pid=$!",
+        "launching=0",
+        "if [ -n \"$pending_signal\" ]",
+    ];
+    let mut launch_offset = 0;
+    for statement in launch_contract {
+        let found = script[launch_offset..]
+            .find(statement)
+            .unwrap_or_else(|| panic!("missing or out-of-order launch contract {statement}"));
+        launch_offset += found + statement.len();
+    }
 }
 
 #[test]

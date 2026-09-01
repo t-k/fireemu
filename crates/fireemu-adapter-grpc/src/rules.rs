@@ -694,9 +694,7 @@ impl RulesEnforcer {
         if let Some(candidates) = exact_name_candidates(parent, query) {
             for candidate in candidates {
                 let segments = rules_document_segments(&candidate);
-                let Some(resource) = access.get(&segments) else {
-                    continue;
-                };
+                let resource = access.get(&segments);
                 let ctx = RequestContext {
                     service: RulesService::Firestore,
                     method: Method::List,
@@ -705,20 +703,18 @@ impl RulesEnforcer {
                         Principal::User(auth) => Some(auth.clone()),
                         _ => None,
                     },
-                    resource: Some(resource),
+                    resource,
                     request_resource: None,
                     time_unix_nanos: now.as_nanos(),
                     abstract_path: false,
                     request_query: Some(query_value(query)),
                 };
-                decide(
-                    ruleset,
-                    &ctx,
-                    Method::List,
-                    &candidate,
-                    &reader,
-                    Some(&rules.diagnostics),
-                )?;
+                let (report, _) = evaluate_request_traced(ruleset, &ctx, Some(&reader));
+                if !matches!(report.decision, Decision::Allow)
+                    || (ctx.resource.is_none() && report.absent_resource_used)
+                {
+                    return Err(Status::permission_denied("query denied by Security Rules"));
+                }
                 let accessed = reader.seen.borrow().len() as u64;
                 if accessed > single_max {
                     return Err(Status::permission_denied(format!(
@@ -1286,11 +1282,12 @@ fn exact_name_candidates(parent: &Parent, query: &Query) -> Option<Vec<DocumentP
         }
         let relative = reference.strip_prefix(&prefix)?;
         let path = DocumentPath::parse(&parent.project, &parent.database, relative).ok()?;
-        if query_scope_contains(&query.scope, &path) {
-            candidates.insert(path);
+        if !query_scope_contains(&query.scope, &path) {
+            return None;
         }
+        candidates.insert(path);
     }
-    Some(candidates.into_iter().collect())
+    (!candidates.is_empty()).then(|| candidates.into_iter().collect())
 }
 
 fn query_scope_contains(

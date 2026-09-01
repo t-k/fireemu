@@ -660,6 +660,14 @@ async fn document_name_in_authorizes_each_real_candidate_as_a_list() {
         vec![format!("{DOCS}/notes/a1"), format!("{DOCS}/notes/a2")]
     );
 
+    let missing = h
+        .client
+        .run_query(with_bearer(names_query(&["missing"]), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), tonic::Code::PermissionDenied);
+    assert_eq!(missing.message(), "query denied by Security Rules");
+
     let denied = h
         .client
         .run_query(with_bearer(names_query(&["a1", "b1"]), &alice_token))

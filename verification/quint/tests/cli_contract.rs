@@ -166,6 +166,16 @@ fn guarded_quint_wrapper_rejects_invalid_timeout_values() {
 }
 
 #[test]
+fn guarded_quint_wrapper_declares_nested_group_signal_forwarding() {
+    let wrapper = fs::read_to_string(wrapper_path()).expect("guarded wrapper must be readable");
+    assert!(wrapper.contains("timeout_pid=$!"));
+    assert!(wrapper.contains("kill -TERM -- \"-$timeout_pid\""));
+    assert!(wrapper.contains("kill -KILL -- \"-$timeout_pid\""));
+    assert!(wrapper.contains("trap 'handle_signal 143' TERM"));
+    assert!(wrapper.contains("wait \"$timeout_pid\""));
+}
+
+#[test]
 fn package_manifest_pins_quint_and_pnpm_exactly() {
     let path = package_path();
     let json = fs::read_to_string(&path)
@@ -392,6 +402,114 @@ fn pilot_term_signal_stops_and_waits_for_the_active_gate_group() {
             .iter()
             .all(|pid| !process_exists(*pid))),
         "TERM must remove every recorded active-gate process: {pids:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pilot_term_signal_reaches_the_nested_guarded_quint_group() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = OwnedTestDirectory::create("pilot-nested-signal");
+    let quint_dir = temporary.0.join("verification/quint");
+    let tla_dir = temporary.0.join("verification/tla");
+    fs::create_dir_all(quint_dir.join("bin")).expect("temporary Quint bin must be created");
+    fs::create_dir_all(&tla_dir).expect("temporary TLA directory must be created");
+
+    let pilot = quint_dir.join("run-pilot.sh");
+    let launcher = quint_dir.join("bin/process-group");
+    let wrapper = quint_dir.join("bin/quint");
+    fs::copy(pilot_script_path(), &pilot).expect("pilot script must be copied");
+    fs::copy(process_group_launcher_path(), &launcher).expect("group launcher must be copied");
+    fs::copy(wrapper_path(), &wrapper).expect("guarded wrapper must be copied");
+
+    let real_quint = temporary.0.join("fake-quint");
+    fs::write(
+        &real_quint,
+        "#!/bin/sh\nsleep 30 &\nchild=$!\ntimeout_pid=$(ps -o ppid= -p \"$$\" | tr -d ' ')\nprintf '%s %s %s\\n' \"$timeout_pid\" \"$$\" \"$child\" > \"$NESTED_PID_FILE\"\nwait \"$child\"\n",
+    )
+    .expect("fake Quint must be written");
+    let gate = tla_dir.join("run-tlc.sh");
+    fs::write(&gate, "#!/bin/sh\nexec \"$PILOT_QUINT_WRAPPER\" \"$@\"\n")
+        .expect("wrapper gate must be written");
+    for path in [&pilot, &launcher, &wrapper, &real_quint, &gate] {
+        let mut permissions = fs::metadata(path)
+            .expect("script metadata must exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("script must be executable");
+    }
+
+    let pid_file = temporary.0.join("nested.pid");
+    let pilot_log = temporary.0.join("pilot.log");
+    let stdout = fs::File::create(&pilot_log).expect("pilot log must be created");
+    let stderr = stdout.try_clone().expect("pilot log handle must be cloned");
+    let mut child = Command::new(&pilot)
+        .current_dir(&temporary.0)
+        .env("NESTED_PID_FILE", &pid_file)
+        .env("PILOT_QUINT_WRAPPER", &wrapper)
+        .env("QUINT_REAL_BIN", &real_quint)
+        .env("QUINT_TIMEOUT_SECONDS", "30")
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .expect("nested pilot must launch");
+    let mut early_status = None;
+    let ready = wait_until(Duration::from_secs(30), || {
+        if pid_file.exists() {
+            return true;
+        }
+        early_status = child
+            .try_wait()
+            .expect("nested pilot readiness wait must succeed");
+        early_status.is_some()
+    });
+    if let Some(status) = early_status {
+        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
+        panic!("nested pilot exited before readiness ({status}):\n{log}");
+    }
+    if !ready {
+        let _ = Command::new("/bin/kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status();
+        let _ = child.wait();
+        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
+        panic!("nested Quint group did not become ready:\n{log}");
+    }
+    let pids = fs::read_to_string(&pid_file).expect("nested pid file must be readable");
+    let pids = pids
+        .split_whitespace()
+        .map(|pid| pid.parse::<u32>().expect("nested pid must be numeric"))
+        .collect::<Vec<_>>();
+    assert_eq!(pids.len(), 3);
+
+    let signal = Command::new("/bin/kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("TERM command must launch");
+    assert!(signal.success());
+    let exited = wait_until(Duration::from_secs(6), || {
+        child
+            .try_wait()
+            .expect("nested pilot wait must succeed")
+            .is_some()
+    });
+    if !exited {
+        let _ = child.kill();
+        for pid in &pids {
+            let _ = Command::new("/bin/kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+        panic!("TERM must stop the nested pilot promptly");
+    }
+    let status = child.wait().expect("nested pilot must be reaped");
+    assert_eq!(status.code(), Some(143));
+    assert!(
+        wait_until(Duration::from_secs(2), || pids
+            .iter()
+            .all(|pid| !process_exists(*pid))),
+        "TERM must remove timeout, Quint, and descendant processes: {pids:?}"
     );
 }
 

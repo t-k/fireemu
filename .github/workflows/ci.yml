@@ -218,14 +218,18 @@ jobs:
         if: always()
         shell: bash
         run: |
-          ps -eo pid=,comm=,args= | awk -v quint="$GITHUB_WORKSPACE/verification/quint/node_modules/.bin/quint" '
+          ps -eo pid=,comm=,args= | awk \
+            -v root="$GITHUB_WORKSPACE/verification/quint" \
+            -v quint="$GITHUB_WORKSPACE/verification/quint/node_modules/.bin/quint" '
             {
               pid = $1
               comm = $2
               $1 = $2 = ""
               args = $0
             }
-            (comm ~ /^node/ && index(args, quint)) || (comm ~ /^java/ && (args ~ /tlc2\.TLC/ || args ~ /[Aa]palache/)) {
+            (comm ~ /^node/ && index(args, root)) ||
+            (comm == "timeout" && index(args, quint)) ||
+            (comm ~ /^java/ && (args ~ /tlc2\.TLC/ || args ~ /[Aa]palache/)) {
               print pid, comm, args
               leaked = 1
             }

@@ -28,10 +28,55 @@ if ! command -v timeout >/dev/null 2>&1; then
   exit 126
 fi
 
+timeout_pid=
+stop_timeout_group() {
+  if [ -z "$timeout_pid" ]; then
+    return
+  fi
+
+  kill -TERM -- "-$timeout_pid" 2>/dev/null || kill -TERM "$timeout_pid" 2>/dev/null || true
+  (
+    sleep 1
+    kill -KILL -- "-$timeout_pid" 2>/dev/null || true
+    kill -KILL "$timeout_pid" 2>/dev/null || true
+  ) &
+  escalation_pid=$!
+
+  set +e
+  wait "$timeout_pid" 2>/dev/null
+  set -e
+  if kill -0 -- "-$timeout_pid" 2>/dev/null; then
+    set +e
+    wait "$escalation_pid" 2>/dev/null
+    set -e
+  else
+    kill -TERM "$escalation_pid" 2>/dev/null || true
+    set +e
+    wait "$escalation_pid" 2>/dev/null
+    set -e
+  fi
+  timeout_pid=
+}
+
+handle_signal() {
+  status=$1
+  trap - HUP INT TERM
+  stop_timeout_group
+  exit "$status"
+}
+
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+
 set +e
-timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" "$QUINT_REAL_BIN" "$@"
+timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" "$QUINT_REAL_BIN" "$@" &
+timeout_pid=$!
+wait "$timeout_pid"
 status=$?
+timeout_pid=
 set -e
+trap - HUP INT TERM
 
 case "$status" in
   124|137) exit 124 ;;

@@ -846,7 +846,7 @@ fn integers_and_doubles_compare_exactly_beyond_2_to_the_53() {
 
 #[test]
 fn regex_step_budget_exhaustion_denies_negated_matches() {
-    let rules = r#"
+    let rules = r"
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -855,7 +855,7 @@ service cloud.firestore {
     }
   }
 }
-"#;
+";
     let ruleset = parse_ruleset(rules).unwrap();
     let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
     request.resource = Some(doc(&[(

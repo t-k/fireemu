@@ -29,7 +29,7 @@ impl fmt::Display for RegexError {
 impl std::error::Error for RegexError {}
 
 /// Runtime failure while executing a compiled regular expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegexRuntimeError {
     /// The matcher consumed more backtracking steps than its safety limit permits.
     StepBudgetExceeded {
@@ -584,7 +584,6 @@ impl Regex {
     }
 
     /// Whether the whole of `text` matches (Rules `matches()` semantics).
-    #[must_use]
     pub fn is_full_match(&self, text: &str) -> Result<bool, RegexRuntimeError> {
         let chars: Vec<char> = text.chars().collect();
         let steps = Cell::new(0);
@@ -600,7 +599,6 @@ impl Regex {
 
     /// Replaces every non-overlapping match, expanding `$0` / `$1` ... and `$$` in
     /// `replacement`, as the official runtime's `replace()` does.
-    #[must_use]
     pub fn replace_all(&self, text: &str, replacement: &str) -> Result<String, RegexRuntimeError> {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::new();

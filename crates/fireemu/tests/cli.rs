@@ -840,7 +840,7 @@ service cloud.firestore {
     write(
         &dir,
         "storage.rules",
-        r#"rules_version = '2';
+        r"rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     match /{path=**} {
@@ -848,7 +848,7 @@ service firebase.storage {
     }
   }
 }
-"#,
+",
     );
     let firebase = write(
         &dir,

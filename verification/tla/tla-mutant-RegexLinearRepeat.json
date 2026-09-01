@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "regex-linear-repeat",
+  "description": "Frozen local identity for the bounded linear regex repeat full-property experiment",
+  "rootModule": "RegexLinearRepeat.tla",
+  "config": "RegexLinearRepeat.cfg",
+  "properties": [
+    "TypeOK",
+    "AtomicProgressDoesNotIncreaseDepth",
+    "MatchedImpliesEveryCharacterAccepted",
+    "ForbiddenCharacterNeverMatches",
+    "WorkIsCharged",
+    "BudgetExhaustionNeverMatches",
+    "NonAtomicFallsBack",
+    "AtomicConsumeAdvancesOneChargedCharacter",
+    "AtomicRejectIsOneChargedBoundedProbe",
+    "FallbackAdvancesOneChargedFrame",
+    "ExhaustionRequiresABudgetBoundary"
+  ]
+}

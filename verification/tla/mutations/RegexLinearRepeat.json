@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "model": "RegexLinearRepeat",
+  "mutations": [
+    {
+      "id": "M-TLA-RULES-REGEX-LINEAR-001",
+      "property": "AtomicProgressDoesNotIncreaseDepth",
+      "operator": "increment-depth-on-atomic-consume",
+      "from": "/\\ position' = position + 1\n    /\\ steps' = steps + 1\n    /\\ depth' = depth",
+      "to": "/\\ position' = position + 1\n    /\\ steps' = steps + 1\n    /\\ depth' = depth + 1"
+    },
+    {
+      "id": "M-TLA-RULES-REGEX-LINEAR-002",
+      "property": "ForbiddenCharacterNeverMatches",
+      "operator": "consume-a-forbidden-character",
+      "from": "/\\ steps < StepMaximum\n    /\\ currentAccepted\n    /\\ position' = position + 1",
+      "to": "/\\ steps < StepMaximum\n    /\\ TRUE\n    /\\ position' = position + 1"
+    },
+    {
+      "id": "M-TLA-RULES-REGEX-LINEAR-003",
+      "property": "WorkIsCharged",
+      "operator": "omit-atomic-branch-probe-charge",
+      "from": "/\\ position' = position + 1\n    /\\ steps' = steps + 1\n    /\\ depth' = depth",
+      "to": "/\\ position' = position + 1\n    /\\ steps' = steps\n    /\\ depth' = depth"
+    },
+    {
+      "id": "M-TLA-RULES-REGEX-LINEAR-004",
+      "property": "NonAtomicFallsBack",
+      "operator": "classify-non-atomic-input-as-atomic",
+      "from": "Fallback ==\n    /\\ classification = \"NonAtomic\"\n    /\\ outcome = \"Running\"",
+      "to": "Fallback ==\n    /\\ classification = \"Atomic\"\n    /\\ outcome = \"Running\""
+    },
+    {
+      "id": "M-TLA-RULES-REGEX-LINEAR-005",
+      "property": "BudgetExhaustionNeverMatches",
+      "operator": "turn-exhaustion-into-a-match",
+      "from": "Exhaust ==\n    /\\ outcome = \"Running\"\n    /\\ steps = StepMaximum \\/ depth = DepthMaximum\n    /\\ outcome' = \"Exhausted\"",
+      "to": "Exhaust ==\n    /\\ outcome = \"Running\"\n    /\\ steps = StepMaximum \\/ depth = DepthMaximum\n    /\\ outcome' = \"Matched\""
+    }
+  ]
+}

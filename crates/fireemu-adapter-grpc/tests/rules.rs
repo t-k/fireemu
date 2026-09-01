@@ -24,7 +24,8 @@ use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
 use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
-use tokio_stream::wrappers::TcpListenerStream;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tokio_stream::StreamExt;
 use tonic::metadata::MetadataValue;
 use tonic::Request;
@@ -1447,6 +1448,7 @@ async fn the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admit
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project() {
     let worker = "demo-app-w0";
     let worker_db = format!("projects/{worker}/databases/(default)");
@@ -1480,6 +1482,114 @@ async fn the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+
+    *firebase.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }",
+    )
+    .unwrap();
+    let (write_tx, write_rx) = mpsc::channel(4);
+    let mut write_responses = firebase
+        .client
+        .write(with_bearer(ReceiverStream::new(write_rx), &token))
+        .await
+        .unwrap()
+        .into_inner();
+    write_tx
+        .send(pb::WriteRequest {
+            database: worker_db.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let handshake = write_responses.next().await.unwrap().unwrap();
+    write_tx
+        .send(pb::WriteRequest {
+            writes: vec![write(&worker_docs)],
+            stream_token: handshake.stream_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(write_responses.next().await.unwrap().is_ok());
+    drop(write_tx);
+    drop(write_responses);
+
+    let (listen_tx, listen_rx) = mpsc::channel(2);
+    let mut listen_responses = firebase
+        .client
+        .listen(with_bearer(ReceiverStream::new(listen_rx), &token))
+        .await
+        .unwrap()
+        .into_inner();
+    listen_tx
+        .send(pb::ListenRequest {
+            database: worker_db.clone(),
+            target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+                target_id: 1,
+                target_type: Some(pb::target::TargetType::Query(pb::target::QueryTarget {
+                    parent: worker_docs.clone(),
+                    query_type: Some(pb::target::query_target::QueryType::StructuredQuery(
+                        pb::StructuredQuery {
+                            from: vec![sq::CollectionSelector {
+                                collection_id: "profiles".to_owned(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                    )),
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(listen_responses.next().await.unwrap().is_ok());
+    drop(listen_tx);
+    drop(listen_responses);
+
+    let (foreign_tx, foreign_rx) = mpsc::channel(2);
+    let mut foreign_responses = firebase
+        .client
+        .listen(with_bearer(ReceiverStream::new(foreign_rx), &token))
+        .await
+        .unwrap()
+        .into_inner();
+    foreign_tx
+        .send(pb::ListenRequest {
+            database: DB.to_owned(),
+            target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+                target_id: 2,
+                target_type: Some(pb::target::TargetType::Query(pb::target::QueryTarget {
+                    parent: DOCS.to_owned(),
+                    query_type: Some(pb::target::query_target::QueryType::StructuredQuery(
+                        pb::StructuredQuery {
+                            from: vec![sq::CollectionSelector {
+                                collection_id: "profiles".to_owned(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                    )),
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(foreign_responses.next().await.unwrap().is_ok());
+    let removed = foreign_responses.next().await.unwrap().unwrap();
+    let Some(pb::listen_response::ResponseType::TargetChange(change)) = removed.response_type
+    else {
+        panic!("expected target removal");
+    };
+    assert_eq!(
+        change.cause.unwrap().code,
+        tonic::Code::Unauthenticated as i32
+    );
+    let err = foreign_responses.next().await.unwrap().unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
     firebase.handle.abort();
 
     let mut strict = start_with(TokenAcceptance::Verified).await;
@@ -1487,7 +1597,7 @@ async fn the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project
         .client
         .commit(with_bearer(
             pb::CommitRequest {
-                database: worker_db,
+                database: worker_db.clone(),
                 writes: vec![write(&worker_docs)],
                 ..Default::default()
             },
@@ -1495,6 +1605,32 @@ async fn the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project
         ))
         .await
         .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+
+    let (strict_tx, strict_rx) = mpsc::channel(4);
+    let mut strict_responses = strict
+        .client
+        .write(with_bearer(ReceiverStream::new(strict_rx), &token))
+        .await
+        .unwrap()
+        .into_inner();
+    strict_tx
+        .send(pb::WriteRequest {
+            database: worker_db,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let handshake = strict_responses.next().await.unwrap().unwrap();
+    strict_tx
+        .send(pb::WriteRequest {
+            writes: vec![write(&worker_docs)],
+            stream_token: handshake.stream_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let err = strict_responses.next().await.unwrap().unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
     strict.handle.abort();
 }

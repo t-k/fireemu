@@ -9,6 +9,7 @@ use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::rules::RulesEnforcer;
 use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
+use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
@@ -26,8 +27,13 @@ use serde_json::{json, Value};
 use tokio_stream::StreamExt;
 
 const DB: &str = "projects/demo-app/databases/(default)";
+const RULES_ALLOW_ALL: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }";
 
 fn hub(rules: Option<&str>) -> Hub {
+    hub_with_acceptance(rules, TokenAcceptance::Verified)
+}
+
+fn hub_with_acceptance(rules: Option<&str>, acceptance: TokenAcceptance) -> Hub {
     let gateway = Gateway {
         enforce_limits: true,
         ctx: PlanningContext {
@@ -47,11 +53,14 @@ fn hub(rules: Option<&str>) -> Hub {
             SplitMix64::new(3),
             TotpPolicy::default(),
         )));
-        Arc::new(RulesEnforcer::new(
-            Arc::new(RwLock::new(LoadedRules::from_source(src).unwrap())),
-            auth,
-            clock,
-        ))
+        Arc::new(
+            RulesEnforcer::new(
+                Arc::new(RwLock::new(LoadedRules::from_source(src).unwrap())),
+                auth,
+                clock,
+            )
+            .with_token_acceptance(acceptance),
+        )
     });
     Hub::new(Arc::new(RestState {
         local,
@@ -59,6 +68,51 @@ fn hub(rules: Option<&str>) -> Hub {
         rules,
         app_check: None,
     }))
+}
+
+fn mock_user_token(sub: &str, project: &str) -> String {
+    let header = base64url_encode(br#"{"alg":"none","type":"JWT"}"#);
+    let payload = base64url_encode(
+        format!(r#"{{"aud":"{project}","exp":3600,"iat":0,"sub":"{sub}"}}"#).as_bytes(),
+    );
+    format!("{header}.{payload}.")
+}
+
+fn auth_handshake(hub: &Hub, project: &str, token: &str) -> (u16, String) {
+    let database = format!("projects/{project}/databases/(default)");
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", &database), ("VER", "8"), ("RID", "1")]),
+        authorization: Some(format!("Bearer {token}")),
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    }));
+    (status, body)
+}
+
+#[tokio::test]
+async fn webchannel_binds_unknown_mock_tokens_to_the_requested_project() {
+    let token = mock_user_token("alice", "demo-app-w0");
+    let firebase = hub_with_acceptance(Some(RULES_ALLOW_ALL), TokenAcceptance::EmulatorMock);
+    assert_eq!(auth_handshake(&firebase, "demo-app-w0", &token).0, 200);
+    assert_eq!(auth_handshake(&firebase, "demo-app", &token).0, 401);
+
+    let strict = hub_with_acceptance(Some(RULES_ALLOW_ALL), TokenAcceptance::Verified);
+    assert_eq!(auth_handshake(&strict, "demo-app-w0", &token).0, 401);
+
+    let header = base64url_encode(br#"{"alg":"RS256","typ":"JWT","kid":"nope"}"#);
+    let payload = base64url_encode(br#"{"aud":"demo-app-w0","exp":3600,"iat":0,"sub":"alice"}"#);
+    assert_eq!(
+        auth_handshake(
+            &firebase,
+            "demo-app-w0",
+            &format!("{header}.{payload}.AAAA")
+        )
+        .0,
+        401
+    );
 }
 
 fn form(pairs: &[(&str, &str)]) -> String {

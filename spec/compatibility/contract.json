@@ -603,7 +603,8 @@
               "the_firebase_profile_keeps_the_project_binding_and_the_signature_it_can_check",
               "rest_binds_unknown_mock_tokens_to_the_requested_project",
               "the_profile_decides_whether_rest_admits_a_mock_token",
-              "the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify"
+              "the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify",
+              "webchannel_binds_unknown_mock_tokens_to_the_requested_project"
             ],
             "integration": [
               "conformance/rules-matrix.json",

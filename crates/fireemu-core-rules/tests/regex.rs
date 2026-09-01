@@ -330,6 +330,19 @@ fn deep_linear_matches_fail_within_a_small_thread_stack() {
 }
 
 #[test]
+fn capture_snapshot_work_is_bounded_before_candidates_accumulate() {
+    let pattern = format!("{}a*", "()".repeat(1_000));
+    let error = Regex::new(&pattern)
+        .unwrap()
+        .is_full_match(&"a".repeat(250))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RegexRuntimeError::StepBudgetExceeded { current, maximum } if current > maximum
+    ));
+}
+
+#[test]
 fn compile_nesting_preflight_ignores_escaped_and_class_parentheses() {
     assert!(Regex::new(&"\\(".repeat(20))
         .unwrap()

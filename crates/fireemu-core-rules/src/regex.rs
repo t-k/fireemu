@@ -840,7 +840,11 @@ fn enter_match<'a>(ctx: &MatchContext<'a>) -> Result<MatchDepthGuard<'a>, RegexR
 }
 
 fn charge_step(ctx: &MatchContext<'_>) -> Result<(), RegexRuntimeError> {
-    let current = ctx.steps.get().saturating_add(1);
+    charge_steps(ctx, 1)
+}
+
+fn charge_steps(ctx: &MatchContext<'_>, amount: u64) -> Result<(), RegexRuntimeError> {
+    let current = ctx.steps.get().saturating_add(amount);
     ctx.steps.set(current);
     if current > STEP_BUDGET {
         return Err(RegexRuntimeError::StepBudgetExceeded {
@@ -849,6 +853,12 @@ fn charge_step(ctx: &MatchContext<'_>) -> Result<(), RegexRuntimeError> {
         });
     }
     Ok(())
+}
+
+fn capture_snapshot(ctx: &MatchContext<'_>) -> Result<Captures, RegexRuntimeError> {
+    let slots = u64::try_from(ctx.caps.borrow().len()).unwrap_or(u64::MAX);
+    charge_steps(ctx, slots)?;
+    Ok(ctx.caps.borrow().clone())
 }
 
 fn class_matches(negated: bool, items: &[ClassItem], c: char, flags: Flags) -> bool {
@@ -1216,7 +1226,7 @@ fn match_deterministic_repeat(
         if end <= current {
             break;
         }
-        candidates.push((end, ctx.caps.borrow().clone()));
+        candidates.push((end, capture_snapshot(ctx)?));
     }
     for (added, (end, captures)) in candidates.into_iter().enumerate().rev() {
         if count + added < min {

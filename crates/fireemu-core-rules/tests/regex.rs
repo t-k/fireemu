@@ -392,6 +392,11 @@ fn deterministic_groups_and_lazy_repeats_avoid_recursive_or_eager_work() {
         .unwrap()
         .is_full_match(&"ab".repeat(500))
         .unwrap());
+    assert_eq!(
+        Regex::new("(?:(?:a)|b)*").unwrap().is_full_match("aaaaaaa"),
+        Ok(true)
+    );
+    assert_eq!(Regex::new("a|").unwrap().is_full_match(""), Ok(true));
     assert!(!Regex::new("(a|aa){1,2}")
         .unwrap()
         .is_full_match("aaaaa")

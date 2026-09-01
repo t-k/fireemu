@@ -6,10 +6,15 @@
 //! algebra, the three-valued boolean operators, and the two call-graph rules the compiler
 //! enforces.
 
+use std::collections::BTreeMap;
+
 use fireemu_core_rules::ast::{ExprKind, Item};
-use fireemu_core_rules::eval::{evaluate_request, Decision, Method, RequestContext, RulesService};
+use fireemu_core_rules::eval::{
+    evaluate_request, Decision, DenyReason, Method, RequestContext, RulesService,
+};
 use fireemu_core_rules::parse::parse_ruleset;
 use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::value::RulesValue;
 use proptest::prelude::*;
 
 /// A ruleset whose single `allow get` condition is `condition`.
@@ -41,6 +46,15 @@ fn holds(condition: &str) -> bool {
     matches!(evaluate_request(&parsed, &ctx()).decision, Decision::Allow)
 }
 
+fn document(entries: impl IntoIterator<Item = (String, RulesValue)>) -> RulesValue {
+    let mut document = BTreeMap::new();
+    document.insert(
+        "data".to_owned(),
+        RulesValue::Map(entries.into_iter().collect()),
+    );
+    RulesValue::Map(document)
+}
+
 /// A chain of `n` functions, `f0` calling `f1` ... and the last returning `true`, so the
 /// ruleset makes `n - 1` function-to-function calls.
 fn chain(n: usize) -> String {
@@ -58,6 +72,38 @@ fn chain(n: usize) -> String {
         "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{db}}/documents {{ {} match /notes/{{id}} {{ allow get: if f0(); }} }} }}",
         functions.join(" ")
     )
+}
+
+#[test]
+fn prop_rules_regex_exhaustion_never_allows() {
+    for negation in [
+        "!resource.data.value.matches('(a)*')",
+        "resource.data.value.matches('(a)*') == false",
+    ] {
+        for nested_allow in [false, true] {
+            let source = format!(
+                "rules_version = '2'; service cloud.firestore {{ match /databases/{{db}}/documents {{ match /notes/{{id}} {{ allow get: if {negation}; match /{{rest=**}} {{ allow get: if {nested_allow}; }} }} }} }}"
+            );
+            let parsed = parse_ruleset(&source).unwrap();
+            let mut request = ctx();
+            request.resource = Some(document([(
+                "value".to_owned(),
+                RulesValue::String("a".repeat(10_000)),
+            )]));
+
+            assert!(
+                matches!(
+                    evaluate_request(&parsed, &request).decision,
+                    Decision::Deny(DenyReason::BudgetExceeded {
+                        limit_id: "FIREEMU-REGEX-DEPTH-PER-MATCH",
+                        current,
+                        maximum,
+                    }) if current > maximum
+                ),
+                "negation={negation}, nested_allow={nested_allow}"
+            );
+        }
+    }
 }
 
 const CALL_DEPTH_MAXIMUM: usize = 20;

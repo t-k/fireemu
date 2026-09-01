@@ -690,6 +690,13 @@ fn regex_runtime_error(error: crate::regex::RegexRuntimeError) -> EvalError {
                 maximum,
             }
         }
+        crate::regex::RegexRuntimeError::DepthBudgetExceeded { current, maximum } => {
+            EvalError::Budget {
+                limit_id: "FIREEMU-REGEX-DEPTH-PER-MATCH",
+                current,
+                maximum,
+            }
+        }
     }
 }
 

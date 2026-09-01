@@ -54,20 +54,20 @@ fn replace_all_replaces_every_match_with_a_literal() {
 }
 
 #[test]
-fn pathological_patterns_report_step_budget_exhaustion() {
+fn pathological_patterns_report_runtime_budget_exhaustion() {
     let re = Regex::new("(a+)+b").unwrap();
     let error = re.is_full_match(&"a".repeat(18)).unwrap_err();
-    let (current, maximum) = match &error {
-        RegexRuntimeError::StepBudgetExceeded { current, maximum } => (*current, *maximum),
+    let RegexRuntimeError::DepthBudgetExceeded { current, maximum } = error else {
+        panic!("unexpected runtime error: {error}");
     };
     assert!(current > maximum);
     assert_eq!(
         error.to_string(),
-        format!("regular expression step budget exceeded: {current} > {maximum}")
+        format!("regular expression depth budget exceeded: {current} > {maximum}")
     );
     assert!(matches!(
         re.replace_all(&"a".repeat(18), "replacement"),
-        Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
+        Err(RegexRuntimeError::DepthBudgetExceeded { current, maximum })
             if current > maximum
     ));
 }
@@ -237,4 +237,71 @@ fn backreferences_one_through_nine_remain_compile_errors() {
             "{class_backreference}"
         );
     }
+}
+
+#[test]
+fn replace_budget_is_shared_across_all_scan_positions() {
+    let input = "a".repeat(210_000);
+    let error = Regex::new("z")
+        .unwrap()
+        .replace_all(&input, "x")
+        .unwrap_err();
+    let RegexRuntimeError::StepBudgetExceeded { current, maximum } = error else {
+        panic!("unexpected runtime error: {error}");
+    };
+    assert!(current > maximum);
+    assert_eq!(
+        error.to_string(),
+        format!("regular expression step budget exceeded: {current} > {maximum}")
+    );
+}
+
+#[test]
+fn deep_linear_matches_fail_within_a_small_thread_stack() {
+    const CHILD_ENV: &str = "FIREEMU_REGEX_SMALL_STACK_CHILD";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let result = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let input = "a".repeat(10_000);
+                assert!(Regex::new("a*").unwrap().is_full_match(&input).unwrap());
+                let literal = "a".repeat(1_000);
+                assert!(Regex::new(&literal)
+                    .unwrap()
+                    .is_full_match(&literal)
+                    .unwrap());
+
+                let matcher = Regex::new("(a)*").unwrap();
+                assert!(matches!(
+                    matcher.is_full_match(&input),
+                    Err(RegexRuntimeError::DepthBudgetExceeded { current, maximum })
+                        if current > maximum
+                ));
+                assert!(matches!(
+                    matcher.replace_all(&input, "x"),
+                    Err(RegexRuntimeError::DepthBudgetExceeded { current, maximum })
+                        if current > maximum
+                ));
+            })
+            .unwrap()
+            .join();
+        assert!(result.is_ok(), "small-stack matcher thread panicked");
+        return;
+    }
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "deep_linear_matches_fail_within_a_small_thread_stack",
+        ])
+        .env(CHILD_ENV, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child status: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

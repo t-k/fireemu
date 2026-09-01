@@ -5,9 +5,9 @@
     {
       "id": "M-TLA-RULES-REGEX-001",
       "property": "ExhaustionNeverAllows",
-      "operator": "treat-regex-exhaustion-as-allow",
-      "from": "IF result = \"Exhausted\"\n    THEN \"Deny\"",
-      "to": "IF result = \"Exhausted\"\n    THEN \"Allow\""
+      "operator": "prefer-nested-allow-over-regex-exhaustion",
+      "from": "IF parent = \"Exhausted\" \\/ nested = \"Exhausted\"\n    THEN \"Exhausted\"\n    ELSE IF parent = \"Matched\" \\/ nested = \"Matched\"\n         THEN \"Matched\"",
+      "to": "IF parent = \"Matched\" \\/ nested = \"Matched\"\n    THEN \"Matched\"\n    ELSE IF parent = \"Exhausted\" \\/ nested = \"Exhausted\"\n         THEN \"Exhausted\""
     }
   ]
 }

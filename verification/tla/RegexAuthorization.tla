@@ -3,24 +3,50 @@ EXTENDS TLC
 
 Outcomes == {"Matched", "NotMatched", "Exhausted"}
 
-VARIABLE outcome
+VARIABLES parentOutcome, nestedOutcome, parentNegated, nestedNegated
 
-vars == <<outcome>>
+vars == <<parentOutcome, nestedOutcome, parentNegated, nestedNegated>>
 
-Init == outcome \in Outcomes
+TypeOK ==
+    /\ parentOutcome \in Outcomes
+    /\ nestedOutcome \in Outcomes
+    /\ parentNegated \in BOOLEAN
+    /\ nestedNegated \in BOOLEAN
 
-Next == outcome' \in Outcomes
+Init == TypeOK
 
-Decision(result) ==
-    IF result = "Exhausted"
-    THEN "Deny"
-    ELSE IF result = "NotMatched"
-         THEN "Allow"
-         ELSE "Deny"
+Next ==
+    /\ parentOutcome' \in Outcomes
+    /\ nestedOutcome' \in Outcomes
+    /\ parentNegated' \in BOOLEAN
+    /\ nestedNegated' \in BOOLEAN
+
+Condition(outcome, negated) ==
+    IF outcome = "Exhausted"
+    THEN "Exhausted"
+    ELSE IF negated
+         THEN IF outcome = "Matched" THEN "NotMatched" ELSE "Matched"
+         ELSE outcome
+
+Merge(parent, nested) ==
+    IF parent = "Exhausted" \/ nested = "Exhausted"
+    THEN "Exhausted"
+    ELSE IF parent = "Matched" \/ nested = "Matched"
+         THEN "Matched"
+         ELSE "NotMatched"
+
+AuthorizationOutcome ==
+    Merge(
+        Condition(parentOutcome, parentNegated),
+        Condition(nestedOutcome, nestedNegated)
+    )
+
+Decision(outcome) == IF outcome = "Matched" THEN "Allow" ELSE "Deny"
 
 Spec == Init /\ [][Next]_vars
 
 ExhaustionNeverAllows ==
-    outcome = "Exhausted" => Decision(outcome) = "Deny"
+    (parentOutcome = "Exhausted" \/ nestedOutcome = "Exhausted")
+        => Decision(AuthorizationOutcome) = "Deny"
 
 =============================================================================

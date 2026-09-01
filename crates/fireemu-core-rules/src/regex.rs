@@ -52,6 +52,13 @@ pub enum RegexRuntimeError {
         /// Maximum permitted steps.
         maximum: u64,
     },
+    /// Recursive matcher frames exceeded the stack-safety limit.
+    DepthBudgetExceeded {
+        /// Logical matcher depth observed when the limit was detected.
+        current: u64,
+        /// Maximum permitted logical matcher depth.
+        maximum: u64,
+    },
 }
 
 impl fmt::Display for RegexRuntimeError {
@@ -63,6 +70,12 @@ impl fmt::Display for RegexRuntimeError {
                     "regular expression step budget exceeded: {current} > {maximum}"
                 )
             }
+            Self::DepthBudgetExceeded { current, maximum } => {
+                write!(
+                    f,
+                    "regular expression depth budget exceeded: {current} > {maximum}"
+                )
+            }
         }
     }
 }
@@ -71,6 +84,10 @@ impl std::error::Error for RegexRuntimeError {}
 
 /// Maximum backtracking steps per match attempt.
 const STEP_BUDGET: u64 = 200_000;
+
+/// Maximum simultaneously active matcher functions. This bounds native stack use even when
+/// a linear match consumes a long subject without exhausting the step budget.
+const DEPTH_BUDGET: u64 = 32;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Node {
@@ -601,10 +618,12 @@ impl Regex {
     pub fn is_full_match(&self, text: &str) -> Result<bool, RegexRuntimeError> {
         let chars: Vec<char> = text.chars().collect();
         let steps = Cell::new(0);
+        let depth = Cell::new(0);
         let caps = RefCell::new(vec![None; self.groups + 1]);
         let ctx = MatchContext {
             chars: &chars,
             steps: &steps,
+            depth: &depth,
             caps: &caps,
             flags: self.flags,
         };
@@ -617,12 +636,14 @@ impl Regex {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::new();
         let mut i = 0;
+        let steps = Cell::new(0);
+        let depth = Cell::new(0);
         while i <= chars.len() {
-            let steps = Cell::new(0);
             let caps = RefCell::new(vec![None; self.groups + 1]);
             let ctx = MatchContext {
                 chars: &chars,
                 steps: &steps,
+                depth: &depth,
                 caps: &caps,
                 flags: self.flags,
             };
@@ -700,11 +721,32 @@ fn expand(
 struct MatchContext<'a> {
     chars: &'a [char],
     steps: &'a Cell<u64>,
+    depth: &'a Cell<u64>,
     caps: &'a RefCell<Captures>,
     flags: Flags,
 }
 
 type MatchResult = Result<bool, RegexRuntimeError>;
+
+struct MatchDepthGuard<'a>(&'a Cell<u64>);
+
+impl Drop for MatchDepthGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
+}
+
+fn enter_match<'a>(ctx: &MatchContext<'a>) -> Result<MatchDepthGuard<'a>, RegexRuntimeError> {
+    let current = ctx.depth.get().saturating_add(1);
+    if current > DEPTH_BUDGET {
+        return Err(RegexRuntimeError::DepthBudgetExceeded {
+            current,
+            maximum: DEPTH_BUDGET,
+        });
+    }
+    ctx.depth.set(current);
+    Ok(MatchDepthGuard(ctx.depth))
+}
 
 fn charge_step(ctx: &MatchContext<'_>) -> Result<(), RegexRuntimeError> {
     let current = ctx.steps.get().saturating_add(1);
@@ -745,6 +787,27 @@ fn chars_equal(a: char, b: char, flags: Flags) -> bool {
             && a.to_lowercase().count() == b.to_lowercase().count())
 }
 
+fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> {
+    match node {
+        Node::Char(expected) => ctx
+            .chars
+            .get(pos)
+            .is_some_and(|actual| chars_equal(*actual, *expected, ctx.flags))
+            .then_some(pos + 1),
+        Node::Any => ctx
+            .chars
+            .get(pos)
+            .is_some_and(|character| ctx.flags.dot_all || *character != '\n')
+            .then_some(pos + 1),
+        Node::Class { negated, items } => ctx
+            .chars
+            .get(pos)
+            .is_some_and(|character| class_matches(*negated, items, *character, ctx.flags))
+            .then_some(pos + 1),
+        _ => None,
+    }
+}
+
 /// Backtracking matcher in continuation-passing style: `k(end)` is called for every way
 /// `node` can match starting at `pos`; returns `true` as soon as `k` accepts.
 fn match_node(
@@ -753,6 +816,7 @@ fn match_node(
     pos: usize,
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
+    let _depth = enter_match(ctx)?;
     charge_step(ctx)?;
     match node {
         Node::Char(c) => {
@@ -845,9 +909,25 @@ fn match_seq(
     pos: usize,
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
-    match items.split_first() {
-        None => k(pos),
-        Some((first, rest)) => match_node(first, ctx, pos, &mut |end| match_seq(rest, ctx, end, k)),
+    let _depth = enter_match(ctx)?;
+    let mut remaining = items;
+    let mut end = pos;
+    while let Some((first, rest)) = remaining.split_first() {
+        if !matches!(first, Node::Char(_) | Node::Any | Node::Class { .. }) {
+            break;
+        }
+        charge_step(ctx)?;
+        let Some(next) = atomic_end(first, ctx, end) else {
+            return Ok(false);
+        };
+        end = next;
+        remaining = rest;
+    }
+    match remaining.split_first() {
+        None => k(end),
+        Some((first, rest)) => {
+            match_node(first, ctx, end, &mut |next| match_seq(rest, ctx, next, k))
+        }
     }
 }
 
@@ -862,7 +942,37 @@ fn match_repeat(
     count: usize,
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
+    let _depth = enter_match(ctx)?;
     charge_step(ctx)?;
+    if matches!(node, Node::Char(_) | Node::Any | Node::Class { .. }) {
+        let mut ends = vec![pos];
+        while max.is_none_or(|maximum| count + ends.len() - 1 < maximum) {
+            charge_step(ctx)?;
+            let Some(end) = atomic_end(node, ctx, *ends.last().unwrap_or(&pos)) else {
+                break;
+            };
+            ends.push(end);
+        }
+        let candidates = ends
+            .into_iter()
+            .enumerate()
+            .filter(|(added, _)| count + added >= min)
+            .map(|(_, end)| end);
+        if greedy {
+            for end in candidates.rev() {
+                if k(end)? {
+                    return Ok(true);
+                }
+            }
+        } else {
+            for end in candidates {
+                if k(end)? {
+                    return Ok(true);
+                }
+            }
+        }
+        return Ok(false);
+    }
     let can_stop = count >= min;
     let can_more = max.is_none_or(|m| count < m);
     let try_more = |k: &mut dyn FnMut(usize) -> MatchResult| -> MatchResult {

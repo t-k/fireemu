@@ -472,7 +472,7 @@
       "status": "implemented",
       "artifacts": {
         "tla": "RegexAuthorization.tla::ExhaustionNeverAllows",
-        "property": "prop_rules_regex_null_escape_matches_only_u0000",
+        "property": "prop_rules_regex_exhaustion_never_allows",
         "mutation": [
           "M-RULES-015",
           "M-TLA-RULES-REGEX-001"

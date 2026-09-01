@@ -845,23 +845,20 @@ fn integers_and_doubles_compare_exactly_beyond_2_to_the_53() {
 }
 
 #[test]
-fn regex_step_budget_exhaustion_denies_negated_matches() {
+fn regex_step_budget_exhaustion_denies_replace() {
     let rules = r"
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /notes/{id} {
-      allow get: if resource.data.value.matches('(a+)+b|.*\\0.*') == false;
+      allow get: if resource.data.value.replace('z', 'x') == resource.data.value;
     }
   }
 }
 ";
     let ruleset = parse_ruleset(rules).unwrap();
     let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
-    request.resource = Some(doc(&[(
-        "value",
-        RulesValue::String(format!("{}\0", "a".repeat(18))),
-    )]));
+    request.resource = Some(doc(&[("value", RulesValue::String("a".repeat(210_000)))]));
 
     let report = evaluate_request(&ruleset, &request);
     assert!(
@@ -884,7 +881,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /notes/{id} {
-      allow get: if resource.data.value.matches('(a+)+b|.*\\0.*') == false;
+      allow get: if resource.data.value.replace('z', 'x') == resource.data.value;
       match /{rest=**} {
         allow get: if true;
       }
@@ -894,10 +891,7 @@ service cloud.firestore {
 ";
     let ruleset = parse_ruleset(rules).unwrap();
     let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
-    request.resource = Some(doc(&[(
-        "value",
-        RulesValue::String(format!("{}\0", "a".repeat(18))),
-    )]));
+    request.resource = Some(doc(&[("value", RulesValue::String("a".repeat(210_000)))]));
 
     let report = evaluate_request(&ruleset, &request);
     assert!(
@@ -940,4 +934,37 @@ service cloud.firestore {
     };
     assert!(!message.contains('\u{202e}'), "{message}");
     assert!(message.contains("\\u{202e}"), "{message}");
+}
+
+#[test]
+fn regex_depth_budget_exhaustion_cannot_be_overridden_by_a_nested_allow() {
+    let rules = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if resource.data.value.matches('(a)*') == false;
+      match /{rest=**} {
+        allow get: if true;
+      }
+    }
+  }
+}
+";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[("value", RulesValue::String("a".repeat(10_000)))]));
+
+    let report = evaluate_request(&ruleset, &request);
+    assert!(
+        matches!(
+            report.decision,
+            Decision::Deny(DenyReason::BudgetExceeded {
+                limit_id: "FIREEMU-REGEX-DEPTH-PER-MATCH",
+                current,
+                maximum,
+            }) if current > maximum
+        ),
+        "{report:?}"
+    );
 }

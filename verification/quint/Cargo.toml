@@ -9,6 +9,7 @@ publish.workspace = true
 description = "private Quint model checking and Quint Connect conformance pilot"
 
 [dependencies]
+anyhow = "1.0"
 fireemu-core-events = { path = "../../crates/fireemu-core-events" }
 fireemu-core-types = { path = "../../crates/fireemu-core-types" }
 quint-connect = "=0.1.2"

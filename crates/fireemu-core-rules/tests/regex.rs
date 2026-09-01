@@ -28,6 +28,8 @@ fn matches_is_a_full_match_with_the_documented_syntax() {
     assert!(full("\\w+\\s\\w+", "hello world"));
     assert!(full("日本.*", "日本語のテキスト"));
     assert!(full("x*?", ""));
+    assert!(full("(?:)*", ""));
+    assert!(!full("a*?b", ""));
     assert!(full("(?:a|b)c", "bc"));
     assert!(!full("a.c", "a\nc"), ". does not match a newline");
     assert!(Regex::new("(unclosed").is_err());
@@ -54,13 +56,17 @@ fn replace_all_replaces_every_match_with_a_literal() {
 #[test]
 fn pathological_patterns_report_step_budget_exhaustion() {
     let re = Regex::new("(a+)+b").unwrap();
+    let error = re.is_full_match(&"a".repeat(18)).unwrap_err();
+    let (current, maximum) = match &error {
+        RegexRuntimeError::StepBudgetExceeded { current, maximum } => (*current, *maximum),
+    };
+    assert!(current > maximum);
+    assert_eq!(
+        error.to_string(),
+        format!("regular expression step budget exceeded: {current} > {maximum}")
+    );
     assert!(matches!(
-        re.is_full_match(&"a".repeat(40)),
-        Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
-            if current > maximum
-    ));
-    assert!(matches!(
-        re.replace_all(&"a".repeat(40), "replacement"),
+        re.replace_all(&"a".repeat(18), "replacement"),
         Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
             if current > maximum
     ));

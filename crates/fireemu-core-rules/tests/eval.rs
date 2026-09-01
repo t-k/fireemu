@@ -860,7 +860,7 @@ service cloud.firestore {
     let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
     request.resource = Some(doc(&[(
         "value",
-        RulesValue::String(format!("{}\0", "a".repeat(40))),
+        RulesValue::String(format!("{}\0", "a".repeat(18))),
     )]));
 
     let report = evaluate_request(&ruleset, &request);

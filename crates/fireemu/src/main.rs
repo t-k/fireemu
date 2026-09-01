@@ -1687,6 +1687,8 @@ fn control_state(
     registry: &Arc<fireemu_core_auth::store::AuthRegistry>,
     tenancy: fireemu_core_session::tenancy::SharedTenancy,
     app_check: Option<fireemu_core_app_check::AppCheckGate>,
+    pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
+    pubsub_resources: &[functions::FunctionPubSubResource],
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases, buckets, users, fault
@@ -1715,6 +1717,15 @@ fn control_state(
         let runtime = runtime.clone();
         reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
     }
+    let pubsub = pubsub.clone();
+    let pubsub_resources = pubsub_resources.to_vec();
+    reset_hooks.push(Arc::new(move || {
+        if let Ok(mut state) = pubsub.lock() {
+            state.clear();
+            functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
+                .expect("validated Functions Pub/Sub resources reprovision after reset");
+        }
+    }));
     fireemu_adapter_http::control::ControlState {
         clock: clock.clone(),
         require_demo_prefix: cfg.require_demo_prefix,
@@ -1986,7 +1997,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
             cfg.seed ^ 0x5053_5542,
         )));
-        if pubsub_listener.is_some() {
+        let pubsub_resources = if pubsub_listener.is_some() {
             if let Some(runtime) = &functions_runtime {
                 let resources = functions::function_pubsub_resources(
                     runtime.project(),
@@ -1996,8 +2007,13 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     .lock()
                     .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
                 functions::provision_function_pubsub_resources(&mut state, &resources)?;
+                resources
+            } else {
+                Vec::new()
             }
-        }
+        } else {
+            Vec::new()
+        };
         let pubsub_bridge: Option<Arc<dyn fireemu_adapter_pubsub::TopicDelivery>> =
             functions_runtime.as_ref().map(|r| {
                 Arc::new(functions::PubSubBridge::new(r.clone()))
@@ -2115,6 +2131,8 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             &registry,
             tenancy.clone(),
             app_check_gate.clone(),
+            &pubsub_state,
+            &pubsub_resources,
         ));
         // The Emulator Hub's locator file lives as long as this scope: dropping it removes
         // the file, so a clean exit on either signal path leaves no stale discovery behind.

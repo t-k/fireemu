@@ -121,11 +121,11 @@ fn an_unsatisfied_engine_fails_before_the_commonjs_graph_reaches_esm_only_code()
 }
 
 #[test]
-fn a_compatible_volta_image_is_selected_without_rewriting_path() {
+fn a_compatible_absolute_path_candidate_is_selected() {
     let Some((node, current_major)) = current_node() else {
         return;
     };
-    let Some((_compatible_node, compatible_major, compatible_version)) =
+    let Some((compatible_node, compatible_major, compatible_version)) =
         sibling_node(&node, current_major)
     else {
         return;
@@ -174,7 +174,11 @@ fn a_compatible_volta_image_is_selected_without_rewriting_path() {
         ])
         .arg(&root)
         .args(["--", "node", "--version"])
-        .env("PATH", node.parent().unwrap())
+        .env(
+            "PATH",
+            std::env::join_paths([node.parent().unwrap(), compatible_node.parent().unwrap()])
+                .unwrap(),
+        )
         .stdin(Stdio::null())
         .output()
         .unwrap();

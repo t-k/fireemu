@@ -38,6 +38,7 @@ pub struct PubSubState {
     topics: BTreeMap<String, TopicEntry>,
     subscriptions: BTreeMap<String, SubscriptionState>,
     topic_subs: BTreeMap<String, BTreeSet<String>>,
+    function_subscriptions: BTreeSet<String>,
     message_counter: u64,
     ack_rng: SplitMix64,
 }
@@ -51,6 +52,7 @@ impl PubSubState {
             topics: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             topic_subs: BTreeMap::new(),
+            function_subscriptions: BTreeSet::new(),
             message_counter: 0,
             // Mix a fixed tag so ack ids never coincide with any other seeded stream.
             ack_rng: SplitMix64::new(seed ^ 0x5053_5542_4143_4b5f),
@@ -63,6 +65,7 @@ impl PubSubState {
         self.topics.clear();
         self.subscriptions.clear();
         self.topic_subs.clear();
+        self.function_subscriptions.clear();
         self.message_counter = 0;
         self.ack_rng = SplitMix64::new(self.seed ^ 0x5053_5542_4143_4b5f);
     }
@@ -170,6 +173,19 @@ impl PubSubState {
         Ok(())
     }
 
+    /// Marks a visible subscription as owned by the Functions bridge. Messages are delivered
+    /// directly by that bridge, so this subscription must not retain a duplicate backlog.
+    pub fn mark_function_subscription(&mut self, name: &SubscriptionName) -> Result<()> {
+        let key = name.to_full();
+        if !self.subscriptions.contains_key(&key) {
+            return Err(PubSubError::not_found(format!(
+                "subscription {key} not found"
+            )));
+        }
+        self.function_subscriptions.insert(key);
+        Ok(())
+    }
+
     /// Borrows a subscription's configuration, or `NOT_FOUND`.
     pub fn subscription_config(&self, name: &SubscriptionName) -> Result<&SubscriptionConfig> {
         self.subscriptions
@@ -199,6 +215,7 @@ impl PubSubState {
                 "subscription {key} not found"
             )));
         };
+        self.function_subscriptions.remove(&key);
         if let Some(set) = self.topic_subs.get_mut(&state.config().topic.to_full()) {
             set.remove(&key);
         }
@@ -260,6 +277,9 @@ impl PubSubState {
                 message,
             };
             for key in &sub_keys {
+                if self.function_subscriptions.contains(key) {
+                    continue;
+                }
                 if let Some(sub) = self.subscriptions.get_mut(key) {
                     if sub.admits(&stored.message.attributes) {
                         sub.enqueue(stored.clone(), now)?;
@@ -444,6 +464,31 @@ mod tests {
             .unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].message.message.data, b"hello");
+    }
+
+    #[test]
+    fn function_owned_subscription_is_visible_without_retaining_duplicate_messages() {
+        let mut state = PubSubState::new(42);
+        let now = LogicalInstant::from_unix_seconds(1000);
+        let topic = topic("demo-app", "orders");
+        let subscription = SubscriptionName::new("demo-app", "emulator-sub-orders").unwrap();
+        state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        state
+            .create_subscription(sub_cfg(
+                "demo-app",
+                "emulator-sub-orders",
+                "orders",
+                Filter::always(),
+            ))
+            .unwrap();
+        state.mark_function_subscription(&subscription).unwrap();
+
+        state.publish(&topic, vec![data(b"hello")], now).unwrap();
+
+        assert!(state.subscription_config(&subscription).is_ok());
+        assert!(state.pull(&subscription, 10, now).unwrap().is_empty());
+        state.delete_subscription(&subscription).unwrap();
+        assert!(state.subscription_config(&subscription).is_err());
     }
 
     #[test]

@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
@@ -129,6 +129,14 @@ pub fn provision_function_pubsub_resources(
                     )
                 })?;
         }
+        state
+            .mark_function_subscription(&resource.subscription)
+            .map_err(|error| {
+                format!(
+                    "could not provision subscription {}: {error}",
+                    resource.subscription.to_full()
+                )
+            })?;
     }
     Ok(())
 }
@@ -790,6 +798,9 @@ fn node_engine_token_matches(token: &str, actual: (u32, u32, u32)) -> Option<boo
 
     let token = token.strip_prefix('=').unwrap_or(token);
     let parts = requirement_parts(token)?;
+    if parts.first().is_some_and(Option::is_none) {
+        return Some(true);
+    }
     let lower = version_floor(&parts)?;
     if parts.len() == 1 || parts.get(1).is_some_and(Option::is_none) {
         return Some(actual >= lower && actual < (lower.0.checked_add(1)?, 0, 0));
@@ -812,6 +823,20 @@ fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool
             return Err(format!(
                 "package.json engines.node {expression:?} is not a supported semver expression"
             ));
+        }
+        if let [lower, "-", upper] = tokens.as_slice() {
+            let lower = version_floor(&requirement_parts(lower).ok_or_else(|| {
+                format!("package.json engines.node {expression:?} is not supported")
+            })?)
+            .ok_or_else(|| format!("package.json engines.node {expression:?} is not supported"))?;
+            let upper = version_floor(&requirement_parts(upper).ok_or_else(|| {
+                format!("package.json engines.node {expression:?} is not supported")
+            })?)
+            .ok_or_else(|| format!("package.json engines.node {expression:?} is not supported"))?;
+            if actual >= lower && actual <= upper {
+                return Ok(true);
+            }
+            continue;
         }
         let mut matches = true;
         for token in tokens {
@@ -858,7 +883,7 @@ fn push_node_candidate(out: &mut Vec<PathBuf>, candidate: PathBuf) {
 fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
     if let Some(program) = std::env::var_os("FIREEMU_NODE") {
         let program = PathBuf::from(program);
-        if !program.is_file() {
+        if !program.is_absolute() || !program.is_file() {
             return Err(format!(
                 "FIREEMU_NODE names {}, which is not an executable file",
                 program.display()
@@ -871,55 +896,80 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
 
     let mut candidates = Vec::new();
     if let Some(path) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&path) {
+        for directory in std::env::split_paths(&path)
+            .filter(|directory| directory.is_absolute())
+            .take(64)
+        {
             push_node_candidate(&mut candidates, directory.join("node"));
             #[cfg(windows)]
             push_node_candidate(&mut candidates, directory.join("node.exe"));
         }
     }
-    let mut volta_roots: BTreeSet<PathBuf> = candidates
-        .iter()
-        .filter_map(|program| program.parent()?.parent()?.parent())
-        .filter(|root| {
-            root.file_name().and_then(|name| name.to_str()) == Some("node")
-                && root
-                    .parent()
-                    .and_then(Path::file_name)
-                    .and_then(|name| name.to_str())
-                    == Some("image")
-        })
-        .map(Path::to_path_buf)
-        .collect();
-    // Volta keeps installed majors in one bounded, version-named directory. Looking only
-    // under the explicitly configured VOLTA_HOME or beside a PATH-resolved Volta image lets a
-    // package engines constraint select an already-installed compatible Node without
-    // recursively scanning the host filesystem.
-    if let Some(home) = std::env::var_os("VOLTA_HOME") {
-        volta_roots.insert(PathBuf::from(home).join("tools/image/node"));
-    }
-    for root in volta_roots {
-        if let Ok(entries) = std::fs::read_dir(root) {
-            let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
-            entries.sort_by_key(std::fs::DirEntry::file_name);
-            for entry in entries.into_iter().take(64) {
-                push_node_candidate(&mut candidates, entry.path().join("bin/node"));
-                #[cfg(windows)]
-                push_node_candidate(&mut candidates, entry.path().join("node.exe"));
-            }
-        }
-    }
+    candidates.truncate(16);
     Ok((candidates, false))
 }
 
 fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
-    let output = Command::new(program)
+    const MAX_VERSION_BYTES: usize = 256;
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+    let mut command = Command::new(program);
+    command
         .arg("--version")
-        .output()
-        .map_err(|error| format!("could not start Node: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("Node --version exited with {}", output.status));
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start Node: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Node stdout unavailable".to_owned())?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.take(257).read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("could not wait for Node: {error}"))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            #[cfg(unix)]
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err("Node --version timed out".to_owned());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = reader
+        .join()
+        .map_err(|_| "Node version reader failed".to_owned())?;
+    if !status.success() {
+        return Err(format!("Node --version exited with {status}"));
+    }
+    if output.len() > MAX_VERSION_BYTES {
+        return Err("Node --version output exceeded 256 bytes".to_owned());
+    }
+    let text = String::from_utf8_lossy(&output);
     let (version, major, minor, patch) = parse_node_version(&text)
         .ok_or_else(|| "Node --version returned an unrecognised version".to_owned())?;
     Ok(NodeInstallation {
@@ -964,12 +1014,28 @@ fn default_runner_for_codebase(
 ) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
     let engines = package_node_engine(Path::new(&codebase.source))?;
+    if let Some(expression) = engines.as_deref() {
+        let _ = node_engine_matches(expression, (0, 0, 0))?;
+    }
     let (candidates, explicit_node) = node_candidates()?;
     let mut installations = Vec::new();
     let mut probe_errors = Vec::new();
     for candidate in candidates {
         match probe_node(&candidate) {
-            Ok(installation) => installations.push(installation),
+            Ok(installation) => {
+                let selected = explicit_node
+                    || engines.as_deref().is_none_or(|expression| {
+                        node_engine_matches(
+                            expression,
+                            (installation.major, installation.minor, installation.patch),
+                        )
+                        .unwrap_or(false)
+                    });
+                installations.push(installation);
+                if selected {
+                    break;
+                }
+            }
             Err(error) => probe_errors.push(error),
         }
     }
@@ -1759,7 +1825,17 @@ mod tests {
 
     #[test]
     fn node_engine_parser_checks_ranges_and_alternatives() {
-        for expression in ["20", "20.x", "^20.0.0", "~20", ">=20 <21", "18 || 20"] {
+        for expression in [
+            "*",
+            "x",
+            "20",
+            "20.x",
+            "^20.0.0",
+            "~20",
+            ">=20 <21",
+            "18 || 20",
+            "20.0.0 - 22.11.0",
+        ] {
             assert!(
                 node_engine_matches(expression, (20, 19, 5)).unwrap(),
                 "{expression}"

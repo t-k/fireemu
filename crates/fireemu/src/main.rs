@@ -782,23 +782,19 @@ fn resolve_export_on_exit(
 /// Node's own `--inspect=<port>` flag placed before it. A configured `functions.runner`
 /// that is not Node cannot be given one, and saying so is better than starting without it.
 fn apply_inspect_functions(cfg: &mut RuntimeConfig, port: u16) -> Result<(), CliError> {
-    let mut command = match cfg.functions_runner.clone() {
-        Some(command) => command,
-        None => functions::default_runner().map_err(CliError::refused)?,
-    };
-    let program = std::path::Path::new(&command[0])
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_owned();
-    if program != "node" {
-        return Err(CliError::refused(format!(
-            "--inspect-functions: the configured functions.runner starts {:?}, not node, so it takes no --inspect flag; remove functions.runner or drop --inspect-functions",
-            command[0]
-        )));
+    if let Some(command) = &cfg.functions_runner {
+        let program = std::path::Path::new(&command[0])
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if program != "node" {
+            return Err(CliError::refused(format!(
+                "--inspect-functions: the configured functions.runner starts {:?}, not node, so it takes no --inspect flag; remove functions.runner or drop --inspect-functions",
+                command[0]
+            )));
+        }
     }
-    command.insert(1, format!("--inspect={port}"));
-    cfg.functions_runner = Some(command);
+    cfg.functions_inspect_port = Some(port);
     Ok(())
 }
 

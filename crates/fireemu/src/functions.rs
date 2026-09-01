@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -711,10 +712,313 @@ pub fn locate_runner() -> Result<RunnerScript, String> {
     ))
 }
 
-/// The bundled Node runner as a command (overridable wholesale with `functions.runner`).
-pub fn default_runner() -> Result<Vec<String>, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NodeInstallation {
+    program: PathBuf,
+    version: String,
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+fn parse_node_version(text: &str) -> Option<(String, u32, u32, u32)> {
+    let version = text.trim().strip_prefix('v').unwrap_or(text.trim());
+    let core = version.split_once('-').map_or(version, |(core, _)| core);
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((version.to_owned(), major, minor, patch))
+}
+
+fn requirement_parts(text: &str) -> Option<Vec<Option<u32>>> {
+    let text = text.trim().trim_start_matches('v');
+    if text.is_empty() {
+        return None;
+    }
+    text.split('.')
+        .map(|part| match part {
+            "x" | "X" | "*" => Some(None),
+            _ => part.parse().ok().map(Some),
+        })
+        .collect()
+}
+
+fn version_floor(parts: &[Option<u32>]) -> Option<(u32, u32, u32)> {
+    Some((
+        parts.first().copied().flatten()?,
+        parts.get(1).copied().flatten().unwrap_or(0),
+        parts.get(2).copied().flatten().unwrap_or(0),
+    ))
+}
+
+fn node_engine_token_matches(token: &str, actual: (u32, u32, u32)) -> Option<bool> {
+    for operator in [">=", "<=", ">", "<"] {
+        if let Some(version) = token.strip_prefix(operator) {
+            let expected = version_floor(&requirement_parts(version)?)?;
+            return Some(match operator {
+                ">=" => actual >= expected,
+                "<=" => actual <= expected,
+                ">" => actual > expected,
+                "<" => actual < expected,
+                _ => unreachable!(),
+            });
+        }
+    }
+
+    if let Some(version) = token.strip_prefix('^') {
+        let lower = version_floor(&requirement_parts(version)?)?;
+        let upper = if lower.0 > 0 {
+            (lower.0.checked_add(1)?, 0, 0)
+        } else if lower.1 > 0 {
+            (0, lower.1.checked_add(1)?, 0)
+        } else {
+            (0, 0, lower.2.checked_add(1)?)
+        };
+        return Some(actual >= lower && actual < upper);
+    }
+    if let Some(version) = token.strip_prefix('~') {
+        let parts = requirement_parts(version)?;
+        let lower = version_floor(&parts)?;
+        let upper = if parts.len() >= 2 && parts[1].is_some() {
+            (lower.0, lower.1.checked_add(1)?, 0)
+        } else {
+            (lower.0.checked_add(1)?, 0, 0)
+        };
+        return Some(actual >= lower && actual < upper);
+    }
+
+    let token = token.strip_prefix('=').unwrap_or(token);
+    let parts = requirement_parts(token)?;
+    let lower = version_floor(&parts)?;
+    if parts.len() == 1 || parts.get(1).is_some_and(Option::is_none) {
+        return Some(actual >= lower && actual < (lower.0.checked_add(1)?, 0, 0));
+    }
+    if parts.len() == 2 || parts.get(2).is_some_and(Option::is_none) {
+        return Some(actual >= lower && actual < (lower.0, lower.1.checked_add(1)?, 0));
+    }
+    Some(actual == lower)
+}
+
+fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool, String> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return Err("package.json engines.node is empty".to_owned());
+    }
+    for alternative in expression.split("||") {
+        let normalized = alternative.replace(',', " ");
+        let tokens: Vec<&str> = normalized.split_whitespace().collect();
+        if tokens.is_empty() {
+            return Err(format!(
+                "package.json engines.node {expression:?} is not a supported semver expression"
+            ));
+        }
+        let mut matches = true;
+        for token in tokens {
+            let Some(token_matches) = node_engine_token_matches(token, actual) else {
+                return Err(format!(
+                    "package.json engines.node {expression:?} is not a supported semver expression"
+                ));
+            };
+            matches &= token_matches;
+        }
+        if matches {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn package_node_engine(source: &Path) -> Result<Option<String>, String> {
+    let path = source.join("package.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let package: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
+    match package.pointer("/engines/node") {
+        None => Ok(None),
+        Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(format!("{}: engines.node must be a string", path.display())),
+    }
+}
+
+fn push_node_candidate(out: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !candidate.is_file() {
+        return;
+    }
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+    if !out.contains(&canonical) {
+        out.push(canonical);
+    }
+}
+
+fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
+    if let Some(program) = std::env::var_os("FIREEMU_NODE") {
+        let program = PathBuf::from(program);
+        if !program.is_file() {
+            return Err(format!(
+                "FIREEMU_NODE names {}, which is not an executable file",
+                program.display()
+            ));
+        }
+        let mut candidates = Vec::new();
+        push_node_candidate(&mut candidates, program);
+        return Ok((candidates, true));
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            push_node_candidate(&mut candidates, directory.join("node"));
+            #[cfg(windows)]
+            push_node_candidate(&mut candidates, directory.join("node.exe"));
+        }
+    }
+    let mut volta_roots: BTreeSet<PathBuf> = candidates
+        .iter()
+        .filter_map(|program| program.parent()?.parent()?.parent())
+        .filter(|root| {
+            root.file_name().and_then(|name| name.to_str()) == Some("node")
+                && root
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    == Some("image")
+        })
+        .map(Path::to_path_buf)
+        .collect();
+    // Volta keeps installed majors in one bounded, version-named directory. Looking only
+    // under the explicitly configured VOLTA_HOME or beside a PATH-resolved Volta image lets a
+    // package engines constraint select an already-installed compatible Node without
+    // recursively scanning the host filesystem.
+    if let Some(home) = std::env::var_os("VOLTA_HOME") {
+        volta_roots.insert(PathBuf::from(home).join("tools/image/node"));
+    }
+    for root in volta_roots {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+            entries.sort_by_key(std::fs::DirEntry::file_name);
+            for entry in entries.into_iter().take(64) {
+                push_node_candidate(&mut candidates, entry.path().join("bin/node"));
+                #[cfg(windows)]
+                push_node_candidate(&mut candidates, entry.path().join("node.exe"));
+            }
+        }
+    }
+    Ok((candidates, false))
+}
+
+fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
+    let output = Command::new(program)
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("could not start Node: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("Node --version exited with {}", output.status));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let (version, major, minor, patch) = parse_node_version(&text)
+        .ok_or_else(|| "Node --version returned an unrecognised version".to_owned())?;
+    Ok(NodeInstallation {
+        program: program.to_path_buf(),
+        version,
+        major,
+        minor,
+        patch,
+    })
+}
+
+fn select_node_installation(
+    engines: Option<&str>,
+    installations: &[NodeInstallation],
+) -> Result<usize, String> {
+    if installations.is_empty() {
+        return Err("no usable Node executable was found on PATH or in VOLTA_HOME".to_owned());
+    }
+    let Some(engines) = engines else {
+        return Ok(0);
+    };
+    for (index, installation) in installations.iter().enumerate() {
+        if node_engine_matches(
+            engines,
+            (installation.major, installation.minor, installation.patch),
+        )? {
+            return Ok(index);
+        }
+    }
+    let found = installations
+        .iter()
+        .map(|installation| format!("v{}", installation.version))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "package.json engines.node {engines:?} accepts none of the discovered Node versions ({found}); install a compatible Node, set FIREEMU_NODE to it, or configure functions.runner explicitly"
+    ))
+}
+
+fn default_runner_for_codebase(
+    codebase: &crate::config::FunctionsCodebase,
+) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
-    Ok(vec!["node".to_owned(), script.path.display().to_string()])
+    let engines = package_node_engine(Path::new(&codebase.source))?;
+    let (candidates, explicit_node) = node_candidates()?;
+    let mut installations = Vec::new();
+    let mut probe_errors = Vec::new();
+    for candidate in candidates {
+        match probe_node(&candidate) {
+            Ok(installation) => installations.push(installation),
+            Err(error) => probe_errors.push(error),
+        }
+    }
+    if installations.is_empty() {
+        let detail = if probe_errors.is_empty() {
+            "no Node executable was found".to_owned()
+        } else {
+            probe_errors.join("; ")
+        };
+        return Err(format!(
+            "the Functions codebase {:?}: {detail}; install Node, set FIREEMU_NODE, or configure functions.runner explicitly",
+            codebase.codebase
+        ));
+    }
+    let selected = if explicit_node {
+        0
+    } else {
+        select_node_installation(engines.as_deref(), &installations)?
+    };
+    let installation = &installations[selected];
+    let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
+        runtime
+            .strip_prefix("nodejs")
+            .and_then(|major| major.parse::<u32>().ok())
+    });
+    if let Some(engines) = &engines {
+        eprintln!(
+            "note: functions[{}]: selected Node v{} for package.json engines.node {:?}{}",
+            codebase.codebase,
+            installation.version,
+            engines,
+            runtime_major
+                .filter(|major| *major != installation.major)
+                .map_or_else(String::new, |major| format!(
+                    " (firebase runtime nodejs{major} is deployment metadata)"
+                ))
+        );
+    } else if let Some(major) = runtime_major {
+        if major != installation.major {
+            eprintln!(
+                "note: functions[{}]: firebase runtime nodejs{major} differs from local Node v{}; the local emulator uses the first usable Node on PATH",
+                codebase.codebase, installation.version
+            );
+        }
+    }
+    Ok(vec![
+        installation.program.display().to_string(),
+        script.path.display().to_string(),
+    ])
 }
 
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
@@ -830,8 +1134,12 @@ async fn start_codebase(
     }
     let mut command = match cfg.functions_runner.clone() {
         Some(command) => command,
-        None => default_runner()?,
+        None => default_runner_for_codebase(codebase)
+            .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
     };
+    if let Some(port) = cfg.functions_inspect_port {
+        command.insert(1, format!("--inspect={port}"));
+    }
     command.push("--source".to_owned());
     command.push(source.clone());
     command.push("--codebase".to_owned());
@@ -1410,13 +1718,77 @@ mod tests {
 
     use super::{
         check_callable_app_check, function_pubsub_resources, functions_source_signature,
-        provision_function_pubsub_resources, snapshot_functions_source,
+        node_engine_matches, package_node_engine, parse_node_version,
+        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
+        NodeInstallation,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
     use serde_json::json;
+
+    fn installed_node(version: &str) -> NodeInstallation {
+        let (_, major, minor, patch) = parse_node_version(version).unwrap();
+        NodeInstallation {
+            program: std::path::PathBuf::from(format!("/opt/node-{major}/bin/node")),
+            version: version.trim_start_matches('v').to_owned(),
+            major,
+            minor,
+            patch,
+        }
+    }
+
+    #[test]
+    fn package_engine_selects_a_compatible_installed_node_before_loading_user_code() {
+        let installations = vec![installed_node("v22.11.0"), installed_node("v20.19.5")];
+        assert_eq!(
+            select_node_installation(Some("20"), &installations).unwrap(),
+            1
+        );
+        assert_eq!(
+            select_node_installation(Some(">=20.0.0 <21.0.0"), &installations).unwrap(),
+            1
+        );
+
+        let error = select_node_installation(Some("18"), &installations).unwrap_err();
+        assert!(error.contains("engines.node \"18\""), "{error}");
+        assert!(error.contains("v22.11.0, v20.19.5"), "{error}");
+        assert!(error.contains("FIREEMU_NODE"), "{error}");
+    }
+
+    #[test]
+    fn node_engine_parser_checks_ranges_and_alternatives() {
+        for expression in ["20", "20.x", "^20.0.0", "~20", ">=20 <21", "18 || 20"] {
+            assert!(
+                node_engine_matches(expression, (20, 19, 5)).unwrap(),
+                "{expression}"
+            );
+        }
+        assert!(node_engine_matches(">=18", (22, 11, 0)).unwrap());
+        assert!(!node_engine_matches("20.20.x", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("20.19.5", (20, 19, 5)).unwrap());
+        assert!(!node_engine_matches("20.19.5", (20, 19, 6)).unwrap());
+        assert!(node_engine_matches("^0.2.3", (0, 2, 9)).unwrap());
+        assert!(node_engine_matches("~20.19.0", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("", (20, 19, 5)).is_err());
+        assert!(node_engine_matches("not-semver", (20, 19, 5)).is_err());
+    }
+
+    #[test]
+    fn package_node_engine_is_read_without_treating_it_as_an_executable() {
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-engine-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"engines":{"node":"20"},"scripts":{"node":"/tmp/not-an-executable"}}"#,
+        )
+        .unwrap();
+        assert_eq!(package_node_engine(&root).unwrap().as_deref(), Some("20"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reload_signature_tracks_build_and_env_files_but_ignores_configured_paths() {

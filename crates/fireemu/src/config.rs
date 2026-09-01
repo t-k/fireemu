@@ -199,6 +199,8 @@ pub struct RuntimeConfig {
     pub functions_loaded: Vec<FunctionsCodebase>,
     /// Runner command (`functions.runner`); default: the bundled Node runner.
     pub functions_runner: Option<Vec<String>>,
+    /// Node inspector port requested by `--inspect-functions`; applied after executable selection.
+    pub functions_inspect_port: Option<u16>,
     /// Explicit manifest path (`functions.manifest`); default: runner discovery.
     pub functions_manifest: Option<String>,
     /// Maximum invocations running at once (`functions.maxGlobalConcurrency`).
@@ -389,6 +391,7 @@ impl Default for RuntimeConfig {
             functions_codebases: Vec::new(),
             functions_loaded: Vec::new(),
             functions_runner: None,
+            functions_inspect_port: None,
             functions_manifest: None,
             functions_max_running: 8,
             functions_unserved_triggers: "refuse".to_owned(),
@@ -1110,7 +1113,10 @@ fn check_codebase_runtime(c: &FunctionsCodebase) -> Result<(), ConfigError> {
     let Some(runtime) = &c.runtime else {
         return Ok(());
     };
-    if runtime.starts_with("nodejs") {
+    if runtime
+        .strip_prefix("nodejs")
+        .is_some_and(|major| !major.is_empty() && major.bytes().all(|byte| byte.is_ascii_digit()))
+    {
         return Ok(());
     }
     let language = if runtime.starts_with("python") {
@@ -2450,6 +2456,14 @@ mod tests {
             .0;
         assert!(message.contains("python312"), "{message}");
         assert!(message.contains("Python"), "{message}");
+
+        let mut cfg = RuntimeConfig::default();
+        let malformed = json!({"functions": [{"source": "fn", "runtime": "nodejs-latest"}]});
+        let message = cfg
+            .apply_firebase_json(&malformed, base, &Selection::default())
+            .unwrap_err()
+            .0;
+        assert!(message.contains("nodejs-latest"), "{message}");
     }
 
     #[test]

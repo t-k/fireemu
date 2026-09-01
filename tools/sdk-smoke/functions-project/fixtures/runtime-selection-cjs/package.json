@@ -1,0 +1,8 @@
+{
+  "name": "runtime-selection-cjs",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  }
+}

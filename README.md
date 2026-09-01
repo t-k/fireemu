@@ -13,7 +13,7 @@ fireemu is experimental. It is not a replacement for the official Firebase Emula
 
 ## Quick start
 
-Node.js 20 or newer is required.
+Node.js 20 or newer is required. For Functions, an explicit `functions.runner` command wins. Otherwise, `FIREEMU_NODE` selects one Node executable, `package.json` `engines.node` selects a matching executable from `PATH` or the installed versions under `VOLTA_HOME`, and an absent constraint uses the first usable Node on `PATH`. The `firebase.json` `runtime` remains deployment metadata; a local major mismatch is reported. Selection happens before user code is loaded, and an unsatisfied or malformed constraint fails with the discovered versions and an actionable override.
 
 ```sh
 npm install --save-dev fireemu

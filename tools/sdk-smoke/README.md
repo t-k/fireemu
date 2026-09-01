@@ -54,6 +54,9 @@ suite) needs, and what leaves the other smokes working without attaching a token
 - `recursive-delete.mjs`: `firebase-admin` recursive deletion of an empty root, a nested
   subtree and a missing root with descendants. It also verifies that an unrelated sibling is
   retained. Run it with `fireemu exec --only firestore -- sh -c 'cd tools/sdk-smoke && npm run smoke:recursive-delete'`.
+- `firestore-contention.mjs`: twenty real Admin SDK transactions synchronize their first read,
+  then each creates one unique item and increments one shared counter through SDK retries. The
+  final item and counter totals must both be twenty.
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) from a `fireemu exec`
   child and open `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FIREEMU_CONTROL_TOKEN>`; the page prints its checks as JSON. The variable is scoped to the child and is not printed by the daemon. `FIREEMU_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.

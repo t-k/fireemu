@@ -1252,12 +1252,20 @@ impl LocalBackend {
     /// read-write mode is given (Firestore's default for `new_transaction`), at the
     /// `read_time` snapshot when one is requested.
     fn new_transaction(
+        parent: &Parent,
         db: &mut FirestoreState,
         opts: &pb::TransactionOptions,
         now: fireemu_core_types::time::LogicalInstant,
     ) -> Result<TransactionId, Status> {
         match &opts.mode {
-            Some(pb::transaction_options::Mode::ReadWrite(_)) => db.begin_transaction(false, now),
+            Some(pb::transaction_options::Mode::ReadWrite(read_write)) => {
+                if read_write.retry_transaction.is_empty() {
+                    db.begin_transaction(false, now)
+                } else {
+                    let previous = Self::required_txn(parent, &read_write.retry_transaction)?;
+                    db.retry_transaction(&previous, now)
+                }
+            }
             Some(pb::transaction_options::Mode::ReadOnly(ro)) => match &ro.consistency_selector {
                 Some(pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts)) => {
                     let at = Self::read_time_selector(ts, now)?;
@@ -1371,7 +1379,7 @@ impl LocalBackend {
                 Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
                     opts,
                 )) => {
-                    let id = Self::new_transaction(db, opts, now)?;
+                    let id = Self::new_transaction(&parent, db, opts, now)?;
                     let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
@@ -1662,6 +1670,12 @@ impl LocalBackend {
                         None => db.begin_transaction(true, now),
                     }
                 }
+                Some(pb::transaction_options::Mode::ReadWrite(read_write))
+                    if !read_write.retry_transaction.is_empty() =>
+                {
+                    let previous = Self::required_txn(&parent, &read_write.retry_transaction)?;
+                    db.retry_transaction(&previous, now)
+                }
                 _ => db.begin_transaction(false, now),
             }
             .map_err(|e| status_from_error(&e))?;
@@ -1738,7 +1752,7 @@ impl LocalBackend {
                     (Some(t), Vec::new())
                 }
                 Some(pb::run_query_request::ConsistencySelector::NewTransaction(opts)) => {
-                    let id = Self::new_transaction(db, opts, now)?;
+                    let id = Self::new_transaction(&parent, db, opts, now)?;
                     let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
@@ -1839,7 +1853,7 @@ impl LocalBackend {
                 Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
                     opts,
                 )) => {
-                    let id = Self::new_transaction(db, opts, now)?;
+                    let id = Self::new_transaction(&parent, db, opts, now)?;
                     let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }

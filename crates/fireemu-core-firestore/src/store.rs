@@ -280,9 +280,9 @@ struct Transaction {
     started_at: LogicalInstant,
     /// Observed version per read path (`None` = absent at read time).
     read_set: BTreeMap<DocumentPath, Option<CommitVersion>>,
-    /// Queries executed inside the transaction. Each holds a lock on the collection it
-    /// scanned, so a phantom write into that collection by another transaction contends.
-    queries: Vec<Query>,
+    /// Queries executed inside the transaction and the rows each snapshot returned. A
+    /// changed result at commit time is a phantom conflict.
+    queries: Vec<(Query, BTreeMap<DocumentPath, CommitVersion>)>,
     last_activity: LogicalInstant,
     finished: bool,
 }
@@ -372,6 +372,9 @@ fn seconds_limit(id: &str, fallback: i64) -> LogicalDuration {
 /// retry a transaction on.
 const TRANSACTION_NO_LONGER_VALID: &str =
     "The referenced transaction has expired or is no longer valid.";
+const TRANSACTION_CONCURRENT_MODIFICATION: &str =
+    "Transaction was aborted due to a concurrent modification.";
+const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
 
 fn transaction_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)
@@ -384,63 +387,6 @@ fn transaction_idle_ttl() -> LogicalDuration {
 fn elapsed(now: LogicalInstant, earlier: LogicalInstant) -> LogicalDuration {
     now.checked_duration_since(earlier)
         .unwrap_or(LogicalDuration::from_nanos(i128::MAX))
-}
-
-/// The instant a transaction stops being usable: the earlier of its total-time deadline
-/// (`FS-LIMIT-TRANSACTION-TOTAL-TIME`, from when it began) and its idle deadline
-/// (`FS-LIMIT-TRANSACTION-IDLE-TIME`, from its last activity). At or after this instant the
-/// transaction is expired: it commits nothing and holds no locks. A deadline that overflows
-/// the representable range saturates to the maximum instant.
-fn transaction_expiry(t: &Transaction) -> LogicalInstant {
-    let total = t
-        .started_at
-        .checked_add(transaction_ttl())
-        .unwrap_or(LogicalInstant::MAX);
-    let idle = t
-        .last_activity
-        .checked_add(transaction_idle_ttl())
-        .unwrap_or(LogicalInstant::MAX);
-    total.min(idle)
-}
-
-/// Whether a query's scope covers `path`, i.e. a write to `path` would join or leave that
-/// query's result. A single-collection query covers exactly the documents directly in its
-/// collection; a collection-group query covers every document in a collection of that id
-/// (under its parent, when the group is scoped). This is the granularity at which a
-/// transaction's query holds a lock, so that a phantom write into a scanned collection
-/// contends with the transaction that scanned it.
-fn scope_covers(scope: &crate::query::QueryScope, path: &DocumentPath) -> bool {
-    use crate::query::QueryScope;
-    match scope {
-        QueryScope::Collection {
-            parent,
-            collection_id,
-        } => {
-            path.parent_document().as_ref() == parent.as_ref()
-                && path.collection_id() == collection_id
-        }
-        QueryScope::CollectionGroup {
-            parent,
-            collection_id,
-        } => {
-            let in_group = path.pairs().iter().any(|(c, _)| c == collection_id);
-            parent
-                .as_ref()
-                .is_none_or(|parent| in_group && path_has_prefix(path, parent))
-                && in_group
-        }
-        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|parent| {
-            path.pairs().len() > parent.pairs().len() && path_has_prefix(path, parent)
-        }),
-    }
-}
-
-/// Whether `path` is `ancestor` itself or a document beneath it.
-fn path_has_prefix(path: &DocumentPath, ancestor: &DocumentPath) -> bool {
-    path.project() == ancestor.project()
-        && path.database() == ancestor.database()
-        && path.pairs().len() >= ancestor.pairs().len()
-        && path.pairs()[..ancestor.pairs().len()] == *ancestor.pairs()
 }
 
 impl FirestoreState {
@@ -637,6 +583,29 @@ impl FirestoreState {
         Ok(self.insert_transaction(read_only, self.version, read_time, now))
     }
 
+    /// Begins a retry attempt linked to a transaction previously issued by this database.
+    /// The previous attempt may already be finished after an `ABORTED` commit, but an unknown
+    /// handle is never accepted as retry lineage.
+    pub fn retry_transaction(
+        &mut self,
+        previous: &TransactionId,
+        now: LogicalInstant,
+    ) -> Result<TransactionId, FirestoreError> {
+        let Some(previous) = self.transactions.get_mut(previous) else {
+            return Err(FirestoreError::InvalidArgument(
+                "Invalid retry transaction.".into(),
+            ));
+        };
+        if previous.read_only {
+            return Err(FirestoreError::InvalidArgument(
+                "read-only transaction cannot be retried as read-write".into(),
+            ));
+        }
+        previous.finished = true;
+        let read_time = self.read_time(now);
+        Ok(self.insert_transaction(false, self.version, read_time, now))
+    }
+
     /// Starts a read-only transaction over the snapshot at `read_time` (the latest version
     /// committed at or before it); its budgets still run from `now`. A `read_time` older than
     /// the retained history is refused instead of being served from unrelated versions.
@@ -660,10 +629,27 @@ impl FirestoreState {
         read_time: LogicalInstant,
         now: LogicalInstant,
     ) -> TransactionId {
-        // Expired transactions are dropped here so abandoned ones never accumulate.
+        // Keep recent finished attempts so `retry_transaction` can name the attempt that was
+        // just aborted. Old lineage is bounded and never participates in reads or conflicts.
         let ttl = transaction_ttl();
         self.transactions
-            .retain(|_, t| !t.finished && elapsed(now, t.started_at) <= ttl);
+            .retain(|_, transaction| elapsed(now, transaction.started_at) <= ttl);
+        while self
+            .transactions
+            .values()
+            .filter(|transaction| transaction.finished)
+            .count()
+            >= MAX_FINISHED_TRANSACTION_LINEAGE
+        {
+            let Some(oldest) = self
+                .transactions
+                .iter()
+                .find_map(|(id, transaction)| transaction.finished.then(|| id.clone()))
+            else {
+                break;
+            };
+            self.transactions.remove(&oldest);
+        }
         self.next_transaction += 1;
         let id = TransactionId(self.next_transaction);
         self.transactions.insert(
@@ -715,9 +701,7 @@ impl FirestoreState {
     ) -> Result<(), FirestoreError> {
         let t = self.transaction(id)?;
         // Expiry is inclusive at the deadline (`now >= deadline`), the same boundary
-        // `transaction_expiry` / the lock check use, so a transaction is considered gone by
-        // its own commit at exactly the instant its lock is released -- never one but not the
-        // other.
+        // The transaction is considered gone by its own commit at the exact deadline.
         let total_deadline = t
             .started_at
             .checked_add(transaction_ttl())
@@ -942,7 +926,12 @@ impl FirestoreState {
             for d in &docs {
                 t.read_set.insert(d.path.clone(), Some(d.version));
             }
-            t.queries.push(query.clone());
+            t.queries.push((
+                query.clone(),
+                docs.iter()
+                    .map(|document| (document.path.clone(), document.version))
+                    .collect(),
+            ));
         }
         Ok((docs, stats))
     }
@@ -960,13 +949,9 @@ impl FirestoreState {
     /// times are strictly monotonic per database even when the clock did not advance, so
     /// `update_time` preconditions cannot be satisfied by a stale timestamp.
     ///
-    /// Concurrency is pessimistic, as in the official emulator and in production: the
-    /// documents a transaction reads (and the collections its queries scan) are locked until
-    /// it commits, rolls back or expires. A write here -- transactional or out of band --
-    /// that touches a document locked by *another* live transaction is refused with
-    /// [`FirestoreError::LockContended`], which the adapter waits out on the virtual clock (a
-    /// held lock is answered with `ABORTED` "Transaction lock timeout."). A transaction's own
-    /// locks never block its own commit.
+    /// Transaction concurrency is optimistic: independent writes commit immediately, while a
+    /// transaction whose document or query snapshot changed is aborted before any staged
+    /// write is published. SDKs retry that attempt against a new snapshot.
     pub fn commit(
         &mut self,
         writes: &[Write],
@@ -981,11 +966,14 @@ impl FirestoreState {
                     "read-only transaction cannot write".into(),
                 ));
             }
-        }
-        // Pessimistic lock check: refuse a write that touches a document another live
-        // transaction has locked (by reading it, or by scanning its collection in a query).
-        if let Some(earliest_release) = self.lock_contention(writes, transaction, now) {
-            return Err(FirestoreError::LockContended { earliest_release });
+            if self.transaction_conflicted(id)? {
+                if let Some(transaction) = self.transactions.get_mut(id) {
+                    transaction.finished = true;
+                }
+                return Err(FirestoreError::Aborted(
+                    TRANSACTION_CONCURRENT_MODIFICATION.into(),
+                ));
+            }
         }
 
         // The transform budget is production's alone: the official emulator applies any
@@ -1094,54 +1082,24 @@ impl FirestoreState {
         })
     }
 
-    /// The soonest a lock held by another live transaction (any but `exclude`) is released
-    /// among the documents `writes` touches, or `None` when nothing is locked against them.
-    /// A live transaction locks the documents it has read and the collections its queries
-    /// have scanned; an expired or finished transaction holds nothing. When more than one
-    /// document is contended the earliest release is reported, so the waiter re-checks after
-    /// each lock frees rather than sleeping to the latest.
-    fn lock_contention(
-        &self,
-        writes: &[Write],
-        exclude: Option<&TransactionId>,
-        now: LogicalInstant,
-    ) -> Option<LogicalInstant> {
-        let mut earliest: Option<LogicalInstant> = None;
-        for write in writes {
-            if let Some(release) = self.lock_release_for(write.op.path(), exclude, now) {
-                earliest = Some(earliest.map_or(release, |e: LogicalInstant| e.min(release)));
+    fn transaction_conflicted(&self, id: &TransactionId) -> Result<bool, FirestoreError> {
+        let transaction = self.transaction(id)?;
+        for (path, observed) in &transaction.read_set {
+            if self.get(path).map(|document| document.version) != *observed {
+                return Ok(true);
             }
         }
-        earliest
-    }
-
-    /// The soonest a lock covering `path`, held by a live transaction other than `exclude`,
-    /// is released; `None` when no such lock is held.
-    fn lock_release_for(
-        &self,
-        path: &DocumentPath,
-        exclude: Option<&TransactionId>,
-        now: LogicalInstant,
-    ) -> Option<LogicalInstant> {
-        let mut soonest: Option<LogicalInstant> = None;
-        for (id, t) in &self.transactions {
-            // Only read-write transactions take locks. A read-only transaction is a
-            // consistent snapshot read (it cannot write), so it never blocks a writer -- as
-            // in production and the official emulator.
-            if t.finished || t.read_only || Some(id) == exclude {
-                continue;
-            }
-            let expiry = transaction_expiry(t);
-            if now >= expiry {
-                continue; // expired: its locks are already released
-            }
-            let holds = t.read_set.contains_key(path)
-                || t.queries.iter().any(|q| scope_covers(&q.scope, path));
-            if holds {
-                soonest = Some(soonest.map_or(expiry, |e: LogicalInstant| e.min(expiry)));
+        for (query, observed) in &transaction.queries {
+            let current: BTreeMap<DocumentPath, CommitVersion> = self
+                .run_query(query, None)?
+                .into_iter()
+                .map(|document| (document.path, document.version))
+                .collect();
+            if &current != observed {
+                return Ok(true);
             }
         }
-        soonest
+        Ok(false)
     }
 
     /// The commit time a commit at `now` would receive: microsecond-aligned and strictly

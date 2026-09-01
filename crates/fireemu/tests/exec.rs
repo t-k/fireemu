@@ -89,7 +89,8 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     assert_eq!(env["GCLOUD_PROJECT"], "demo-exec");
     assert_eq!(env["FIREEMU_CONTROL_TOKEN"].len(), 32);
     assert!(env["FIREEMU_CONTROL_URL"].starts_with("http://127.0.0.1:"));
-    assert!(env["STORAGE_EMULATOR_HOST"].starts_with("http://127.0.0.1:"));
+    assert!(env["STORAGE_EMULATOR_HOST"].starts_with("http://fireemu:"));
+    assert!(env["STORAGE_EMULATOR_HOST"].contains("@127.0.0.1:"));
     for key in [
         "FIRESTORE_EMULATOR_HOST",
         "FIREBASE_AUTH_EMULATOR_HOST",
@@ -104,6 +105,12 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     assert!(stdout.starts_with("fireemu exec\n"), "{stdout}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let token = &env["FIREEMU_CONTROL_TOKEN"];
+    let storage_capability = env["STORAGE_EMULATOR_HOST"]
+        .split_once("http://fireemu:")
+        .and_then(|(_, rest)| rest.split_once('@'))
+        .map(|(capability, _)| capability)
+        .expect("the Admin Storage endpoint carries its scoped capability");
+    assert_eq!(storage_capability.len(), 32);
     assert!(
         !stdout.contains(token),
         "the success log exposed the control capability"
@@ -111,6 +118,10 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     assert!(
         !stderr.contains(token),
         "the shutdown log exposed the control capability"
+    );
+    assert!(
+        !stdout.contains(storage_capability) && !stderr.contains(storage_capability),
+        "the logs exposed the Admin Storage capability"
     );
     assert!(!stdout.contains("FIREEMU_CONTROL_TOKEN="));
     assert!(!stderr.contains("FIREEMU_CONTROL_TOKEN="));
@@ -533,8 +544,8 @@ fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
                 );
             }
         }
-        // The formats are the official ones: bare host:port everywhere but
-        // STORAGE_EMULATOR_HOST, which carries the scheme.
+        // Bare host:port everywhere except the Admin Storage endpoint. Its URL userinfo is
+        // the only channel the unmodified Google client forwards to a custom endpoint.
         if want_fs {
             assert!(env["FIRESTORE_EMULATOR_HOST"].starts_with("127.0.0.1:"));
             assert_eq!(
@@ -544,11 +555,13 @@ fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
         }
         if want_st {
             assert!(env["FIREBASE_STORAGE_EMULATOR_HOST"].starts_with("127.0.0.1:"));
-            assert_eq!(
-                env["STORAGE_EMULATOR_HOST"],
-                format!("http://{}", env["FIREBASE_STORAGE_EMULATOR_HOST"]),
-                "{label}"
-            );
+            let endpoint = &env["STORAGE_EMULATOR_HOST"];
+            let (capability, address) = endpoint
+                .strip_prefix("http://fireemu:")
+                .and_then(|rest| rest.split_once('@'))
+                .unwrap_or_else(|| panic!("{label}: malformed Admin Storage endpoint"));
+            assert_eq!(capability.len(), 32, "{label}");
+            assert_eq!(address, env["FIREBASE_STORAGE_EMULATOR_HOST"], "{label}");
         }
         assert!(
             !env.contains_key("FIREBASE_DATABASE_EMULATOR_HOST"),

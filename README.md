@@ -217,7 +217,7 @@ Names and formats follow the pinned `firebase-tools@15.28.2` `src/emulator/env.t
 | `FIREBASE_FIRESTORE_EMULATOR_ADDRESS` | `firestore` selected | `host:port` |
 | `FIREBASE_AUTH_EMULATOR_HOST` | `auth` selected | `host:port` |
 | `FIREBASE_STORAGE_EMULATOR_HOST` | `storage` selected | `host:port` |
-| `STORAGE_EMULATOR_HOST` | `storage` selected | `http://host:port` |
+| `STORAGE_EMULATOR_HOST` | `storage` selected | a scoped `http://fireemu:<per-run capability>@host:port` endpoint for the Admin Storage SDK; never printed or exported beyond the direct child |
 | `FIREBASE_EMULATOR_HUB` | the Hub is bound | `host:port` |
 | `FIREEMU_FUNCTIONS_HOST` | a codebase is loaded | `host:port` |
 | `CLOUD_EVENTARC_EMULATOR_HOST` | a codebase is loaded | `http://host:port` (the functions port; it serves `publishEvents`) |
@@ -228,6 +228,8 @@ Names and formats follow the pinned `firebase-tools@15.28.2` `src/emulator/env.t
 | `GCLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT`, `FIREBASE_CONFIG` | always | project ID, project ID, JSON |
 
 There is no `CLOUD_STORAGE_EMULATOR_HOST` variable: the `firebase-tools` constant of that name emits `STORAGE_EMULATOR_HOST`, which is the one above. `FIREBASE_DATABASE_EMULATOR_HOST` is never set, because Realtime Database is a deferred product fireemu does not serve.
+
+The credential embedded in `STORAGE_EMULATOR_HOST` is a separate 128-bit per-run capability, not the owner or control token. The Storage adapter accepts its Basic authorization only on the GCS JSON dialect and only without browser `Origin` or Fetch Metadata headers. `FIREBASE_STORAGE_EMULATOR_HOST` remains the plain browser endpoint, so a dialect rewrite or loopback destination alone never gains the Admin App Check bypass.
 
 Two deliberate differences from the official CLI, both published in the Capability Manifest under `CLI-02`:
 

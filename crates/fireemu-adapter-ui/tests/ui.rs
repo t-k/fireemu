@@ -68,6 +68,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         faults: None,
         clock_observer: None,
         app_check_policy: None,
+        admin_capability: None,
         token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
     });
     let control = Arc::new(ControlState {

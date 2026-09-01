@@ -71,7 +71,7 @@ fireemu exec --config tools/sdk-smoke/fireemu.appcheck.json \
   -- sh -c 'cd tools/sdk-smoke && npm run smoke:appcheck'
 ```
 
-Exit code 0 means every check passed; the JSON output lists each check.
+Exit code 0 means every check passed; the JSON output lists each check. The App Check smoke uses the pinned `firebase-admin@14.3.0` Storage client to list the object uploaded by the Web SDK while Storage enforcement remains enabled.
 
 `txn-order.mjs` probes transaction ordering with the web and Admin SDKs: a write before a read fails client-side with `Firestore transactions require all reads to be executed before all writes.` (the SDKs buffer writes until Commit, so the daemon, like production, never sees a misordered transaction), and a well-ordered transaction commits.
 

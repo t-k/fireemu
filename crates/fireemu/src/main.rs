@@ -854,6 +854,7 @@ fn child_environment(
     only: &Selection,
     addrs: &BoundAddrs,
     control_token: &str,
+    storage_admin_capability: &str,
 ) -> Vec<(String, String)> {
     let mut env = vec![
         ("GOOGLE_CLOUD_PROJECT".to_owned(), cfg.auth_project.clone()),
@@ -879,7 +880,10 @@ fn child_environment(
             "FIREBASE_STORAGE_EMULATOR_HOST".to_owned(),
             addr.to_string(),
         ));
-        env.push(("STORAGE_EMULATOR_HOST".to_owned(), format!("http://{addr}")));
+        env.push((
+            "STORAGE_EMULATOR_HOST".to_owned(),
+            format!("http://fireemu:{storage_admin_capability}@{addr}"),
+        ));
     }
     if let Some(addr) = addrs.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), addr.to_string()));
@@ -1237,6 +1241,7 @@ fn storage_state(
     faults: &fireemu_core_session::fault::SharedFaultRegistry,
     clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     app_check_policy: Option<Arc<fireemu_core_app_check::ServiceAdmission>>,
+    admin_capability: String,
 ) -> Result<Arc<fireemu_adapter_http::storage::StorageState>, String> {
     let parent = fireemu_adapter_grpc::decode::Parent {
         project: fireemu_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
@@ -1263,6 +1268,7 @@ fn storage_state(
         faults: Some(faults.clone()),
         clock_observer,
         app_check_policy,
+        admin_capability: Some(admin_capability),
         token_acceptance: cfg.token_acceptance,
     }))
 }
@@ -1911,6 +1917,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // the runner's HTTP server to this daemon's proxy.
         let control_token = random_secret()?;
         let runner_secret = random_secret()?;
+        let storage_admin_capability = random_secret()?;
         let app_check = match app_check_signer {
             Some(signer) => Some(app_check_state(
                 &cfg,
@@ -2025,6 +2032,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             &faults,
             clock_observer,
             storage_policy,
+            storage_admin_capability.clone(),
         )?;
         if let Some(runtime) = &functions_runtime {
             runtime.set_faults(faults.for_project(runtime.project()));
@@ -2306,7 +2314,13 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // Every listener is bound and served: the command may start.
         let mut child = match &exec {
             Some(plan) => {
-                let env = child_environment(&cfg, &only, &addrs, &control_token);
+                let env = child_environment(
+                    &cfg,
+                    &only,
+                    &addrs,
+                    &control_token,
+                    &storage_admin_capability,
+                );
                 if !quiet {
                     println!("  running: {}", plan.command.join(" "));
                 }

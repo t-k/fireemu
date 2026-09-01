@@ -282,6 +282,7 @@ pub(crate) mod tests {
                 faults: None,
                 clock_observer: None,
                 app_check_policy: None,
+                admin_capability: None,
                 token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
             }),
             registry: Arc::new(AuthRegistry::new("demo-app", auth_store)),

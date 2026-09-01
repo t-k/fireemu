@@ -49,6 +49,7 @@ fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> Storage
         faults: None,
         clock_observer: None,
         app_check_policy: None,
+        admin_capability: None,
         token_acceptance,
     }
 }

@@ -217,6 +217,10 @@ const FORWARDED_HEADERS: &[&str] = &[
     "x-goog-upload-header-content-length",
     "x-upload-content-type",
     "x-upload-content-length",
+    "origin",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-dest",
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.
@@ -311,8 +315,13 @@ async fn respond(
         if fireemu_core_app_check::header::is_app_check_header(name) {
             continue;
         }
-        if let Some(v) = req.headers().get(*name).and_then(|v| v.to_str().ok()) {
-            headers.insert((*name).to_owned(), v.to_owned());
+        let values = req.headers().get_all(*name);
+        let mut values = values.iter();
+        let value = values.next().and_then(|v| v.to_str().ok());
+        if values.next().is_some() {
+            headers.insert((*name).to_owned(), String::new());
+        } else if let Some(value) = value {
+            headers.insert((*name).to_owned(), value.to_owned());
         }
     }
     let app_check: Vec<String> = req

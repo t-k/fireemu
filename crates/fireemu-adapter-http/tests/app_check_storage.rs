@@ -55,6 +55,7 @@ fn harness(mode: BaselineMode) -> Harness {
         faults: None,
         clock_observer: None,
         app_check_policy: fixture::policy(&app_check, "storage", mode),
+        admin_capability: Some("storage-capability".to_owned()),
         token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
     };
     Harness {
@@ -154,6 +155,13 @@ fn header<'a>(r: &'a StorageResponse, name: &str) -> Option<&'a str> {
 
 fn body_of(r: &StorageResponse) -> Value {
     serde_json::from_slice(&r.body).unwrap_or(Value::Null)
+}
+
+fn admin_storage_authorization() -> String {
+    format!(
+        "Basic {}",
+        fireemu_core_storage::hash::base64(b"fireemu:storage-capability")
+    )
 }
 
 // ------------------------------------------------------------------------------------------
@@ -844,6 +852,67 @@ fn the_firebase_dialect_never_bypasses_on_the_owner_credential_alone() {
         "{}",
         String::from_utf8_lossy(&denied.body)
     );
+}
+
+#[test]
+fn the_admin_storage_capability_bypasses_only_the_server_side_gcs_dialect() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("admin/listed.txt");
+    let authorization = admin_storage_authorization();
+    let path = format!("/storage/v1/b/{BUCKET}/o?prefix=admin/");
+
+    let admitted = h.call("GET", &path, &[("authorization", &authorization)], &[], b"");
+    assert_eq!(
+        admitted.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&admitted.body)
+    );
+
+    for (label, headers) in [
+        ("missing capability", vec![]),
+        (
+            "wrong capability",
+            vec![("authorization", "Basic ZmlyZWVtdTp3cm9uZw==")],
+        ),
+        (
+            "browser origin",
+            vec![
+                ("authorization", authorization.as_str()),
+                ("origin", "http://127.0.0.1:5173"),
+            ],
+        ),
+        (
+            "browser fetch metadata",
+            vec![
+                ("authorization", authorization.as_str()),
+                ("sec-fetch-site", "same-origin"),
+            ],
+        ),
+    ] {
+        let denied = h.call("GET", &path, &headers, &[], b"");
+        assert_eq!(
+            denied.status,
+            403,
+            "{label}: {}",
+            String::from_utf8_lossy(&denied.body)
+        );
+        assert_eq!(
+            body_of(&denied)["error"]["reason"],
+            "APP_CHECK_REQUIRED",
+            "{label}"
+        );
+    }
+
+    let firebase = h.call(
+        "GET",
+        &format!("/v0/b/{BUCKET}/o"),
+        &[("authorization", &authorization)],
+        &[],
+        b"",
+    );
+    assert_eq!(firebase.status, 403);
+    assert_eq!(body_of(&firebase)["error"]["reason"], "APP_CHECK_REQUIRED");
 }
 
 // ------------------------------------------------------------------------------------------

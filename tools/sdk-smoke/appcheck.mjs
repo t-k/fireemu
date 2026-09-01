@@ -89,6 +89,13 @@ const [stHostname, stPort] = storageHost.split(":");
 const storage = getStorage(app, `gs://${project}.appspot.com`);
 connectStorageEmulator(storage, stHostname, Number(stPort));
 
+const { initializeApp: initializeAdminApp } = await import("firebase-admin/app");
+const { getStorage: getAdminStorage } = await import("firebase-admin/storage");
+const adminApp = initializeAdminApp(
+  { projectId: project, storageBucket: `${project}.appspot.com` },
+  "app-check-storage-admin",
+);
+
 await check("initializeAppCheck obtains a local token through CustomProvider", async () => {
   const result = await getToken(appCheck, false);
   if (!result.token) throw new Error("no token");
@@ -127,6 +134,14 @@ await check("Storage admits a resumable upload from an App Check enabled app", a
   await task;
   const bytes = await getBytes(object);
   return { size: bytes.byteLength };
+});
+
+await check("Admin Storage lists objects while App Check enforcement remains enabled", async () => {
+  const [files] = await getAdminStorage(adminApp).bucket().getFiles({ prefix: "appcheck/" });
+  if (!files.some((file) => file.name.startsWith("appcheck/web-"))) {
+    throw new Error(`the Admin SDK list did not contain the web upload: ${files.map((file) => file.name)}`);
+  }
+  return { count: files.length };
 });
 
 // The callable path: the Web SDK's own Functions client attaches the App Check token, and the

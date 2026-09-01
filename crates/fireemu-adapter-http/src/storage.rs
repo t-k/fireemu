@@ -120,6 +120,9 @@ pub struct StorageState {
     /// The App Check baseline policy of Cloud Storage (`appCheck.services.storage`). `None`
     /// is the `off` mode: no header is collected and nothing is classified.
     pub app_check_policy: Option<Arc<ServiceAdmission>>,
+    /// Per-run capability used only by the Admin Storage SDK endpoint inherited by an
+    /// `exec` child. It is distinct from the owner and control credentials.
+    pub admin_capability: Option<String>,
     /// How a caller's ID token is verified before Storage Rules see it: the compatibility
     /// profile decides (`firebase` admits the official emulator's mock tokens, `strict`
     /// does not).
@@ -1760,6 +1763,29 @@ fn bucket_name(bucket: &str) -> Result<BucketName, StorageResponse> {
         .map_err(|e| gcs_json_error(400, &format!("invalid bucket name: {e}"), "invalid"))
 }
 
+fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bool {
+    use subtle::ConstantTimeEq as _;
+
+    let (Some(capability), Some(presented)) = (
+        state.admin_capability.as_deref(),
+        req.header("authorization"),
+    ) else {
+        return false;
+    };
+    if req.header("origin").is_some()
+        || req.header("sec-fetch-site").is_some()
+        || req.header("sec-fetch-mode").is_some()
+        || req.header("sec-fetch-dest").is_some()
+    {
+        return false;
+    }
+    let expected = format!(
+        "Basic {}",
+        fireemu_core_storage::hash::base64(format!("fireemu:{capability}").as_bytes())
+    );
+    presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
+}
+
 fn object_name(name: &str) -> Result<ObjectName, StorageResponse> {
     ObjectName::try_new(name)
         .map_err(|e| gcs_json_error(400, &format!("invalid object name: {e}"), "invalid"))
@@ -1820,8 +1846,9 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     // dialect" and says a dialect-like path is never sufficient on its own, so the App Check
     // bypass requires the emulator's exact owner credential, exactly as Firestore and
     // Identity Toolkit do.
-    let json_api_authenticated =
-        dialect == Dialect::Gcs && authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL);
+    let json_api_authenticated = dialect == Dialect::Gcs
+        && (authorization == Some(crate::identity_toolkit::OWNER_CREDENTIAL)
+            || admin_storage_authenticated(state, &req));
     // App Check, before the fault plan, the Auth credential, the rules and every mutation.
     let admitted = if state.app_check_policy.is_some() {
         // The bypass classification reads the object store for a download-token URL, so it

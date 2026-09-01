@@ -916,6 +916,9 @@ impl<'a> Parser<'a> {
                         items.push(self.expr()?);
                         let s = self.pos;
                         if self.next()? == Token::Punct(",") {
+                            if self.peek()? == Token::Punct("]") {
+                                break;
+                            }
                             continue;
                         }
                         self.pos = s;

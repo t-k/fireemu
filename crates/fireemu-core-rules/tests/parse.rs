@@ -94,6 +94,38 @@ fn expression_precedence_and_forms() {
 }
 
 #[test]
+fn list_literals_accept_one_trailing_comma() {
+    let src = r#"
+service cloud.firestore {
+  function allowedValues() {
+    return [
+      "one",
+      "two",
+    ];
+  }
+}
+"#;
+    let ruleset = parse_ruleset(src).unwrap();
+    let function = match &ruleset.services[0].items[0] {
+        Item::Function(function) => function,
+        Item::Match(_) => panic!(),
+    };
+    let ExprKind::List(items) = function.body.kind() else {
+        panic!("expected list return, got {:?}", function.body.kind());
+    };
+    assert_eq!(items.len(), 2);
+}
+
+#[test]
+fn list_literals_reject_missing_expressions() {
+    for literal in ["[, 1]", "[1, , 2]", "[1, ,]"] {
+        let src =
+            format!("service cloud.firestore {{ function invalid() {{ return {literal}; }} }}");
+        assert!(parse_ruleset(&src).is_err(), "accepted {literal}");
+    }
+}
+
+#[test]
 fn path_literals_with_bindings_parse_in_expressions() {
     let src = "service cloud.firestore {\n  match /a/{b} {\n    allow read: if exists(/databases/$(database)/documents/x/$(b + 'y'));\n  }\n}";
     let ruleset = parse_ruleset(src).unwrap();

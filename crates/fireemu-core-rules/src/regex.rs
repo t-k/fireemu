@@ -768,41 +768,6 @@ fn posix_class_width(characters: &[char], start: usize) -> Option<std::num::NonZ
         .and_then(std::num::NonZeroUsize::new)
 }
 
-#[cfg(test)]
-mod preflight_tests {
-    use std::num::NonZeroUsize;
-
-    use super::posix_class_width;
-
-    fn chars(pattern: &str) -> Vec<char> {
-        pattern.chars().collect()
-    }
-
-    #[test]
-    fn posix_class_member_end_accepts_complete_members() {
-        assert_eq!(
-            posix_class_width(&chars("[:alpha:]"), 0),
-            NonZeroUsize::new(9)
-        );
-        assert_eq!(
-            posix_class_width(&chars("[:^alpha:]"), 0),
-            NonZeroUsize::new(10)
-        );
-    }
-
-    #[test]
-    fn posix_class_member_end_rejects_invalid_prefixes() {
-        assert_eq!(posix_class_width(&chars("x:alpha:]"), 0), None);
-        assert_eq!(posix_class_width(&chars("[xalpha:]"), 0), None);
-    }
-
-    #[test]
-    fn posix_class_member_end_rejects_invalid_closures() {
-        assert_eq!(posix_class_width(&chars("[:alpha:x"), 0), None);
-        assert_eq!(posix_class_width(&chars("[:alpha-]"), 0), None);
-    }
-}
-
 /// Expands `$0` (the whole match), `$1` .. `$9` (groups) and `$$` (a literal `$`).
 fn expand(
     replacement: &str,
@@ -1264,4 +1229,39 @@ fn match_deterministic_repeat(
     }
     *ctx.caps.borrow_mut() = original_captures;
     Ok(false)
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use std::num::NonZeroUsize;
+
+    use super::posix_class_width;
+
+    fn chars(pattern: &str) -> Vec<char> {
+        pattern.chars().collect()
+    }
+
+    #[test]
+    fn posix_class_member_end_accepts_complete_members() {
+        assert_eq!(
+            posix_class_width(&chars("[:alpha:]"), 0),
+            NonZeroUsize::new(9)
+        );
+        assert_eq!(
+            posix_class_width(&chars("[:^alpha:]"), 0),
+            NonZeroUsize::new(10)
+        );
+    }
+
+    #[test]
+    fn posix_class_member_end_rejects_invalid_prefixes() {
+        assert_eq!(posix_class_width(&chars("x:alpha:]"), 0), None);
+        assert_eq!(posix_class_width(&chars("[xalpha:]"), 0), None);
+    }
+
+    #[test]
+    fn posix_class_member_end_rejects_invalid_closures() {
+        assert_eq!(posix_class_width(&chars("[:alpha:x"), 0), None);
+        assert_eq!(posix_class_width(&chars("[:alpha-]"), 0), None);
+    }
 }

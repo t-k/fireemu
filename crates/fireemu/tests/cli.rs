@@ -819,6 +819,104 @@ service cloud.firestore {
 }
 
 #[test]
+fn a_referenced_rules_file_accepts_firebase_null_escape() {
+    let dir = scratch("firebase-rules-null-escape");
+    write(
+        &dir,
+        "firestore.rules",
+        r#"rules_version = '2';
+service cloud.firestore {
+  function isValidString(data) {
+    return data.matches(".*(\r|\n|\\0|\u0000|\x00)+.*") == false;
+  }
+  match /databases/{database}/documents {
+    match /items/{itemId} {
+      allow read: if isValidString(itemId);
+    }
+  }
+}
+"#,
+    );
+    write(
+        &dir,
+        "storage.rules",
+        r#"rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{path=**} {
+      allow read: if false;
+    }
+  }
+}
+"#,
+    );
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{
+  "firestore": {"rules": "firestore.rules"},
+  "storage": {"rules": "storage.rules"},
+  "emulators": {"auth": {}, "firestore": {}, "storage": {}}
+}
+"#,
+    );
+
+    let out = exec_with(
+        &[
+            "--firebase-json",
+            firebase.to_str().unwrap(),
+            "--only",
+            "auth,firestore,storage",
+        ],
+        &["true"],
+    );
+
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn a_rules_parse_error_escapes_decoded_control_characters() {
+    let dir = scratch("firebase-rules-control-diagnostic");
+    write(
+        &dir,
+        "firestore.rules",
+        r#"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /items/{itemId} {
+      allow read: if itemId.matches("\u0000(?=x)");
+    }
+  }
+}
+"#,
+    );
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{"firestore": {"rules": "firestore.rules"}}"#,
+    );
+
+    let out = exec_with(
+        &[
+            "--firebase-json",
+            firebase.to_str().unwrap(),
+            "--only",
+            "firestore",
+        ],
+        &["true"],
+    );
+
+    assert_eq!(out.status.code(), Some(1));
+    let text = stderr(&out);
+    let diagnostic = text.strip_suffix('\n').unwrap_or(&text);
+    assert!(
+        diagnostic.chars().all(|character| !character.is_control()),
+        "{text:?}"
+    );
+    assert!(diagnostic.contains("\\0"), "{text:?}");
+}
+
+#[test]
 fn a_routable_emulator_host_is_refused() {
     // firebase-tools 15.28.2 binds each of these as given; fireemu publishes the refusal as a
     // divergence of the CLI lifecycle claim, so the exit code and the message are contract.

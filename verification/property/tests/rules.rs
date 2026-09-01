@@ -63,6 +63,25 @@ fn chain(n: usize) -> String {
 const CALL_DEPTH_MAXIMUM: usize = 20;
 
 proptest! {
+    /// REQ-RULES-PARITY-01: after Rules string decoding, regex `\0` matches U+0000 and
+    /// never ASCII `0` or the two-character backslash-zero spelling, for arbitrary safe
+    /// surrounding text.
+    #[test]
+    fn prop_rules_regex_null_escape_matches_only_u0000(
+        prefix in prop::collection::vec(b'a'..=b'z', 0..65),
+        suffix in prop::collection::vec(b'a'..=b'z', 0..65),
+    ) {
+        let prefix = String::from_utf8(prefix).unwrap();
+        let suffix = String::from_utf8(suffix).unwrap();
+        let with_u0000 = format!("'{prefix}\\u0000{suffix}'.matches('.*\\\\0.*')");
+        let with_ascii_zero = format!("'{prefix}0{suffix}'.matches('.*\\\\0.*')");
+        let with_backslash_zero = format!("'{prefix}\\\\0{suffix}'.matches('.*\\\\0.*')");
+
+        prop_assert!(holds(&with_u0000), "{}", with_u0000);
+        prop_assert!(!holds(&with_ascii_zero), "{}", with_ascii_zero);
+        prop_assert!(!holds(&with_backslash_zero), "{}", with_backslash_zero);
+    }
+
     /// REQ-RULES-PARITY-01: list length, layout, one optional trailing comma and the final
     /// return semicolon vary independently without changing the parsed list members.
     #[test]

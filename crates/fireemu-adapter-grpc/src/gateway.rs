@@ -141,7 +141,7 @@ impl Gateway {
         }
         let decision = decide(&canonical, &self.indexes, &self.ctx);
         match &decision {
-            IndexDecision::UseIndex { .. } => {}
+            IndexDecision::UseIndex { .. } | IndexDecision::KindlessScan => {}
             IndexDecision::AssumedIndex { requirement } => {
                 warnings.push("FS_EMULATOR_INDEX_ASSUMED".to_owned());
                 note_assumed_index(&requirement.indexes_json_fragment());
@@ -149,7 +149,6 @@ impl Gateway {
             IndexDecision::FullScanAllowed { plan } => {
                 warnings.extend(plan.diagnostics.iter().map(|d| (*d).to_owned()));
             }
-            IndexDecision::KindlessScan => {}
             IndexDecision::MissingRequired { requirement } => {
                 return Err(Rejection::MissingIndex {
                     fragment: requirement.indexes_json_fragment(),

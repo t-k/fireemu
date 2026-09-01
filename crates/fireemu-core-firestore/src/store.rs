@@ -959,21 +959,7 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<CommitResult, FirestoreError> {
         if let Some(id) = transaction {
-            self.touch_transaction(id, now)?;
-            let t = self.transaction(id)?;
-            if t.read_only && !writes.is_empty() {
-                return Err(FirestoreError::InvalidArgument(
-                    "read-only transaction cannot write".into(),
-                ));
-            }
-            if self.transaction_conflicted(id)? {
-                if let Some(transaction) = self.transactions.get_mut(id) {
-                    transaction.finished = true;
-                }
-                return Err(FirestoreError::Aborted(
-                    TRANSACTION_CONCURRENT_MODIFICATION.into(),
-                ));
-            }
+            self.validate_transaction_commit(id, writes, now)?;
         }
 
         // The transform budget is production's alone: the official emulator applies any
@@ -1080,6 +1066,30 @@ impl FirestoreState {
             version,
             changes: document_changes,
         })
+    }
+
+    fn validate_transaction_commit(
+        &mut self,
+        id: &TransactionId,
+        writes: &[Write],
+        now: LogicalInstant,
+    ) -> Result<(), FirestoreError> {
+        self.touch_transaction(id, now)?;
+        let transaction = self.transaction(id)?;
+        if transaction.read_only && !writes.is_empty() {
+            return Err(FirestoreError::InvalidArgument(
+                "read-only transaction cannot write".into(),
+            ));
+        }
+        if self.transaction_conflicted(id)? {
+            if let Some(transaction) = self.transactions.get_mut(id) {
+                transaction.finished = true;
+            }
+            return Err(FirestoreError::Aborted(
+                TRANSACTION_CONCURRENT_MODIFICATION.into(),
+            ));
+        }
+        Ok(())
     }
 
     fn transaction_conflicted(&self, id: &TransactionId) -> Result<bool, FirestoreError> {

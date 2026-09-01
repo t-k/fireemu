@@ -11,7 +11,7 @@ use fireemu_verification_quint::process::{
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 26] = [
+const BOUND_INPUTS: [&str; 28] = [
     ".github/workflows/ci.yml",
     "Cargo.toml",
     "Cargo.lock",
@@ -23,7 +23,9 @@ const BOUND_INPUTS: [&str; 26] = [
     "crates/fireemu-core-types/src/ids.rs",
     "crates/fireemu-core-types/src/time.rs",
     "verification/quint/Cargo.toml",
+    "verification/quint/README.md",
     "verification/quint/bin/quint",
+    "verification/quint/bin/process-group",
     "verification/quint/run-pilot.sh",
     "verification/quint/specs/EventDelivery.qnt",
     "verification/quint/specs/tlc-config.json",

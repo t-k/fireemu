@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Executes one command as the leader of a new process group."""
+
+import os
+import sys
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("error: process-group requires a command", file=sys.stderr)
+        return 126
+    os.setpgid(0, 0)
+    os.execvp(sys.argv[1], sys.argv[1:])
+    return 126
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

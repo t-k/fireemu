@@ -265,6 +265,7 @@ pub fn classify_execution(execution: &Execution) -> CheckerOutcome {
 #[must_use]
 pub fn classify_mutation_execution(
     execution: &Execution,
+    expected_property: &str,
     expects_temporal: bool,
 ) -> MutationOutcome {
     match classify_execution(execution) {
@@ -281,8 +282,9 @@ pub fn classify_mutation_execution(
             if execution.status.code() != Some(1) || !quint_counterexample {
                 return MutationOutcome::ToolError;
             }
-            let temporal = has_temporal_counterexample(&diagnostic);
-            let safety = has_safety_counterexample(&diagnostic);
+            let temporal = expected_property == "EventEventuallyTerminates"
+                && has_temporal_counterexample(&diagnostic);
+            let safety = has_expected_safety_counterexample(&diagnostic, expected_property);
             match (expects_temporal, temporal, safety) {
                 (true, true, _) => MutationOutcome::KilledTemporal,
                 (false, _, true) => MutationOutcome::KilledSafety,
@@ -297,6 +299,18 @@ fn has_safety_counterexample(diagnostic: &str) -> bool {
         let line = line.trim();
         line.starts_with("error: invariant ") && line.ends_with(" is violated.")
     })
+}
+
+fn has_expected_safety_counterexample(diagnostic: &str, expected_property: &str) -> bool {
+    let invariant = match expected_property {
+        "NoTerminalRegression" => "eventdeliveryproof_eventdelivery_noterminalregression",
+        "LegalStateTransitions"
+        | "AttemptsChangeOnlyOnStart"
+        | "StaleDiscardRequiresOlderEpoch" => "q_inv",
+        _ => return false,
+    };
+    let expected = format!("error: invariant {invariant} is violated.");
+    diagnostic.lines().any(|line| line.trim() == expected)
 }
 
 fn has_temporal_counterexample(diagnostic: &str) -> bool {
@@ -338,8 +352,11 @@ pub fn mutate_event_delivery(
         let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         let execution_result = execute_quint(&temporary.path, &argument_refs);
         let execution = execution_result?;
-        let outcome =
-            classify_mutation_execution(&execution, mutation.requires_temporal_counterexample());
+        let outcome = classify_mutation_execution(
+            &execution,
+            &mutation.property,
+            mutation.requires_temporal_counterexample(),
+        );
         let diagnostic =
             bound_diagnostic(format!("{}\n{}", execution.stdout, execution.stderr).as_bytes());
         temporary.close()?;
@@ -590,15 +607,24 @@ mod tests {
     fn mutation_classifier_requires_expected_counterexample_evidence() {
         let safety = execution(
             1,
-            "Error: Invariant LegalStateTransitions is violated.",
+            "Error: Invariant q_inv is violated.",
             "error: found a counterexample",
         );
         assert_eq!(
-            classify_mutation_execution(&safety, false),
+            classify_mutation_execution(&safety, "LegalStateTransitions", false),
             MutationOutcome::KilledSafety
         );
         assert_eq!(
-            classify_mutation_execution(&safety, true),
+            classify_mutation_execution(&safety, "LegalStateTransitions", true),
+            MutationOutcome::ToolError
+        );
+        let unrelated = execution(
+            1,
+            "Error: Invariant EventDeliveryProof_EventDelivery_AttemptsChangeOnlyOnStart is violated.",
+            "error: found a counterexample",
+        );
+        assert_eq!(
+            classify_mutation_execution(&unrelated, "LegalStateTransitions", false),
             MutationOutcome::ToolError
         );
 
@@ -608,11 +634,11 @@ mod tests {
             "error: found a counterexample",
         );
         assert_eq!(
-            classify_mutation_execution(&temporal, true),
+            classify_mutation_execution(&temporal, "EventEventuallyTerminates", true),
             MutationOutcome::KilledTemporal
         );
         assert_eq!(
-            classify_mutation_execution(&execution(0, "", ""), false),
+            classify_mutation_execution(&execution(0, "", ""), "LegalStateTransitions", false),
             MutationOutcome::Survived
         );
         assert_eq!(
@@ -622,6 +648,7 @@ mod tests {
                     "Error: Invariant X is violated.",
                     "error: found a counterexample",
                 ),
+                "LegalStateTransitions",
                 false,
             ),
             MutationOutcome::Timeout
@@ -633,6 +660,7 @@ mod tests {
                     "Error: Invariant X is violated.",
                     "translation failed\nerror: found a counterexample",
                 ),
+                "LegalStateTransitions",
                 false
             ),
             MutationOutcome::ToolError

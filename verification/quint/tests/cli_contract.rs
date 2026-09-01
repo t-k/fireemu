@@ -2,10 +2,15 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn wrapper_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/quint")
+}
+
+fn process_group_launcher_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/process-group")
 }
 
 fn package_path() -> PathBuf {
@@ -22,6 +27,10 @@ fn event_delivery_spec_path() -> PathBuf {
 
 fn pilot_script_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run-pilot.sh")
+}
+
+fn readme_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md")
 }
 
 fn repository_root() -> PathBuf {
@@ -49,6 +58,54 @@ fn run_wrapper(configure: impl FnOnce(&mut Command)) -> Output {
     command.env_remove("QUINT_TIMEOUT_SECONDS");
     configure(&mut command);
     command.output().expect("guarded Quint wrapper must launch")
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    condition()
+}
+
+#[cfg(unix)]
+struct OwnedTestDirectory(PathBuf);
+
+#[cfg(unix)]
+impl OwnedTestDirectory {
+    fn create(label: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must follow the Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "fireemu-quint-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("owned test directory must be created");
+        Self(path)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for OwnedTestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 #[test]
@@ -235,6 +292,110 @@ fn pilot_script_declares_ordered_dual_run_gates() {
 }
 
 #[test]
+fn readme_declares_every_non_modeled_production_behavior() {
+    let readme = fs::read_to_string(readme_path()).expect("pilot README must exist");
+    assert!(readme.contains("`Interrupt` transition is explicit non-modeled debt"));
+    assert!(readme.contains("Time and backoff behavior is explicit non-modeled debt"));
+}
+
+#[cfg(unix)]
+#[test]
+fn pilot_term_signal_stops_and_waits_for_the_active_gate_group() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = OwnedTestDirectory::create("pilot-signal");
+    let quint_dir = temporary.0.join("verification/quint");
+    let tla_dir = temporary.0.join("verification/tla");
+    fs::create_dir_all(&quint_dir).expect("temporary Quint directory must be created");
+    fs::create_dir_all(&tla_dir).expect("temporary TLA directory must be created");
+
+    let pilot = quint_dir.join("run-pilot.sh");
+    fs::copy(pilot_script_path(), &pilot).expect("pilot script must be copied");
+    let launcher = quint_dir.join("bin/process-group");
+    fs::create_dir_all(launcher.parent().expect("launcher must have a parent"))
+        .expect("temporary launcher directory must be created");
+    fs::copy(process_group_launcher_path(), &launcher).expect("group launcher must be copied");
+    let gate = tla_dir.join("run-tlc.sh");
+    fs::write(
+        &gate,
+        "#!/bin/sh\nsleep 30 &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$PILOT_CHILD_PID_FILE\"\nwait \"$child\"\n",
+    )
+    .expect("gate fixture must be written");
+    for path in [&pilot, &launcher, &gate] {
+        let mut permissions = fs::metadata(path)
+            .expect("script metadata must exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("script must be executable");
+    }
+
+    let pid_file = temporary.0.join("children.pid");
+    let pilot_log = temporary.0.join("pilot.log");
+    let stdout = fs::File::create(&pilot_log).expect("pilot log must be created");
+    let stderr = stdout.try_clone().expect("pilot log handle must be cloned");
+    let mut child = Command::new(&pilot)
+        .current_dir(&temporary.0)
+        .env("PILOT_CHILD_PID_FILE", &pid_file)
+        .env("QUINT_REAL_BIN", "/bin/sh")
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .expect("pilot must launch");
+    let mut early_status = None;
+    let ready = wait_until(Duration::from_secs(30), || {
+        if pid_file.exists() {
+            return true;
+        }
+        early_status = child.try_wait().expect("pilot readiness wait must succeed");
+        early_status.is_some()
+    });
+    if let Some(status) = early_status {
+        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
+        panic!("pilot exited before the active gate was ready ({status}):\n{log}");
+    }
+    if !ready {
+        let _ = Command::new("/bin/kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status();
+        let _ = child.wait();
+        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
+        panic!("active gate did not become ready within 30 seconds:\n{log}");
+    }
+    let pids = fs::read_to_string(&pid_file).expect("child pid file must be readable");
+    let pids = pids
+        .split_whitespace()
+        .map(|pid| pid.parse::<u32>().expect("child pid must be numeric"))
+        .collect::<Vec<_>>();
+    assert_eq!(pids.len(), 2);
+
+    let signal = Command::new("/bin/kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("TERM command must launch");
+    assert!(signal.success());
+    let exited = wait_until(Duration::from_secs(4), || {
+        child.try_wait().expect("pilot wait must succeed").is_some()
+    });
+    if !exited {
+        let _ = child.kill();
+        for pid in &pids {
+            let _ = Command::new("/bin/kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+        panic!("TERM must stop the pilot promptly");
+    }
+    let status = child.wait().expect("pilot must be reaped");
+    assert_eq!(status.code(), Some(143));
+    assert!(
+        wait_until(Duration::from_secs(2), || pids
+            .iter()
+            .all(|pid| !process_exists(*pid))),
+        "TERM must remove every recorded active-gate process: {pids:?}"
+    );
+}
+
+#[test]
 #[ignore = "requires Java and the pinned local Quint CLI"]
 fn verify_model_cli_checks_event_delivery_with_tlc() {
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
@@ -279,10 +440,25 @@ fn guarded_quint_wrapper_propagates_exit_status() {
 #[cfg(target_os = "linux")]
 #[test]
 fn guarded_quint_wrapper_times_out_its_process_group() {
+    let temporary = OwnedTestDirectory::create("wrapper-timeout");
+    let pid_file = temporary.0.join("descendant.pid");
     let output = run_wrapper(|command| {
         command.env("QUINT_REAL_BIN", "/bin/sh");
         command.env("QUINT_TIMEOUT_SECONDS", "1");
-        command.args(["-c", "sleep 30 & wait"]);
+        command.env("WRAPPER_CHILD_PID_FILE", &pid_file);
+        command.args([
+            "-c",
+            "sleep 30 & child=$!; printf '%s\\n' \"$child\" > \"$WRAPPER_CHILD_PID_FILE\"; wait \"$child\"",
+        ]);
     });
     assert_eq!(output.status.code(), Some(124));
+    let pid = fs::read_to_string(&pid_file)
+        .expect("wrapper descendant pid must be recorded")
+        .trim()
+        .parse::<u32>()
+        .expect("wrapper descendant pid must be numeric");
+    assert!(
+        wait_until(Duration::from_secs(2), || !process_exists(pid)),
+        "timeout must remove the wrapper descendant {pid}"
+    );
 }

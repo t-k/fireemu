@@ -4,7 +4,7 @@ This directory is an additive pilot for replacing the EventDelivery TLA+ specifi
 
 ## Pinned tools
 
-`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. Install the JavaScript dependency with:
+`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. The pilot runner also requires Python 3 from the host to create an owned process group without third-party packages. Install the JavaScript dependency with:
 
 ```sh
 pnpm -C verification/quint install --frozen-lockfile
@@ -27,6 +27,8 @@ QUINT_REAL_BIN="$PWD/verification/quint/node_modules/.bin/quint" PATH="$PWD/veri
 - `EventDeliveryConnect` uses two events and three attempts for generated implementation-conformance traces.
 
 Quint Connect dispatches `Lease`, `Start`, `Succeed`, `Fail`, `RetryDue`, `Cancel`, `Reset`, and `DiscardStale` to the real Rust `EventRecord` API. After every action it compares lifecycle, attempts, maximum attempts, captured epoch, current epoch, terminal, cancelled, and stale fields. The Rust-only `Interrupt` transition is explicit non-modeled debt and is not claimed by this pilot.
+
+Time and backoff behavior is explicit non-modeled debt. The driver uses the real retry deadline returned by `EventRecord::fail`, but the Quint state compares lifecycle behavior rather than independently calculating or projecting that deadline.
 
 ## Generated traces and mutations
 

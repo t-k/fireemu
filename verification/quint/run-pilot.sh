@@ -23,17 +23,78 @@ if [ ! -x "$QUINT_REAL_BIN" ]; then
   exit 2
 fi
 
+group_launcher="$script_dir/bin/process-group"
+if [ ! -x "$group_launcher" ]; then
+  echo "error: process-group launcher is not executable" >&2
+  exit 2
+fi
+
 owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-pilot.XXXXXX")
+active_pid=
+active_pgid=
 cleanup() {
   rm -rf -- "$owned_temp"
 }
-trap cleanup EXIT HUP INT TERM
+
+stop_active_gate() {
+  if [ -z "$active_pid" ] || [ -z "$active_pgid" ]; then
+    return
+  fi
+
+  pid=$active_pid
+  pgid=$active_pgid
+  kill -TERM -- "-$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  (
+    sleep 2
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+  ) &
+  escalation_pid=$!
+
+  set +e
+  wait "$pid" 2>/dev/null
+  set -e
+  if kill -0 -- "-$pgid" 2>/dev/null; then
+    set +e
+    wait "$escalation_pid" 2>/dev/null
+    set -e
+  else
+    kill -TERM "$escalation_pid" 2>/dev/null || true
+    set +e
+    wait "$escalation_pid" 2>/dev/null
+    set -e
+  fi
+  active_pid=
+  active_pgid=
+}
+
+handle_signal() {
+  status=$1
+  trap - EXIT HUP INT TERM
+  stop_active_gate
+  cleanup
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 
 run_gate() {
   gate=$1
   shift
   echo "gate: $gate"
-  "$@"
+  "$group_launcher" "$@" &
+  active_pid=$!
+  active_pgid=$active_pid
+  set +e
+  wait "$active_pid"
+  status=$?
+  set -e
+  active_pid=
+  active_pgid=
+  return "$status"
 }
 
 pass=1

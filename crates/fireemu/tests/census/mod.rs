@@ -117,6 +117,19 @@ pub fn wait_for_no_descendants(pid: i32, timeout: Duration) -> Vec<Proc> {
     }
 }
 
+/// Waits until `pgid` has no members left, up to `timeout`. Returns the survivors.
+#[must_use]
+pub fn wait_for_empty_process_group(pgid: i32, timeout: Duration) -> Vec<Proc> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let survivors = process_group(pgid);
+        if survivors.is_empty() || Instant::now() >= deadline {
+            return survivors;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// Renders a census table for a failure message.
 #[must_use]
 pub fn table(procs: &[Proc]) -> String {
@@ -143,6 +156,17 @@ pub fn assert_no_owned_descendants(context: &str, grace: Duration) {
     assert!(
         survivors.is_empty(),
         "{context}: {} owned descendant(s) survived after {grace:?}\n{}",
+        survivors.len(),
+        table(&survivors)
+    );
+}
+
+/// Fails with a census table when a command's dedicated process group survives `grace`.
+pub fn assert_process_group_empty(pgid: i32, context: &str, grace: Duration) {
+    let survivors = wait_for_empty_process_group(pgid, grace);
+    assert!(
+        survivors.is_empty(),
+        "{context}: {} process-group member(s) survived after {grace:?}\n{}",
         survivors.len(),
         table(&survivors)
     );

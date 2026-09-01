@@ -7,7 +7,7 @@
 mod census;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 fn fixture(name: &str) -> PathBuf {
@@ -77,6 +77,41 @@ fn exec() -> Command {
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
     cmd
+}
+
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn id(&self) -> u32 {
+        self.0.as_ref().expect("child is present").id()
+    }
+
+    fn wait_with_output(mut self) -> std::io::Result<Output> {
+        self.0.take().expect("child is present").wait_with_output()
+    }
+
+    fn terminate_and_wait(mut self) {
+        let mut child = self.0.take().expect("child is present");
+        let _ = Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status();
+        let _ = child.wait();
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = Command::new("kill")
+                .args(["-TERM", &child.id().to_string()])
+                .status();
+            let _ = child.wait();
+        }
+    }
 }
 
 fn text(output: &Output) -> String {
@@ -363,6 +398,50 @@ fn a_malformed_auth_section_refuses_the_whole_import() {
     assert_refused(&output, "auth", "accounts.json");
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_manifest_and_optional_auth_config_are_never_followed() {
+    use std::os::unix::fs::symlink;
+
+    for leaf in ["firebase-export-metadata.json", "auth_export/config.json"] {
+        let dir = scratch(&format!("symlink-{}", leaf.replace('/', "-")));
+        let export = dir.join("export");
+        copy_tree(&fixture("official-multiproduct"), &export);
+        let link = export.join(leaf);
+        let outside = dir.join("outside.json");
+        std::fs::copy(&link, &outside).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink(&outside, &link).unwrap();
+
+        let output = exec()
+            .args(["--import"])
+            .arg(&export)
+            .args(["--", "true"])
+            .output()
+            .unwrap();
+        let log = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{leaf}: {log}");
+        assert!(log.contains("symlink"), "{leaf}: {log}");
+    }
+}
+
+#[test]
+fn a_missing_optional_auth_config_still_imports_accounts() {
+    let dir = scratch("missing-auth-config");
+    let export = copy_fixture("official-multiproduct", &dir);
+    std::fs::remove_file(export.join("auth_export/config.json")).unwrap();
+
+    let output = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert!(log.contains("auth: 5 account(s)"), "{log}");
+}
+
 #[test]
 fn a_storage_blob_that_does_not_match_its_metadata_refuses_the_whole_import() {
     let dir = scratch("corrupt-storage");
@@ -388,6 +467,37 @@ fn a_storage_blob_that_does_not_match_its_metadata_refuses_the_whole_import() {
     assert_eq!(output.status.code(), Some(1), "{log}");
     assert!(log.contains("storage"), "{log}");
     assert!(!log.contains("running: "), "{log}");
+}
+
+#[test]
+fn a_storage_resource_limit_refuses_a_mixed_import_before_the_command_starts() {
+    let dir = scratch("storage-import-limit");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let sparse = export.join("storage_export/blobs/over-budget");
+    std::fs::File::create(&sparse)
+        .unwrap()
+        .set_len(1024 * 1024 * 1024 + 1)
+        .unwrap();
+    let marker = dir.join("command-ran");
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "sh", "-c"])
+        .arg(format!("touch {}", marker.display()))
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(
+        log.contains("1073741824 byte cumulative import limit"),
+        "{log}"
+    );
+    assert!(!log.contains("running: "), "{log}");
+    assert!(
+        !marker.exists(),
+        "the command must not run after preparation fails"
+    );
 }
 
 #[test]
@@ -632,20 +742,31 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
     let dir = scratch("sigint");
     let out = dir.join("out");
     let ready = dir.join("ready");
-    let supervisor = exec()
-        .args(["--import"])
-        .arg(fixture("official-multiproduct"))
-        .arg("--export-on-exit")
-        .arg(&out)
-        .args(["--", "sh", "-c"])
-        .arg(format!("touch {}; exec sleep 60", ready.display()))
-        .spawn()
-        .unwrap();
+    let child_pid = dir.join("child-pid");
+    let supervisor = ChildGuard::new(
+        exec()
+            .args(["--import"])
+            .arg(fixture("official-multiproduct"))
+            .arg("--export-on-exit")
+            .arg(&out)
+            .args(["--", "sh", "-c"])
+            .arg(format!(
+                "printf '%s' $$ > {}; touch {}; exec sleep 60",
+                child_pid.display(),
+                ready.display()
+            ))
+            .spawn()
+            .unwrap(),
+    );
     let started = Instant::now();
     while !ready.exists() && started.elapsed() < Duration::from_secs(60) {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(ready.exists(), "the command started");
+    let child_pgid = std::fs::read_to_string(&child_pid)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
     assert!(Command::new("kill")
         .args(["-INT", &supervisor.id().to_string()])
         .status()
@@ -657,7 +778,11 @@ fn the_export_runs_when_the_daemon_is_interrupted() {
         out.join("firebase-export-metadata.json").is_file(),
         "SIGINT still wrote the export: {log}"
     );
-    census::assert_no_owned_descendants("after the interrupted export", Duration::from_secs(10));
+    census::assert_process_group_empty(
+        child_pgid,
+        "after the interrupted export",
+        Duration::from_secs(10),
+    );
 }
 
 #[test]
@@ -665,20 +790,31 @@ fn the_export_runs_when_the_daemon_is_terminated() {
     let dir = scratch("sigterm");
     let out = dir.join("out");
     let ready = dir.join("ready");
-    let supervisor = exec()
-        .args(["--import"])
-        .arg(fixture("official-multiproduct"))
-        .arg("--export-on-exit")
-        .arg(&out)
-        .args(["--", "sh", "-c"])
-        .arg(format!("touch {}; exec sleep 60", ready.display()))
-        .spawn()
-        .unwrap();
+    let child_pid = dir.join("child-pid");
+    let supervisor = ChildGuard::new(
+        exec()
+            .args(["--import"])
+            .arg(fixture("official-multiproduct"))
+            .arg("--export-on-exit")
+            .arg(&out)
+            .args(["--", "sh", "-c"])
+            .arg(format!(
+                "printf '%s' $$ > {}; touch {}; exec sleep 60",
+                child_pid.display(),
+                ready.display()
+            ))
+            .spawn()
+            .unwrap(),
+    );
     let started = Instant::now();
     while !ready.exists() && started.elapsed() < Duration::from_secs(60) {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(ready.exists(), "the command started");
+    let child_pgid = std::fs::read_to_string(&child_pid)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
     assert!(Command::new("kill")
         .args(["-TERM", &supervisor.id().to_string()])
         .status()
@@ -690,7 +826,11 @@ fn the_export_runs_when_the_daemon_is_terminated() {
         out.join("firebase-export-metadata.json").is_file(),
         "SIGTERM still wrote the export: {log}"
     );
-    census::assert_no_owned_descendants("after the terminated export", Duration::from_secs(10));
+    census::assert_process_group_empty(
+        child_pgid,
+        "after the terminated export",
+        Duration::from_secs(10),
+    );
 }
 
 #[test]
@@ -826,6 +966,111 @@ fn an_occupied_directory_that_is_not_an_export_is_never_overwritten() {
 }
 
 #[test]
+fn replacing_an_export_preserves_unmanaged_regular_entries() {
+    let dir = scratch("preserve-unmanaged");
+    let out = copy_fixture("official-multiproduct", &dir);
+    std::fs::write(out.join("README.txt"), "keep me").unwrap();
+    std::fs::create_dir(out.join("notes")).unwrap();
+    std::fs::write(out.join("notes/local.txt"), "also keep me").unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    assert_eq!(
+        std::fs::read_to_string(out.join("README.txt")).unwrap(),
+        "keep me"
+    );
+    assert_eq!(
+        std::fs::read_to_string(out.join("notes/local.txt")).unwrap(),
+        "also keep me"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_staged_export_leaves_the_existing_export_unchanged() {
+    use std::os::unix::fs::symlink;
+
+    let dir = scratch("failed-stage");
+    let out = copy_fixture("official-multiproduct", &dir);
+    let manifest = out.join("firebase-export-metadata.json");
+    let original_manifest = std::fs::read(&manifest).unwrap();
+    let outside = dir.join("outside.txt");
+    std::fs::write(&outside, "outside").unwrap();
+    symlink(&outside, out.join("unmanaged-link")).unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(
+        output.status.success(),
+        "the command's exit code is preserved: {log}"
+    );
+    assert!(log.contains("not a regular file or directory"), "{log}");
+    assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside");
+    assert!(std::fs::symlink_metadata(out.join("unmanaged-link"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let stage_prefix = format!(
+        ".{}.fireemu-stage-",
+        out.file_name().unwrap().to_string_lossy()
+    );
+    assert!(
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&stage_prefix)),
+        "a failed export must remove its private stage"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_export_root_is_refused_without_touching_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = scratch("symlink-export-root");
+    let target = dir.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("marker.txt"), "unchanged").unwrap();
+    let out = dir.join("out");
+    symlink(&target, &out).unwrap();
+
+    let output = exec()
+        .args(["--export-on-exit"])
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(log.contains("symlink"), "{log}");
+    assert_eq!(
+        std::fs::read_to_string(target.join("marker.txt")).unwrap(),
+        "unchanged"
+    );
+    assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+}
+
+#[test]
 fn export_on_exit_refuses_the_working_directory() {
     let dir = scratch("cwd");
     let output = exec()
@@ -845,57 +1090,69 @@ fn emulators_export_drives_a_running_suite_through_its_hub() {
     let dir = scratch("hub-export");
     let out = dir.join("out");
     let hub_port = free_port();
-    let ready = dir.join("ready");
-    let mut supervisor = Command::new(env!("CARGO_BIN_EXE_fireemu"))
-        .args([
-            "up",
-            "--firestore-port",
-            "0",
-            "--http-port",
-            "0",
-            "--storage-port",
-            "0",
-            "--logging-port",
-            "0",
-            "--ui-port",
-            "0",
-            "--project",
-            "demo-export-hub",
-            "--hub-port",
-            &hub_port.to_string(),
-            "--import",
-        ])
-        .arg(fixture("official-multiproduct"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    // The Hub is up once its port accepts.
+    let hub_port_text = hub_port.to_string();
+    let project = format!("demo-export-hub-{}", std::process::id());
+    let locator = std::env::temp_dir().join(format!("hub-{project}.json"));
+    let supervisor = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args([
+                "up",
+                "--firestore-port",
+                "0",
+                "--http-port",
+                "0",
+                "--storage-port",
+                "0",
+                "--logging-port",
+                "0",
+                "--ui-port",
+                "0",
+                "--project",
+                project.as_str(),
+                "--hub-port",
+                hub_port_text.as_str(),
+                "--import",
+            ])
+            .arg(fixture("official-multiproduct"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    // Binding the Hub socket happens before import and locator publication. Wait for the
+    // locator that proves this exact daemon has completed startup instead of only connecting.
     let started = Instant::now();
-    while std::net::TcpStream::connect(("127.0.0.1", hub_port)).is_err()
-        && started.elapsed() < Duration::from_secs(60)
-    {
+    let mut locator_ready = false;
+    while started.elapsed() < Duration::from_secs(60) {
+        locator_ready = std::fs::read_to_string(&locator)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|document| {
+                document["pid"].as_u64() == Some(u64::from(supervisor.id()))
+                    && document["origins"][0].as_str()
+                        == Some(format!("http://127.0.0.1:{hub_port}").as_str())
+            });
+        if locator_ready {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let _ = std::fs::write(&ready, "");
+    assert!(locator_ready, "the exact Hub locator was published");
 
     let export = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(["emulators:export"])
         .arg(&out)
-        .args(["--project", "demo-export-hub"])
+        .args(["--project", project.as_str()])
         .output()
         .unwrap();
     let log = text(&export);
     assert!(export.status.success(), "{log}");
-    assert!(log.contains("exported demo-export-hub"), "{log}");
+    assert!(log.contains(&format!("exported {project}")), "{log}");
     assert!(out.join("firebase-export-metadata.json").is_file(), "{log}");
     assert!(out.join("auth_export/accounts.json").is_file(), "{log}");
 
-    let _ = Command::new("kill")
-        .args(["-TERM", &supervisor.id().to_string()])
-        .status();
-    let _ = supervisor.wait();
+    supervisor.terminate_and_wait();
 }
 
 #[test]

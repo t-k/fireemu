@@ -370,6 +370,8 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
+ "rustix",
  "serde_json",
  "tokio",
  "tonic",

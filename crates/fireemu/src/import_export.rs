@@ -73,6 +73,15 @@ pub const COMPATIBLE_FIRESTORE_VERSION: &str = "1.22.0";
 /// The default database, which the official Firestore section carries.
 const DEFAULT_DATABASE: &str = "(default)";
 
+const IMPORT_MANIFEST_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
+const IMPORT_AUTH_FILE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
+const IMPORT_AUTH_TOTAL_BYTES_LIMIT: u64 = 256 * 1024 * 1024;
+const IMPORT_AUTH_FILE_COUNT_LIMIT: u64 = 2_048;
+const IMPORT_STORAGE_TOTAL_BYTES_LIMIT: u64 = 1024 * 1024 * 1024;
+const IMPORT_STORAGE_OBJECT_COUNT_LIMIT: usize = 10_000;
+const IMPORT_STORAGE_ENTRY_COUNT_LIMIT: u64 = 25_000;
+const IMPORT_STORAGE_NESTING_DEPTH_LIMIT: u64 = 4;
+
 /// A failure of one product's section, with the path that caused it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactError {
@@ -243,10 +252,10 @@ impl Products {
 /// is a failure, because ignoring it would start a suite that silently holds less state than
 /// the artifact recorded.
 pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared, ArtifactError> {
+    ensure_directory_inside(dir, dir).map_err(|e| ArtifactError::new("import", dir, e))?;
     let manifest_path = dir.join(METADATA_FILE_NAME);
-    let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        ArtifactError::new("import", &manifest_path, format!("cannot read it: {e}"))
-    })?;
+    let text = read_text_inside_limited(dir, &manifest_path, IMPORT_MANIFEST_BYTES_LIMIT)
+        .map_err(|e| ArtifactError::new("import", &manifest_path, e))?;
     let manifest = ExportMetadata::parse(&text)
         .map_err(|e| ArtifactError::new("import", &manifest_path, e.to_string()))?;
 
@@ -438,8 +447,12 @@ fn read_inside(root: &Path, path: &Path) -> Result<Vec<u8>, String> {
     // canonicalized containment below stays, because this leaf check does not see a link
     // in an intermediate directory component. Hard links and a concurrent swap between the
     // check and the read are outside the threat model (a static, distributed artifact).
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| format!("cannot read it: {e}"))?;
+    if metadata.file_type().is_symlink() {
         return Err("it is a symlink, which an import never follows".to_owned());
+    }
+    if !metadata.file_type().is_file() {
+        return Err("it is not a regular file".to_owned());
     }
     let root = std::fs::canonicalize(root).map_err(|e| format!("cannot resolve it: {e}"))?;
     let real = std::fs::canonicalize(path).map_err(|e| format!("cannot read it: {e}"))?;
@@ -455,6 +468,126 @@ fn read_inside(root: &Path, path: &Path) -> Result<Vec<u8>, String> {
 fn read_text_inside(root: &Path, path: &Path) -> Result<String, String> {
     let bytes = read_inside(root, path)?;
     String::from_utf8(bytes).map_err(|_| "it is not UTF-8".to_owned())
+}
+
+fn read_text_inside_limited(root: &Path, path: &Path, limit: u64) -> Result<String, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| format!("cannot read it: {e}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("it is a symlink, which an import never follows".to_owned());
+    }
+    if !metadata.file_type().is_file() {
+        return Err("it is not a regular file".to_owned());
+    }
+    if metadata.len() > limit {
+        return Err(format!("it exceeds the {limit} byte per-file import limit"));
+    }
+    read_text_inside(root, path)
+}
+
+fn ensure_directory_inside(root: &Path, path: &Path) -> Result<(), String> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|e| format!("cannot inspect it: {e}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("it is a symlink, which an import never follows".to_owned());
+    }
+    if !metadata.file_type().is_dir() {
+        return Err("it is not a directory".to_owned());
+    }
+    let root = std::fs::canonicalize(root).map_err(|e| format!("cannot resolve it: {e}"))?;
+    let real = std::fs::canonicalize(path).map_err(|e| format!("cannot resolve it: {e}"))?;
+    if !real.starts_with(root) {
+        return Err("it resolves outside the export directory".to_owned());
+    }
+    Ok(())
+}
+
+fn scan_import_tree(
+    artifact_root: &Path,
+    section_root: &Path,
+    product: &'static str,
+    total_bytes_limit: u64,
+    entry_count_limit: u64,
+    nesting_depth_limit: u64,
+    per_file_limit: Option<u64>,
+) -> Result<(), ArtifactError> {
+    ensure_directory_inside(artifact_root, section_root)
+        .map_err(|e| ArtifactError::new(product, section_root, e))?;
+    let mut pending = vec![(section_root.to_path_buf(), 0u64)];
+    let mut entries_seen = 0u64;
+    let mut bytes_seen = 0u64;
+    while let Some((directory, depth)) = pending.pop() {
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|e| ArtifactError::new(product, &directory, format!("cannot read it: {e}")))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                ArtifactError::new(product, &directory, format!("cannot read an entry: {e}"))
+            })?;
+            entries_seen = entries_seen.saturating_add(1);
+            if entries_seen > entry_count_limit {
+                return Err(ArtifactError::new(
+                    product,
+                    section_root,
+                    format!(
+                        "the section exceeds the {entry_count_limit} directory-entry import limit"
+                    ),
+                ));
+            }
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|e| {
+                ArtifactError::new(product, &path, format!("cannot inspect it: {e}"))
+            })?;
+            if kind.is_symlink() {
+                return Err(ArtifactError::new(
+                    product,
+                    &path,
+                    "it is a symlink, which an import never follows",
+                ));
+            }
+            if kind.is_dir() {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > nesting_depth_limit {
+                    return Err(ArtifactError::new(
+                        product,
+                        &path,
+                        format!("the section exceeds the {nesting_depth_limit} level nesting-depth import limit"),
+                    ));
+                }
+                pending.push((path, child_depth));
+                continue;
+            }
+            if !kind.is_file() {
+                return Err(ArtifactError::new(
+                    product,
+                    &path,
+                    "it is not a regular file",
+                ));
+            }
+            let len = entry
+                .metadata()
+                .map_err(|e| ArtifactError::new(product, &path, format!("cannot inspect it: {e}")))?
+                .len();
+            if let Some(limit) = per_file_limit {
+                if len > limit {
+                    return Err(ArtifactError::new(
+                        product,
+                        &path,
+                        format!("it exceeds the {limit} byte per-file import limit"),
+                    ));
+                }
+            }
+            bytes_seen = bytes_seen.saturating_add(len);
+            if bytes_seen > total_bytes_limit {
+                return Err(ArtifactError::new(
+                    product,
+                    section_root,
+                    format!(
+                        "the section exceeds the {total_bytes_limit} byte cumulative import limit"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A directory entry an import may look at: never a symlink.
@@ -573,12 +706,27 @@ fn collect_documents(
 
 fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
+    scan_import_tree(
+        dir,
+        &section_dir,
+        "auth",
+        IMPORT_AUTH_TOTAL_BYTES_LIMIT,
+        IMPORT_AUTH_FILE_COUNT_LIMIT,
+        0,
+        Some(IMPORT_AUTH_FILE_BYTES_LIMIT),
+    )?;
     let config_path = section_dir.join(CONFIG_FILE);
-    let config = match std::fs::symlink_metadata(&config_path)
-        .map_err(|e| e.to_string())
-        .and_then(|_| read_text_inside(dir, &config_path))
-    {
-        Ok(text) => {
+    let config = match std::fs::symlink_metadata(&config_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                return Err(ArtifactError::new(
+                    "auth",
+                    &config_path,
+                    "the optional config is not a regular no-symlink file",
+                ));
+            }
+            let text = read_text_inside_limited(dir, &config_path, IMPORT_AUTH_FILE_BYTES_LIMIT)
+                .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
             let parsed = AuthConfig::parse(&text)
                 .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
             ProjectAuthConfig {
@@ -586,7 +734,14 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
                 enable_improved_email_privacy: parsed.enable_improved_email_privacy,
             }
         }
-        Err(_) => ProjectAuthConfig::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProjectAuthConfig::default(),
+        Err(e) => {
+            return Err(ArtifactError::new(
+                "auth",
+                &config_path,
+                format!("cannot inspect the optional config: {e}"),
+            ))
+        }
     };
 
     let mut tenants = BTreeMap::new();
@@ -818,6 +973,15 @@ fn decode_base32(text: &str) -> Option<Vec<u8>> {
 
 fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage, ArtifactError> {
     let section_dir = dir.join(&section.path);
+    scan_import_tree(
+        dir,
+        &section_dir,
+        "storage",
+        IMPORT_STORAGE_TOTAL_BYTES_LIMIT,
+        IMPORT_STORAGE_ENTRY_COUNT_LIMIT,
+        IMPORT_STORAGE_NESTING_DEPTH_LIMIT,
+        None,
+    )?;
     let buckets_path = section_dir.join(BUCKETS_FILE);
     let text = read_text_inside(dir, &buckets_path)
         .map_err(|e| ArtifactError::new("storage", &buckets_path, e))?;
@@ -848,6 +1012,7 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
         }
     }
     paths.sort();
+    enforce_storage_object_count(paths.len(), &metadata_dir)?;
     let mut identities = BTreeSet::new();
     for path in paths {
         let text =
@@ -914,6 +1079,19 @@ fn read_storage_section(dir: &Path, section: &Section) -> Result<PreparedStorage
         objects.push((imported_object(&meta, &path)?, bytes));
     }
     Ok((objects, buckets.buckets))
+}
+
+fn enforce_storage_object_count(count: usize, path: &Path) -> Result<(), ArtifactError> {
+    if count > IMPORT_STORAGE_OBJECT_COUNT_LIMIT {
+        return Err(ArtifactError::new(
+            "storage",
+            path,
+            format!(
+                "the section exceeds the {IMPORT_STORAGE_OBJECT_COUNT_LIMIT} object import limit"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject, ArtifactError> {
@@ -1061,6 +1239,25 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 /// export carries password material and, for a fireemu TOTP second factor, a shared secret
 /// (`DATA-05`). fireemu's own session snapshots and every App Check secret stay out of it.
 pub fn export(
+    dir: &Path,
+    products: Products,
+    endpoints: &Endpoints,
+    initiated_by: &str,
+) -> Result<(), ArtifactError> {
+    may_overwrite(dir).map_err(|e| ArtifactError::new("export", dir, e))?;
+    let expected = target_identity(dir).map_err(|e| ArtifactError::new("export", dir, e))?;
+    let stage = create_export_stage(dir).map_err(|e| ArtifactError::new("export", dir, e))?;
+    let staged = StagedExport(stage.clone());
+    if expected.present {
+        copy_unmanaged_entries(dir, &stage).map_err(|e| ArtifactError::new("export", dir, e))?;
+    }
+    write_export_tree(&stage, products, endpoints, initiated_by)?;
+    publish_stage(&stage, dir, expected).map_err(|e| ArtifactError::new("export", dir, e))?;
+    drop(staged);
+    Ok(())
+}
+
+fn write_export_tree(
     dir: &Path,
     products: Products,
     endpoints: &Endpoints,
@@ -1461,6 +1658,258 @@ fn export_storage(
 // Overwrite protection and permissions
 // ---------------------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TargetIdentity {
+    present: bool,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+fn target_identity(path: &Path) -> Result<TargetIdentity, String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(TargetIdentity {
+                present: false,
+                #[cfg(unix)]
+                device: 0,
+                #[cfg(unix)]
+                inode: 0,
+            })
+        }
+        Err(e) => return Err(format!("cannot inspect it: {e}")),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err("it is a symlink, which an export never follows".to_owned());
+    }
+    if !metadata.file_type().is_dir() {
+        return Err("it is not a directory".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        Ok(TargetIdentity {
+            present: true,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(TargetIdentity { present: true })
+    }
+}
+
+struct StagedExport(PathBuf);
+
+impl Drop for StagedExport {
+    fn drop(&mut self) {
+        if std::fs::symlink_metadata(&self.0).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+fn create_export_stage(target: &Path) -> Result<PathBuf, String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| "the export path has no parent directory".to_owned())?;
+    match std::fs::symlink_metadata(parent) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("the export parent is a symlink, which an export never follows".to_owned())
+        }
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return Err("the export parent is not a directory".to_owned())
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_private_dir(parent)?,
+        Err(e) => return Err(format!("cannot inspect the export parent: {e}")),
+    }
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "export".into());
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let stage = parent.join(format!(
+        ".{name}.fireemu-stage-{}-{nonce}",
+        std::process::id()
+    ));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&stage)
+            .map_err(|e| format!("cannot create private export stage: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(&stage)
+            .map_err(|e| format!("cannot create private export stage: {e}"))?;
+    }
+    Ok(stage)
+}
+
+fn export_owns(name: &str) -> bool {
+    EXPORT_OWNED_ENTRIES.contains(&name) || name.ends_with(".overall_export_metadata")
+}
+
+fn copy_unmanaged_entries(source: &Path, destination: &Path) -> Result<(), String> {
+    for entry in
+        std::fs::read_dir(source).map_err(|e| format!("cannot read {}: {e}", source.display()))?
+    {
+        let entry = entry.map_err(|e| format!("cannot read an export entry: {e}"))?;
+        let name = entry.file_name();
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("cannot inspect {}: {e}", entry.path().display()))?;
+        if kind.is_symlink() || (!kind.is_file() && !kind.is_dir()) {
+            return Err(format!(
+                "export entry {} is not a regular file or directory and will not be followed",
+                entry.path().display()
+            ));
+        }
+        if name.to_str().is_some_and(export_owns) {
+            continue;
+        }
+        copy_unmanaged_entry(&entry.path(), &destination.join(name), 0)?;
+    }
+    Ok(())
+}
+
+fn copy_unmanaged_entry(source: &Path, destination: &Path, depth: u32) -> Result<(), String> {
+    if depth > 64 {
+        return Err(format!(
+            "unmanaged export entry {} exceeds the 64 level copy depth limit",
+            source.display()
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(source)
+        .map_err(|e| format!("cannot inspect {}: {e}", source.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "unmanaged export entry {} is a symlink, which an export never follows",
+            source.display()
+        ));
+    }
+    if metadata.file_type().is_dir() {
+        create_private_dir(destination)?;
+        for entry in std::fs::read_dir(source)
+            .map_err(|e| format!("cannot read {}: {e}", source.display()))?
+        {
+            let entry = entry.map_err(|e| format!("cannot read an export entry: {e}"))?;
+            copy_unmanaged_entry(
+                &entry.path(),
+                &destination.join(entry.file_name()),
+                depth + 1,
+            )?;
+        }
+        return Ok(());
+    }
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "unmanaged export entry {} is not a regular file",
+            source.display()
+        ));
+    }
+    copy_private_file(source, destination)
+}
+
+#[cfg(unix)]
+fn copy_private_file(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut input = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(source)
+        .map_err(|e| format!("cannot read {}: {e}", source.display()))?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(destination)
+        .map_err(|e| format!("cannot write {}: {e}", destination.display()))?;
+    std::io::copy(&mut input, &mut output)
+        .map_err(|e| format!("cannot copy {}: {e}", source.display()))?;
+    output
+        .flush()
+        .map_err(|e| format!("cannot flush {}: {e}", destination.display()))
+}
+
+#[cfg(not(unix))]
+fn copy_private_file(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|e| format!("cannot copy {}: {e}", source.display()))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn atomic_publish(stage: &Path, target: &Path, target_present: bool) -> Result<(), String> {
+    let flags = if target_present {
+        rustix::fs::RenameFlags::EXCHANGE
+    } else {
+        rustix::fs::RenameFlags::NOREPLACE
+    };
+    rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
+        .map_err(|e| format!("atomic export publication is unavailable or failed: {e}"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn atomic_publish(stage: &Path, target: &Path, target_present: bool) -> Result<(), String> {
+    if target_present {
+        return Err(
+            "atomic directory replacement is unavailable on this platform; the existing export was left unchanged"
+                .to_owned(),
+        );
+    }
+    std::fs::rename(stage, target)
+        .map_err(|e| format!("cannot atomically publish the new export directory: {e}"))
+}
+
+fn publish_stage(stage: &Path, target: &Path, expected: TargetIdentity) -> Result<(), String> {
+    let current = target_identity(target)?;
+    if current != expected {
+        return Err(
+            "the export target changed after it was checked; it was left unchanged".to_owned(),
+        );
+    }
+    atomic_publish(stage, target, expected.present)?;
+    if expected.present {
+        verify_displaced_target_or_rollback(stage, target, expected)?;
+    }
+    Ok(())
+}
+
+fn verify_displaced_target_or_rollback(
+    stage: &Path,
+    target: &Path,
+    expected: TargetIdentity,
+) -> Result<(), String> {
+    let displaced = target_identity(stage);
+    if displaced
+        .as_ref()
+        .is_ok_and(|identity| *identity == expected)
+    {
+        return Ok(());
+    }
+    let detail = displaced
+        .err()
+        .unwrap_or_else(|| "the displaced target has a different identity".to_owned());
+    match atomic_publish(stage, target, true) {
+        Ok(()) => Err(format!(
+            "the export target changed during publication ({detail}); the prior target was restored"
+        )),
+        Err(rollback) => Err(format!(
+            "the export target changed during publication ({detail}), and atomic rollback failed: {rollback}"
+        )),
+    }
+}
+
 /// Whether `dir` may be overwritten by an export.
 ///
 /// The official CLI refuses a non-empty target unless `--force` or `--export-on-exit` was
@@ -1469,16 +1918,26 @@ fn export_storage(
 /// `firebase-export-metadata.json`, so `fireemu emulators:export ~/Documents` cannot
 /// silently replace a directory that was never an export.
 pub fn may_overwrite(dir: &Path) -> Result<(), String> {
-    if !dir.exists() {
-        return Ok(());
+    let metadata = match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("cannot inspect {}: {e}", dir.display())),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "{} is a symlink, which an export never follows",
+            dir.display()
+        ));
     }
-    if !dir.is_dir() {
+    if !metadata.file_type().is_dir() {
         return Err(format!("{} is not a directory", dir.display()));
     }
     let empty = std::fs::read_dir(dir)
         .map(|mut entries| entries.next().is_none())
         .unwrap_or(false);
-    if empty || dir.join(METADATA_FILE_NAME).is_file() {
+    let manifest_is_file = std::fs::symlink_metadata(dir.join(METADATA_FILE_NAME))
+        .is_ok_and(|metadata| metadata.file_type().is_file());
+    if empty || manifest_is_file {
         return Ok(());
     }
     Err(format!(
@@ -1562,47 +2021,194 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
     "dataconnect_export",
 ];
 
-/// Removes an existing export's own entries before a new export replaces it, so a document
-/// that no longer exists does not survive in the directory. Only the entries an export
-/// owns go: a README or a fixture script next to them stays (the official CLI exports over
-/// the `--import` directory by default, and that directory is often a checked-in fixture).
-pub fn clear_export_dir(dir: &Path) -> Result<(), String> {
-    if !dir.exists() {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(dir)
-        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?
-        .flatten()
-    {
-        let path = entry.path();
-        let owned = entry.file_name().to_str().is_some_and(|n| {
-            EXPORT_OWNED_ENTRIES.contains(&n) || n.ends_with(".overall_export_metadata")
-        });
-        if !owned {
-            continue;
-        }
-        // `symlink_metadata` rather than `is_dir`: a symlink that points at a directory must
-        // be unlinked, never descended into. Descending would delete whatever it aims at.
-        let kind = std::fs::symlink_metadata(&path)
-            .map_err(|e| format!("cannot inspect {}: {e}", path.display()))?
-            .file_type();
-        let result = if kind.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        };
-        result.map_err(|e| format!("cannot remove {}: {e}", path.display()))?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        civil_from_days, days_from_civil, decode_base32, decode_base64, may_overwrite,
-        rfc3339_instant, rfc3339_text,
+        atomic_publish, civil_from_days, create_export_stage, days_from_civil, decode_base32,
+        decode_base64, enforce_storage_object_count, may_overwrite, publish_stage, rfc3339_instant,
+        rfc3339_text, scan_import_tree, target_identity, verify_displaced_target_or_rollback,
+        IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
     use fireemu_core_types::time::LogicalInstant;
+
+    fn budget_dir(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "fireemu-import-budget-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn cumulative_and_per_file_import_limits_hold_at_the_boundary() {
+        let root = budget_dir("bytes");
+        std::fs::write(root.join("one"), b"12").unwrap();
+        std::fs::write(root.join("two"), b"345").unwrap();
+        scan_import_tree(&root, &root, "test", 5, 2, 0, Some(3)).unwrap();
+
+        std::fs::write(root.join("two"), b"3456").unwrap();
+        let per_file = scan_import_tree(&root, &root, "test", 6, 2, 0, Some(3)).unwrap_err();
+        assert!(per_file.message.contains("per-file import limit"));
+        let cumulative = scan_import_tree(&root, &root, "test", 5, 2, 0, None).unwrap_err();
+        assert!(cumulative.message.contains("cumulative import limit"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn many_small_files_and_deep_trees_hit_stable_import_limits() {
+        let root = budget_dir("shape");
+        for name in ["one", "two", "three"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let entries = scan_import_tree(&root, &root, "test", 3, 2, 0, None).unwrap_err();
+        assert!(entries.message.contains("directory-entry import limit"));
+
+        for name in ["one", "two", "three"] {
+            std::fs::remove_file(root.join(name)).unwrap();
+        }
+        std::fs::create_dir_all(root.join("one/two")).unwrap();
+        let depth = scan_import_tree(&root, &root, "test", 0, 10, 1, None).unwrap_err();
+        assert!(depth.message.contains("nesting-depth import limit"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn storage_object_count_accepts_the_boundary_and_rejects_one_more() {
+        let path = std::path::Path::new("storage_export/metadata");
+        enforce_storage_object_count(IMPORT_STORAGE_OBJECT_COUNT_LIMIT, path).unwrap();
+        let error =
+            enforce_storage_object_count(IMPORT_STORAGE_OBJECT_COUNT_LIMIT + 1, path).unwrap_err();
+        assert!(error.message.contains("object import limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_files_are_not_import_artifacts() {
+        // macOS limits Unix-domain socket paths to roughly one hundred bytes, while its
+        // per-user temporary directory is already long. Use the conventional short temp root.
+        let root = std::path::PathBuf::from(format!(
+            "/tmp/fireemu-import-special-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let socket = std::os::unix::net::UnixListener::bind(root.join("socket")).unwrap();
+        let error = scan_import_tree(&root, &root, "test", 0, 1, 0, None).unwrap_err();
+        assert!(error.message.contains("not a regular file"));
+        drop(socket);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn atomic_directory_publication_exposes_the_complete_new_tree() {
+        let root = budget_dir("publish");
+        let target = root.join("target");
+        let stage = root.join("stage");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::create_dir(&stage).unwrap();
+        std::fs::write(target.join("old"), b"old").unwrap();
+        std::fs::write(stage.join("new"), b"new").unwrap();
+        let expected = target_identity(&target).unwrap();
+        publish_stage(&stage, &target, expected).unwrap();
+        assert_eq!(std::fs::read(target.join("new")).unwrap(), b"new");
+        assert_eq!(std::fs::read(stage.join("old")).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creating_an_export_stage_does_not_restrict_an_existing_parent() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = budget_dir("stage-parent-mode");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stage = create_export_stage(&root.join("export")).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            std::fs::metadata(&stage).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_a_checked_target_before_publication_is_refused() {
+        let root = budget_dir("publish-race");
+        let target = root.join("target");
+        let displaced = root.join("displaced");
+        let stage = root.join("stage");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("old"), b"old").unwrap();
+        let expected = target_identity(&target).unwrap();
+        std::fs::rename(&target, &displaced).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("attacker"), b"unchanged").unwrap();
+        std::fs::create_dir(&stage).unwrap();
+        std::fs::write(stage.join("new"), b"new").unwrap();
+
+        let error = publish_stage(&stage, &target, expected).unwrap_err();
+        assert!(error.contains("changed after it was checked"), "{error}");
+        assert_eq!(
+            std::fs::read(target.join("attacker")).unwrap(),
+            b"unchanged"
+        );
+        assert_eq!(std::fs::read(stage.join("new")).unwrap(), b"new");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn replacing_a_target_during_publication_is_rolled_back() {
+        let root = budget_dir("publish-race-rollback");
+        let target = root.join("target");
+        let displaced = root.join("displaced");
+        let stage = root.join("stage");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("old"), b"old").unwrap();
+        let expected = target_identity(&target).unwrap();
+        std::fs::rename(&target, &displaced).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("attacker"), b"unchanged").unwrap();
+        std::fs::create_dir(&stage).unwrap();
+        std::fs::write(stage.join("new"), b"new").unwrap();
+
+        // This exchange represents the narrow race after the pre-publication identity check.
+        atomic_publish(&stage, &target, true).unwrap();
+        let error = verify_displaced_target_or_rollback(&stage, &target, expected).unwrap_err();
+        assert!(error.contains("prior target was restored"), "{error}");
+        assert_eq!(
+            std::fs::read(target.join("attacker")).unwrap(),
+            b"unchanged"
+        );
+        assert_eq!(std::fs::read(stage.join("new")).unwrap(), b"new");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn replacing_an_existing_export_refuses_when_atomic_exchange_is_unavailable() {
+        let root = budget_dir("publish-unsupported");
+        let target = root.join("target");
+        let stage = root.join("stage");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::create_dir(&stage).unwrap();
+        let expected = target_identity(&target).unwrap();
+
+        let error = publish_stage(&stage, &target, expected).unwrap_err();
+        assert!(error.contains("unavailable on this platform"), "{error}");
+        assert!(target.is_dir());
+        assert!(stage.is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn an_rfc_3339_timestamp_round_trips_through_the_instant() {

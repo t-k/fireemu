@@ -560,10 +560,14 @@ A section of a product `--only` did not select is skipped with a notice. A `data
 **refused**: fireemu serves neither product, and importing the rest would start a suite
 holding less state than the artifact records. Tenant account files are parsed before installation and are installed only into the isolated tenant namespace named by their filename; a conflicting `tenantId` inside a record is refused.
 
+**Import resource limits.** The root manifest is limited to 4 MiB. Auth permits at most 64 MiB per file, 256 MiB across the section and 2,048 section entries. Storage permits at most 1 GiB across the section, 10,000 objects, 25,000 directory entries and four directory levels. These limits are checked during preparation before any product state is installed; diagnostics name the stable limit and path without echoing artifact contents.
+
 **Overwrite protection.** A directory is overwritten only when it is empty or already holds a
 `firebase-export-metadata.json`. The official CLI overwrites any directory once `--force` or
 `--export-on-exit` is given; fireemu applies the stricter rule always, so
 `fireemu emulators:export ~/Documents` cannot replace a directory that was never an export.
+
+Import roots, manifests, optional files and section members must be regular no-symlink artifacts contained by the selected directory. Export roots are inspected without following symlinks. A new export is built in a private sibling directory, the target identity is rechecked, and the complete directory is published atomically on Linux and macOS. Replacing an existing export is refused on platforms without atomic directory exchange. A failed build leaves the prior export unchanged and removes the private stage; regular files and directories fireemu does not own are preserved.
 
 #### Security policy for export artifacts
 
@@ -576,6 +580,7 @@ and -- for a fireemu TOTP factor -- the shared secret. Because of that:
 
 - every directory fireemu creates for an export is `0700` and every file is `0600`;
 - an export is never written to a directory that is not empty and not already an export;
+- symlink and special-file roots or members are refused rather than followed;
 - do not commit an export directory to a repository, attach it to an issue, or copy it to
   shared storage. Use `demo-` projects and throwaway passwords in any fixture you do share.
 

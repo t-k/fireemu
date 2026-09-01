@@ -1537,9 +1537,6 @@ impl Exporter {
 impl hub::ExportRunner for Exporter {
     fn export(&self, path: &Path, initiated_by: &str) -> Result<(), String> {
         import_export::may_overwrite(path)?;
-        // The directory is emptied first, so a document that no longer exists cannot survive
-        // in an export that is supposed to describe the current state.
-        import_export::clear_export_dir(path)?;
         import_export::export(path, self.products, &self.endpoints(), initiated_by)
             .map_err(|e| e.to_string())
     }

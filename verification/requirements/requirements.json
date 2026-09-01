@@ -1296,6 +1296,36 @@
       }
     },
     {
+      "id": "DATA-06",
+      "statement": "Import and export artifact roots and members are never followed through symlinks, and an export replaces a checked target only by publishing a complete private sibling in one atomic directory operation where the platform supports it.",
+      "criticality": "critical",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "Root manifests, optional Auth configuration and section members are read only after no-symlink regular-file and containment checks. Export roots use non-following metadata, a private sibling stage and identity revalidation immediately before rename exchange. Linux and macOS replace existing exports atomically; platforms without directory exchange refuse replacement and leave the old export unchanged. Integration tests cover missing optional files, symlinks, special files, target replacement, failed stages and private permissions.",
+      "artifacts": {
+        "tla": "AtomicExportPublication.tla::AtomicExportPublication",
+        "mutation": [
+          "M-TLA-EXPORT-ATOMIC-001"
+        ],
+        "integration": [
+          "crates/fireemu/tests/import_export.rs"
+        ]
+      }
+    },
+    {
+      "id": "DATA-07",
+      "statement": "Auth and Storage imports enforce stable per-file, cumulative-byte, entry-count, nesting-depth and object-count limits during preparation before any product state is installed.",
+      "criticality": "important",
+      "owner": "fireemu",
+      "status": "implemented",
+      "note": "Auth files are capped at 64 MiB each, 256 MiB cumulatively and 2,048 entries. Storage is capped at 1 GiB cumulatively, 10,000 objects, 25,000 directory entries and four directory levels. Boundary, over-boundary, many-small-file, deep-tree, special-file and mixed-product refusal scenarios exercise the shared preparation path without printing artifact contents.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu/tests/import_export.rs"
+        ]
+      }
+    },
+    {
       "id": "REQ-RULES-PARITY-01",
       "statement": "Every builtin, namespace, operator, coercion, comparison and regex construct of the Firestore Rules language answers what the pinned official runtime answers, or diverges only where the divergence is recorded.",
       "criticality": "critical",

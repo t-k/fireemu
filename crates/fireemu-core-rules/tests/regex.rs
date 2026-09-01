@@ -345,6 +345,14 @@ fn compile_nesting_preflight_ignores_escaped_and_class_parentheses() {
         .is_full_match("a")
         .unwrap());
 
+    for class in ["[^]x]", r"[\]]", "[[:alpha:]]"] {
+        let above_limit = format!("{class}{}a{}", "(".repeat(9), ")".repeat(9));
+        assert_eq!(
+            Regex::new(&above_limit).unwrap_err().to_string(),
+            "invalid regular expression: pattern nesting too deep"
+        );
+    }
+
     let nested_non_capturing = format!("{}a{}", "(?:".repeat(8), ")".repeat(8));
     assert!(Regex::new(&nested_non_capturing)
         .unwrap()

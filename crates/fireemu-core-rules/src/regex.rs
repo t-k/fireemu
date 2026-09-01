@@ -348,7 +348,7 @@ impl Parser<'_> {
     fn parse_group(&mut self) -> Result<Node, RegexError> {
         let current = self.depth.saturating_add(1);
         if current > PARSE_DEPTH_BUDGET {
-            return Err(RegexError("pattern nesting too deep".into()));
+            return Err(RegexError("recursive parser nesting guard exceeded".into()));
         }
         self.depth = current;
         let result = self.parse_group_inner();

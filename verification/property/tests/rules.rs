@@ -77,8 +77,8 @@ fn chain(n: usize) -> String {
 #[test]
 fn prop_rules_regex_exhaustion_never_allows() {
     for negation in [
-        "!resource.data.value.matches('(a)*')",
-        "resource.data.value.matches('(a)*') == false",
+        "!resource.data.value.matches('(a|aa)*b')",
+        "resource.data.value.matches('(a|aa)*b') == false",
     ] {
         for nested_allow in [false, true] {
             let source = format!(

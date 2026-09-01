@@ -943,7 +943,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /notes/{id} {
-      allow get: if resource.data.value.matches('(a)*') == false;
+      allow get: if resource.data.value.matches('(a|aa)*b') == false;
       match /{rest=**} {
         allow get: if true;
       }

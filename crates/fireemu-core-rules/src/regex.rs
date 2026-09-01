@@ -808,6 +808,77 @@ fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> 
     }
 }
 
+fn is_deterministic(node: &Node) -> bool {
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node {
+            Node::Char(_) | Node::Any | Node::Class { .. } | Node::Start | Node::End => {}
+            Node::Group(_, inner) => pending.push(inner),
+            Node::Seq(items) => pending.extend(items),
+            Node::Alt(_) | Node::Repeat { .. } => return false,
+        }
+    }
+    true
+}
+
+enum DeterministicTask<'a> {
+    Match(&'a Node),
+    CloseGroup { index: usize, start: usize },
+}
+
+fn deterministic_end(
+    node: &Node,
+    ctx: &MatchContext<'_>,
+    pos: usize,
+) -> Result<Option<usize>, RegexRuntimeError> {
+    let original_captures = ctx.caps.borrow().clone();
+    let mut end = pos;
+    let mut pending = vec![DeterministicTask::Match(node)];
+    while let Some(task) = pending.pop() {
+        match task {
+            DeterministicTask::Match(node) => {
+                charge_step(ctx)?;
+                match node {
+                    Node::Char(_) | Node::Any | Node::Class { .. } => {
+                        let Some(next) = atomic_end(node, ctx, end) else {
+                            *ctx.caps.borrow_mut() = original_captures;
+                            return Ok(None);
+                        };
+                        end = next;
+                    }
+                    Node::Start if end == 0 => {}
+                    Node::End if end == ctx.chars.len() => {}
+                    Node::Start | Node::End => {
+                        *ctx.caps.borrow_mut() = original_captures;
+                        return Ok(None);
+                    }
+                    Node::Group(index, inner) => {
+                        if let Some(index) = index {
+                            pending.push(DeterministicTask::CloseGroup {
+                                index: *index,
+                                start: end,
+                            });
+                        }
+                        pending.push(DeterministicTask::Match(inner));
+                    }
+                    Node::Seq(items) => {
+                        pending.extend(items.iter().rev().map(DeterministicTask::Match));
+                    }
+                    Node::Alt(_) | Node::Repeat { .. } => {
+                        unreachable!("deterministic nodes contain no alternatives or repeats")
+                    }
+                }
+            }
+            DeterministicTask::CloseGroup { index, start } => {
+                if let Some(slot) = ctx.caps.borrow_mut().get_mut(index) {
+                    *slot = Some((start, end));
+                }
+            }
+        }
+    }
+    Ok(Some(end))
+}
+
 /// Backtracking matcher in continuation-passing style: `k(end)` is called for every way
 /// `node` can match starting at `pos`; returns `true` as soon as `k` accepts.
 fn match_node(
@@ -819,38 +890,8 @@ fn match_node(
     let _depth = enter_match(ctx)?;
     charge_step(ctx)?;
     match node {
-        Node::Char(c) => {
-            if ctx
-                .chars
-                .get(pos)
-                .is_some_and(|got| chars_equal(*got, *c, ctx.flags))
-            {
-                k(pos + 1)
-            } else {
-                Ok(false)
-            }
-        }
-        Node::Any => {
-            if ctx
-                .chars
-                .get(pos)
-                .is_some_and(|c| ctx.flags.dot_all || *c != '\n')
-            {
-                k(pos + 1)
-            } else {
-                Ok(false)
-            }
-        }
-        Node::Class { negated, items } => {
-            if ctx
-                .chars
-                .get(pos)
-                .is_some_and(|c| class_matches(*negated, items, *c, ctx.flags))
-            {
-                k(pos + 1)
-            } else {
-                Ok(false)
-            }
+        Node::Char(_) | Node::Any | Node::Class { .. } => {
+            atomic_end(node, ctx, pos).map_or_else(|| Ok(false), k)
         }
         Node::Start => {
             if pos == 0 {
@@ -910,25 +951,37 @@ fn match_seq(
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
+    let original_captures = ctx.caps.borrow().clone();
     let mut remaining = items;
     let mut end = pos;
     while let Some((first, rest)) = remaining.split_first() {
-        if !matches!(first, Node::Char(_) | Node::Any | Node::Class { .. }) {
+        if !is_deterministic(first) {
             break;
         }
-        charge_step(ctx)?;
-        let Some(next) = atomic_end(first, ctx, end) else {
-            return Ok(false);
+        let next = match deterministic_end(first, ctx, end) {
+            Ok(Some(next)) => next,
+            Ok(None) => {
+                *ctx.caps.borrow_mut() = original_captures;
+                return Ok(false);
+            }
+            Err(error) => {
+                *ctx.caps.borrow_mut() = original_captures;
+                return Err(error);
+            }
         };
         end = next;
         remaining = rest;
     }
-    match remaining.split_first() {
+    let result = match remaining.split_first() {
         None => k(end),
         Some((first, rest)) => {
             match_node(first, ctx, end, &mut |next| match_seq(rest, ctx, next, k))
         }
+    };
+    if !matches!(result, Ok(true)) {
+        *ctx.caps.borrow_mut() = original_captures;
     }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -944,34 +997,8 @@ fn match_repeat(
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
     charge_step(ctx)?;
-    if matches!(node, Node::Char(_) | Node::Any | Node::Class { .. }) {
-        let mut ends = vec![pos];
-        while max.is_none_or(|maximum| count + ends.len() - 1 < maximum) {
-            charge_step(ctx)?;
-            let Some(end) = atomic_end(node, ctx, *ends.last().unwrap_or(&pos)) else {
-                break;
-            };
-            ends.push(end);
-        }
-        let candidates = ends
-            .into_iter()
-            .enumerate()
-            .filter(|(added, _)| count + added >= min)
-            .map(|(_, end)| end);
-        if greedy {
-            for end in candidates.rev() {
-                if k(end)? {
-                    return Ok(true);
-                }
-            }
-        } else {
-            for end in candidates {
-                if k(end)? {
-                    return Ok(true);
-                }
-            }
-        }
-        return Ok(false);
+    if is_deterministic(node) {
+        return match_deterministic_repeat(node, min, max, greedy, ctx, pos, count, k);
     }
     let can_stop = count >= min;
     let can_more = max.is_none_or(|m| count < m);
@@ -1004,4 +1031,68 @@ fn match_repeat(
             try_more(k)
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn match_deterministic_repeat(
+    node: &Node,
+    min: usize,
+    max: Option<usize>,
+    greedy: bool,
+    ctx: &MatchContext,
+    pos: usize,
+    count: usize,
+    k: &mut dyn FnMut(usize) -> MatchResult,
+) -> MatchResult {
+    let original_captures = ctx.caps.borrow().clone();
+    if !greedy {
+        let mut end = pos;
+        let mut current_count = count;
+        loop {
+            let candidate_captures = ctx.caps.borrow().clone();
+            if current_count >= min {
+                match k(end) {
+                    Ok(true) => return Ok(true),
+                    Ok(false) => *ctx.caps.borrow_mut() = candidate_captures,
+                    Err(error) => return Err(error),
+                }
+            }
+            if max.is_some_and(|maximum| current_count >= maximum) {
+                break;
+            }
+            let Some(next) = deterministic_end(node, ctx, end)? else {
+                break;
+            };
+            if next <= end {
+                break;
+            }
+            end = next;
+            current_count += 1;
+        }
+        *ctx.caps.borrow_mut() = original_captures;
+        return Ok(false);
+    }
+
+    let mut candidates = vec![(pos, original_captures.clone())];
+    while max.is_none_or(|maximum| count + candidates.len() - 1 < maximum) {
+        let current = candidates.last().map_or(pos, |(end, _)| *end);
+        let Some(end) = deterministic_end(node, ctx, current)? else {
+            break;
+        };
+        if end <= current {
+            break;
+        }
+        candidates.push((end, ctx.caps.borrow().clone()));
+    }
+    for (added, (end, captures)) in candidates.into_iter().enumerate().rev() {
+        if count + added < min {
+            continue;
+        }
+        *ctx.caps.borrow_mut() = captures;
+        if k(end)? {
+            return Ok(true);
+        }
+    }
+    *ctx.caps.borrow_mut() = original_captures;
+    Ok(false)
 }

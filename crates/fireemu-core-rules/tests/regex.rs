@@ -270,8 +270,12 @@ fn deep_linear_matches_fail_within_a_small_thread_stack() {
                     .unwrap()
                     .is_full_match(&literal)
                     .unwrap());
+                assert!(Regex::new("(ab)*")
+                    .unwrap()
+                    .is_full_match(&"ab".repeat(1_000))
+                    .unwrap());
 
-                let matcher = Regex::new("(a)*").unwrap();
+                let matcher = Regex::new("(a|aa)*b").unwrap();
                 assert!(matches!(
                     matcher.is_full_match(&input),
                     Err(RegexRuntimeError::DepthBudgetExceeded { current, maximum })
@@ -303,5 +307,23 @@ fn deep_linear_matches_fail_within_a_small_thread_stack() {
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn deterministic_groups_and_lazy_repeats_avoid_recursive_or_eager_work() {
+    let captures = Regex::new("(a)(b)(c)(d)(e)(f)(g)(h)").unwrap();
+    assert_eq!(
+        captures
+            .replace_all("abcdefgh", "$8$7$6$5$4$3$2$1")
+            .unwrap(),
+        "hgfedcba"
+    );
+
+    let input = "a".repeat(1_000);
+    let expected = format!("{}x", "xa".repeat(1_000));
+    assert_eq!(
+        Regex::new("a*?").unwrap().replace_all(&input, "x").unwrap(),
+        expected
     );
 }

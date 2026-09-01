@@ -407,6 +407,36 @@ fn fb_denied(method: Method) -> StorageResponse {
     fb_json_error(403, &format!("Permission denied. No {verb} permission."))
 }
 
+fn set_rules_error(message: &str) -> StorageResponse {
+    StorageResponse::json(400, &json!({"message": message}))
+}
+
+fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
+    let parsed: Value = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(_) => return set_rules_error("Request body must be valid JSON"),
+    };
+    let Some(content) = parsed
+        .pointer("/rules/files/0/content")
+        .and_then(Value::as_str)
+    else {
+        return set_rules_error("Request body must include a rules file");
+    };
+    let loaded = match LoadedRules::from_source(content) {
+        Ok(loaded) => loaded,
+        Err(_) => {
+            return set_rules_error("There was an error updating rules, see logs for more details")
+        }
+    };
+    match state.rules.write() {
+        Ok(mut active) => *active = loaded,
+        Err(_) => {
+            return StorageResponse::json(500, &json!({"message": "Internal error updating rules"}))
+        }
+    }
+    StorageResponse::json(200, &json!({"message": "Rules updated successfully"}))
+}
+
 /// The JSON API's Google error envelope.
 fn gcs_json_error(status: u16, message: &str, reason: &str) -> StorageResponse {
     StorageResponse::json(
@@ -1293,6 +1323,8 @@ enum GcsSpelling {
 /// Parsed target of a request, method already taken into account the way the official
 /// emulator's express routers register their handlers.
 enum Route {
+    /// `PUT /internal/setRules`, used by `@firebase/rules-unit-testing`.
+    SetRules,
     /// `GET /v0/` -> `{"emulator": "storage"}`.
     FbRoot,
     /// `/v0/b/{bucket}/o`: list (GET), upload (POST / PUT).
@@ -1354,6 +1386,7 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
         }
     }
     match (method, segments.as_slice()) {
+        ("PUT", ["internal", "setRules"]) => Ok(Route::SetRules),
         ("GET", ["b"]) => Ok(Route::GcsListBuckets),
         ("GET", ["b", b, "o"] | ["storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsList { bucket: d(b)? })
@@ -1801,6 +1834,12 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     let Ok(route) = route(&req.method, &req.path) else {
         return plain_status(400);
     };
+    // Internal rules activation is admitted with the session, but it is not a bucket data
+    // operation and therefore does not pass through client App Check, Auth or fault plans.
+    let _admitted = state.barrier.as_ref().map(|b| b.admit());
+    if matches!(route, Route::SetRules) {
+        return set_rules(state, &req.body);
+    }
     let dialect = match &route {
         Route::FbRoot | Route::FbBucket { .. } | Route::FbObject { .. } => Dialect::Firebase,
         _ => Dialect::Gcs,
@@ -1831,13 +1870,10 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         | Route::GcsUpload { bucket }
         | Route::FormUpload { bucket }
         | Route::XmlStyle { bucket, .. } => bucket.clone(),
-        Route::FbRoot | Route::GcsListBuckets | Route::NotImplemented => state.project.clone(),
+        Route::SetRules | Route::FbRoot | Route::GcsListBuckets | Route::NotImplemented => {
+            state.project.clone()
+        }
     };
-    // Admitted for the whole request, before the fault plan is consulted and the token is
-    // verified: a reset waits for it, a fault is counted only for a request that runs, and
-    // a request cannot verify against the old Auth store and then write into the new
-    // session. Requests are synchronous, so the admission is short-lived.
-    let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let bucket_project = state.project_of_bucket(&bucket_of_route);
     let authorization = req.header("authorization");
     // The JSON API dialect bypasses Security Rules entirely, as the official emulator's
@@ -1898,6 +1934,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         }
     }
     let outcome = match route {
+        Route::SetRules => unreachable!("setRules returns before Storage data dispatch"),
         Route::FbRoot => Ok(StorageResponse::json(200, &json!({"emulator": "storage"}))),
         Route::FbBucket { bucket } => match method.as_str() {
             "GET" => fb_list(state, &principal, &bucket, &params),

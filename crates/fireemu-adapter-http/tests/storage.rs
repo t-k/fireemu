@@ -512,6 +512,69 @@ fn json_api_dialect_for_the_admin_sdk() {
 }
 
 #[test]
+fn rules_unit_testing_set_rules_replaces_the_active_ruleset() {
+    let s = state(Some(
+        "rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{path=**} { allow read, write: if false; }
+  }
+}",
+    ));
+    let upload = |name: &str| {
+        let (content_type, body) = multipart(&json!({}), "text/plain", b"content");
+        handle(
+            &s,
+            req(
+                "POST",
+                &format!("/v0/b/{BUCKET}/o?name={name}&uploadType=multipart"),
+                &[
+                    ("content-type", &content_type),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &body,
+            ),
+        )
+    };
+
+    assert_eq!(upload("before.txt").status, 403);
+
+    let update = json!({
+        "rules": {
+            "files": [{
+                "name": "storage.rules",
+                "content": "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }"
+            }]
+        }
+    });
+    let response = handle(
+        &s,
+        req(
+            "PUT",
+            "/internal/setRules",
+            &[("content-type", "application/json")],
+            &serde_json::to_vec(&update).unwrap(),
+        ),
+    );
+
+    assert_eq!(
+        response.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    assert_eq!(
+        header(&response, "content-type"),
+        Some("application/json; charset=utf-8")
+    );
+    assert_eq!(
+        json_body(&response),
+        json!({"message": "Rules updated successfully"})
+    );
+    assert_eq!(upload("after.txt").status, 200);
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn storage_rules_gate_uploads_downloads_and_lists() {
     let s = state(Some(

@@ -1776,7 +1776,12 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 None => IndexSet::default(),
             },
         };
-        let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed));
+        let backend = Arc::new(if cfg.clock_start_pinned {
+            LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+        } else {
+            LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+                .with_wall_clock_write_time()
+        });
         for (database, files) in &cfg.firestore_databases {
             if database != "(default)" {
                 if let Some(path) = &files.indexes {

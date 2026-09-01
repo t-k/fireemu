@@ -25,7 +25,9 @@ use tokio_stream::StreamExt;
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
-async fn start() -> (
+async fn start_with_write_time(
+    wall_clock: bool,
+) -> (
     FirestoreClient<tonic::transport::Channel>,
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
@@ -44,7 +46,11 @@ async fn start() -> (
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let backend = Arc::new(if wall_clock {
+        LocalBackend::new(gateway.clone(), clock.clone(), 7).with_wall_clock_write_time()
+    } else {
+        LocalBackend::new(gateway.clone(), clock.clone(), 7)
+    });
     let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -59,6 +65,14 @@ async fn start() -> (
         .await
         .unwrap();
     (FirestoreClient::new(channel), clock, handle)
+}
+
+async fn start() -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    tokio::task::JoinHandle<()>,
+) {
+    start_with_write_time(false).await
 }
 
 async fn start_with_edition(
@@ -125,6 +139,39 @@ fn update_write(name: &str, fields: &[(&str, pb::Value)]) -> pb::Write {
         operation: Some(pb::write::Operation::Update(doc(name, fields))),
         ..Default::default()
     }
+}
+fn server_timestamp_write(name: &str) -> pb::Write {
+    let mut write = update_write(name, &[]);
+    write.update_transforms = ["createdAt", "updatedAt"]
+        .into_iter()
+        .map(|field_path| pb::document_transform::FieldTransform {
+            field_path: field_path.to_owned(),
+            transform_type: Some(
+                pb::document_transform::field_transform::TransformType::SetToServerValue(
+                    pb::document_transform::field_transform::ServerValue::RequestTime as i32,
+                ),
+            ),
+        })
+        .collect();
+    write
+}
+fn timestamp_field_nanos(document: &pb::Document, field: &str) -> i128 {
+    let Some(pb::value::ValueType::TimestampValue(timestamp)) = document
+        .fields
+        .get(field)
+        .and_then(|value| value.value_type.as_ref())
+    else {
+        panic!("missing timestamp field {field}");
+    };
+    i128::from(timestamp.seconds) * 1_000_000_000 + i128::from(timestamp.nanos)
+}
+fn wall_clock_nanos() -> i128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        .try_into()
+        .unwrap()
 }
 fn query(collection: &str, filter: Option<sq::Filter>) -> pb::RunQueryRequest {
     pb::RunQueryRequest {
@@ -240,6 +287,61 @@ async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn unpinned_server_timestamps_follow_each_write_wall_time() {
+    let (mut client, _, handle) = start_with_write_time(true).await;
+    let before_first = wall_clock_nanos();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![server_timestamp_write("timestamps/first")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let after_first = wall_clock_nanos();
+    let first = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/timestamps/first"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let first_nanos = timestamp_field_nanos(&first, "createdAt");
+    assert_eq!(first_nanos, timestamp_field_nanos(&first, "updatedAt"));
+    assert!(
+        first_nanos >= before_first - 1_000_000,
+        "{first_nanos} < {before_first}"
+    );
+    assert!(first_nanos <= after_first, "{first_nanos} > {after_first}");
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let before_second = wall_clock_nanos();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![server_timestamp_write("timestamps/second")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let after_second = wall_clock_nanos();
+    let second = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/timestamps/second"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let second_nanos = timestamp_field_nanos(&second, "createdAt");
+    assert!(second_nanos >= before_second - 1_000_000);
+    assert!(second_nanos <= after_second);
+    assert!(second_nanos / 1_000_000 > first_nanos / 1_000_000);
     handle.abort();
 }
 

@@ -58,6 +58,14 @@ async fn respond(
         .uri()
         .path_and_query()
         .map_or_else(|| req.uri().path().to_owned(), |pq| pq.as_str().to_owned());
+    if method == "GET" && path == "/" {
+        return Ok(finish(
+            200,
+            &serde_json::json!({"emulator": "auth"}),
+            origin.as_deref(),
+            true,
+        ));
+    }
     // The IdP login widget pages are HTML, served on GET, outside the JSON pipeline. The
     // loopback origin guard above still applies; the pages carry no secret and mint no
     // credential (that is `signInWithIdp`, guarded on its own).

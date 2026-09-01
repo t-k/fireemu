@@ -646,6 +646,49 @@ async fn serves_over_a_real_socket() {
     server.abort();
 }
 
+#[tokio::test]
+async fn auth_root_is_a_bounded_readiness_route() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn request(addr: std::net::SocketAddr, request: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        String::from_utf8(response).unwrap()
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_http::server::serve(
+        listener,
+        Arc::new(state()),
+    ));
+
+    let ready = request(
+        addr,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(ready.starts_with("HTTP/1.1 200"), "{ready}");
+    assert!(ready.contains("cache-control: no-store"), "{ready}");
+
+    let unknown = request(
+        addr,
+        "GET /unknown HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+
+    let foreign = request(
+        addr,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nOrigin: https://example.test\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(foreign.starts_with("HTTP/1.1 403"), "{foreign}");
+    server.abort();
+}
+
 // ------------------------------------------------------------------------------------------
 // Admin SDK (project-scoped) routes
 // ------------------------------------------------------------------------------------------
@@ -1203,6 +1246,42 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         None,
         "rejected tokens create nobody"
     );
+}
+
+#[test]
+fn legacy_v3_custom_token_exchange_matches_v1() {
+    let s = state();
+    let now_secs = 1_788_004_860;
+    let token = custom_token("legacy-custom", &json!({"role": "tester"}), now_secs + 3600);
+    let (status, body) = post(
+        &s,
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
+        &json!({"token": token, "returnSecureToken": true}),
+    );
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["localId"], "legacy-custom");
+    assert_eq!(body["isNewUser"], true);
+    let decoded =
+        fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        decoded.payload.get("role").and_then(|value| value.as_str()),
+        Some("tester")
+    );
+
+    let expired = custom_token("legacy-expired", &json!({}), now_secs - 1);
+    let (status, _) = post(
+        &s,
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
+        &json!({"token": expired}),
+    );
+    assert_eq!(status, 400);
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("legacy-expired")
+        .is_none());
 }
 
 #[test]

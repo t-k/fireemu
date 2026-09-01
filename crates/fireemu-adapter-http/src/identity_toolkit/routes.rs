@@ -401,6 +401,12 @@ pub(crate) const ROUTES: &[Route] = &[
     ),
     end_user(
         "POST",
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken",
+        "accounts:signInWithCustomToken",
+        Handler::SignInWithCustomToken,
+    ),
+    end_user(
+        "POST",
         concat_v1!("accounts:lookup"),
         "accounts:lookup",
         Handler::Lookup,

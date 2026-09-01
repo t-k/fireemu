@@ -777,6 +777,48 @@ fn a_named_firestore_database_is_reported_rather_than_folded_into_the_default_on
 }
 
 #[test]
+fn a_referenced_rules_file_accepts_firebase_compatible_delimiters() {
+    let dir = scratch("firebase-rules-delimiters");
+    write(
+        &dir,
+        "firestore.rules",
+        r#"rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function allowedValues() {
+      return [
+        "one",
+        "two",
+      ]
+    }
+
+    match /items/{itemId} {
+      allow read: if allowedValues().hasAny(["one"]);
+    }
+  }
+}
+"#,
+    );
+    let firebase = write(
+        &dir,
+        "firebase.json",
+        r#"{"firestore": {"rules": "firestore.rules"}}"#,
+    );
+
+    let out = exec_with(
+        &[
+            "--firebase-json",
+            firebase.to_str().unwrap(),
+            "--only",
+            "firestore",
+        ],
+        &["true"],
+    );
+
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
 fn a_routable_emulator_host_is_refused() {
     // firebase-tools 15.28.2 binds each of these as given; fireemu publishes the refusal as a
     // divergence of the CLI lifecycle claim, so the exit code and the message are contract.

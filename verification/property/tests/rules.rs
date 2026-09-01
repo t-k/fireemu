@@ -6,6 +6,7 @@
 //! algebra, the three-valued boolean operators, and the two call-graph rules the compiler
 //! enforces.
 
+use fireemu_core_rules::ast::{ExprKind, Item};
 use fireemu_core_rules::eval::{evaluate_request, Decision, Method, RequestContext, RulesService};
 use fireemu_core_rules::parse::parse_ruleset;
 use fireemu_core_rules::runtime::LoadedRules;
@@ -62,6 +63,45 @@ fn chain(n: usize) -> String {
 const CALL_DEPTH_MAXIMUM: usize = 20;
 
 proptest! {
+    /// REQ-RULES-PARITY-01: list length, layout, one optional trailing comma and the final
+    /// return semicolon vary independently without changing the parsed list members.
+    #[test]
+    fn prop_rules_list_and_final_return_delimiters(
+        values in prop::collection::vec(-100i64..100, 0..9),
+        trailing_comma: bool,
+        return_semicolon: bool,
+        multiline: bool,
+        separator_comment: bool,
+    ) {
+        let separator = match (multiline, separator_comment) {
+            (true, true) => ", /* separator */\n      ",
+            (true, false) => ",\n      ",
+            (false, true) => ", /* separator */ ",
+            (false, false) => ", ",
+        };
+        let mut items = values.iter().map(i64::to_string).collect::<Vec<_>>().join(separator);
+        if trailing_comma && !items.is_empty() {
+            items.push(',');
+            if separator_comment {
+                items.push_str(" /* trailing */");
+            }
+        }
+        let terminator = if return_semicolon { ";" } else { "" };
+        let source = format!(
+            "service cloud.firestore {{\n  function values() {{\n    return [\n      {items}\n    ]{terminator}\n  }}\n}}"
+        );
+        let parsed = parse_ruleset(&source);
+        prop_assert!(parsed.is_ok(), "{}", parsed.unwrap_err());
+        let parsed = parsed.unwrap();
+        let Item::Function(function) = &parsed.services[0].items[0] else {
+            unreachable!("the generated first item is a function");
+        };
+        let ExprKind::List(parsed_items) = function.body.kind() else {
+            unreachable!("the generated function returns a list");
+        };
+        prop_assert_eq!(parsed_items.len(), values.len());
+    }
+
     /// REQ-RULES-PARITY-01: a range index is in range exactly when the start is a valid
     /// index and the end is a valid position after one -- `0 <= i < len` and
     /// `0 < j <= len`, with `i <= j` -- and it yields exactly that sub-list. The asymmetry

@@ -20,6 +20,25 @@ fn event_delivery_spec_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("specs/EventDelivery.qnt")
 }
 
+fn repository_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("verification/quint must have a repository parent")
+        .to_path_buf()
+}
+
+fn path_with_pinned_quint() -> std::ffi::OsString {
+    let mut paths = vec![pinned_quint_path()
+        .parent()
+        .expect("pinned Quint must have a bin directory")
+        .to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(paths).expect("test PATH must be joinable")
+}
+
 fn run_wrapper(configure: impl FnOnce(&mut Command)) -> Output {
     let mut command = Command::new(wrapper_path());
     command.env_remove("QUINT_REAL_BIN");
@@ -160,6 +179,51 @@ fn event_delivery_named_scenarios_pass() {
             "Quint output did not execute {scenario}:\n{stdout}\n{stderr}"
         );
     }
+}
+
+#[test]
+fn cli_declares_verify_model_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .arg("--help")
+        .output()
+        .expect("pilot CLI must launch");
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("verify-model [--root PATH]"),
+        "help must declare the verify-model contract"
+    );
+}
+
+#[test]
+#[ignore = "requires Java and the pinned local Quint CLI"]
+fn verify_model_cli_checks_event_delivery_with_tlc() {
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .args([
+            "verify-model",
+            "--root",
+            repository_root()
+                .to_str()
+                .expect("repository path must be UTF-8"),
+        ])
+        .env("PATH", path_with_pinned_quint())
+        .output()
+        .expect("pilot CLI must launch");
+    assert!(
+        output.status.success(),
+        "verify-model failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "EventDelivery Quint/TLC model: ok"
+    );
+    assert!(
+        !repository_root()
+            .join("verification/quint/_apalache-out")
+            .exists(),
+        "verify-model must remove the checker output it owns"
+    );
 }
 
 #[cfg(target_os = "linux")]

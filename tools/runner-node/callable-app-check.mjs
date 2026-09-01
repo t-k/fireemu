@@ -187,8 +187,18 @@ export function instrumentCallables(sourceDir) {
   ].map((v) => String(v ?? "").toLowerCase());
 
   const options = new WeakMap();
+  const observe = (fn, opts) => {
+    if (typeof fn !== "function" || options.has(fn)) return;
+    options.set(
+      fn,
+      Object.freeze({
+        enforceAppCheck: (opts ?? {}).enforceAppCheck === true,
+        consumeAppCheckToken: consumeState((opts ?? {}).consumeAppCheckToken),
+      }),
+    );
+  };
   const carry = (from, to) => {
-    if (typeof to === "function" && options.has(from)) {
+    if (typeof to === "function" && !options.has(to) && options.has(from)) {
       options.set(to, options.get(from));
     }
   };
@@ -196,12 +206,7 @@ export function instrumentCallables(sourceDir) {
   const originalOnCallHandler = loaded.commonHttps.onCallHandler;
   loaded.commonHttps.onCallHandler = function onCallHandler(opts, handler, version_) {
     const fn = originalOnCallHandler.call(this, opts, handler, version_);
-    if (typeof fn === "function") {
-      options.set(fn, {
-        enforceAppCheck: (opts ?? {}).enforceAppCheck === true,
-        consumeAppCheckToken: consumeState((opts ?? {}).consumeAppCheckToken),
-      });
-    }
+    observe(fn, opts);
     return fn;
   };
 
@@ -221,15 +226,8 @@ export function instrumentCallables(sourceDir) {
 
   const esmLoaded = new Set();
   const esmFailed = new Map();
-  globalThis[REGISTRY_SYMBOL] = {
-    observe(fn, opts) {
-      if (typeof fn === "function") {
-        options.set(fn, {
-          enforceAppCheck: (opts ?? {}).enforceAppCheck === true,
-          consumeAppCheckToken: consumeState((opts ?? {}).consumeAppCheckToken),
-        });
-      }
-    },
+  const registry = Object.freeze({
+    observe,
     carry,
     moduleLoaded(name) {
       esmLoaded.add(name);
@@ -237,7 +235,13 @@ export function instrumentCallables(sourceDir) {
     moduleFailed(name, reason) {
       esmFailed.set(name, reason);
     },
-  };
+  });
+  Object.defineProperty(globalThis, REGISTRY_SYMBOL, {
+    value: registry,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
 
   const esmTargets = Object.fromEntries(
     Object.entries(ESM_MODULES).map(([name, relative]) => [

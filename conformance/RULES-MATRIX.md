@@ -156,9 +156,9 @@ error: 10 &middot; false: 2 &middot; true: 26
 | `bool('true') == true` | error |
 | `bytes('abc').size() == 3` | error |
 
-## regex (19)
+## regex (33)
 
-compile-error: 3 &middot; false: 2 &middot; true: 14
+compile-error: 3 &middot; false: 4 &middot; true: 26
 
 | claim | oracle |
 | --- | --- |
@@ -181,6 +181,20 @@ compile-error: 3 &middot; false: 2 &middot; true: 14
 | `'abc'.matches('(?:abc)')` | true |
 | `'abc'.matches('a\\x62c')` | true |
 | `'\u00e9'.matches('.')` | true |
+| `'\u0000'.matches('\\0')` | true |
+| `'0'.matches('\\0')` | false |
+| `'\\0'.matches('\\0')` | false |
+| `'\u0000\u0000'.matches('(\\0)+')` | true |
+| `'\u0000'.matches('[\\0]')` | true |
+| `'0'.matches('[^\\0]')` | true |
+| `'\u0000'.matches('\\00')` | true |
+| `'\u00009'.matches('\\09')` | true |
+| `'\u0000'.matches('\\000')` | true |
+| `'\u00000'.matches('\\0000')` | true |
+| `'\u0001'.matches('\\01')` | true |
+| `'\u0001'.matches('\\001')` | true |
+| `'\t'.matches('\\011')` | true |
+| `'\u00008'.matches('\\08')` | true |
 
 ## list (26)
 

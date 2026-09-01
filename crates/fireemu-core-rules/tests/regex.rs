@@ -215,6 +215,18 @@ fn null_escape_works_in_groups_quantifiers_and_character_classes() {
 }
 
 #[test]
+fn zero_prefixed_octal_escapes_follow_official_regex_boundaries() {
+    assert!(full("\\00", "\0"));
+    assert!(full("\\000", "\0"));
+    assert!(full("\\0000", concat!("\0", "0")));
+    assert!(full("\\01", "\u{1}"));
+    assert!(full("\\001", "\u{1}"));
+    assert!(full("\\011", "\t"));
+    assert!(full("\\08", concat!("\0", "8")));
+    assert!(full("\\09", concat!("\0", "9")));
+}
+
+#[test]
 fn backreferences_one_through_nine_remain_compile_errors() {
     for digit in '1'..='9' {
         let backreference = format!("\\{digit}");

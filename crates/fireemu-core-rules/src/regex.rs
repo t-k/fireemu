@@ -4,9 +4,9 @@
 //! their negations, POSIX classes `[[:alpha:]]` and Unicode classes `\p{L}`, also inside
 //! classes), anchors `^` `$`, capturing groups `( )` and non-capturing `(?: )`, the inline
 //! flags `(?i)` / `(?s)` / `(?m)`, alternation `|`, quantifiers `* + ? {n} {n,} {n,m}` with
-//! lazy variants, and `\xHH` / `\x{H...}` escapes. RE2 has no backreferences and no
-//! lookarounds, and neither does this: both are compile errors, which is what the official
-//! runtime reports for the same patterns.
+//! lazy variants, `\0` / zero-prefixed octal escapes, and `\xHH` / `\x{H...}` escapes. RE2
+//! has no backreferences and no lookarounds, and neither does this: both are compile errors,
+//! which is what the official runtime reports for the same patterns.
 //!
 //! Matching is backtracking over chars with a step budget, so pathological patterns fail
 //! closed instead of hanging (`matches()` is a full match, as in the Rules language).
@@ -399,7 +399,7 @@ impl Parser<'_> {
                 negated: false,
                 items: vec![ClassItem::Named(self.parse_unicode_class()?, e == 'p')],
             },
-            '0' => Node::Char('\0'),
+            '0' => Node::Char(self.parse_zero_prefixed_octal_escape()?),
             // A digit after a backslash is a backreference, which RE2 does not have.
             '1'..='9' => return Err(RegexError("backreferences are not supported".into())),
             'b' | 'B' | 'A' | 'z' => {
@@ -411,6 +411,23 @@ impl Parser<'_> {
             other if other.is_ascii_punctuation() || other == ' ' => Node::Char(other),
             other => return Err(RegexError(format!("unknown escape \\{other}"))),
         })
+    }
+
+    /// `\0`, followed by up to two octal digits. A following `8` or `9` begins the next
+    /// literal atom, as in the official RE2 runtime.
+    fn parse_zero_prefixed_octal_escape(&mut self) -> Result<char, RegexError> {
+        let mut value = 0;
+        for _ in 0..2 {
+            let Some(digit) = self
+                .peek()
+                .filter(|character| matches!(character, '0'..='7'))
+            else {
+                break;
+            };
+            self.pos += 1;
+            value = value * 8 + digit.to_digit(8).unwrap_or(0);
+        }
+        char::from_u32(value).ok_or_else(|| RegexError("octal escape names no character".into()))
     }
 
     /// `\xHH` or `\x{H...}`.

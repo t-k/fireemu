@@ -764,13 +764,18 @@ fn node_engine_token_matches(token: &str, actual: (u32, u32, u32)) -> Option<boo
     for operator in [">=", "<=", ">", "<"] {
         if let Some(version) = token.strip_prefix(operator) {
             let parts = requirement_parts(version)?;
+            if parts.first().is_some_and(Option::is_none) {
+                return Some(matches!(operator, ">=" | "<="));
+            }
             let expected = version_floor(&parts)?;
-            let next_partial = if parts.len() == 1 {
-                Some((expected.0.checked_add(1)?, 0, 0))
-            } else if parts.len() == 2 {
-                Some((expected.0, expected.1.checked_add(1)?, 0))
-            } else {
-                None
+            let partial_at = parts
+                .iter()
+                .position(Option::is_none)
+                .or((parts.len() < 3).then_some(parts.len()));
+            let next_partial = match partial_at {
+                Some(1) => Some((expected.0.checked_add(1)?, 0, 0)),
+                Some(2) => Some((expected.0, expected.1.checked_add(1)?, 0)),
+                _ => None,
             };
             return Some(match operator {
                 ">=" => actual >= expected,
@@ -843,7 +848,11 @@ fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool
             let upper = version_floor(&upper_parts).ok_or_else(|| {
                 format!("package.json engines.node {expression:?} is not supported")
             })?;
-            let below_upper = if upper_parts.len() == 1 {
+            let partial_at = upper_parts
+                .iter()
+                .position(Option::is_none)
+                .or((upper_parts.len() < 3).then_some(upper_parts.len()));
+            let below_upper = if partial_at == Some(1) {
                 actual
                     < (
                         upper.0.checked_add(1).ok_or_else(|| {
@@ -852,7 +861,7 @@ fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool
                         0,
                         0,
                     )
-            } else if upper_parts.len() == 2 {
+            } else if partial_at == Some(2) {
                 actual
                     < (
                         upper.0,
@@ -940,9 +949,9 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
         let root = PathBuf::from(home).join("tools/image/node");
         if root.is_absolute() {
             if let Ok(entries) = std::fs::read_dir(root) {
-                let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+                let mut entries: Vec<_> = entries.filter_map(Result::ok).take(64).collect();
                 entries.sort_by_key(std::fs::DirEntry::file_name);
-                for entry in entries.into_iter().take(64) {
+                for entry in entries {
                     push_node_candidate(&mut candidates, entry.path().join("bin/node"));
                     #[cfg(windows)]
                     push_node_candidate(&mut candidates, entry.path().join("node.exe"));
@@ -954,7 +963,16 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
     Ok((candidates, false))
 }
 
+#[cfg_attr(windows, allow(unreachable_code))]
 fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
+    #[cfg(windows)]
+    {
+        let _ = program;
+        return Err(
+            "automatic Node probing is unavailable on Windows; configure functions.runner explicitly"
+                .to_owned(),
+        );
+    }
     const MAX_VERSION_BYTES: usize = 256;
     const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
     let mut command = Command::new(program);
@@ -1906,6 +1924,9 @@ mod tests {
         assert!(node_engine_matches("<=20", (20, 19, 5)).unwrap());
         assert!(!node_engine_matches(">20", (20, 19, 5)).unwrap());
         assert!(node_engine_matches("20 - 22", (22, 11, 0)).unwrap());
+        assert!(node_engine_matches("<=20.x", (20, 19, 5)).unwrap());
+        assert!(!node_engine_matches(">20.x", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("20 - 22.x", (22, 11, 0)).unwrap());
         assert!(node_engine_matches("", (20, 19, 5)).is_err());
         assert!(node_engine_matches("not-semver", (20, 19, 5)).is_err());
     }

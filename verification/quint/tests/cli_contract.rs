@@ -20,6 +20,10 @@ fn event_delivery_spec_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("specs/EventDelivery.qnt")
 }
 
+fn pilot_script_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run-pilot.sh")
+}
+
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -202,6 +206,32 @@ fn cli_declares_verify_model_command() {
             .contains("verify-evidence [--root PATH] [--evidence PATH]"),
         "help must declare the evidence contract"
     );
+}
+
+#[test]
+fn pilot_script_declares_ordered_dual_run_gates() {
+    let script = fs::read_to_string(pilot_script_path()).expect("pilot script must exist");
+    let gates = [
+        "verification/tla/run-tlc.sh EventDelivery",
+        "cargo run -p tla-verification -- check-eventdelivery",
+        "verify-model",
+        "deterministic_scenarios_cover_all_actions",
+        "generated_traces_match_rust",
+        "each_projection_field_detects_drift",
+        "mutate-event-delivery",
+        "verify-evidence",
+        "cargo run -p traceability-check",
+    ];
+    let mut offset = 0;
+    for gate in gates {
+        let found = script[offset..]
+            .find(gate)
+            .unwrap_or_else(|| panic!("missing or out-of-order gate {gate}"));
+        offset += found + gate.len();
+    }
+    assert!(script.contains("PILOT_PASSES:-1"));
+    assert!(script.contains("mktemp -d"));
+    assert!(script.contains("trap cleanup"));
 }
 
 #[test]

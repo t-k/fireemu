@@ -169,3 +169,33 @@ fn inline_flags_and_named_classes_behave_as_the_official_runtime_records_them() 
     assert!(Regex::new("[[:bogus:]]").is_err());
     assert!(Regex::new("\\p{Bogus}").is_err());
 }
+
+#[test]
+fn null_escape_matches_u0000_and_nothing_else() {
+    let null = Regex::new("\\0").unwrap();
+    assert!(null.is_full_match("\0"));
+    assert!(!null.is_full_match("0"));
+    assert!(!null.is_full_match("\\0"));
+}
+
+#[test]
+fn null_escape_works_in_groups_quantifiers_and_character_classes() {
+    assert!(full("(\\0)+", "\0\0"));
+    assert!(full("[\\0]", "\0"));
+    assert!(!full("[\\0]", "0"));
+    assert!(full("[^\\0]", "0"));
+    assert!(!full("[^\\0]", "\0"));
+}
+
+#[test]
+fn backreferences_one_through_nine_remain_compile_errors() {
+    for digit in '1'..='9' {
+        let backreference = format!("\\{digit}");
+        assert!(Regex::new(&backreference).is_err(), "{backreference}");
+        let class_backreference = format!("[\\{digit}]");
+        assert!(
+            Regex::new(&class_backreference).is_err(),
+            "{class_backreference}"
+        );
+    }
+}

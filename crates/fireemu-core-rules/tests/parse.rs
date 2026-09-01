@@ -197,3 +197,40 @@ fn input_budget_rejects_oversized_or_control_character_sources() {
         "service cloud.firestore {\n match /a {\n allow read: if 'a\u{0}b' == 'x';\n }\n}";
     assert!(parse_ruleset(with_nul).is_err());
 }
+
+#[test]
+fn parser_accepts_firebase_null_escape_pattern() {
+    let source = r#"
+rules_version = '2';
+service cloud.firestore {
+  function isValidString(data) {
+    return data.matches(".*(\r|\n|\\0|\u0000|\x00)+.*") == false;
+  }
+}
+"#;
+
+    parse_ruleset(source).unwrap();
+}
+
+#[test]
+fn invalid_regex_diagnostics_escape_control_characters() {
+    let source = r#"
+rules_version = '2';
+service cloud.firestore {
+  function invalid(data) {
+    return data.matches("\u0000(?=x)");
+  }
+}
+"#;
+
+    let error = parse_ruleset(source).unwrap_err();
+    assert!(
+        error
+            .message
+            .chars()
+            .all(|character| !character.is_control()),
+        "{:?}",
+        error.message
+    );
+    assert!(error.message.contains("\\0"), "{}", error.message);
+}

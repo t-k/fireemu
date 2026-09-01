@@ -843,3 +843,36 @@ fn integers_and_doubles_compare_exactly_beyond_2_to_the_53() {
         &extreme
     ));
 }
+
+#[test]
+fn regex_step_budget_exhaustion_denies_negated_matches() {
+    let rules = r#"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if resource.data.value.matches('(a+)+b|.*\\0.*') == false;
+    }
+  }
+}
+"#;
+    let ruleset = parse_ruleset(rules).unwrap();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[(
+        "value",
+        RulesValue::String(format!("{}\0", "a".repeat(40))),
+    )]));
+
+    let report = evaluate_request(&ruleset, &request);
+    assert!(
+        matches!(
+            report.decision,
+            Decision::Deny(DenyReason::BudgetExceeded {
+                limit_id: "FIREEMU-REGEX-STEPS-PER-MATCH",
+                current,
+                maximum,
+            }) if current > maximum
+        ),
+        "{report:?}"
+    );
+}

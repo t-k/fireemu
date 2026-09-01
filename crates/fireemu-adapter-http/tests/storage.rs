@@ -578,6 +578,7 @@ service firebase.storage {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rules_unit_testing_set_rules_rejects_invalid_updates_without_replacing_rules() {
     const DENY_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
     const ALLOW_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";

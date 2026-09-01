@@ -599,6 +599,77 @@ async fn list_is_authorized_from_the_query_constraints() {
 }
 
 #[tokio::test]
+async fn document_name_in_authorizes_each_real_candidate_as_a_list() {
+    let mut h = start().await;
+    let (alice, alice_token) = h.user("alice@example.com");
+    let (bob, _) = h.user("bob@example.com");
+    h.client
+        .commit(with_bearer(
+            commit(vec![
+                set_write("notes/a1", &[("owner", s(&alice))]),
+                set_write("notes/a2", &[("owner", s(&alice))]),
+                set_write("notes/b1", &[("owner", s(&bob))]),
+            ]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    let names_query = |names: &[&str]| {
+        let mut request = list("notes");
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            &mut request.query_type
+        {
+            query.r#where = Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                    field: Some(sq::FieldReference {
+                        field_path: "__name__".to_owned(),
+                    }),
+                    op: sq::field_filter::Operator::In as i32,
+                    value: Some(pb::Value {
+                        value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue {
+                            values: names
+                                .iter()
+                                .map(|name| pb::Value {
+                                    value_type: Some(pb::value::ValueType::ReferenceValue(
+                                        format!("{DOCS}/notes/{name}"),
+                                    )),
+                                })
+                                .collect(),
+                        })),
+                    }),
+                })),
+            });
+        }
+        request
+    };
+
+    let mut stream = h
+        .client
+        .run_query(with_bearer(names_query(&["a2", "a1"]), &alice_token))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut returned = Vec::new();
+    while let Some(response) = stream.next().await {
+        if let Some(document) = response.unwrap().document {
+            returned.push(document.name);
+        }
+    }
+    assert_eq!(
+        returned,
+        vec![format!("{DOCS}/notes/a1"), format!("{DOCS}/notes/a2")]
+    );
+
+    let denied = h
+        .client
+        .run_query(with_bearer(names_query(&["a1", "b1"]), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
+    h.handle.abort();
+}
+
+#[tokio::test]
 async fn query_proofs_are_sound_for_shapes_arrays_and_collection_groups() {
     let mut h = start().await;
     let (alice, alice_token) = h.user("alice@example.com");
@@ -747,6 +818,82 @@ service cloud.firestore {
         .run_query(with_bearer(list("gated"), &alice_token))
         .await
         .is_ok());
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn nested_create_gets_preexisting_parent_and_absorbs_optional_field_errors() {
+    let mut h = start().await;
+    let (alice, alice_token) = h.user("alice@example.com");
+    let (bob, bob_token) = h.user("bob@example.com");
+    *h.rules.write().unwrap() = LoadedRules::from_source(
+        "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /projects/{projectId}/private/{documentId} {
+      allow create: if request.auth != null && (
+        request.auth.uid == get(/databases/$(database)/documents/projects/$(projectId)).data.creditorId ||
+        request.auth.uid == get(/databases/$(database)/documents/projects/$(projectId)).data.creditorAgentId ||
+        request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.members
+      );
+    }
+  }
+}",
+    )
+    .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "projects/primary",
+                &[("creditorId", s(&alice))],
+            )]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "projects/primary/private/creditor",
+                &[("value", s("allowed"))],
+            )]),
+            &alice_token,
+        ))
+        .await
+        .unwrap();
+    let denied = h
+        .client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "projects/primary/private/unrelated",
+                &[("value", s("denied"))],
+            )]),
+            &bob_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
+
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "projects/member",
+                &[("members", arr(vec![s(&bob)]))],
+            )]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "projects/member/private/creditor",
+                &[("value", s("allowed"))],
+            )]),
+            &bob_token,
+        ))
+        .await
+        .unwrap();
     h.handle.abort();
 }
 

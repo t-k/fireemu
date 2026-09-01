@@ -691,6 +691,44 @@ impl RulesEnforcer {
             seen: RefCell::new(BTreeSet::new()),
         };
         let single_max = single_max();
+        if let Some(candidates) = exact_name_candidates(parent, query) {
+            for candidate in candidates {
+                let segments = rules_document_segments(&candidate);
+                let Some(resource) = access.get(&segments) else {
+                    continue;
+                };
+                let ctx = RequestContext {
+                    service: RulesService::Firestore,
+                    method: Method::List,
+                    path: rules_path(&candidate),
+                    auth: match principal {
+                        Principal::User(auth) => Some(auth.clone()),
+                        _ => None,
+                    },
+                    resource: Some(resource),
+                    request_resource: None,
+                    time_unix_nanos: now.as_nanos(),
+                    abstract_path: false,
+                    request_query: Some(query_value(query)),
+                };
+                decide(
+                    ruleset,
+                    &ctx,
+                    Method::List,
+                    &candidate,
+                    &reader,
+                    Some(&rules.diagnostics),
+                )?;
+                let accessed = reader.seen.borrow().len() as u64;
+                if accessed > single_max {
+                    return Err(Status::permission_denied(format!(
+                        "list on {} denied by Security Rules: RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}",
+                        candidate.relative()
+                    )));
+                }
+            }
+            return Ok(());
+        }
         for placeholder in placeholder_paths(parent, query)? {
             for disjunction in query.dnf() {
                 let ctx = RequestContext {
@@ -1216,6 +1254,87 @@ pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentP
     let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
     Ok(vec![path])
+}
+
+/// Finite same-database candidates of a pure `__name__ ==`/`in` query. Any additional
+/// predicate, cursor, offset or limit falls back to the content-independent constraint proof.
+fn exact_name_candidates(parent: &Parent, query: &Query) -> Option<Vec<DocumentPath>> {
+    if query.limit.is_some()
+        || query.offset != 0
+        || query.start_at.is_some()
+        || query.end_at.is_some()
+    {
+        return None;
+    }
+    let prefix = format!(
+        "projects/{}/databases/{}/documents/",
+        parent.project.as_str(),
+        parent.database.as_str()
+    );
+    let mut candidates = BTreeSet::new();
+    for disjunction in query.dnf() {
+        let [FilterExpr::Field {
+            field,
+            op: FieldOp::Equal,
+            value: Value::Reference(reference),
+        }] = disjunction.as_slice()
+        else {
+            return None;
+        };
+        if !field.is_document_name() {
+            return None;
+        }
+        let relative = reference.strip_prefix(&prefix)?;
+        let path = DocumentPath::parse(&parent.project, &parent.database, relative).ok()?;
+        if query_scope_contains(&query.scope, &path) {
+            candidates.insert(path);
+        }
+    }
+    Some(candidates.into_iter().collect())
+}
+
+fn query_scope_contains(
+    scope: &fireemu_core_firestore::query::QueryScope,
+    path: &DocumentPath,
+) -> bool {
+    use fireemu_core_firestore::query::QueryScope;
+    match scope {
+        QueryScope::Collection {
+            parent,
+            collection_id,
+        } => {
+            path.parent_document().as_ref() == parent.as_ref()
+                && path.collection_id() == collection_id
+        }
+        QueryScope::CollectionGroup {
+            parent,
+            collection_id,
+        } => {
+            path.collection_id() == collection_id
+                && parent
+                    .as_ref()
+                    .is_none_or(|ancestor| path_is_below(path, ancestor))
+        }
+        QueryScope::KindlessAllDescendants { parent } => parent
+            .as_ref()
+            .is_none_or(|ancestor| path_is_below(path, ancestor)),
+    }
+}
+
+fn path_is_below(path: &DocumentPath, ancestor: &DocumentPath) -> bool {
+    path.pairs().len() > ancestor.pairs().len()
+        && path.pairs()[..ancestor.pairs().len()] == *ancestor.pairs()
+}
+
+fn rules_document_segments(path: &DocumentPath) -> Vec<String> {
+    [
+        "databases".to_owned(),
+        path.database().as_str().to_owned(),
+        "documents".to_owned(),
+    ]
+    .into_iter()
+    .chain(path.relative().split('/').map(str::to_owned))
+    .collect()
 }
 
 fn reference_path(resource_name: &str) -> RulesValue {

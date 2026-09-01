@@ -785,6 +785,7 @@ dependencies = [
  "anyhow",
  "fireemu-core-events",
  "fireemu-core-rules",
+ "fireemu-core-session",
  "fireemu-core-storage",
  "fireemu-core-types",
  "quint-connect",

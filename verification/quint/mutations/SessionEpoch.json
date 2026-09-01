@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "model": "SessionEpoch",
+  "mutations": [
+    {
+      "id": "M-FORMAL-EPOCH-ISOLATION-001",
+      "property": "EpochIsolation",
+      "operator": "allow-stale-work-to-apply",
+      "from": "workEpoch.get(worker) == observable.epoch,\n    record(\"ApplyWork\"",
+      "to": "workEpoch.get(worker) != observable.epoch,\n    record(\"ApplyWork\""
+    },
+    {
+      "id": "M-FORMAL-EPOCH-CAPTURE-001",
+      "property": "WorkCapturedOnlyWhileActive",
+      "operator": "capture-work-outside-active-state",
+      "from": "action captureWork(worker) = all {\n    observable.state == \"Active\",",
+      "to": "action captureWork(worker) = all {\n    true,"
+    },
+    {
+      "id": "M-FORMAL-EPOCH-MONOTONIC-001",
+      "property": "EpochNeverDecreases",
+      "operator": "regress-reset-epoch",
+      "from": "val nextEpoch = observable.epoch + 1",
+      "to": "val nextEpoch = if (observable.epoch > 0) observable.epoch - 1 else observable.epoch + 1"
+    },
+    {
+      "id": "M-FORMAL-RESET-LIVENESS-001",
+      "property": "ResetEventuallyActivatesNewEpoch",
+      "operator": "remove-reset-completion-fairness",
+      "from": "temporal Fairness = CompleteReset.weakFair((\n    observable,\n    previousObservable,\n    workEpoch,\n    applied,\n    previousState,\n    lastCapturedEpoch,\n    lastAction\n  ))",
+      "to": "temporal Fairness = true"
+    }
+  ]
+}

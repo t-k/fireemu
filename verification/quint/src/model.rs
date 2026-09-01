@@ -442,7 +442,11 @@ const MODELS: &[ModelDescriptor] = &[
             invariant("TypeOK"),
             invariant("EpochIsolation"),
             invariant("WorkCapturedOnlyWhileActive"),
-            temporal("EpochNeverDecreases"),
+            PropertyDescriptor {
+                name: "EpochNeverDecreases",
+                kind: PropertyKind::Temporal,
+                diagnostic_name: "sessionepochproof_sessionepoch_epochneverdecreases",
+            },
             temporal("ResetEventuallyActivatesNewEpoch"),
         ],
         actions: &[
@@ -466,7 +470,13 @@ const MODELS: &[ModelDescriptor] = &[
                 value: "2",
             },
         ],
-        scenarios: &["activate", "reset", "close", "discardStale"],
+        scenarios: &[
+            "activateScenario",
+            "applyCurrent",
+            "resetScenario",
+            "closeScenario",
+            "discardStale",
+        ],
         projection_fields: &["state", "epoch", "workEpochResult"],
         driver: "verification/quint/src/session_epoch.rs",
         connect_test: "verification/quint/tests/session_epoch_connect.rs",

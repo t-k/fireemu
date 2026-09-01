@@ -12,6 +12,7 @@ description = "private Quint model checking and Quint Connect conformance pilot"
 anyhow = "1.0"
 fireemu-core-events = { path = "../../crates/fireemu-core-events" }
 fireemu-core-rules = { path = "../../crates/fireemu-core-rules" }
+fireemu-core-session = { path = "../../crates/fireemu-core-session" }
 fireemu-core-storage = { path = "../../crates/fireemu-core-storage" }
 fireemu-core-types = { path = "../../crates/fireemu-core-types" }
 quint-connect = "=0.1.2"

@@ -706,26 +706,30 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
             continue;
         }
         if in_class {
-            if class_first && character == '^' {
-                index += 1;
+            if in_posix_class {
+                if character == ':' && characters.get(index + 1) == Some(&']') {
+                    in_posix_class = false;
+                    index = index.saturating_add(2);
+                } else {
+                    index = index.saturating_add(1);
+                }
                 continue;
             }
-            if !in_posix_class && character == '[' && characters.get(index + 1) == Some(&':') {
+            if class_first && character == '^' {
+                index = index.saturating_add(1);
+                continue;
+            }
+            if character == '[' && characters.get(index + 1) == Some(&':') {
                 in_posix_class = true;
                 class_first = false;
-                index += 2;
+                index = index.saturating_add(2);
                 continue;
             }
-            if in_posix_class && character == ':' && characters.get(index + 1) == Some(&']') {
-                in_posix_class = false;
-                index += 2;
-                continue;
-            }
-            if !in_posix_class && character == ']' && !class_first {
+            if character == ']' && !class_first {
                 in_class = false;
             }
             class_first = false;
-            index += 1;
+            index = index.saturating_add(1);
             continue;
         }
         match character {
@@ -742,7 +746,7 @@ fn check_pattern_nesting(pattern: &str) -> Result<(), RegexError> {
             ')' => depth = depth.saturating_sub(1),
             _ => {}
         }
-        index += 1;
+        index = index.saturating_add(1);
     }
     Ok(())
 }

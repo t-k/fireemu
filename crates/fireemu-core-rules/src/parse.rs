@@ -148,7 +148,7 @@ fn check_literal_patterns(ruleset: &Ruleset) -> Result<(), ParseError> {
                             args.first().map(Expr::kind)
                         {
                             if crate::regex::Regex::new(pattern).is_err() {
-                                let pattern = diagnostic_pattern(pattern);
+                                let pattern = crate::regex::escape_diagnostic_text(pattern);
                                 return Err(ParseError {
                                     message: format!(
                                         "Invalid regular expression pattern. Pattern: {pattern}."
@@ -168,18 +168,6 @@ fn check_literal_patterns(ruleset: &Ruleset) -> Result<(), ParseError> {
         }
     }
     Ok(())
-}
-
-fn diagnostic_pattern(pattern: &str) -> String {
-    let mut escaped = String::with_capacity(pattern.len());
-    for character in pattern.chars() {
-        if character.is_control() {
-            escaped.extend(character.escape_debug());
-        } else {
-            escaped.push(character);
-        }
-    }
-    escaped
 }
 
 impl<'a> Parser<'a> {

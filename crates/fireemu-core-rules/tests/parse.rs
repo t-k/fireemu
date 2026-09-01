@@ -234,3 +234,19 @@ service cloud.firestore {
     );
     assert!(error.message.contains("\\0"), "{}", error.message);
 }
+
+#[test]
+fn invalid_regex_diagnostics_escape_unicode_format_characters() {
+    let source = r#"
+rules_version = '2';
+service cloud.firestore {
+  function invalid(data) {
+    return data.matches("\u202e(?=x)");
+  }
+}
+"#;
+
+    let error = parse_ruleset(source).unwrap_err();
+    assert!(!error.message.contains('\u{202e}'), "{}", error.message);
+    assert!(error.message.contains("\\u{202e}"), "{}", error.message);
+}

@@ -28,6 +28,20 @@ impl fmt::Display for RegexError {
 
 impl std::error::Error for RegexError {}
 
+pub(crate) fn escape_diagnostic_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_debug());
+        } else if character.is_ascii() {
+            escaped.push(character);
+        } else {
+            escaped.extend(character.escape_default());
+        }
+    }
+    escaped
+}
+
 /// Runtime failure while executing a compiled regular expression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegexRuntimeError {

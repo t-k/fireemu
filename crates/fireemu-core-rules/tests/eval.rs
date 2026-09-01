@@ -912,3 +912,32 @@ service cloud.firestore {
         "{report:?}"
     );
 }
+
+#[test]
+fn dynamic_invalid_regex_diagnostics_escape_unicode_format_characters() {
+    let ruleset = parse_ruleset(
+        r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if 'x'.matches(resource.data.pattern);
+    }
+  }
+}
+",
+    )
+    .unwrap();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[(
+        "pattern",
+        RulesValue::String("\\p{\u{202e}}".to_owned()),
+    )]));
+
+    let report = evaluate_request(&ruleset, &request);
+    let Decision::Deny(DenyReason::Unsupported(message)) = report.decision else {
+        panic!("{report:?}");
+    };
+    assert!(!message.contains('\u{202e}'), "{message}");
+    assert!(message.contains("\\u{202e}"), "{message}");
+}

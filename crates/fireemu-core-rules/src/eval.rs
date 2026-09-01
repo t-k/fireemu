@@ -1767,8 +1767,9 @@ fn method_call(
             let V::String(pattern) = &args[0] else {
                 return Err(soft("matches() expects a string pattern"));
             };
-            let re = crate::regex::Regex::new(pattern)
-                .map_err(|e| EvalError::Unsupported(e.to_string()))?;
+            let re = crate::regex::Regex::new(pattern).map_err(|error| {
+                EvalError::Unsupported(crate::regex::escape_diagnostic_text(&error.to_string()))
+            })?;
             V::Bool(re.is_full_match(s).map_err(regex_runtime_error)?)
         }
         (V::String(s), "replace") => {
@@ -1776,8 +1777,9 @@ fn method_call(
             let (V::String(pattern), V::String(replacement)) = (&args[0], &args[1]) else {
                 return Err(soft("replace() expects a pattern and a replacement"));
             };
-            let re = crate::regex::Regex::new(pattern)
-                .map_err(|e| EvalError::Unsupported(e.to_string()))?;
+            let re = crate::regex::Regex::new(pattern).map_err(|error| {
+                EvalError::Unsupported(crate::regex::escape_diagnostic_text(&error.to_string()))
+            })?;
             V::String(
                 re.replace_all(s, replacement)
                     .map_err(regex_runtime_error)?,

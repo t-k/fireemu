@@ -418,6 +418,14 @@ fn deterministic_groups_and_lazy_repeats_avoid_recursive_or_eager_work() {
         Ok("X".to_owned())
     );
     assert_eq!(Regex::new("(a+)+?").unwrap().is_full_match(""), Ok(false));
+    assert_eq!(Regex::new("a{1}?").unwrap().is_full_match("a"), Ok(true));
+    assert_eq!(Regex::new("a{2}?").unwrap().is_full_match("a"), Ok(false));
+    assert_eq!(Regex::new("a{0}?").unwrap().is_full_match("a"), Ok(false));
+    assert_eq!(Regex::new("(?:)*?a").unwrap().is_full_match("b"), Ok(false));
+    assert_eq!(
+        Regex::new("a{0,1}?b").unwrap().is_full_match("aab"),
+        Ok(false)
+    );
     assert!(!Regex::new("(a|aa){1,2}")
         .unwrap()
         .is_full_match("aaaaa")

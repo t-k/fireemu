@@ -384,6 +384,20 @@ fn admin_guard(
     project: &str,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
+    admin_request_guard(headers, method)?;
+    if project.is_empty() || project != store.project_id() {
+        return Err(error(
+            400,
+            &format!(
+                "INVALID_PROJECT_ID : this runtime serves project {}",
+                store.project_id()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn admin_request_guard(headers: &RequestHeaders, method: &str) -> Result<(), JsonResponse> {
     if headers.authorization.as_deref() != Some(OWNER_CREDENTIAL) {
         return Err(error(
             401,
@@ -404,15 +418,6 @@ fn admin_guard(
                 ));
             }
         }
-    }
-    if project.is_empty() || project != store.project_id() {
-        return Err(error(
-            400,
-            &format!(
-                "INVALID_PROJECT_ID : this runtime serves project {}",
-                store.project_id()
-            ),
-        ));
     }
     Ok(())
 }
@@ -900,6 +905,14 @@ pub fn handle_with(
         }
         _ => None,
     };
+    if let Some(project) = routed_project {
+        if fireemu_core_types::ids::ProjectId::try_new(project.to_owned()).is_err() {
+            return error(400, "INVALID_PROJECT_ID");
+        }
+        if let Err(response) = admin_request_guard(headers, method) {
+            return response;
+        }
+    }
     // Serialize the first request for an unregistered compatibility namespace. The gate is
     // acquired before choosing a store, so two concurrent creates cannot both publish a
     // different authoritative store for the same project.
@@ -919,19 +932,25 @@ pub fn handle_with(
         None => None,
     };
     let mut pending_routed_project = None;
-    let store_arc = routed_project
-        .and_then(|project| {
-            let registry = state.registry.as_ref()?;
-            registry
-                .store_for(project)
-                .or_else(|| registry.routed_store_for(project))
-                .or_else(|| {
-                    let candidate = registry.routed_candidate(project)?;
-                    pending_routed_project = Some(project.to_owned());
-                    Some(Arc::new(Mutex::new(candidate)))
-                })
-        })
-        .unwrap_or_else(|| select_store(state, path, query, body));
+    let store_arc = if let Some(project) = routed_project {
+        let Some(registry) = state.registry.as_ref() else {
+            return error(500, "INTERNAL");
+        };
+        let Some(store) = registry
+            .store_for(project)
+            .or_else(|| registry.routed_store_for(project))
+            .or_else(|| {
+                let candidate = registry.routed_candidate(project)?;
+                pending_routed_project = Some(project.to_owned());
+                Some(Arc::new(Mutex::new(candidate)))
+            })
+        else {
+            return error(400, "INVALID_PROJECT_ID");
+        };
+        store
+    } else {
+        select_store(state, path, query, body)
+    };
     let operation_gate = if state.blocking.is_some()
         && matches!(
             resolution,

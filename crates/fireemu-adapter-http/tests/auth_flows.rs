@@ -1106,6 +1106,38 @@ fn compatibility_profile_routes_unregistered_admin_projects_without_leaking_stat
 }
 
 #[test]
+fn compatibility_profile_rejects_noncanonical_projects_without_default_fallback() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    s.registry = Some(registry.clone());
+    s.allow_routed_projects = true;
+    sign_up(&s, "default@example.com");
+
+    for project in [
+        "Uppercase",
+        "has_underscore",
+        "has.dot",
+        "-leading",
+        "trailing-",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        let (status, _) = admin(
+            &s,
+            &format!("{V1}/projects/{project}/accounts"),
+            &json!({"email": "routed@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 400, "project {project}");
+    }
+
+    assert_eq!(registry.routed_count(), 0);
+    let default = s.store.lock().unwrap();
+    assert!(default.user_by_email("default@example.com").is_some());
+    assert!(default.user_by_email("routed@example.com").is_none());
+}
+
+#[test]
 fn tenant_admin_routes_use_an_isolated_namespace_and_issue_tenant_tokens() {
     use fireemu_core_auth::store::AuthRegistry;
 

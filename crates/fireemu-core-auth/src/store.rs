@@ -3,7 +3,7 @@
 use core::fmt;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use fireemu_core_limits::catalogs::FIREBASE_AUTH_2026_08_30;
 use fireemu_core_limits::evaluate::{
@@ -2369,7 +2369,7 @@ pub struct AuthRegistry {
     projects: Mutex<ProjectStores>,
     tenants: Mutex<BTreeMap<TenantKey, SharedAuthStore>>,
     tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
-    operation_gates: Mutex<BTreeMap<TenantKey, Arc<Mutex<()>>>>,
+    operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     next_tenant_id: AtomicU64,
 }
 
@@ -2491,8 +2491,17 @@ impl AuthRegistry {
 
     /// Clears every compatibility namespace owned by the default session.
     pub fn clear_routed(&self) {
-        if let Ok(mut projects) = self.projects.lock() {
-            projects.routed.clear();
+        let removed = self.projects.lock().map_or_else(
+            |_| Vec::new(),
+            |mut projects| {
+                let removed = projects.routed.keys().cloned().collect::<Vec<_>>();
+                projects.routed.clear();
+                removed
+            },
+        );
+        if let Ok(mut gates) = self.operation_gates.lock() {
+            gates
+                .retain(|(project, _), gate| !removed.contains(project) && gate.strong_count() > 0);
         }
     }
 
@@ -2559,10 +2568,13 @@ impl AuthRegistry {
         self.operation_gates.lock().map_or_else(
             |_| Arc::new(Mutex::new(())),
             |mut gates| {
-                gates
-                    .entry(key)
-                    .or_insert_with(|| Arc::new(Mutex::new(())))
-                    .clone()
+                gates.retain(|_, gate| gate.strong_count() > 0);
+                if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
+                    return gate;
+                }
+                let gate = Arc::new(Mutex::new(()));
+                gates.insert(key, Arc::downgrade(&gate));
+                gate
             },
         )
     }
@@ -2795,11 +2807,7 @@ impl AuthRegistry {
 }
 
 fn valid_routed_project(project: &str) -> bool {
-    !project.is_empty()
-        && project.len() <= 255
-        && project
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_'))
+    fireemu_core_types::ids::ProjectId::try_new(project.to_owned()).is_ok()
 }
 
 #[cfg(test)]

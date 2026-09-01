@@ -284,7 +284,15 @@ struct Transaction {
     /// changed result at commit time is a phantom conflict.
     queries: Vec<(Query, BTreeMap<DocumentPath, CommitVersion>)>,
     last_activity: LogicalInstant,
-    finished: bool,
+    state: TransactionState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransactionState {
+    Active,
+    RetryableAborted,
+    Retried,
+    Finished,
 }
 
 /// Execution counters for one query. Test and verification surface (`FS-QUERY-PERF-*`); the
@@ -580,7 +588,7 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
         let read_time = self.read_time(now);
-        Ok(self.insert_transaction(read_only, self.version, read_time, now))
+        self.insert_transaction(read_only, self.version, read_time, now)
     }
 
     /// Begins a retry attempt linked to a transaction previously issued by this database.
@@ -591,19 +599,29 @@ impl FirestoreState {
         previous: &TransactionId,
         now: LogicalInstant,
     ) -> Result<TransactionId, FirestoreError> {
-        let Some(previous) = self.transactions.get_mut(previous) else {
+        self.prune_transactions(now);
+        let Some(previous_attempt) = self.transactions.get(previous) else {
             return Err(FirestoreError::InvalidArgument(
                 "Invalid retry transaction.".into(),
             ));
         };
-        if previous.read_only {
+        if previous_attempt.read_only {
             return Err(FirestoreError::InvalidArgument(
                 "read-only transaction cannot be retried as read-write".into(),
             ));
         }
-        previous.finished = true;
+        if previous_attempt.state != TransactionState::RetryableAborted {
+            return Err(FirestoreError::InvalidArgument(
+                "Invalid retry transaction.".into(),
+            ));
+        }
+        self.ensure_transaction_capacity()?;
+        self.transactions
+            .get_mut(previous)
+            .expect("retry predecessor was checked above")
+            .state = TransactionState::Retried;
         let read_time = self.read_time(now);
-        Ok(self.insert_transaction(false, self.version, read_time, now))
+        self.insert_transaction(false, self.version, read_time, now)
     }
 
     /// Starts a read-only transaction over the snapshot at `read_time` (the latest version
@@ -619,7 +637,7 @@ impl FirestoreState {
                 "read_time is older than the retained history ({READ_TIME_RETENTION_SECONDS} s)"
             )));
         };
-        Ok(self.insert_transaction(true, version, read_time, now))
+        self.insert_transaction(true, version, read_time, now)
     }
 
     fn insert_transaction(
@@ -628,24 +646,21 @@ impl FirestoreState {
         read_version: CommitVersion,
         read_time: LogicalInstant,
         now: LogicalInstant,
-    ) -> TransactionId {
+    ) -> Result<TransactionId, FirestoreError> {
         // Keep recent finished attempts so `retry_transaction` can name the attempt that was
         // just aborted. Old lineage is bounded and never participates in reads or conflicts.
-        let ttl = transaction_ttl();
-        self.transactions
-            .retain(|_, transaction| elapsed(now, transaction.started_at) <= ttl);
+        self.prune_transactions(now);
+        self.ensure_transaction_capacity()?;
         while self
             .transactions
             .values()
-            .filter(|transaction| transaction.finished)
+            .filter(|transaction| transaction.state != TransactionState::Active)
             .count()
             >= MAX_FINISHED_TRANSACTION_LINEAGE
         {
-            let Some(oldest) = self
-                .transactions
-                .iter()
-                .find_map(|(id, transaction)| transaction.finished.then(|| id.clone()))
-            else {
+            let Some(oldest) = self.transactions.iter().find_map(|(id, transaction)| {
+                (transaction.state != TransactionState::Active).then(|| id.clone())
+            }) else {
                 break;
             };
             self.transactions.remove(&oldest);
@@ -662,10 +677,32 @@ impl FirestoreState {
                 read_set: BTreeMap::new(),
                 queries: Vec::new(),
                 last_activity: now,
-                finished: false,
+                state: TransactionState::Active,
             },
         );
-        id
+        Ok(id)
+    }
+
+    fn prune_transactions(&mut self, now: LogicalInstant) {
+        let ttl = transaction_ttl();
+        self.transactions
+            .retain(|_, transaction| elapsed(now, transaction.started_at) <= ttl);
+    }
+
+    fn ensure_transaction_capacity(&self) -> Result<(), FirestoreError> {
+        const MAX_ACTIVE_TRANSACTIONS: usize = 4_096;
+        if self
+            .transactions
+            .values()
+            .filter(|transaction| transaction.state == TransactionState::Active)
+            .count()
+            >= MAX_ACTIVE_TRANSACTIONS
+        {
+            return Err(FirestoreError::FailedPrecondition(
+                "too many active transactions".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Forgets a transaction that was never handed to the client (its read was refused).
@@ -713,7 +750,7 @@ impl FirestoreState {
         let expired = now >= total_deadline || now >= idle_deadline;
         if let Some(t) = self.transactions.get_mut(id) {
             if expired {
-                t.finished = true;
+                t.state = TransactionState::Finished;
             } else {
                 t.last_activity = now;
             }
@@ -798,7 +835,7 @@ impl FirestoreState {
         let mut floor = self.version_at(oldest_read);
         let ttl = transaction_ttl();
         for t in self.transactions.values() {
-            if t.finished || elapsed(now, t.started_at) > ttl {
+            if t.state != TransactionState::Active || elapsed(now, t.started_at) > ttl {
                 continue;
             }
             floor = floor.min(t.read_version);
@@ -879,7 +916,7 @@ impl FirestoreState {
 
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
         match self.transactions.get(id) {
-            Some(t) if !t.finished => Ok(t),
+            Some(t) if t.state == TransactionState::Active => Ok(t),
             // A finished transaction is reported the way the official emulator reports it:
             // `ABORTED`, which is the code the SDKs retry a transaction on.
             Some(_) => Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into())),
@@ -940,7 +977,7 @@ impl FirestoreState {
     pub fn rollback(&mut self, id: &TransactionId) -> Result<(), FirestoreError> {
         self.transaction(id)?;
         if let Some(t) = self.transactions.get_mut(id) {
-            t.finished = true;
+            t.state = TransactionState::Finished;
         }
         Ok(())
     }
@@ -1054,7 +1091,7 @@ impl FirestoreState {
         };
         if let Some(id) = transaction {
             if let Some(t) = self.transactions.get_mut(id) {
-                t.finished = true;
+                t.state = TransactionState::Finished;
             }
         }
         // Retention is owned by the store: every commit drops the history that has fallen
@@ -1083,7 +1120,7 @@ impl FirestoreState {
         }
         if self.transaction_conflicted(id)? {
             if let Some(transaction) = self.transactions.get_mut(id) {
-                transaction.finished = true;
+                transaction.state = TransactionState::RetryableAborted;
             }
             return Err(FirestoreError::Aborted(
                 TRANSACTION_CONCURRENT_MODIFICATION.into(),

@@ -560,12 +560,27 @@ async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_m
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(80))])],
-            transaction: txn,
+            transaction: txn.clone(),
             ..Default::default()
         })
         .await
         .unwrap_err();
     assert_eq!(conflict.code(), tonic::Code::Aborted);
+    let retry = || pb::BeginTransactionRequest {
+        database: DB.to_owned(),
+        options: Some(pb::TransactionOptions {
+            mode: Some(pb::transaction_options::Mode::ReadWrite(
+                pb::transaction_options::ReadWrite {
+                    retry_transaction: txn.clone(),
+                    ..Default::default()
+                },
+            )),
+        }),
+        ..Default::default()
+    };
+    assert!(client.begin_transaction(retry()).await.is_ok());
+    let replay = client.begin_transaction(retry()).await.unwrap_err();
+    assert_eq!(replay.code(), tonic::Code::InvalidArgument);
     let got = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/acct/a"),

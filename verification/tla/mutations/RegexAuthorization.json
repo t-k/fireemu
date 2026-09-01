@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "model": "RegexAuthorization",
+  "mutations": [
+    {
+      "id": "M-TLA-RULES-REGEX-001",
+      "property": "ExhaustionNeverAllows",
+      "operator": "treat-regex-exhaustion-as-allow",
+      "from": "IF result = \"Exhausted\"\n    THEN \"Deny\"",
+      "to": "IF result = \"Exhausted\"\n    THEN \"Allow\""
+    }
+  ]
+}

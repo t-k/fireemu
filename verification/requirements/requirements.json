@@ -465,6 +465,25 @@
       }
     },
     {
+      "id": "INV-RULES-004",
+      "statement": "Regular expression step-budget exhaustion is distinct from an ordinary non-match and never reaches allow, including when matches() is negated.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "RegexAuthorization.tla::ExhaustionNeverAllows",
+        "property": "prop_rules_regex_null_escape_matches_only_u0000",
+        "mutation": [
+          "M-RULES-015",
+          "M-TLA-RULES-REGEX-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/eval.rs",
+          "crates/fireemu-core-rules/tests/regex.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-TEXT-001",
       "statement": "A READY Text Index represents every document version its visibility policy and watermark require.",
       "criticality": "critical",

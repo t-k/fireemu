@@ -304,6 +304,11 @@
       "critical": true
     },
     {
+      "id": "M-RULES-015",
+      "fault": "regex step-budget exhaustion treated as an ordinary non-match",
+      "critical": true
+    },
+    {
       "id": "M-TXN-001",
       "fault": "conflict changed to last-write-wins",
       "critical": true

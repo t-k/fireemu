@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "model": "RegexAuthorization",
+  "generatedAt": "1788233523",
+  "tlcVersion": "TLC2 Version 2026.08.21.155922 (rev: 9787e65)",
+  "moduleSha256": "71573730567ee5bf9764c9e6ccefbf68d1fe0367853150567a70b25981f24707",
+  "configSha256": "0a0ed508ccc7bcf3aa012288bc54be94c01c93400de63fa8b39c009df93810a4",
+  "manifestSha256": "9bf6b81055824a1daa5655c606b9678dd3644f2b562d6e67f444345f82677ea0",
+  "jarSha256": "eabd140a70f49eb9305a3bd3f3df944eddf87e5a90d329789085f8953a80533a",
+  "results": [
+    {
+      "id": "M-TLA-RULES-REGEX-001",
+      "property": "ExhaustionNeverAllows",
+      "outcome": "killed_safety",
+      "detail": "exit 12: TLC2 Version 2026.08.21.155922 (rev: 9787e65)\nWarning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the \"-XX:+UseParallelGC\" property.\n(Use the -nowarning option to disable this warning.)\nRunning breadth-first search Model-Checking with fp 18 and seed 539997981260118320 with 18 workers on 18 cores with 30688MB heap and 64MB offheap memory [pid: 49905] (Mac OS X 26.3.1 aarch64, Azul Systems, Inc. 21.0.11 64bit, MSBDiskFPSet, DiskStateQueue).\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tla-mutant-49711-0/RegexAuthorization.tla\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tlc-2423777508657747139/TLC.tla (jar:file:/Users/tk/work/tla-mutant/.tools/tla2tools-1.8.0.jar!/tla2sany/StandardModules/TLC.tla)\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tlc-2423777508657747139/_TLCTrace.tla (jar:file:/Users/tk/work/tla-mutant/.tools/tla2tools-1.8.0.jar!/tla2sany/StandardModules/_TLCTrace.tla)\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tlc-2423777508657747139/Naturals.tla (jar:file:/Users/tk/work/tla-mutant/.tools/tla2tools-1.8.0.jar!/tla2sany/StandardModules/Naturals.tla)\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tlc-2423777508657747139/Sequences.tla (jar:file:/Users/tk/work/tla-mutant/.tools/tla2tools-1.8.0.jar!/tla2sany/StandardModules/Sequences.tla)\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tlc-2423777508657747139/FiniteSets.tla (jar:file:/Users/tk/work/tla-mutant/.tools/tla2tools-1.8.0.jar!/tla2sany/StandardModules/FiniteSets.tla)\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tlc-2423777508657747139/TLCExt.tla (jar:file:/Users/tk/work/tla-mutant/.tools/tla2tools-1.8.0.jar!/tla2sany/StandardModules/TLCExt.tla)\nParsing file /private/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T/tlc-2423777508657747139/Integers.tla (jar:file:/Users/tk/work/tla-mutant/.tools/tla2tools-1.8.0.jar!/tla2sany/StandardModules/Integers.tla)\nSemantic processing of module Naturals\nSemantic processing of module Sequences\nSemantic processing of module FiniteSets\nSemantic processing of module TLC\nSemantic processing of module Integers\nSemantic processing of module TLCExt\nSemantic processing of module _TLCTrace\nSemantic processing of module RegexAuthorization\nLinting of module TLCExt\nLinting of module _TLCTrace\nLinting of module RegexAuthorization\nStarting... (2026-09-01 12:32:03)\nComputing initial states...\nComputed 2 initial states...\nError: Invariant ExhaustionNeverAllows is violated by the initial state:\noutcome = \"Exhausted\"\n\nFinished in 00s at (2026-09-01 12:32:03)"
+    }
+  ]
+}

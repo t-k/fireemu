@@ -148,6 +148,9 @@ impl ProjectHooks for Projects {
                 .map_err(|_| TransitionFailure::new("auth", "the Auth store is poisoned"))?
                 .clear();
         }
+        if matches!(scope, Scope::AllExcept(_)) {
+            self.registry.clear_routed();
+        }
         install_app_check_epochs(self.app_check.as_ref(), |p| scope.owns_project(p), &epochs);
         Ok(())
     }
@@ -173,6 +176,7 @@ pub(crate) mod tests {
 
     use super::{ProjectHooks, Projects, Scope};
 
+    use std::collections::BTreeSet;
     use std::sync::{Arc, Mutex, RwLock};
 
     use fireemu_adapter_grpc::gateway::Gateway;
@@ -185,7 +189,7 @@ pub(crate) mod tests {
     use fireemu_core_app_check::registry::{AppCheckRegistry, AppRegistration, ProjectEpoch};
     use fireemu_core_app_check::verify::BaselineMode;
     use fireemu_core_auth::mfa::TotpPolicy;
-    use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+    use fireemu_core_auth::store::{AuthRegistry, AuthStore, RoutedStoreInstall};
     use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
     use fireemu_core_rules::runtime::LoadedRules;
     use fireemu_core_session::clock::VirtualClock;
@@ -342,6 +346,29 @@ pub(crate) mod tests {
         let after = token(&gate);
         assert!(admits(&gate, &after), "a token of the new epoch verifies");
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn resetting_the_default_scope_discards_compatibility_routed_projects() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        let candidate = hooks
+            .registry
+            .routed_candidate("isolated-a")
+            .expect("the project name is valid");
+        assert!(matches!(
+            hooks
+                .registry
+                .install_routed("isolated-a", Arc::new(Mutex::new(candidate))),
+            RoutedStoreInstall::Installed(_)
+        ));
+        assert_eq!(hooks.registry.routed_count(), 1);
+
+        hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect("the reset succeeds");
+
+        assert_eq!(hooks.registry.routed_count(), 0);
     }
 
     #[test]

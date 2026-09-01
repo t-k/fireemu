@@ -32,6 +32,7 @@ fn state() -> AuthState {
         operation_gate: Arc::new(Mutex::new(())),
         control_token: None,
         registry: None,
+        allow_routed_projects: false,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -1021,6 +1022,87 @@ fn a_registered_project_has_its_own_users_behind_the_project_scoped_routes() {
     );
     assert!(registry.remove("demo-b"));
     assert!(!registry.remove("demo-b"));
+}
+
+#[test]
+fn compatibility_profile_routes_unregistered_admin_projects_without_leaking_state() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    s.registry = Some(registry.clone());
+    s.allow_routed_projects = true;
+    sign_up(&s, "default@example.com");
+
+    let (status, _) = admin(
+        &s,
+        &format!("{V1}/projects/isolated-a/accounts"),
+        &json!({"email": "invalid@example.com", "password": "short"}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        registry.routed_count(),
+        0,
+        "a rejected write is not retained"
+    );
+
+    let (status, empty) = admin(
+        &s,
+        &format!("{V1}/projects/isolated-a/accounts:lookup"),
+        &json!({"email": ["missing@example.com"]}),
+    );
+    assert_eq!(status, 200, "{empty}");
+    assert!(
+        empty
+            .get("users")
+            .is_none_or(|users| users.as_array().is_some_and(Vec::is_empty)),
+        "{empty}"
+    );
+    assert_eq!(
+        registry.routed_count(),
+        0,
+        "a read-only miss is not retained"
+    );
+
+    for (project, email) in [
+        ("isolated-a", "a@example.com"),
+        ("isolated-b", "b@example.com"),
+    ] {
+        let (status, created) = admin(
+            &s,
+            &format!("{V1}/projects/{project}/accounts"),
+            &json!({"email": email, "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{created}");
+    }
+    assert_eq!(registry.routed_count(), 2);
+
+    for (project, expected, absent) in [
+        ("isolated-a", "a@example.com", "b@example.com"),
+        ("isolated-b", "b@example.com", "a@example.com"),
+    ] {
+        let (status, found) = admin(
+            &s,
+            &format!("{V1}/projects/{project}/accounts:lookup"),
+            &json!({"email": [expected, absent, "default@example.com"]}),
+        );
+        assert_eq!(status, 200, "{found}");
+        let users = found["users"].as_array().unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0]["email"], expected);
+    }
+
+    assert_eq!(
+        registry.projects(),
+        vec!["demo-app".to_owned()],
+        "compatibility namespaces are not control-plane sessions"
+    );
+    assert!(!registry.register(
+        "isolated-a",
+        AuthStore::new("isolated-a", SplitMix64::new(11), TotpPolicy::default())
+    ));
+    registry.clear_routed();
+    assert_eq!(registry.routed_count(), 0);
 }
 
 #[test]

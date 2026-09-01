@@ -138,6 +138,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             operation_gate: Arc::new(Mutex::new(())),
             control_token: Some(TOKEN.to_owned()),
             registry: None,
+            allow_routed_projects: false,
             app_check: None,
             app_check_policy: None,
             tenancy: None,

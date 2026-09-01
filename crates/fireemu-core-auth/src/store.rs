@@ -2204,7 +2204,7 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        user.tokens_valid_after = Self::whole_second(now);
+        user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
         Ok(())
     }
 
@@ -2337,6 +2337,28 @@ impl AuthSnapshot {
 type SharedAuthStore = Arc<Mutex<AuthStore>>;
 type TenantKey = (String, String);
 
+/// Maximum compatibility-routed Auth project namespaces retained by one daemon.
+pub const MAX_ROUTED_AUTH_PROJECTS: usize = 1_024;
+
+#[derive(Debug, Default)]
+struct ProjectStores {
+    registered: BTreeMap<String, SharedAuthStore>,
+    routed: BTreeMap<String, SharedAuthStore>,
+}
+
+/// Result of atomically installing a compatibility-routed project store.
+#[derive(Debug, Clone)]
+pub enum RoutedStoreInstall {
+    /// This request installed the supplied store.
+    Installed(SharedAuthStore),
+    /// Another request already installed the authoritative routed store.
+    Existing(SharedAuthStore),
+    /// An explicitly registered session owns the project.
+    RegisteredConflict,
+    /// The fixed routed-project capacity has been reached.
+    Capacity,
+}
+
 /// The Auth stores of every project a daemon serves: the configured (default) project plus
 /// the projects created as sessions through the control API. Tokens name their project in
 /// `aud`, so a verifier picks the store by audience.
@@ -2344,7 +2366,7 @@ type TenantKey = (String, String);
 pub struct AuthRegistry {
     default_project: String,
     default: SharedAuthStore,
-    others: Mutex<BTreeMap<String, SharedAuthStore>>,
+    projects: Mutex<ProjectStores>,
     tenants: Mutex<BTreeMap<TenantKey, SharedAuthStore>>,
     tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Arc<Mutex<()>>>>,
@@ -2389,7 +2411,7 @@ impl AuthRegistry {
         Self {
             default_project: default_project.to_owned(),
             default,
-            others: Mutex::new(BTreeMap::new()),
+            projects: Mutex::new(ProjectStores::default()),
             tenants: Mutex::new(BTreeMap::new()),
             tenant_metadata: Mutex::new(BTreeMap::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
@@ -2415,7 +2437,71 @@ impl AuthRegistry {
         if project == self.default_project {
             return Some(self.default.clone());
         }
-        self.others.lock().ok()?.get(project).cloned()
+        self.projects.lock().ok()?.registered.get(project).cloned()
+    }
+
+    /// An existing compatibility-routed store. Explicitly registered projects are not
+    /// returned through this method.
+    #[must_use]
+    pub fn routed_store_for(&self, project: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        self.projects.lock().ok()?.routed.get(project).cloned()
+    }
+
+    /// Builds an isolated compatibility store without registering it. A rejected request can
+    /// use and drop this candidate without growing the registry.
+    pub fn routed_candidate(&self, project: &str) -> Option<AuthStore> {
+        if !valid_routed_project(project) || project == self.default_project {
+            return None;
+        }
+        let (policy, config, signer) = {
+            let default = self.default.lock().ok()?;
+            (*default.policy(), default.config(), default.signer_arc())
+        };
+        let seed = project
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
+            });
+        let mut store = AuthStore::new(project, SplitMix64::new(seed), policy);
+        store.set_config(config);
+        if let Some(signer) = signer {
+            store.set_signer(signer);
+        }
+        Some(store)
+    }
+
+    /// Atomically installs a compatibility store without ever replacing a registered or
+    /// already-routed namespace.
+    pub fn install_routed(&self, project: &str, store: SharedAuthStore) -> RoutedStoreInstall {
+        let Ok(mut projects) = self.projects.lock() else {
+            return RoutedStoreInstall::RegisteredConflict;
+        };
+        if projects.registered.contains_key(project) {
+            return RoutedStoreInstall::RegisteredConflict;
+        }
+        if let Some(existing) = projects.routed.get(project) {
+            return RoutedStoreInstall::Existing(existing.clone());
+        }
+        if projects.routed.len() >= MAX_ROUTED_AUTH_PROJECTS {
+            return RoutedStoreInstall::Capacity;
+        }
+        projects.routed.insert(project.to_owned(), store.clone());
+        RoutedStoreInstall::Installed(store)
+    }
+
+    /// Clears every compatibility namespace owned by the default session.
+    pub fn clear_routed(&self) {
+        if let Ok(mut projects) = self.projects.lock() {
+            projects.routed.clear();
+        }
+    }
+
+    /// Number of retained compatibility namespaces.
+    #[must_use]
+    pub fn routed_count(&self) -> usize {
+        self.projects
+            .lock()
+            .map_or(0, |projects| projects.routed.len())
     }
 
     /// Registers a project's store; `false` when the project already has one.
@@ -2423,23 +2509,25 @@ impl AuthRegistry {
         if project == self.default_project {
             return false;
         }
-        let Ok(mut others) = self.others.lock() else {
+        let Ok(mut projects) = self.projects.lock() else {
             return false;
         };
-        if others.contains_key(project) {
+        if projects.registered.contains_key(project) || projects.routed.contains_key(project) {
             return false;
         }
-        others.insert(project.to_owned(), Arc::new(Mutex::new(store)));
+        projects
+            .registered
+            .insert(project.to_owned(), Arc::new(Mutex::new(store)));
         true
     }
 
     /// Removes a registered project; `false` when it was not registered.
     pub fn remove(&self, project: &str) -> bool {
         let removed = self
-            .others
+            .projects
             .lock()
             .ok()
-            .is_some_and(|mut o| o.remove(project).is_some());
+            .is_some_and(|mut projects| projects.registered.remove(project).is_some());
         if removed {
             if let Ok(mut tenants) = self.tenants.lock() {
                 tenants.retain(|(candidate, _), _| candidate != project);
@@ -2669,15 +2757,24 @@ impl AuthRegistry {
         if self.default.lock().is_ok_and(|s| pred(&s)) {
             return Some(self.default.clone());
         }
-        let others = self.others.lock().ok()?;
-        if let Some(found) = others
+        let projects = self.projects.lock().ok()?;
+        if let Some(found) = projects
+            .registered
             .values()
             .find(|s| s.lock().is_ok_and(|s| pred(&s)))
             .cloned()
         {
             return Some(found);
         }
-        drop(others);
+        if let Some(found) = projects
+            .routed
+            .values()
+            .find(|s| s.lock().is_ok_and(|s| pred(&s)))
+            .cloned()
+        {
+            return Some(found);
+        }
+        drop(projects);
         self.tenants
             .lock()
             .ok()?
@@ -2690,11 +2787,19 @@ impl AuthRegistry {
     #[must_use]
     pub fn projects(&self) -> Vec<String> {
         let mut out = vec![self.default_project.clone()];
-        if let Ok(others) = self.others.lock() {
-            out.extend(others.keys().cloned());
+        if let Ok(projects) = self.projects.lock() {
+            out.extend(projects.registered.keys().cloned());
         }
         out
     }
+}
+
+fn valid_routed_project(project: &str) -> bool {
+    !project.is_empty()
+        && project.len() <= 255
+        && project
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_'))
 }
 
 #[cfg(test)]

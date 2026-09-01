@@ -26,7 +26,7 @@ use fireemu_core_auth::jwt::{encode_with, JwtError};
 use fireemu_core_auth::mfa::MfaError;
 use fireemu_core_auth::store::{
     AuthError, AuthStore, FederatedIdentity, LocalId, NewUser, OobRequestType, PendingSignInId,
-    SecondFactorAssertion, VerificationPurpose,
+    RoutedStoreInstall, SecondFactorAssertion, VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
@@ -77,6 +77,9 @@ pub struct AuthState {
     /// Stores of the other session projects: project-scoped routes (`projects/{p}/...`,
     /// `/emulator/v1/projects/{p}/...`) of a registered project use its own store.
     pub registry: Option<Arc<fireemu_core_auth::store::AuthRegistry>>,
+    /// Whether unregistered project-scoped Admin routes may use isolated compatibility
+    /// namespaces. Strict profile leaves this disabled.
+    pub allow_routed_projects: bool,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
     pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
@@ -887,7 +890,48 @@ pub fn handle_with(
     let at = now(state);
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let resolution = routes::resolve(method, path);
-    let store_arc = select_store(state, path, query, body);
+    let routed_project = match resolution {
+        routes::Resolution::Matched {
+            route,
+            project: Some(project),
+            tenant: None,
+        } if state.allow_routed_projects && route.class == routes::RouteClass::Admin => {
+            Some(project)
+        }
+        _ => None,
+    };
+    // Serialize the first request for an unregistered compatibility namespace. The gate is
+    // acquired before choosing a store, so two concurrent creates cannot both publish a
+    // different authoritative store for the same project.
+    let routed_gate = routed_project.and_then(|project| {
+        state.registry.as_ref().and_then(|registry| {
+            registry
+                .store_for(project)
+                .is_none()
+                .then(|| registry.operation_gate(project, None))
+        })
+    });
+    let _routed_operation = match routed_gate.as_ref() {
+        Some(gate) => match gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        },
+        None => None,
+    };
+    let mut pending_routed_project = None;
+    let store_arc = routed_project
+        .and_then(|project| {
+            let registry = state.registry.as_ref()?;
+            registry
+                .store_for(project)
+                .or_else(|| registry.routed_store_for(project))
+                .or_else(|| {
+                    let candidate = registry.routed_candidate(project)?;
+                    pending_routed_project = Some(project.to_owned());
+                    Some(Arc::new(Mutex::new(candidate)))
+                })
+        })
+        .unwrap_or_else(|| select_store(state, path, query, body));
     let operation_gate = if state.blocking.is_some()
         && matches!(
             resolution,
@@ -987,22 +1031,53 @@ pub fn handle_with(
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
-    let response = if route.class == routes::RouteClass::EndUser {
-        if let Some(blocking) = &state.blocking {
-            dispatch_with_blocking_hook(
-                state,
-                blocking.as_ref(),
+    if route.class != routes::RouteClass::EndUser {
+        let response = dispatch(route.handler, &mut store, query, body, headers, at);
+        let retain_candidate = response.status == 200
+            && pending_routed_project.is_some()
+            && matches!(
                 route.handler,
-                &store_arc,
-                store,
-                query,
-                body,
-                headers,
-                at,
+                routes::Handler::AdminCreate | routes::Handler::AdminBatchCreate
             )
-        } else {
-            dispatch(route.handler, &mut store, query, body, headers, at)
+            && !store.all_user_ids().is_empty();
+        drop(store);
+        if retain_candidate {
+            let project = pending_routed_project.expect("checked above");
+            let Some(registry) = state.registry.as_ref() else {
+                return error(500, "INTERNAL");
+            };
+            match registry.install_routed(&project, store_arc.clone()) {
+                RoutedStoreInstall::Installed(_) => {}
+                RoutedStoreInstall::Existing(_) => {
+                    return error(409, "CONCURRENT_PROJECT_OWNERSHIP");
+                }
+                RoutedStoreInstall::RegisteredConflict => {
+                    return error(400, "INVALID_PROJECT_ID");
+                }
+                RoutedStoreInstall::Capacity => return error(429, "RESOURCE_EXHAUSTED"),
+            }
         }
+        return if response.status == 200 {
+            JsonResponse {
+                status: 200,
+                body: without_nulls(response.body),
+            }
+        } else {
+            response
+        };
+    }
+    let response = if let Some(blocking) = &state.blocking {
+        dispatch_with_blocking_hook(
+            state,
+            blocking.as_ref(),
+            route.handler,
+            &store_arc,
+            store,
+            query,
+            body,
+            headers,
+            at,
+        )
     } else {
         dispatch(route.handler, &mut store, query, body, headers, at)
     };
@@ -1453,6 +1528,7 @@ fn select_store(
         return tenant
             .and_then(|tenant| registry.tenant_store(project, tenant))
             .or_else(|| registry.store_for(project))
+            .or_else(|| registry.routed_store_for(project))
             .unwrap_or_else(|| state.store.clone());
     }
     // Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode them.
@@ -1498,6 +1574,7 @@ fn select_store(
                 .as_deref()
                 .and_then(|tenant| registry.tenant_store(&project, tenant))
                 .or_else(|| registry.store_for(&project))
+                .or_else(|| registry.routed_store_for(&project))
             {
                 return store;
             }
@@ -2057,7 +2134,7 @@ struct UpdatePlan {
     photo_url: Change,
     email_verified: Option<bool>,
     disable: Option<bool>,
-    revoke: bool,
+    revoke_at: Option<LogicalInstant>,
     /// `linkProviderUserInfo`.
     link: Option<FederatedIdentity>,
     /// `deleteProvider` entries naming federated providers.
@@ -2246,6 +2323,23 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         None | Some(Value::Null) => None,
         Some(v) => Some(parse_phone_factors(v)?),
     };
+    let revoke_at = match body.get("validSince") {
+        None => None,
+        Some(Value::String(seconds))
+            if !seconds.is_empty() && seconds.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            let seconds = seconds
+                .parse::<i64>()
+                .map_err(|_| error(400, "INVALID_ARGUMENT : validSince is out of range"))?;
+            Some(LogicalInstant::from_unix_seconds(seconds))
+        }
+        Some(_) => {
+            return Err(error(
+                400,
+                "INVALID_ARGUMENT : validSince must be a non-negative whole-second string",
+            ))
+        }
+    };
     Ok(UpdatePlan {
         claims,
         password,
@@ -2255,7 +2349,7 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         photo_url,
         email_verified: opt_bool(body, "emailVerified")?,
         disable: opt_bool(body, "disableUser")?,
-        revoke: body.get("validSince").is_some(),
+        revoke_at,
         link,
         unlink,
         phone_factors,
@@ -2417,12 +2511,15 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
     // that session's refresh tokens, because the client SDK continues on whichever refresh
     // token it holds -- its response tokens when they differ, its previous ones when the ID
     // token is byte-identical (same second, same claims), which a pinned clock makes certain.
-    let credentials_changed = plan.password.is_some() || email_changed || plan.revoke;
+    let credentials_changed = plan.password.is_some() || email_changed || plan.revoke_at.is_some();
     if credentials_changed || plan.disable == Some(true) {
-        let _ = store.revoke_tokens(&uid, at);
+        let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
     }
     let self_service = local_id.is_none();
-    if plan.revoke || plan.disable == Some(true) || (credentials_changed && !self_service) {
+    if plan.revoke_at.is_some()
+        || plan.disable == Some(true)
+        || (credentials_changed && !self_service)
+    {
         store.revoke_refresh_tokens(&uid);
     }
     let mut response =

@@ -100,6 +100,7 @@ fn state() -> AuthState {
         operation_gate: Arc::new(Mutex::new(())),
         control_token: None,
         registry: None,
+        allow_routed_projects: false,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -1147,6 +1148,76 @@ fn admin_password_change_revokes_sessions_and_update_is_atomic() {
         &json!({"email": "p@example.com", "password": "password2", "returnSecureToken": true}),
     );
     assert_eq!(status, 200);
+}
+
+#[test]
+fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
+    let s = state();
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": "revoked-user", "email": "before@example.com"}),
+        )
+        .0,
+        200
+    );
+
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({
+            "localId": "revoked-user",
+            "validSince": "1788005000",
+            "displayName": "applied"
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["revoked-user"]}),
+    );
+    assert_eq!(looked["users"][0]["validSince"], "1788005000");
+    assert_eq!(looked["users"][0]["displayName"], "applied");
+
+    for invalid in [
+        json!("-1"),
+        json!("1.5"),
+        json!("9223372036854775808"),
+        json!(1_788_005_001_i64),
+        Value::Null,
+    ] {
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({
+                "localId": "revoked-user",
+                "validSince": invalid,
+                "displayName": "must-not-apply"
+            }),
+        );
+        assert_eq!(status, 400, "{invalid}");
+    }
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "revoked-user", "validSince": "1788004900"}),
+    );
+    assert_eq!(status, 200);
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["revoked-user"]}),
+    );
+    assert_eq!(looked["users"][0]["validSince"], "1788005000");
+    assert_eq!(looked["users"][0]["displayName"], "applied");
 }
 
 // ------------------------------------------------------------------------------------------

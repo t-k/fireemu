@@ -1,6 +1,7 @@
 //! Server-sent event streams: Firestore commits and function logs. Each stream is one task
 //! feeding a bounded channel; the task ends when the client goes away (the channel closes).
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,22 +39,27 @@ fn stream_response(rx: mpsc::Receiver<Bytes>) -> UiResponse {
 /// pile up tasks that poll the runtime).
 pub const MAX_STREAMS: usize = 64;
 
-static OPEN_STREAMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Connection budget shared by the streams of one UI runtime.
+#[derive(Default)]
+pub struct StreamLimiter {
+    open: AtomicUsize,
+}
 
 /// One of the [`MAX_STREAMS`] slots; released when the stream's task ends.
-struct StreamSlot;
+struct StreamSlot(Arc<StreamLimiter>);
 
 impl StreamSlot {
-    fn acquire() -> Option<Self> {
-        use std::sync::atomic::Ordering;
-        let mut open = OPEN_STREAMS.load(Ordering::SeqCst);
+    fn acquire(limiter: &Arc<StreamLimiter>) -> Option<Self> {
+        let mut open = limiter.open.load(Ordering::SeqCst);
         loop {
             if open >= MAX_STREAMS {
                 return None;
             }
-            match OPEN_STREAMS.compare_exchange(open, open + 1, Ordering::SeqCst, Ordering::SeqCst)
+            match limiter
+                .open
+                .compare_exchange(open, open + 1, Ordering::SeqCst, Ordering::SeqCst)
             {
-                Ok(_) => return Some(Self),
+                Ok(_) => return Some(Self(limiter.clone())),
                 Err(now) => open = now,
             }
         }
@@ -62,7 +68,7 @@ impl StreamSlot {
 
 impl Drop for StreamSlot {
     fn drop(&mut self) {
-        OPEN_STREAMS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.open.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -82,7 +88,7 @@ pub fn firestore_watch(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     if req.method != "GET" {
         return UiResponse::error(405, "METHOD_NOT_ALLOWED");
     }
-    let Some(slot) = StreamSlot::acquire() else {
+    let Some(slot) = StreamSlot::acquire(&state.stream_limiter) else {
         return too_many_streams();
     };
     let project = req
@@ -207,7 +213,7 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     let Some(runtime) = state.functions.clone() else {
         return UiResponse::error(404, "NOT_FOUND : no functions runtime is configured");
     };
-    let Some(slot) = StreamSlot::acquire() else {
+    let Some(slot) = StreamSlot::acquire(&state.stream_limiter) else {
         return too_many_streams();
     };
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_DEPTH);

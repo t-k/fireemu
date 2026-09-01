@@ -100,6 +100,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         project_hooks: None,
     });
     Arc::new(UiState {
+        stream_limiter: Arc::new(fireemu_adapter_ui::sse::StreamLimiter::default()),
         control_token: TOKEN.to_owned(),
         info: RuntimeInfo {
             version: "test".to_owned(),

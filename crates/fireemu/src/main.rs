@@ -1429,7 +1429,12 @@ fn logging_new_lines<'a>(previous: &[String], current: &'a [String]) -> &'a [Str
     current
 }
 
-fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: &BoundAddrs) {
+fn print_banner(
+    cfg: &RuntimeConfig,
+    verb: &str,
+    addrs: &BoundAddrs,
+    functions_runtime: Option<&fireemu_adapter_functions::runtime::FunctionsRuntime>,
+) {
     println!("fireemu {verb}");
     match addrs.firestore {
         Some(a) => println!("  firestore (gRPC + REST): {a}   FIRESTORE_EMULATOR_HOST={a}"),
@@ -1446,11 +1451,27 @@ fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: &BoundAddrs) {
         None => println!("  storage:          not selected by --only (nothing is bound)"),
     }
     match addrs.functions {
-        Some(addr) => println!(
-            "  functions (HTTP): {addr}   http://{addr}/{}/us-central1/{{function}}   (source: {})",
-            cfg.auth_project,
-            cfg.functions_source.as_deref().unwrap_or("")
-        ),
+        Some(addr) => {
+            println!(
+                "  functions (HTTP): {addr}   (source: {})",
+                cfg.functions_source.as_deref().unwrap_or("")
+            );
+            if let Some(runtime) = functions_runtime {
+                for function in &runtime.manifest().functions {
+                    if matches!(
+                        function.trigger,
+                        fireemu_core_functions::manifest::Trigger::Http { .. }
+                    ) {
+                        println!(
+                            "  function URL: http://{addr}/{}/{}/{}",
+                            runtime.project(),
+                            function.region,
+                            function.name
+                        );
+                    }
+                }
+            }
+        }
         None => {
             println!("  functions:        not configured (functions.source or --functions <dir>)");
         }
@@ -1969,6 +1990,18 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
             cfg.seed ^ 0x5053_5542,
         )));
+        if pubsub_listener.is_some() {
+            if let Some(runtime) = &functions_runtime {
+                let resources = functions::function_pubsub_resources(
+                    runtime.project(),
+                    runtime.manifest(),
+                )?;
+                let mut state = pubsub_state
+                    .lock()
+                    .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
+                functions::provision_function_pubsub_resources(&mut state, &resources)?;
+            }
+        }
         let pubsub_bridge: Option<Arc<dyn fireemu_adapter_pubsub::TopicDelivery>> =
             functions_runtime.as_ref().map(|r| {
                 Arc::new(functions::PubSubBridge::new(r.clone()))
@@ -2131,7 +2164,12 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             locator
         });
         if !quiet {
-            print_banner(&cfg, if exec.is_some() { "exec" } else { "up" }, &addrs);
+            print_banner(
+                &cfg,
+                if exec.is_some() { "exec" } else { "up" },
+                &addrs,
+                functions_runtime.as_deref(),
+            );
             if let Some(state) = &app_check {
                 println!(
                     "  app check:        {} app(s)   FIREEMU_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",

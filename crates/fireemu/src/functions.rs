@@ -1,5 +1,6 @@
 //! Functions runtime wiring: runner process, event subscriptions, control hooks.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,121 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
 
 use crate::config::RuntimeConfig;
+
+/// One Pub/Sub topic and emulator subscription required by a loaded function manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionPubSubResource {
+    /// The canonical topic name.
+    pub topic: fireemu_core_pubsub::TopicName,
+    /// The canonical emulator subscription name.
+    pub subscription: fireemu_core_pubsub::SubscriptionName,
+}
+
+/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions.
+pub fn function_pubsub_resources(
+    project: &str,
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+) -> Result<Vec<FunctionPubSubResource>, String> {
+    use fireemu_core_functions::manifest::Trigger;
+
+    let mut topics: BTreeSet<(String, String)> = BTreeSet::new();
+    for function in &manifest.functions {
+        match &function.trigger {
+            Trigger::PubSub { topic } => {
+                topics.insert((topic.clone(), format!("function {:?}", function.name)));
+            }
+            Trigger::Schedule { .. } => {
+                topics.insert((
+                    format!("firebase-schedule-{}", function.name),
+                    format!("scheduled function {:?}", function.name),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // The same topic may be declared by more than one function. Resource names, not the
+    // diagnostics attached to them, define uniqueness.
+    let mut seen = BTreeSet::new();
+    let mut resources = Vec::new();
+    for (topic_id, owner) in topics {
+        if !seen.insert(topic_id.clone()) {
+            continue;
+        }
+        let topic = fireemu_core_pubsub::TopicName::new(project, &topic_id).map_err(|error| {
+            format!("{owner} requires invalid Pub/Sub topic {topic_id:?}: {error}")
+        })?;
+        let subscription_id = format!("emulator-sub-{topic_id}");
+        let subscription = fireemu_core_pubsub::SubscriptionName::new(project, &subscription_id)
+            .map_err(|error| {
+                format!(
+                    "{owner} requires invalid Pub/Sub subscription {subscription_id:?}: {error}"
+                )
+            })?;
+        resources.push(FunctionPubSubResource {
+            topic,
+            subscription,
+        });
+    }
+    Ok(resources)
+}
+
+/// Creates missing manifest-owned Pub/Sub resources without changing existing compatible ones.
+pub fn provision_function_pubsub_resources(
+    state: &mut fireemu_core_pubsub::PubSubState,
+    resources: &[FunctionPubSubResource],
+) -> Result<(), String> {
+    use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
+    use fireemu_core_pubsub::{Filter, PushConfig, SubscriptionConfig};
+
+    // Check every existing subscription before creating anything. A stale subscription with
+    // the expected name but another topic is configuration drift, not an idempotent match.
+    for resource in resources {
+        if let Ok(existing) = state.subscription_config(&resource.subscription) {
+            if existing.topic != resource.topic {
+                return Err(format!(
+                    "Functions requires subscription {} to target {}, but it already targets {}",
+                    resource.subscription.to_full(),
+                    resource.topic.to_full(),
+                    existing.topic.to_full()
+                ));
+            }
+        }
+    }
+
+    for resource in resources {
+        if !state.topic_exists(&resource.topic) {
+            state
+                .create_topic(resource.topic.clone(), BTreeMap::new())
+                .map_err(|error| {
+                    format!(
+                        "could not provision topic {}: {error}",
+                        resource.topic.to_full()
+                    )
+                })?;
+        }
+        if state.subscription_config(&resource.subscription).is_err() {
+            state
+                .create_subscription(SubscriptionConfig {
+                    name: resource.subscription.clone(),
+                    topic: resource.topic.clone(),
+                    ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: None,
+                    push_config: PushConfig::default(),
+                })
+                .map_err(|error| {
+                    format!(
+                        "could not provision subscription {}: {error}",
+                        resource.subscription.to_full()
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
 
 fn ignored_reload_path(relative: &Path, configured: &[String]) -> bool {
     let text = relative.to_string_lossy().replace('\\', "/");
@@ -1290,8 +1406,16 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_callable_app_check, functions_source_signature, snapshot_functions_source};
+    use std::collections::BTreeMap;
+
+    use super::{
+        check_callable_app_check, function_pubsub_resources, functions_source_signature,
+        provision_function_pubsub_resources, snapshot_functions_source,
+    };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
+    use fireemu_core_pubsub::{
+        Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
+    };
     use serde_json::json;
 
     #[test]
@@ -1410,6 +1534,80 @@ mod tests {
             "debugMode": true,
             "authHeaders": auth_headers,
         })
+    }
+
+    #[test]
+    fn pubsub_resources_cover_shared_topics_and_schedules_once() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "workerOne", "trigger": {"type": "pubsub", "topic": "shared-jobs"}},
+            {"name": "workerTwo", "trigger": {"type": "pubsub", "topic": "shared-jobs"}, "region": "europe-west1"},
+            {"name": "dailyReport", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}},
+            {"name": "health", "trigger": {"type": "http"}}
+        ]})).unwrap();
+
+        let resources = function_pubsub_resources("demo-app", &manifest).unwrap();
+        let actual: Vec<(String, String)> = resources
+            .iter()
+            .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "projects/demo-app/topics/firebase-schedule-dailyReport".to_owned(),
+                    "projects/demo-app/subscriptions/emulator-sub-firebase-schedule-dailyReport"
+                        .to_owned(),
+                ),
+                (
+                    "projects/demo-app/topics/shared-jobs".to_owned(),
+                    "projects/demo-app/subscriptions/emulator-sub-shared-jobs".to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn provisioning_function_pubsub_resources_is_idempotent_and_checks_existing_links() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "worker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}}
+        ]}))
+        .unwrap();
+        let resources = function_pubsub_resources("demo-app", &manifest).unwrap();
+        let mut state = PubSubState::new(7);
+
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        assert_eq!(state.list_topics("demo-app").len(), 1);
+        assert_eq!(state.list_subscriptions("demo-app").len(), 1);
+
+        let mut conflicting = PubSubState::new(8);
+        let expected_topic = TopicName::new("demo-app", "shared-jobs").unwrap();
+        let other_topic = TopicName::new("demo-app", "other-jobs").unwrap();
+        conflicting
+            .create_topic(expected_topic, BTreeMap::new())
+            .unwrap();
+        conflicting
+            .create_topic(other_topic.clone(), BTreeMap::new())
+            .unwrap();
+        conflicting
+            .create_subscription(SubscriptionConfig {
+                name: SubscriptionName::new("demo-app", "emulator-sub-shared-jobs").unwrap(),
+                topic: other_topic,
+                ack_deadline_seconds:
+                    fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS,
+                enable_message_ordering: false,
+                filter: Filter::always(),
+                dead_letter_policy: None,
+                retry_policy: None,
+                push_config: PushConfig::default(),
+            })
+            .unwrap();
+
+        let error = provision_function_pubsub_resources(&mut conflicting, &resources).unwrap_err();
+        assert!(error.contains("emulator-sub-shared-jobs"), "{error}");
+        assert!(error.contains("other-jobs"), "{error}");
+        assert_eq!(conflicting.list_topics("demo-app").len(), 2);
+        assert_eq!(conflicting.list_subscriptions("demo-app").len(), 1);
     }
 
     /// Functions scenario 6: `consumeAppCheckToken: true` fails discovery outright, whether or

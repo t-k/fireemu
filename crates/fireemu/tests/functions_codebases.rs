@@ -113,6 +113,19 @@ fn every_declared_codebase_is_loaded_on_its_own_runner_and_routed_by_region() {
     assert_eq!(answers.len(), 2, "stdout was:\n{stdout}\nstderr:\n{err}");
     assert_eq!(answers[0]["codebase"], "alpha");
     assert_eq!(answers[1]["codebase"], "beta");
+    let advertised: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("  function URL: http://"))
+        .collect();
+    assert_eq!(advertised.len(), 2, "unexpected banner:\n{stdout}");
+    assert!(
+        advertised[0].ends_with("/demo-multi/us-central1/fxAlpha"),
+        "the banner did not print the first routable function URL:\n{stdout}"
+    );
+    assert!(
+        advertised[1].ends_with("/demo-multi/europe-west1/fxBeta"),
+        "the banner did not print the second routable function URL:\n{stdout}"
+    );
     // One runner process per codebase, which is the point: the two answers come from
     // different processes.
     assert_ne!(

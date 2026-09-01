@@ -113,7 +113,22 @@ try {
   );
 
   // --- T4: a published message reaches a subscribed Cloud Function (EVTINFRA-02) ----------
-  const jobs = await getOrCreateTopic("jobs");
+  const jobs = pubsub.topic("jobs");
+  const [jobsExists] = await jobs.exists();
+  check("the Functions manifest provisions its Pub/Sub topic before exec", jobsExists);
+  const [jobSubscriptionExists] = await pubsub.subscription("emulator-sub-jobs").exists();
+  check(
+    "the Functions manifest provisions its emulator subscription before exec",
+    jobSubscriptionExists,
+  );
+  const [scheduleTopicExists] = await pubsub.topic("firebase-schedule-tick").exists();
+  const [scheduleSubscriptionExists] = await pubsub
+    .subscription("emulator-sub-firebase-schedule-tick")
+    .exists();
+  check(
+    "scheduled Functions provision Firebase-compatible Pub/Sub resources",
+    scheduleTopicExists && scheduleSubscriptionExists,
+  );
   await jobs.publishMessage({
     data: Buffer.from(JSON.stringify({ task: "reindex" })),
     attributes: { priority: "high" },

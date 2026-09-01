@@ -30,6 +30,7 @@
 //! HTTPS, callable and scheduled functions are unaffected, again as upstream: only records
 //! carrying an event trigger are disabled.
 
+use std::io::Write as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -97,6 +98,8 @@ pub struct HubState {
     pub functions: Option<Arc<FunctionsRuntime>>,
     /// The export writer `POST /_admin/export` drives.
     pub export: Option<Arc<dyn ExportRunner>>,
+    /// The per-run capability required by every state-changing Hub route.
+    pub control_token: String,
 }
 
 impl HubState {
@@ -113,6 +116,14 @@ impl HubState {
             "origins": [origin],
             "pid": std::process::id(),
         })
+    }
+
+    fn discovery_locator(&self) -> Value {
+        let mut locator = self.locator();
+        if let Some(object) = locator.as_object_mut() {
+            object.insert("fireemuControlToken".to_owned(), json!(self.control_token));
+        }
+        locator
     }
 
     /// `GET /emulators`: an object keyed by emulator name, as upstream returns it.
@@ -154,6 +165,15 @@ impl Locator {
     /// when it declined, so the operator learns that discovery still points elsewhere.
     pub fn write(state: &HubState) -> (Self, Option<String>) {
         let path = Self::path_for(&state.project);
+        if std::fs::symlink_metadata(&path).is_ok_and(|metadata| !metadata.file_type().is_file()) {
+            return (
+                Self { path: None },
+                Some(format!(
+                    "{} is not a regular file and was left alone",
+                    path.display()
+                )),
+            );
+        }
         if let Some(pid) = existing_live_pid(&path) {
             return (
                 Self { path: None },
@@ -164,13 +184,37 @@ impl Locator {
                 )),
             );
         }
-        let body = serde_json::to_string(&state.locator()).unwrap_or_default();
-        match std::fs::write(&path, body) {
+        let body = serde_json::to_string(&state.discovery_locator()).unwrap_or_default();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let temporary = path.with_file_name(format!(
+            ".hub-{}-{}-{nonce}.tmp",
+            state.project,
+            std::process::id()
+        ));
+        let result = (|| -> std::io::Result<()> {
+            let mut options = std::fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary)?;
+            file.write_all(body.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, &path)
+        })();
+        match result {
             Ok(()) => (Self { path: Some(path) }, None),
-            Err(e) => (
-                Self { path: None },
-                Some(format!("cannot write {}: {e}", path.display())),
-            ),
+            Err(e) => {
+                let _ = std::fs::remove_file(&temporary);
+                (
+                    Self { path: None },
+                    Some(format!("cannot write {}: {e}", path.display())),
+                )
+            }
         }
     }
 }
@@ -190,6 +234,9 @@ impl Drop for Locator {
 
 /// The `pid` a locator file records, if it parses.
 fn existing_pid(path: &std::path::Path) -> Option<u32> {
+    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
     let text = std::fs::read_to_string(path).ok()?;
     let json: Value = serde_json::from_str(&text).ok()?;
     json.get("pid")
@@ -221,12 +268,136 @@ fn json_response(status: StatusCode, body: &Value, origin: Option<&str>) -> Resp
     if let Some(origin) = origin {
         builder = builder
             .header("access-control-allow-origin", origin)
-            .header("access-control-allow-methods", "GET, PUT, POST, OPTIONS")
-            .header("access-control-allow-headers", "content-type")
-            .header("access-control-allow-private-network", "true");
+            .header("vary", "Origin");
     }
     builder
         .body(Full::new(Bytes::from(text)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
+fn local_origin(req: &Request<Incoming>) -> Option<&str> {
+    let mut values = req.headers().get_all(hyper::header::ORIGIN).iter();
+    let origin = values.next()?.to_str().ok()?;
+    if values.next().is_some() || origin == "null" {
+        return None;
+    }
+    let uri = origin.parse::<hyper::Uri>().ok()?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.path() != "/" {
+        return None;
+    }
+    let host = uri.host()?;
+    (matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127."))
+        .then_some(origin)
+}
+
+fn fetch_metadata_allows(req: &Request<Incoming>) -> bool {
+    let single = |name: &'static str| {
+        let mut values = req.headers().get_all(name).iter();
+        let value = values.next().and_then(|v| v.to_str().ok());
+        (values.next().is_none(), value)
+    };
+    let (site_valid, site) = single("sec-fetch-site");
+    let (mode_valid, mode) = single("sec-fetch-mode");
+    site_valid
+        && mode_valid
+        && (site.is_none() || matches!(site, Some("same-origin" | "same-site" | "none")))
+        && (mode.is_none() || mode == Some("cors"))
+}
+
+fn bearer(req: &Request<Incoming>) -> Option<&str> {
+    let mut values = req.headers().get_all(hyper::header::AUTHORIZATION).iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some() {
+        return None;
+    }
+    value.strip_prefix("Bearer ")
+}
+
+fn is_mutation(method: &Method, path: &str) -> bool {
+    (method == Method::PUT
+        && matches!(
+            path,
+            "/functions/disableBackgroundTriggers" | "/functions/enableBackgroundTriggers"
+        ))
+        || (method == Method::POST && path == "/_admin/export")
+}
+
+fn mutation_preflight(req: &Request<Incoming>, path: &str) -> Response<Full<Bytes>> {
+    let origin = local_origin(req);
+    let wanted_method = if path == "/_admin/export" {
+        "POST"
+    } else {
+        "PUT"
+    };
+    let requested_method = {
+        let mut values = req
+            .headers()
+            .get_all("access-control-request-method")
+            .iter();
+        let value = values.next().and_then(|v| v.to_str().ok());
+        (values.next().is_none()).then_some(value).flatten()
+    };
+    let requested_headers = {
+        let mut values = req
+            .headers()
+            .get_all("access-control-request-headers")
+            .iter();
+        let value = values.next().and_then(|v| v.to_str().ok());
+        (values.next().is_none()).then_some(value).flatten()
+    };
+    let allowed_headers = requested_headers.and_then(|headers| {
+        let names = headers
+            .split(',')
+            .map(|name| name.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        let unique = names.iter().collect::<std::collections::HashSet<_>>();
+        (!names.is_empty()
+            && unique.len() == names.len()
+            && names
+                .iter()
+                .all(|name| matches!(name.as_str(), "authorization" | "content-type"))
+            && names.iter().all(|name| !name.is_empty()))
+        .then(|| names.join(", "))
+    });
+    let private_network = {
+        let mut values = req
+            .headers()
+            .get_all("access-control-request-private-network")
+            .iter();
+        let first = values.next().and_then(|value| value.to_str().ok());
+        (values.next().is_none() && first.is_none_or(|value| value == "true")).then_some(first)
+    };
+    if origin.is_none()
+        || requested_method != Some(wanted_method)
+        || allowed_headers.is_none()
+        || private_network.is_none()
+        || !fetch_metadata_allows(req)
+    {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            &json!({"error": "the Hub mutation preflight was not admitted"}),
+            None,
+        );
+    }
+    let origin = origin.unwrap_or_default();
+    let mut builder = Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header("access-control-allow-origin", origin)
+        .header("access-control-allow-methods", wanted_method)
+        .header(
+            "access-control-allow-headers",
+            allowed_headers.unwrap_or_default(),
+        )
+        .header(
+            "vary",
+            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network, Sec-Fetch-Site, Sec-Fetch-Mode",
+        )
+        .header("content-length", "0");
+    if private_network.flatten() == Some("true") {
+        builder = builder.header("access-control-allow-private-network", "true");
+    }
+    builder
+        .body(Full::new(Bytes::new()))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
@@ -251,29 +422,40 @@ async fn respond(
     state: Arc<HubState>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    let origin = req
-        .headers()
-        .get(hyper::header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+    let has_origin = req.headers().contains_key(hyper::header::ORIGIN);
+    let origin = local_origin(&req).map(str::to_owned);
     if !host_is_local(&req) {
         return Ok(json_response(
             StatusCode::FORBIDDEN,
             &json!({"error": "the Emulator Hub answers loopback Hosts only"}),
-            origin.as_deref(),
+            None,
         ));
     }
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
     if method == Method::OPTIONS {
+        if matches!(
+            path.as_str(),
+            "/functions/disableBackgroundTriggers"
+                | "/functions/enableBackgroundTriggers"
+                | "/_admin/export"
+        ) {
+            return Ok(mutation_preflight(&req, &path));
+        }
+        return Ok(json_response(StatusCode::NOT_FOUND, &json!({}), None));
+    }
+    if is_mutation(&method, &path)
+        && (!fireemu_adapter_http::control::token_matches(bearer(&req), &state.control_token)
+            || (has_origin && (origin.is_none() || !fetch_metadata_allows(&req))))
+    {
         return Ok(json_response(
-            StatusCode::NO_CONTENT,
-            &json!({}),
-            origin.as_deref(),
+            StatusCode::FORBIDDEN,
+            &json!({"error": "Hub mutations require the control capability"}),
+            None,
         ));
     }
     if (&method, path.as_str()) == (&Method::POST, "/_admin/export") {
-        return Ok(run_export(&state, req, origin.as_deref()).await);
+        return Ok(run_export(&state, req, has_origin.then_some("browser")).await);
     }
     let origin = origin.as_deref();
     let response = match (&method, path.as_str()) {
@@ -389,14 +571,29 @@ fn set_background_triggers(
     origin: Option<&str>,
 ) -> Response<Full<Bytes>> {
     let Some(runtime) = &state.functions else {
-        return json_response(
+        return mutation_json_response(
             StatusCode::BAD_REQUEST,
             &json!({"error": "The Cloud Functions emulator is not running."}),
             origin,
         );
     };
     runtime.set_background_triggers(enabled);
-    json_response(StatusCode::OK, &json!({"enabled": enabled}), origin)
+    mutation_json_response(StatusCode::OK, &json!({"enabled": enabled}), origin)
+}
+
+fn mutation_json_response(
+    status: StatusCode,
+    body: &Value,
+    origin: Option<&str>,
+) -> Response<Full<Bytes>> {
+    let mut response = json_response(status, body, origin);
+    if origin.is_some() {
+        response.headers_mut().insert(
+            hyper::header::VARY,
+            hyper::header::HeaderValue::from_static("Origin, Sec-Fetch-Site, Sec-Fetch-Mode"),
+        );
+    }
+    response
 }
 
 /// Serves the Hub on `listener` until the task is aborted.
@@ -450,6 +647,7 @@ mod tests {
             ],
             functions: None,
             export: None,
+            control_token: "unit-test-token".to_owned(),
         }
     }
 

@@ -300,12 +300,21 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| CliError::refused(format!("{} names no Hub origin", locator.display())))?;
     let address = origin.trim_start_matches("http://");
+    let token = document
+        .get("fireemuControlToken")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            CliError::refused(format!(
+                "{} names no fireemu control capability",
+                locator.display()
+            ))
+        })?;
     let body = serde_json::json!({
         "path": absolute.to_string_lossy(),
         "initiatedBy": "emulators:export",
     })
     .to_string();
-    let (status, response) = post_json(address, "/_admin/export", &body)
+    let (status, response) = post_json(address, "/_admin/export", &body, token)
         .map_err(|e| CliError::refused(format!("the export request to {origin} failed: {e}")))?;
     if status != 200 {
         let message = serde_json::from_str::<serde_json::Value>(&response)
@@ -324,7 +333,12 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
 
 /// One `POST` against a loopback Hub, written by hand: the binary carries a server-side
 /// hyper only, and the Hub's answers are small enough to read in one go.
-fn post_json(address: &str, path: &str, body: &str) -> Result<(u16, String), String> {
+fn post_json(
+    address: &str,
+    path: &str,
+    body: &str,
+    control_token: &str,
+) -> Result<(u16, String), String> {
     use std::io::{Read as _, Write as _};
     let mut stream = std::net::TcpStream::connect(address).map_err(|e| e.to_string())?;
     stream
@@ -332,7 +346,7 @@ fn post_json(address: &str, path: &str, body: &str) -> Result<(u16, String), Str
         .map_err(|e| e.to_string())?;
     write!(
         stream,
-        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {control_token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
     .map_err(|e| e.to_string())?;
@@ -2096,6 +2110,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             emulators: hub_emulators(&addrs),
             functions: functions_runtime.clone(),
             export: Some(exporter.clone() as Arc<dyn hub::ExportRunner>),
+            control_token: control_token.clone(),
         });
         let _locator = hub_addr.map(|_| {
             let (locator, note) = hub::Locator::write(&hub_state);
@@ -2106,7 +2121,6 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         });
         if !quiet {
             print_banner(&cfg, if exec.is_some() { "exec" } else { "up" }, &addrs);
-            println!("  control token:    FIREEMU_CONTROL_TOKEN={control_token}   (browser requests to privileged control routes must send Authorization: Bearer <token>)");
             if let Some(state) = &app_check {
                 println!(
                     "  app check:        {} app(s)   FIREEMU_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",

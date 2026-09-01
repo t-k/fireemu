@@ -52,9 +52,8 @@ suite) needs, and what leaves the other smokes working without attaching a token
   the SDK speaks gRPC, so that transport is probed directly). Run it with
   `fireemu exec --config tools/sdk-smoke/fireemu.missing-index.json --firebase-json tools/sdk-smoke/missing-index.firebase.json`.
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
-  directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) and open
-  `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FIREEMU_CONTROL_TOKEN>`; the page prints
-  its checks as JSON. `FIREEMU_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.
+  directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) from a `fireemu exec`
+  child and open `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FIREEMU_CONTROL_TOKEN>`; the page prints its checks as JSON. The variable is scoped to the child and is not printed by the daemon. `FIREEMU_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.
 
 ```sh
 # one-shot: fireemu exec --firestore-port 8080 --http-port 9099 --storage-port 9199 -- npm run smoke

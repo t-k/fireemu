@@ -1980,7 +1980,7 @@ pub fn browser_guard(
     if privileged && !token_matches(presented, &state.control_token) {
         return Some(error(
             403,
-            "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token> (printed at start, FIREEMU_CONTROL_TOKEN)",
+            "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token>",
         ));
     }
     None

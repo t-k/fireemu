@@ -4,12 +4,12 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { STATE_FILE } from "./global-setup";
 
-/** The control token the daemon printed at start (every UI API request presents it). */
+/** The control token embedded in the same-origin UI page. */
 export const controlToken = (): string => {
-  const state = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { banner?: string };
-  const token = /FIREEMU_CONTROL_TOKEN=([0-9a-f]+)/.exec(state.banner ?? "")?.[1];
+  const state = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { token?: string };
+  const token = state.token;
   if (!token) {
-    throw new Error("the daemon banner carries no FIREEMU_CONTROL_TOKEN");
+    throw new Error("the UI test state carries no control token");
   }
   return token;
 };

@@ -390,7 +390,7 @@ fn control_guard(state: &AppCheckState, headers: &RequestHeaders) -> Option<Json
     Some(error(
         403,
         "PERMISSION_DENIED",
-        "CONTROL_TOKEN_REQUIRED : App Check debug-token management needs Authorization: Bearer <control token> (printed at start, FIREEMU_CONTROL_TOKEN)",
+        "CONTROL_TOKEN_REQUIRED : App Check debug-token management needs Authorization: Bearer <control token>",
     ))
 }
 

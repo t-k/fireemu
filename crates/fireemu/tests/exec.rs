@@ -102,6 +102,18 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     assert!(!env.contains_key("FIREEMU_FUNCTIONS_HOST"));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.starts_with("fireemu exec\n"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let token = &env["FIREEMU_CONTROL_TOKEN"];
+    assert!(
+        !stdout.contains(token),
+        "the success log exposed the control capability"
+    );
+    assert!(
+        !stderr.contains(token),
+        "the shutdown log exposed the control capability"
+    );
+    assert!(!stdout.contains("FIREEMU_CONTROL_TOKEN="));
+    assert!(!stderr.contains("FIREEMU_CONTROL_TOKEN="));
 }
 
 #[test]

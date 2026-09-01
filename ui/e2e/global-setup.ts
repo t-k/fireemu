@@ -62,6 +62,12 @@ export default async function globalSetup(): Promise<void> {
   });
   await waitFor(`http://127.0.0.1:${PORTS.http}/health/live`, 120);
   await waitFor(`http://127.0.0.1:${PORTS.ui}/ui/`, 40);
-  writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner }));
+  const html = await (await fetch(`http://127.0.0.1:${PORTS.ui}/ui/`)).text();
+  const config = /window\.__FIREEMU__ = (\{.*?\});<\/script>/.exec(html)?.[1];
+  const token = config
+    ? ((JSON.parse(config) as { controlToken?: string }).controlToken ?? "")
+    : "";
+  if (!token) throw new Error("the served UI page carries no control token");
+  writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, banner, token }));
   child.unref();
 }

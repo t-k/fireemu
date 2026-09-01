@@ -29,13 +29,30 @@ fn scratch(name: &str) -> PathBuf {
 /// One HTTP request against the Hub. Written by hand because the binary's test suite has no
 /// HTTP client dependency, and the Hub's answers are small enough to read in one go.
 fn request(port: u16, method: &str, path: &str, host: &str) -> (u16, String) {
+    let (status, _, body) = request_with_headers(port, method, path, host, &[], "");
+    (status, body)
+}
+
+fn request_with_headers(
+    port: u16,
+    method: &str,
+    path: &str,
+    host: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, String, String) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the Hub accepts");
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
+    write!(stream, "{method} {path} HTTP/1.1\r\nHost: {host}\r\n").unwrap();
+    for (name, value) in headers {
+        write!(stream, "{name}: {value}\r\n").unwrap();
+    }
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        "Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
     )
     .unwrap();
     stream.flush().unwrap();
@@ -48,7 +65,7 @@ fn request(port: u16, method: &str, path: &str, host: &str) -> (u16, String) {
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
-    (status, body.to_owned())
+    (status, head.to_owned(), body.to_owned())
 }
 
 fn json(port: u16, method: &str, path: &str) -> serde_json::Value {
@@ -122,6 +139,12 @@ impl Daemon {
         std::env::temp_dir().join(format!("hub-{}.json", self.project))
     }
 
+    fn control_token(&self) -> String {
+        let locator: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(self.locator()).unwrap()).unwrap();
+        locator["fireemuControlToken"].as_str().unwrap().to_owned()
+    }
+
     fn stop(mut self) {
         let _ = Command::new("kill")
             .args(["-TERM", &self.child.id().to_string()])
@@ -187,6 +210,10 @@ fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
     assert_eq!(root["host"], "127.0.0.1");
     assert_eq!(root["port"], u64::from(port));
     assert!(root["pid"].as_u64().is_some_and(|p| p > 0));
+    assert!(
+        root.get("fireemuControlToken").is_none(),
+        "the public Hub response must not expose the discovery capability"
+    );
 
     // An unknown route is a 404, not a hang or a 200 with an empty body.
     let (status, _) = request(port, "GET", "/nope", "127.0.0.1");
@@ -194,7 +221,15 @@ fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
     // The export route exists; a request without the official body is refused precisely
     // rather than writing a directory the caller never named. `tests/import_export.rs`
     // drives the successful path end to end.
-    let (status, body) = request(port, "POST", "/_admin/export", "127.0.0.1");
+    let token = daemon.control_token();
+    let (status, _, body) = request_with_headers(
+        port,
+        "POST",
+        "/_admin/export",
+        "127.0.0.1",
+        &[("Authorization", &format!("Bearer {token}"))],
+        "",
+    );
     assert_eq!(status, 400, "{body}");
     assert!(body.contains("export request body"), "{body}");
 
@@ -221,6 +256,15 @@ fn the_locator_file_is_written_at_start_and_removed_at_exit() {
         u64::from(daemon.child.id()),
         "the locator names the daemon that wrote it, which is what tells a second suite it is live"
     );
+    assert_eq!(locator["fireemuControlToken"].as_str().unwrap().len(), 32);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 
     daemon.stop();
     let gone = Instant::now();
@@ -232,6 +276,32 @@ fn the_locator_file_is_written_at_start_and_removed_at_exit() {
         "{} outlived the daemon that wrote it",
         path.display()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_hub_discovery_file_never_follows_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let project = format!("demo-hub-symlink-{}", std::process::id());
+    let path = std::env::temp_dir().join(format!("hub-{project}.json"));
+    let target = scratch("locator-symlink-target").join("target.txt");
+    std::fs::write(&target, "do not replace").unwrap();
+    let _ = std::fs::remove_file(&path);
+    symlink(&target, &path).unwrap();
+    let port = free_port();
+    let daemon = Daemon::start(&project, port, &[]);
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "do not replace");
+    assert!(std::fs::symlink_metadata(&path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    daemon.stop();
+    assert!(std::fs::symlink_metadata(&path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -275,11 +345,14 @@ fn the_hub_switches_background_triggers_and_says_so() {
     // No functions codebase is loaded, so the switch has nothing to act on and says that
     // rather than reporting a state it did not reach.
     let daemon = Daemon::start("demo-hub-triggers", port, &[]);
-    let (status, body) = request(
+    let token = daemon.control_token();
+    let (status, _, body) = request_with_headers(
         port,
         "PUT",
         "/functions/disableBackgroundTriggers",
         "127.0.0.1",
+        &[("Authorization", &format!("Bearer {token}"))],
+        "",
     );
     assert_eq!(status, 400, "{body}");
     assert!(
@@ -310,14 +383,147 @@ fn the_hub_switches_background_triggers_and_says_so() {
             "0",
         ],
     );
-    let disabled = json(port, "PUT", "/functions/disableBackgroundTriggers");
+    let token = daemon.control_token();
+    let mutation = |path: &str| {
+        let (status, _, body) = request_with_headers(
+            port,
+            "PUT",
+            path,
+            "127.0.0.1",
+            &[("Authorization", &format!("Bearer {token}"))],
+            "",
+        );
+        assert_eq!(status, 200, "PUT {path} -> {body}");
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()
+    };
+    let disabled = mutation("/functions/disableBackgroundTriggers");
     assert_eq!(disabled["enabled"], false);
-    let enabled = json(port, "PUT", "/functions/enableBackgroundTriggers");
+    let enabled = mutation("/functions/enableBackgroundTriggers");
     assert_eq!(enabled["enabled"], true);
     // The Functions emulator is discoverable while it runs.
     let emulators = json(port, "GET", "/emulators");
     assert_eq!(emulators["functions"]["name"], "functions");
     let _ = scratch("triggers");
+    daemon.stop();
+}
+
+#[test]
+fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
+    let port = free_port();
+    let daemon = Daemon::start("demo-hub-mutation-security", port, &[]);
+    let token = daemon.control_token();
+    let path = "/functions/disableBackgroundTriggers";
+
+    for (label, headers) in [
+        (
+            "remote origin",
+            vec![
+                ("Origin", "https://attacker.example"),
+                ("Access-Control-Request-Method", "PUT"),
+                ("Access-Control-Request-Headers", "authorization"),
+            ],
+        ),
+        (
+            "opaque origin",
+            vec![
+                ("Origin", "null"),
+                ("Access-Control-Request-Method", "PUT"),
+                ("Access-Control-Request-Headers", "authorization"),
+            ],
+        ),
+        (
+            "wrong requested method",
+            vec![
+                ("Origin", "http://127.0.0.1:4000"),
+                ("Access-Control-Request-Method", "POST"),
+                ("Access-Control-Request-Headers", "authorization"),
+            ],
+        ),
+        (
+            "unapproved requested header",
+            vec![
+                ("Origin", "http://127.0.0.1:4000"),
+                ("Access-Control-Request-Method", "PUT"),
+                ("Access-Control-Request-Headers", "x-fireemu-internal"),
+            ],
+        ),
+        (
+            "cross-site fetch metadata",
+            vec![
+                ("Origin", "http://127.0.0.1:4000"),
+                ("Access-Control-Request-Method", "PUT"),
+                ("Access-Control-Request-Headers", "authorization"),
+                ("Sec-Fetch-Site", "cross-site"),
+            ],
+        ),
+    ] {
+        let (status, head, _) =
+            request_with_headers(port, "OPTIONS", path, "127.0.0.1", &headers, "");
+        assert_eq!(status, 403, "{label}: {head}");
+        assert!(
+            !head
+                .to_ascii_lowercase()
+                .contains("access-control-allow-origin"),
+            "{label}: {head}"
+        );
+    }
+
+    let local_origin = "http://127.0.0.1:4000";
+    let (status, head, _) = request_with_headers(
+        port,
+        "OPTIONS",
+        path,
+        "127.0.0.1",
+        &[
+            ("Origin", local_origin),
+            ("Access-Control-Request-Method", "PUT"),
+            ("Access-Control-Request-Headers", "authorization"),
+            ("Sec-Fetch-Site", "same-site"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Access-Control-Request-Private-Network", "true"),
+        ],
+        "",
+    );
+    let lower = head.to_ascii_lowercase();
+    assert_eq!(status, 204, "{head}");
+    assert!(lower.contains(&format!("access-control-allow-origin: {local_origin}")));
+    assert!(
+        lower.contains("access-control-allow-methods: put"),
+        "{head}"
+    );
+    assert!(
+        lower.contains("access-control-allow-headers: authorization"),
+        "{head}"
+    );
+    assert!(lower.contains("access-control-allow-private-network: true"));
+    assert!(lower.contains("vary: origin, access-control-request-method, access-control-request-headers, access-control-request-private-network, sec-fetch-site, sec-fetch-mode"), "{head}");
+
+    for (label, authorization) in [
+        ("missing token", None),
+        ("wrong token", Some("Bearer wrong")),
+    ] {
+        let mut headers = vec![("Origin", local_origin)];
+        if let Some(value) = authorization {
+            headers.push(("Authorization", value));
+        }
+        let (status, _, _) = request_with_headers(port, "PUT", path, "127.0.0.1", &headers, "");
+        assert_eq!(status, 403, "{label}");
+    }
+    let authorization = format!("Bearer {token}");
+    let (status, head, body) = request_with_headers(
+        port,
+        "PUT",
+        path,
+        "127.0.0.1",
+        &[("Origin", local_origin), ("Authorization", &authorization)],
+        "",
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        head.to_ascii_lowercase()
+            .contains(&format!("access-control-allow-origin: {local_origin}")),
+        "{head}"
+    );
     daemon.stop();
 }
 
@@ -415,7 +621,7 @@ fn turning_the_hub_off_leaves_no_listener_and_no_variable() {
 /// every request carrying an `Origin`: the official CLI drives it without one, a page in a
 /// browser cannot avoid sending one.
 #[test]
-fn the_export_route_refuses_browser_origins_and_serves_plain_clients() {
+fn the_export_route_requires_the_control_capability_and_refuses_browser_origins() {
     use std::io::{Read as _, Write as _};
     use std::net::TcpStream;
     use std::time::Duration;
@@ -423,7 +629,8 @@ fn the_export_route_refuses_browser_origins_and_serves_plain_clients() {
     let _ = std::fs::remove_dir_all(&dir);
     let port = free_port();
     let daemon = Daemon::start("demo-hub-export", port, &[]);
-    let send = |origin: Option<&str>| -> u16 {
+    let token = daemon.control_token();
+    let send = |origin: Option<&str>, authorization: Option<&str>| -> u16 {
         let body = format!(
             "{{\"path\": {:?}, \"initiatedBy\": \"test\"}}",
             dir.display().to_string()
@@ -435,9 +642,12 @@ fn the_export_route_refuses_browser_origins_and_serves_plain_clients() {
         let origin_line = origin
             .map(|o| format!("Origin: {o}\r\n"))
             .unwrap_or_default();
+        let authorization_line = authorization
+            .map(|value| format!("Authorization: {value}\r\n"))
+            .unwrap_or_default();
         write!(
             stream,
-            "POST /_admin/export HTTP/1.1\r\nHost: 127.0.0.1\r\n{origin_line}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST /_admin/export HTTP/1.1\r\nHost: 127.0.0.1\r\n{origin_line}{authorization_line}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
         .unwrap();
@@ -450,13 +660,14 @@ fn the_export_route_refuses_browser_origins_and_serves_plain_clients() {
             .unwrap_or(0)
     };
     // A page (any Origin, loopback included) is refused and writes nothing.
-    assert_eq!(send(Some("http://127.0.0.1:4000")), 403);
+    let bearer = format!("Bearer {token}");
+    assert_eq!(send(Some("http://127.0.0.1:4000"), Some(&bearer)), 403);
     assert!(
         !dir.exists(),
         "a refused export must not create the directory"
     );
-    // The plain client the CLI is: served.
-    assert_eq!(send(None), 200);
+    assert_eq!(send(None, None), 403);
+    assert_eq!(send(None, Some(&bearer)), 200);
     assert!(dir.join("firebase-export-metadata.json").is_file());
     drop(daemon);
     let _ = std::fs::remove_dir_all(&dir);

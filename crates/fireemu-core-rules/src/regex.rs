@@ -28,8 +28,35 @@ impl fmt::Display for RegexError {
 
 impl std::error::Error for RegexError {}
 
+/// Runtime failure while executing a compiled regular expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegexRuntimeError {
+    /// The matcher consumed more backtracking steps than its safety limit permits.
+    StepBudgetExceeded {
+        /// Steps observed when the limit was detected.
+        current: u64,
+        /// Maximum permitted steps.
+        maximum: u64,
+    },
+}
+
+impl fmt::Display for RegexRuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StepBudgetExceeded { current, maximum } => {
+                write!(
+                    f,
+                    "regular expression step budget exceeded: {current} > {maximum}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for RegexRuntimeError {}
+
 /// Maximum backtracking steps per match attempt.
-const STEP_BUDGET: usize = 200_000;
+const STEP_BUDGET: u64 = 200_000;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Node {
@@ -541,9 +568,9 @@ impl Regex {
 
     /// Whether the whole of `text` matches (Rules `matches()` semantics).
     #[must_use]
-    pub fn is_full_match(&self, text: &str) -> bool {
+    pub fn is_full_match(&self, text: &str) -> Result<bool, RegexRuntimeError> {
         let chars: Vec<char> = text.chars().collect();
-        let steps = Cell::new(0usize);
+        let steps = Cell::new(0);
         let caps = RefCell::new(vec![None; self.groups + 1]);
         let ctx = MatchContext {
             chars: &chars,
@@ -551,18 +578,18 @@ impl Regex {
             caps: &caps,
             flags: self.flags,
         };
-        match_node(&self.node, &ctx, 0, &mut |end| end == chars.len())
+        match_node(&self.node, &ctx, 0, &mut |end| Ok(end == chars.len()))
     }
 
     /// Replaces every non-overlapping match, expanding `$0` / `$1` ... and `$$` in
     /// `replacement`, as the official runtime's `replace()` does.
     #[must_use]
-    pub fn replace_all(&self, text: &str, replacement: &str) -> String {
+    pub fn replace_all(&self, text: &str, replacement: &str) -> Result<String, RegexRuntimeError> {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::new();
         let mut i = 0;
         while i <= chars.len() {
-            let steps = Cell::new(0usize);
+            let steps = Cell::new(0);
             let caps = RefCell::new(vec![None; self.groups + 1]);
             let ctx = MatchContext {
                 chars: &chars,
@@ -573,8 +600,8 @@ impl Regex {
             let mut best: Option<(usize, Captures)> = None;
             let found = match_node(&self.node, &ctx, i, &mut |end| {
                 best = Some((end, caps.borrow().clone()));
-                true
-            });
+                Ok(true)
+            })?;
             match (found, best) {
                 (true, Some((end, groups))) if end > i => {
                     out.push_str(&expand(replacement, &chars, i, end, &groups));
@@ -596,7 +623,7 @@ impl Regex {
                 }
             }
         }
-        out
+        Ok(out)
     }
 }
 
@@ -643,9 +670,23 @@ fn expand(
 /// the pattern-wide flags.
 struct MatchContext<'a> {
     chars: &'a [char],
-    steps: &'a Cell<usize>,
+    steps: &'a Cell<u64>,
     caps: &'a RefCell<Captures>,
     flags: Flags,
+}
+
+type MatchResult = Result<bool, RegexRuntimeError>;
+
+fn charge_step(ctx: &MatchContext<'_>) -> Result<(), RegexRuntimeError> {
+    let current = ctx.steps.get().saturating_add(1);
+    ctx.steps.set(current);
+    if current > STEP_BUDGET {
+        return Err(RegexRuntimeError::StepBudgetExceeded {
+            current,
+            maximum: STEP_BUDGET,
+        });
+    }
+    Ok(())
 }
 
 fn class_matches(negated: bool, items: &[ClassItem], c: char, flags: Flags) -> bool {
@@ -681,33 +722,57 @@ fn match_node(
     node: &Node,
     ctx: &MatchContext,
     pos: usize,
-    k: &mut dyn FnMut(usize) -> bool,
-) -> bool {
-    ctx.steps.set(ctx.steps.get() + 1);
-    if ctx.steps.get() > STEP_BUDGET {
-        return false;
-    }
+    k: &mut dyn FnMut(usize) -> MatchResult,
+) -> MatchResult {
+    charge_step(ctx)?;
     match node {
         Node::Char(c) => {
-            ctx.chars
+            if ctx
+                .chars
                 .get(pos)
                 .is_some_and(|got| chars_equal(*got, *c, ctx.flags))
-                && k(pos + 1)
+            {
+                k(pos + 1)
+            } else {
+                Ok(false)
+            }
         }
         Node::Any => {
-            ctx.chars
+            if ctx
+                .chars
                 .get(pos)
                 .is_some_and(|c| ctx.flags.dot_all || *c != '\n')
-                && k(pos + 1)
+            {
+                k(pos + 1)
+            } else {
+                Ok(false)
+            }
         }
         Node::Class { negated, items } => {
-            ctx.chars
+            if ctx
+                .chars
                 .get(pos)
                 .is_some_and(|c| class_matches(*negated, items, *c, ctx.flags))
-                && k(pos + 1)
+            {
+                k(pos + 1)
+            } else {
+                Ok(false)
+            }
         }
-        Node::Start => pos == 0 && k(pos),
-        Node::End => pos == ctx.chars.len() && k(pos),
+        Node::Start => {
+            if pos == 0 {
+                k(pos)
+            } else {
+                Ok(false)
+            }
+        }
+        Node::End => {
+            if pos == ctx.chars.len() {
+                k(pos)
+            } else {
+                Ok(false)
+            }
+        }
         Node::Group(None, inner) => match_node(inner, ctx, pos, k),
         Node::Group(Some(index), inner) => {
             let index = *index;
@@ -716,16 +781,25 @@ fn match_node(
                 if let Some(slot) = ctx.caps.borrow_mut().get_mut(index) {
                     *slot = Some((pos, end));
                 }
-                if k(end) {
-                    return true;
+                match k(end) {
+                    Ok(true) => return Ok(true),
+                    Ok(false) => {}
+                    Err(error) => return Err(error),
                 }
                 if let Some(slot) = ctx.caps.borrow_mut().get_mut(index) {
                     *slot = previous;
                 }
-                false
+                Ok(false)
             })
         }
-        Node::Alt(branches) => branches.iter().any(|b| match_node(b, ctx, pos, k)),
+        Node::Alt(branches) => {
+            for branch in branches {
+                if match_node(branch, ctx, pos, k)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
         Node::Seq(items) => match_seq(items, ctx, pos, k),
         Node::Repeat {
             node,
@@ -740,8 +814,8 @@ fn match_seq(
     items: &[Node],
     ctx: &MatchContext,
     pos: usize,
-    k: &mut dyn FnMut(usize) -> bool,
-) -> bool {
+    k: &mut dyn FnMut(usize) -> MatchResult,
+) -> MatchResult {
     match items.split_first() {
         None => k(pos),
         Some((first, rest)) => match_node(first, ctx, pos, &mut |end| match_seq(rest, ctx, end, k)),
@@ -757,24 +831,38 @@ fn match_repeat(
     ctx: &MatchContext,
     pos: usize,
     count: usize,
-    k: &mut dyn FnMut(usize) -> bool,
-) -> bool {
-    ctx.steps.set(ctx.steps.get() + 1);
-    if ctx.steps.get() > STEP_BUDGET {
-        return false;
-    }
+    k: &mut dyn FnMut(usize) -> MatchResult,
+) -> MatchResult {
+    charge_step(ctx)?;
     let can_stop = count >= min;
     let can_more = max.is_none_or(|m| count < m);
-    let try_more = |k: &mut dyn FnMut(usize) -> bool| -> bool {
-        can_more
-            && match_node(node, ctx, pos, &mut |end| {
+    let try_more = |k: &mut dyn FnMut(usize) -> MatchResult| -> MatchResult {
+        if can_more {
+            match_node(node, ctx, pos, &mut |end| {
                 // An empty iteration would loop forever; require progress.
-                end > pos && match_repeat(node, min, max, greedy, ctx, end, count + 1, k)
+                if end > pos {
+                    match_repeat(node, min, max, greedy, ctx, end, count + 1, k)
+                } else {
+                    Ok(false)
+                }
             })
+        } else {
+            Ok(false)
+        }
     };
     if greedy {
-        try_more(k) || (can_stop && k(pos))
+        if try_more(k)? {
+            Ok(true)
+        } else if can_stop {
+            k(pos)
+        } else {
+            Ok(false)
+        }
     } else {
-        (can_stop && k(pos)) || try_more(k)
+        if can_stop && k(pos)? {
+            Ok(true)
+        } else {
+            try_more(k)
+        }
     }
 }

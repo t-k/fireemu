@@ -681,6 +681,18 @@ fn soft(msg: impl Into<String>) -> EvalError {
     EvalError::Soft(msg.into())
 }
 
+fn regex_runtime_error(error: crate::regex::RegexRuntimeError) -> EvalError {
+    match error {
+        crate::regex::RegexRuntimeError::StepBudgetExceeded { current, maximum } => {
+            EvalError::Budget {
+                limit_id: "FIREEMU-REGEX-STEPS-PER-MATCH",
+                current,
+                maximum,
+            }
+        }
+    }
+}
+
 fn truthy(v: &RulesValue) -> Result<bool, EvalError> {
     match v {
         RulesValue::Bool(b) => Ok(*b),
@@ -1757,7 +1769,7 @@ fn method_call(
             };
             let re = crate::regex::Regex::new(pattern)
                 .map_err(|e| EvalError::Unsupported(e.to_string()))?;
-            V::Bool(re.is_full_match(s))
+            V::Bool(re.is_full_match(s).map_err(regex_runtime_error)?)
         }
         (V::String(s), "replace") => {
             arity(2)?;
@@ -1766,7 +1778,10 @@ fn method_call(
             };
             let re = crate::regex::Regex::new(pattern)
                 .map_err(|e| EvalError::Unsupported(e.to_string()))?;
-            V::String(re.replace_all(s, replacement))
+            V::String(
+                re.replace_all(s, replacement)
+                    .map_err(regex_runtime_error)?,
+            )
         }
         (V::List(items) | V::Set(items), "size") => {
             arity(0)?;

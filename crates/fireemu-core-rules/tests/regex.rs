@@ -4,10 +4,10 @@
 // the point of some of these tests.
 #![allow(clippy::invalid_regex)]
 
-use fireemu_core_rules::regex::Regex;
+use fireemu_core_rules::regex::{Regex, RegexRuntimeError};
 
 fn full(p: &str, s: &str) -> bool {
-    Regex::new(p).unwrap().is_full_match(s)
+    Regex::new(p).unwrap().is_full_match(s).unwrap()
 }
 
 #[test]
@@ -44,17 +44,26 @@ fn matches_is_a_full_match_with_the_documented_syntax() {
 #[test]
 fn replace_all_replaces_every_match_with_a_literal() {
     let re = Regex::new("[aeiou]").unwrap();
-    assert_eq!(re.replace_all("banana", "_"), "b_n_n_");
+    assert_eq!(re.replace_all("banana", "_").unwrap(), "b_n_n_");
     let re = Regex::new("\\s+").unwrap();
-    assert_eq!(re.replace_all("a  b\tc", "-"), "a-b-c");
+    assert_eq!(re.replace_all("a  b\tc", "-").unwrap(), "a-b-c");
     let re = Regex::new("x").unwrap();
-    assert_eq!(re.replace_all("none", "y"), "none");
+    assert_eq!(re.replace_all("none", "y").unwrap(), "none");
 }
 
 #[test]
-fn pathological_patterns_fail_closed_within_the_step_budget() {
+fn pathological_patterns_report_step_budget_exhaustion() {
     let re = Regex::new("(a+)+b").unwrap();
-    assert!(!re.is_full_match(&"a".repeat(40)));
+    assert!(matches!(
+        re.is_full_match(&"a".repeat(40)),
+        Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
+            if current > maximum
+    ));
+    assert!(matches!(
+        re.replace_all(&"a".repeat(40), "replacement"),
+        Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
+            if current > maximum
+    ));
 }
 
 #[test]
@@ -107,31 +116,40 @@ fn quantifier_group_escape_and_class_syntax_boundaries() {
 #[test]
 fn matching_boundaries_and_replace_all_edge_cases() {
     let re = |p: &str| Regex::new(p).unwrap();
-    assert!(re("a{2,3}").is_full_match("aa"));
-    assert!(re("a{2,3}").is_full_match("aaa"));
-    assert!(!re("a{2,3}").is_full_match("a"));
-    assert!(!re("a{2,3}").is_full_match("aaaa"));
-    assert!(re("a{2,}").is_full_match(&"a".repeat(50)));
-    assert!(!re("a{3,}").is_full_match("aa"));
-    assert!(!re(".").is_full_match("\n"), "`.` never matches a newline");
-    assert!(re("[^a]").is_full_match("\n"));
-    assert!(re("a|b|c").is_full_match("c"));
-    assert!(re("^ab$").is_full_match("ab"));
-    assert!(re("[a-c]+").is_full_match("cab") && !re("[a-c]+").is_full_match("cad"));
-    assert!(re("[\\d]+").is_full_match("123") && !re("[\\d]+").is_full_match("12a"));
-    assert!(re("\\.").is_full_match(".") && !re("\\.").is_full_match("a"));
-    assert!(re("[^\\d]").is_full_match("x") && !re("[^\\d]").is_full_match("5"));
-    assert!(re("(ab)*").is_full_match("abab") && !re("(ab)*").is_full_match("aba"));
+    assert!(re("a{2,3}").is_full_match("aa").unwrap());
+    assert!(re("a{2,3}").is_full_match("aaa").unwrap());
+    assert!(!re("a{2,3}").is_full_match("a").unwrap());
+    assert!(!re("a{2,3}").is_full_match("aaaa").unwrap());
+    assert!(re("a{2,}").is_full_match(&"a".repeat(50)).unwrap());
+    assert!(!re("a{3,}").is_full_match("aa").unwrap());
+    assert!(
+        !re(".").is_full_match("\n").unwrap(),
+        "`.` never matches a newline"
+    );
+    assert!(re("[^a]").is_full_match("\n").unwrap());
+    assert!(re("a|b|c").is_full_match("c").unwrap());
+    assert!(re("^ab$").is_full_match("ab").unwrap());
+    assert!(
+        re("[a-c]+").is_full_match("cab").unwrap() && !re("[a-c]+").is_full_match("cad").unwrap()
+    );
+    assert!(
+        re("[\\d]+").is_full_match("123").unwrap() && !re("[\\d]+").is_full_match("12a").unwrap()
+    );
+    assert!(re("\\.").is_full_match(".").unwrap() && !re("\\.").is_full_match("a").unwrap());
+    assert!(re("[^\\d]").is_full_match("x").unwrap() && !re("[^\\d]").is_full_match("5").unwrap());
+    assert!(
+        re("(ab)*").is_full_match("abab").unwrap() && !re("(ab)*").is_full_match("aba").unwrap()
+    );
     // replace_all: an empty match inserts the replacement before every character and at
     // the end; non-empty matches consume their text. An empty match right after a
     // non-empty one is emitted (JavaScript semantics: "baab".replace(/a*/g, "-")).
-    assert_eq!(re("x*").replace_all("ab", "-"), "-a-b-");
-    assert_eq!(re("a*").replace_all("baab", "-"), "-b--b-");
-    assert_eq!(re("ab").replace_all("abab", "X"), "XX");
-    assert_eq!(re("a").replace_all("aaa", "bb"), "bbbbbb");
-    assert_eq!(re("a+").replace_all("aaa", "b"), "b");
-    assert_eq!(re("b").replace_all("", "x"), "");
-    assert_eq!(re("^").replace_all("ab", "^"), "^ab");
+    assert_eq!(re("x*").replace_all("ab", "-").unwrap(), "-a-b-");
+    assert_eq!(re("a*").replace_all("baab", "-").unwrap(), "-b--b-");
+    assert_eq!(re("ab").replace_all("abab", "X").unwrap(), "XX");
+    assert_eq!(re("a").replace_all("aaa", "bb").unwrap(), "bbbbbb");
+    assert_eq!(re("a+").replace_all("aaa", "b").unwrap(), "b");
+    assert_eq!(re("b").replace_all("", "x").unwrap(), "");
+    assert_eq!(re("^").replace_all("ab", "^").unwrap(), "^ab");
 }
 
 #[test]
@@ -139,20 +157,23 @@ fn replace_expands_the_capture_group_references_the_official_runtime_expands() {
     let re = |p: &str| Regex::new(p).unwrap();
     // Recorded against the official emulator: `'abc'.replace('(a)(b)', '$2$1') == 'bac'`
     // is true and the `\2\1` spelling is false.
-    assert_eq!(re("(a)(b)").replace_all("abc", "$2$1"), "bac");
-    assert_eq!(re("(a)(b)").replace_all("abc", "\\2\\1"), "\\2\\1c");
-    assert_eq!(re("a").replace_all("a", "$0$0"), "aa");
-    assert_eq!(re("(a)").replace_all("ab", "[$1]"), "[a]b");
-    assert_eq!(re("a").replace_all("a", "$$"), "$");
+    assert_eq!(re("(a)(b)").replace_all("abc", "$2$1").unwrap(), "bac");
+    assert_eq!(
+        re("(a)(b)").replace_all("abc", "\\2\\1").unwrap(),
+        "\\2\\1c"
+    );
+    assert_eq!(re("a").replace_all("a", "$0$0").unwrap(), "aa");
+    assert_eq!(re("(a)").replace_all("ab", "[$1]").unwrap(), "[a]b");
+    assert_eq!(re("a").replace_all("a", "$$").unwrap(), "$");
     // A group that never participated expands to nothing, and a reference past the last
     // group is dropped rather than raising.
-    assert_eq!(re("(a)|(b)").replace_all("a", "<$2>"), "<>");
-    assert_eq!(re("a").replace_all("a", "$7"), "");
+    assert_eq!(re("(a)|(b)").replace_all("a", "<$2>").unwrap(), "<>");
+    assert_eq!(re("a").replace_all("a", "$7").unwrap(), "");
 }
 
 #[test]
 fn inline_flags_and_named_classes_behave_as_the_official_runtime_records_them() {
-    let full = |p: &str, s: &str| Regex::new(p).unwrap().is_full_match(s);
+    let full = |p: &str, s: &str| Regex::new(p).unwrap().is_full_match(s).unwrap();
     assert!(full("(?i)abc", "ABC"));
     assert!(!full("abc", "ABC"));
     assert!(full("(?i)[a-z]+", "ABC"), "case folding reaches classes");
@@ -173,9 +194,9 @@ fn inline_flags_and_named_classes_behave_as_the_official_runtime_records_them() 
 #[test]
 fn null_escape_matches_u0000_and_nothing_else() {
     let null = Regex::new("\\0").unwrap();
-    assert!(null.is_full_match("\0"));
-    assert!(!null.is_full_match("0"));
-    assert!(!null.is_full_match("\\0"));
+    assert!(null.is_full_match("\0").unwrap());
+    assert!(!null.is_full_match("0").unwrap());
+    assert!(!null.is_full_match("\\0").unwrap());
 }
 
 #[test]

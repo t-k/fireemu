@@ -204,9 +204,13 @@ fn coverage_merge_adds_distinct_value_counts_without_replaying_observations() {
 fn request_trace_payloads_are_lazy_until_a_client_enables_the_ring() {
     use std::cell::Cell;
 
-    use fireemu_core_rules::coverage::{Coverage, RequestTrace, RulesDiagnostics};
+    use fireemu_core_rules::ast::Span;
+    use fireemu_core_rules::coverage::{
+        Coverage, RequestTrace, RulesDiagnostics, REQUEST_TRACE_CAPACITY,
+    };
 
-    let coverage = Coverage::default();
+    let mut coverage = Coverage::default();
+    coverage.record(Span::default(), 4, ExprValue::Bool(true));
     let called = Cell::new(0);
     let trace = |sequence| {
         called.set(called.get() + 1);
@@ -222,12 +226,36 @@ fn request_trace_payloads_are_lazy_until_a_client_enables_the_ring() {
     };
     let mut diagnostics = RulesDiagnostics::default();
 
+    assert!(!diagnostics.request_traces_enabled());
     diagnostics.push(&coverage, trace);
     assert_eq!(called.get(), 0);
     assert!(diagnostics.requests().is_empty());
+    assert_eq!(diagnostics.coverage().entries()[0].values[0].1, 1);
 
     diagnostics.enable_request_traces();
+    assert!(diagnostics.request_traces_enabled());
     diagnostics.push(&coverage, trace);
     assert_eq!(called.get(), 1);
     assert_eq!(diagnostics.requests().len(), 1);
+    assert_eq!(diagnostics.requests()[0].sequence, 1);
+
+    for index in 0..REQUEST_TRACE_CAPACITY {
+        diagnostics.push(&coverage, |sequence| RequestTrace {
+            sequence,
+            method: "get",
+            path: format!("notes/{index}"),
+            allowed: true,
+            reason: String::new(),
+            uid: None,
+            expressions: Vec::new(),
+        });
+    }
+    let requests = diagnostics.requests();
+    assert_eq!(requests.len(), REQUEST_TRACE_CAPACITY);
+    assert_eq!(requests[0].sequence, (REQUEST_TRACE_CAPACITY + 1) as u64);
+    assert_eq!(requests.last().unwrap().sequence, 2);
+
+    let mut coverage_only = RulesDiagnostics::default();
+    coverage_only.merge_coverage(&coverage);
+    assert_eq!(coverage_only.coverage().entries()[0].values[0].1, 1);
 }

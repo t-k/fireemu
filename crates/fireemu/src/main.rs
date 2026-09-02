@@ -1799,13 +1799,17 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         export_on_exit,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
-    if !cfg.clock_start_pinned {
+    let auth_wall_clock = if cfg.clock_start_pinned {
+        None
+    } else {
         // Unpinned: start at the precise wall-clock instant so a credential mutation around
         // a second boundary cannot lag the caller by the subsecond part discarded at startup.
         // Token claims are still serialized at second precision; daemon.clockStart pins the
         // logical clock for reproducible runs.
+        let monotonic_start = std::time::Instant::now();
         cfg.clock_start = logical_system_time(std::time::SystemTime::now());
-    }
+        Some(AuthWallClock::from_anchor(cfg.clock_start, monotonic_start))
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -2070,7 +2074,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let auth = Arc::new(AuthState {
             store: auth_store.clone(),
             clock: clock.clone(),
-            wall_clock: (!cfg.clock_start_pinned).then(|| AuthWallClock::new(cfg.clock_start)),
+            wall_clock: auth_wall_clock,
             totp_extension_enabled: cfg.auth_totp.is_some(),
             barrier: Some(barrier.clone()),
             events: functions_runtime.as_ref().map(functions::auth_sink),

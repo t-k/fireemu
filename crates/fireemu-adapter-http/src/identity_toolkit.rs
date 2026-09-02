@@ -52,12 +52,17 @@ pub struct AuthWallClock {
 }
 
 impl AuthWallClock {
-    /// Anchors elapsed monotonic time to the daemon's initial wall-clock instant.
+    /// Anchors elapsed monotonic time to a wall-clock instant sampled at the same point in
+    /// daemon startup. Capturing the monotonic instant at request-state construction would
+    /// lose the setup duration and can put Auth behind the caller near a second boundary.
     #[must_use]
-    pub fn new(logical_start: LogicalInstant) -> Self {
+    pub const fn from_anchor(
+        logical_start: LogicalInstant,
+        monotonic_start: std::time::Instant,
+    ) -> Self {
         Self {
             logical_start,
-            monotonic_start: std::time::Instant::now(),
+            monotonic_start,
         }
     }
 
@@ -4689,7 +4694,7 @@ mod tests {
     #[test]
     fn auth_wall_clock_advances_from_its_monotonic_anchor() {
         let start = LogicalInstant::from_unix_seconds(1_800_000_000);
-        let mut wall_clock = AuthWallClock::new(start);
+        let mut wall_clock = AuthWallClock::from_anchor(start, std::time::Instant::now());
         wall_clock.monotonic_start = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(2))
             .unwrap();

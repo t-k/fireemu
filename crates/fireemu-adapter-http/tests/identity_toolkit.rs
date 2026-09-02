@@ -1223,6 +1223,29 @@ fn self_service_password_change_invalidates_an_existing_session_cookie() {
         }),
     );
     assert_eq!(status, 200, "{changed}");
+    let old_auth_time =
+        fireemu_core_auth::jwt::decode_unsigned(old_cookie["sessionCookie"].as_str().unwrap())
+            .unwrap()
+            .payload
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64)
+            .unwrap();
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid.clone()]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let valid_since = lookup["users"][0]["validSince"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    assert!(
+        old_auth_time < valid_since,
+        "the Admin SDK compares cookie auth_time={old_auth_time} with lookup validSince={valid_since}"
+    );
     let (status, new_cookie) = admin(
         &s,
         "POST",

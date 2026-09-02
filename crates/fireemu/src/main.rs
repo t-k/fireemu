@@ -1800,13 +1800,11 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
     if !cfg.clock_start_pinned {
-        // Unpinned: start at the wall clock (whole seconds) so ID tokens verify against
-        // real time; daemon.clockStart pins it for reproducible runs.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_secs()).unwrap_or(0))
-            .unwrap_or(0);
-        cfg.clock_start = LogicalInstant::from_unix_seconds(now);
+        // Unpinned: start at the precise wall-clock instant so a credential mutation around
+        // a second boundary cannot lag the caller by the subsecond part discarded at startup.
+        // Token claims are still serialized at second precision; daemon.clockStart pins the
+        // logical clock for reproducible runs.
+        cfg.clock_start = logical_system_time(std::time::SystemTime::now());
     }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2491,6 +2489,14 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     }
 }
 
+fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
+    let nanos = system_time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX))
+        .unwrap_or(0);
+    LogicalInstant::from_nanos(nanos)
+}
+
 #[cfg(test)]
 mod config_reload_tests {
     use super::*;
@@ -2506,6 +2512,18 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn unpinned_clock_start_preserves_subsecond_wall_time() {
+        let wall_time = std::time::UNIX_EPOCH
+            .checked_add(std::time::Duration::new(1_800_000_000, 123_456_789))
+            .unwrap();
+
+        assert_eq!(
+            logical_system_time(wall_time),
+            LogicalInstant::from_nanos(1_800_000_000_123_456_789)
+        );
     }
 
     #[tokio::test]

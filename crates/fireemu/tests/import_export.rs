@@ -10,44 +10,33 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
+#[cfg(unix)]
+use trusted_temp::TrustedTempDir;
+
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/export")
         .join(name)
 }
 
+#[cfg(unix)]
+fn scratch(name: &str) -> TrustedTempDir {
+    TrustedTempDir::new(&format!("import-export-{name}"))
+}
+
+#[cfg(not(unix))]
 fn scratch(name: &str) -> PathBuf {
-    let base = trusted_scratch_base();
-    std::fs::create_dir_all(&base).expect("create trusted import/export test base");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))
-            .expect("restrict trusted import/export test base");
-    }
-    let dir = base.join(format!(
+    let dir = std::env::temp_dir().join(format!(
         "fireemu-import-export-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-#[cfg(target_os = "macos")]
-fn trusted_scratch_base() -> PathBuf {
-    let output = Command::new("getconf")
-        .arg("DARWIN_USER_TEMP_DIR")
-        .output()
-        .expect("read the per-user macOS temporary directory");
-    assert!(output.status.success(), "getconf DARWIN_USER_TEMP_DIR");
-    let path = String::from_utf8(output.stdout).expect("UTF-8 temporary directory");
-    PathBuf::from(path.trim()).join("fireemu-import-export-tests")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn trusted_scratch_base() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fireemu-import-export-tests")
 }
 
 /// A copy of a recorded fixture that a scenario may damage.

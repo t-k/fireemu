@@ -6,26 +6,16 @@ use std::path::{Path, PathBuf};
 
 use fireemu_export_publication::PublicationStage;
 
-struct TestRoot(PathBuf);
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
+use trusted_temp::TrustedTempDir;
+
+struct TestRoot(TrustedTempDir);
 
 impl TestRoot {
     fn new(label: &str) -> Self {
-        let base = trusted_test_base();
-        std::fs::create_dir_all(&base).expect("create trusted test base");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))
-                .expect("restrict trusted test base");
-        }
-        let path = base.join(format!(
-            "fireemu-publication-{label}-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir(&path).expect("create test root");
-        Self(path)
+        Self(TrustedTempDir::new(&format!("publication-{label}")))
     }
 
     fn target(&self) -> PathBuf {
@@ -33,30 +23,33 @@ impl TestRoot {
     }
 }
 
-impl Drop for TestRoot {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn trusted_test_base() -> PathBuf {
-    let output = std::process::Command::new("getconf")
-        .arg("DARWIN_USER_TEMP_DIR")
-        .output()
-        .expect("read the per-user macOS temporary directory");
-    assert!(output.status.success(), "getconf DARWIN_USER_TEMP_DIR");
-    let path = String::from_utf8(output.stdout).expect("UTF-8 temporary directory");
-    PathBuf::from(path.trim()).join("fireemu-publication-tests")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn trusted_test_base() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fireemu-publication-tests")
-}
-
 fn write(path: &Path, name: &str, value: &str) {
     std::fs::write(path.join(name), value).expect("write stage marker");
+}
+
+fn create_private_dir(path: &Path) {
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(path).expect("create private directory");
+}
+
+#[test]
+fn trusted_test_root_is_owner_only_and_cleans_up_during_unwind() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut created = None;
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let root = TrustedTempDir::new("publication-unwind");
+        created = Some(root.path().to_owned());
+        let mode = std::fs::metadata(root.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        panic!("exercise cleanup");
+    }));
+
+    assert!(panic.is_err());
+    assert!(!created.unwrap().exists());
 }
 
 #[test]
@@ -205,9 +198,7 @@ fn other_user_writable_namespace_ancestor_is_refused() {
 
     let root = TestRoot::new("writable-ancestor");
     let parent = root.0.join("private-parent");
-    std::fs::create_dir(&parent).expect("create private parent");
-    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
-        .expect("make direct parent private");
+    create_private_dir(&parent);
     std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o777))
         .expect("make ancestor writable");
 
@@ -223,7 +214,7 @@ fn other_user_writable_namespace_ancestor_is_refused() {
 fn extended_acl_namespace_ancestor_is_refused() {
     let root = TestRoot::new("acl-ancestor");
     let parent = root.0.join("private-parent");
-    std::fs::create_dir(&parent).expect("create private parent");
+    create_private_dir(&parent);
     let status = std::process::Command::new("chmod")
         .args(["+a", "everyone allow add_file,delete_child"])
         .arg(&root.0)

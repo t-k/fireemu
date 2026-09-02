@@ -62,6 +62,10 @@ use fireemu_export_publication::PublicationStage;
 
 use crate::config::Selection;
 
+#[cfg(all(test, unix))]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
 /// The CLI version an export manifest is stamped with. The official emulator writes the
 /// `firebase-tools` version here; fireemu writes the version it is compatible with, so that
 /// a directory fireemu produced is accepted by the official CLI's own version checks, and
@@ -2240,6 +2244,9 @@ mod tests {
     use fireemu_core_types::time::LogicalInstant;
     use fireemu_export_publication::PublicationStage;
 
+    #[cfg(unix)]
+    use super::trusted_temp::TrustedTempDir;
+
     #[cfg(windows)]
     #[test]
     fn export_entry_fails_before_creating_a_destination_on_windows() {
@@ -2321,6 +2328,12 @@ mod tests {
         assert!(!root.exists());
     }
 
+    #[cfg(unix)]
+    fn budget_dir(name: &str) -> TrustedTempDir {
+        TrustedTempDir::new(&format!("import-budget-{name}"))
+    }
+
+    #[cfg(not(unix))]
     fn budget_dir(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
             "fireemu-import-budget-{name}-{}-{:?}",

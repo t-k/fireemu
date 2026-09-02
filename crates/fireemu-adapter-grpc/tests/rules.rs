@@ -212,6 +212,16 @@ fn s(v: &str) -> pb::Value {
         value_type: Some(pb::value::ValueType::StringValue(v.to_owned())),
     }
 }
+fn map(fields: &[(&str, pb::Value)]) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: fields
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                .collect(),
+        })),
+    }
+}
 fn with_bearer<T>(req: T, token: &str) -> Request<T> {
     let mut r = Request::new(req);
     r.metadata_mut().insert(
@@ -830,7 +840,7 @@ service cloud.firestore {
 }
 
 #[tokio::test]
-async fn nested_create_gets_preexisting_parent_and_absorbs_optional_field_errors() {
+async fn nested_create_lazily_evaluates_optional_parent_fields() {
     let mut h = start().await;
     let (alice, alice_token) = h.user("alice@example.com");
     let (bob, bob_token) = h.user("bob@example.com");
@@ -839,11 +849,19 @@ async fn nested_create_gets_preexisting_parent_and_absorbs_optional_field_errors
 service cloud.firestore {
   match /databases/{database}/documents {
     match /projects/{projectId}/private/{documentId} {
-      allow create: if request.auth != null && (
-        request.auth.uid == get(/databases/$(database)/documents/projects/$(projectId)).data.creditorId ||
-        request.auth.uid == get(/databases/$(database)/documents/projects/$(projectId)).data.creditorAgentId ||
-        request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.members
-      );
+      function mayCreate() {
+        let project = get(/databases/$(database)/documents/projects/$(projectId)).data;
+        let primaryId = project.primaryId;
+        let optionalId = project.optionalId;
+        let members = get(/databases/$(database)/documents/projects/$(projectId)).data.members;
+        return primaryId == request.auth.uid ||
+               optionalId == request.auth.uid ||
+               (
+                 request.auth.uid in members &&
+                 members[request.auth.uid].role in ['primary', 'agent']
+               );
+      }
+      allow create: if request.auth != null && mayCreate();
     }
   }
 }",
@@ -853,7 +871,10 @@ service cloud.firestore {
         .commit(with_bearer(
             commit(vec![set_write(
                 "projects/primary",
-                &[("creditorId", s(&alice))],
+                &[
+                    ("primaryId", s(&alice)),
+                    ("members", map(&[(&alice, map(&[("role", s("primary"))]))])),
+                ],
             )]),
             "owner",
         ))
@@ -886,7 +907,10 @@ service cloud.firestore {
         .commit(with_bearer(
             commit(vec![set_write(
                 "projects/member",
-                &[("members", arr(vec![s(&bob)]))],
+                &[
+                    ("primaryId", s("someone-else")),
+                    ("members", map(&[(&bob, map(&[("role", s("primary"))]))])),
+                ],
             )]),
             "owner",
         ))
@@ -902,6 +926,19 @@ service cloud.firestore {
         ))
         .await
         .unwrap();
+
+    let missing_parent = h
+        .client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "projects/missing/private/creditor",
+                &[("value", s("denied"))],
+            )]),
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(missing_parent.code(), tonic::Code::PermissionDenied);
     h.handle.abort();
 }
 

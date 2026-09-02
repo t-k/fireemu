@@ -284,6 +284,64 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
     }
 }
 
+/// The active Firestore transaction implementation validates optimistic read sets at commit.
+/// Public metadata must preserve the measured lock-timing divergence from the official Local
+/// Emulator Suite instead of claiming that unreachable pessimistic wait branches are parity.
+#[test]
+fn firestore_transaction_metadata_matches_the_optimistic_runtime() {
+    let transaction = text_of(&manifest()["capabilities"]["FS-TXN-1"]).to_ascii_lowercase();
+    for term in ["optimistic", "official local emulator", "locks"] {
+        assert!(
+            transaction.contains(term),
+            "FS-TXN-1 does not publish the required transaction term {term}"
+        );
+    }
+
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../spec/compatibility/contract.json"))
+            .expect("the compatibility contract is JSON");
+    let semantics = contract["profiles"]["firebase"]["officialEmulatorDivergences"]
+        .as_array()
+        .expect("the firebase profile lists official-emulator divergences")
+        .iter()
+        .find(|entry| entry["key"] == "firestore.semantics")
+        .expect("the firebase profile publishes the Firestore semantics matrix");
+    assert!(
+        semantics["profileValue"]
+            .as_str()
+            .is_some_and(|value| value.contains("20 rows")),
+        "the Firestore semantics profile does not publish all 20 divergence rows"
+    );
+    let semantics_note = text_of(&semantics["note"]).to_ascii_lowercase();
+    for term in ["optimistic", "pessimistic", "five families"] {
+        assert!(
+            semantics_note.contains(term),
+            "the Firestore semantics profile does not publish {term}"
+        );
+    }
+
+    let firestore = contract["surfaces"]
+        .as_array()
+        .expect("the contract lists surfaces")
+        .iter()
+        .find(|surface| surface["id"] == "firestore")
+        .expect("the contract lists Firestore");
+    let rpc_claim = firestore["claims"]
+        .as_array()
+        .expect("Firestore lists claims")
+        .iter()
+        .find(|claim| claim["id"] == "FS-CLAIM-RPC")
+        .expect("Firestore lists FS-CLAIM-RPC");
+    let statement = rpc_claim["statement"]
+        .as_str()
+        .expect("FS-CLAIM-RPC has a statement")
+        .to_ascii_lowercase();
+    assert!(
+        statement.contains("except") && statement.contains("transaction concurrency"),
+        "FS-CLAIM-RPC does not exclude the documented transaction-concurrency rows"
+    );
+}
+
 /// `LIMIT-META-03`: the `FS-LIM-1` capability entry, the Standard catalog and `/v1/limits`
 /// name the same set of enforced limits, and it is exactly the set the runtime enforces
 /// (`fireemu_core_firestore::limits::ENFORCED_LIMIT_IDS`). A limit the runtime can refuse a

@@ -95,7 +95,7 @@ fn prop_rules_regex_exhaustion_never_allows() {
                 matches!(
                     evaluate_request(&parsed, &request).decision,
                     Decision::Deny(DenyReason::BudgetExceeded {
-                        limit_id: "FIREEMU-REGEX-DEPTH-PER-MATCH",
+                        limit_id: "FIREEMU-REGEX-STEPS-PER-MATCH",
                         current,
                         maximum,
                     }) if current > maximum

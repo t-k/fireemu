@@ -268,6 +268,36 @@ fn unsupported_builtins_deny_instead_of_allowing() {
 }
 
 #[test]
+fn unsupported_parent_allow_cannot_be_overridden_by_a_nested_allow() {
+    let src = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /a/{x} {\n      allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true;\n      match /{rest=**} { allow read: if true; }\n    }\n  }\n}";
+    let ruleset = parse_ruleset(src).unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::Unsupported(_))),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn unsupported_sibling_allow_cannot_be_overridden_by_a_later_allow() {
+    let src = "service cloud.firestore {\n  match /databases/{db}/documents {\n    match /a/{x} {\n      allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true;\n    }\n    match /a/{x} { allow read: if true; }\n  }\n}";
+    let ruleset = parse_ruleset(src).unwrap();
+    let report = evaluate_request(
+        &ruleset,
+        &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
+    );
+
+    assert!(
+        matches!(report.decision, Decision::Deny(DenyReason::Unsupported(_))),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn expression_budget_and_call_depth_are_enforced_from_the_catalog() {
     // A chain of 25 function frames exceeds RULES-FUNCTION-CALL-DEPTH (20) at runtime.
     use std::fmt::Write as _;

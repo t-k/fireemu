@@ -614,31 +614,16 @@ fn walk_items<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    let mut deferred_unsupported: Option<EvalError> = None;
     for item in items {
         if let Item::Match(block) = item {
             match walk_match(block, remaining, ctx, ev, matched_any) {
                 Ok(true) => return Ok(true),
                 Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
-                Err(EvalError::Budget {
-                    limit_id,
-                    current,
-                    maximum,
-                }) => {
-                    return Err(EvalError::Budget {
-                        limit_id,
-                        current,
-                        maximum,
-                    })
-                }
-                Err(e @ EvalError::Unsupported(_)) => deferred_unsupported = Some(e),
+                Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
             }
         }
     }
-    match deferred_unsupported {
-        Some(e) => Err(e),
-        None => Ok(false),
-    }
+    Ok(false)
 }
 
 fn walk_match<'a>(
@@ -685,7 +670,10 @@ fn walk_match<'a>(
             *matched_any = true;
             result = evaluate_allows(&block.allows, ctx, ev);
         }
-        if !matches!(result, Ok(true) | Err(EvalError::Budget { .. })) {
+        if !matches!(
+            result,
+            Ok(true) | Err(EvalError::Budget { .. } | EvalError::Unsupported(_))
+        ) {
             let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
             result = match (result, nested) {
                 (_, Ok(true)) => Ok(true),
@@ -699,7 +687,7 @@ fn walk_match<'a>(
         match result {
             Ok(true) => return Ok(true),
             Ok(false) => {}
-            Err(e @ EvalError::Budget { .. }) => return Err(e),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
             Err(e) => {
                 if matches!(outcome, Ok(false)) {
                     outcome = Err(e);

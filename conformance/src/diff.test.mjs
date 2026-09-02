@@ -109,11 +109,13 @@ test("gRPC error trailers preserve duplicate ASCII values and binary bytes line 
   const metadata = {
     getMap() {
       return {
+        date: "Wed, 02 Sep 2026 03:01:11 GMT",
         "fireemu-reason": "first",
         "grpc-status-details-bin": Buffer.from([0, 255]),
       };
     },
     get(key) {
+      if (key === "date") return ["Wed, 02 Sep 2026 03:01:11 GMT"];
       if (key === "fireemu-reason") return ["first", "second"];
       if (key === "grpc-status-details-bin") return [Buffer.from([0, 255]), Buffer.alloc(0)];
       return [];

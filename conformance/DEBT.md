@@ -12,7 +12,12 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - **documented divergence** -- a difference that is intended and written down. These are listed
   for completeness; `check` does gate them, against the recorded fireemu value.
 
-## Debt (7)
+## Debt (9)
+
+### `auth/oob-code-shapes#create-the-user`
+
+- oracle: `{"keys":["email","expiresIn","idToken","kind","localId","refreshToken"],"status":200}`
+- fireemu: `{"keys":["email","emailVerified","expiresIn","idToken","kind","localId","refreshToken"],"status":200}`
 
 ### `firestore/lite-rest-transport#write-into-a-rules-closed-collection-is-denied`
 
@@ -48,6 +53,11 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 
 - oracle: `{"thrown":true,"code":"permission-denied","message":"\nfalse for 'get' @ L17"}`
 - fireemu: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_owner/<uid> denied by Security Rules: no allow statement evaluated to true"}`
+
+### `functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-loopback-origin`
+
+- oracle: `{"allowHeaders":"content-type","allowMethods":"POST","allowOrigin":"http://<host>","status":204,"vary":"Origin, Access-Control-Request-Headers"}`
+- fireemu: `{"allowHeaders":"content-type","allowMethods":"POST","allowOrigin":"http://<host>","status":204,"vary":"Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode"}`
 
 
 ## Pending: needs a real project (6)

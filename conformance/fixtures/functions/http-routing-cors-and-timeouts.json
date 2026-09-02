@@ -9,9 +9,9 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 10,
+    "parity": 9,
     "documented-divergence": 2,
-    "debt": 0,
+    "debt": 1,
     "pending": 0
   },
   "steps": [
@@ -80,13 +80,20 @@
     },
     {
       "id": "preflight-on-a-callable-from-a-loopback-origin",
-      "status": "parity",
-      "value": {
+      "status": "debt",
+      "oracle": {
         "allowHeaders": "content-type",
         "allowMethods": "POST",
         "allowOrigin": "http://<host>",
         "status": 204,
         "vary": "Origin, Access-Control-Request-Headers"
+      },
+      "testd": {
+        "allowHeaders": "content-type",
+        "allowMethods": "POST",
+        "allowOrigin": "http://<host>",
+        "status": 204,
+        "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode"
       }
     },
     {

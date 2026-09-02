@@ -4,6 +4,7 @@ pub mod atomic_commit_outbox;
 #[cfg(unix)]
 pub mod atomic_export_publication;
 pub mod auth_totp;
+pub mod await_idle;
 pub mod event_delivery;
 pub mod evidence;
 pub mod model;

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "model": "AwaitIdle",
+  "mutations": [
+    {
+      "id": "M-FORMAL-IDLE-SAFETY-001",
+      "property": "NoFalseIdle",
+      "operator": "return-before-blocking-work-drains",
+      "from": "blocking(observable) == Set(),\n    record(\"ReturnIdle\"",
+      "to": "true,\n    record(\"ReturnIdle\""
+    },
+    {
+      "id": "M-FORMAL-IDLE-LIVENESS-001",
+      "property": "AwaitIdleEventuallyReturns",
+      "operator": "remove-return-idle-fairness",
+      "from": "ReturnIdle.weakFair((observable, previousObservable, depth, used, previousUsed, fenced, lastAction, lastItem)),",
+      "to": "true,"
+    },
+    {
+      "id": "M-FORMAL-IDLE-IDENTITY-EXTERNAL-001",
+      "property": "NoIdentityReuse",
+      "operator": "reuse-external-work-identity",
+      "from": "not(used.contains(work)),\n    ITEMS.exclude(used).size() > observable.reservations.size(),",
+      "to": "true,\n    ITEMS.exclude(used).size() > observable.reservations.size(),"
+    },
+    {
+      "id": "M-FORMAL-IDLE-IDENTITY-CHILD-001",
+      "property": "NoIdentityReuse",
+      "operator": "reuse-child-work-identity",
+      "from": "not(used.contains(child)),\n    record(\"EnqueueChild\"",
+      "to": "true,\n    record(\"EnqueueChild\""
+    },
+    {
+      "id": "M-FORMAL-IDLE-FENCE-ADMISSION-001",
+      "property": "FenceClosedToNewExternalWork",
+      "operator": "admit-external-work-while-waiting",
+      "from": "observable.fence == \"none\",\n    ITEMS.contains(work)",
+      "to": "observable.fence != \"returned\",\n    ITEMS.contains(work)"
+    },
+    {
+      "id": "M-FORMAL-IDLE-FENCE-LIFECYCLE-001",
+      "property": "FenceLifecycleMonotonic",
+      "operator": "reopen-returned-fence",
+      "from": "{ ...observable, fence: \"returned\", returned: true }",
+      "to": "{ ...observable, fence: \"none\", returned: false }"
+    },
+    {
+      "id": "M-FORMAL-IDLE-RESERVATION-001",
+      "property": "CoveredReservationsBlock",
+      "operator": "exclude-covered-reservations-from-blocking",
+      "from": "state.reservations.intersect(fenced).union(\n    activeItems(state).filter",
+      "to": "Set().union(\n    activeItems(state).filter"
+    }
+  ]
+}

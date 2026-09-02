@@ -57,16 +57,16 @@
   ],
   "digests": {
     ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
-    "Cargo.lock": "15e11f752c34b411232a7706a8a58ec40ddb4664cda72fc59476fed24f30a265",
-    "Cargo.toml": "58e5be6aa303158de17183219fd293d24c7d261543ef33db2f9bc324cfde8245",
+    "Cargo.lock": "b9d9003d89e783439407af3eb59207cc649e1e52a8668688ce7fb10dbe61dfb6",
+    "Cargo.toml": "244bf68843deadddd11112ae015177de0c5cd0ff58a37beb17d0127d98af6f48",
     "crates/fireemu-adapter-functions/src/node_selection.rs": "b0d3581e3c8887e6d39fdb76f3dd56a1be420e37905c58e87e0f46791aac5a21",
-    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "c6694c90fb10738185517be88a0e6309632118eeffaf9cd0d0a1291d50a26c81",
+    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "fa1e410bb5ec70be8bf0b072a1c806c4da343e023a240571cd928a121d0a348c",
     "crates/fireemu-adapter-http/tests/auth_flows.rs": "66d2a587b460ba2de5bd6c4e982ba45f0501ce974c2dc085ea4648760a29e91c",
-    "crates/fireemu-core-auth/src/store.rs": "d0434bbda15e1a584682ef302ae8842bfc684a5d983062624fa3814baf8f0b1b",
-    "crates/fireemu-core-auth/tests/store.rs": "794d87362121c02253fa64fa028b437282191145459be0c479ae1b8898191496",
-    "crates/fireemu/src/functions.rs": "ba60cba4859d95cd1c9e2bb24504f1ff794fbae75acca7f429c60d21b6ffd6b7",
+    "crates/fireemu-core-auth/src/store.rs": "c56043dd5de9521e705355e038cbe109d6ac08d2331771848fd697fd4201f888",
+    "crates/fireemu-core-auth/tests/store.rs": "0b198d9cb370da7e2c18ef94304e0f000fffff7c25feb5a4473e60df58682700",
+    "crates/fireemu/src/functions.rs": "0e0135738caa8c6a9c2eb616b777ffcd9b7a84899b3949ca407f8cd37c2ea06e",
     "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
-    "verification/quint/README.md": "beb8675e2520a3d60dcc1f5045310f0ea869258b91131f6daa223310482dede1",
+    "verification/quint/README.md": "2d7533465b7b04b2614aac381931650961eb382e4d10a5bf02f496bd59ffb97b",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
     "verification/quint/bin/authority-lock": "51530b393fbff9bedadd2c97721fa72c889ab47420e25d5d79b1ee8d974f4ce6",
     "verification/quint/bin/install-apalache": "6a12dbd4ec229d3b004205251027dbd758b26b3477a4672274e3ad3301373d11",
@@ -76,18 +76,18 @@
     "verification/quint/mutations/CompatibilitySelection.json": "486f1b383350045a0d9cf2657d51f040448ab1489d2661e2113bf93029291d50",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
-    "verification/quint/run-verification.sh": "e77c9a278fd5b17e8c6ecf89a32a2454f7bc64f5bab7f36cf07c6eaf1af1c8cc",
+    "verification/quint/run-verification.sh": "19939ee64cad11c6b146d0e9839bfdab531d7c638aa51085ad9d289e7e2dc8a2",
     "verification/quint/specs/CompatibilitySelection.qnt": "49df8322d61e73786eb23a28bbcc84872a9bd4b0ebb19a7a4e6f8c1dabb1680f",
     "verification/quint/src/compatibility_selection.rs": "c0af039dc03633be58e9c5b437d0d6586a5a848459cb39cdbe9790ab03c5b0be",
     "verification/quint/src/evidence.rs": "2699af66039588f3dd87c85899a6e537aae90d19f6e127d58fbe6b621462577f",
-    "verification/quint/src/lib.rs": "4e16c4a8e887c5cd8fb133c1ed0370051ca5d676941ae05bdef3b2152a617ced",
+    "verification/quint/src/lib.rs": "056b941ea736b56c599f40de1f279089dc0f6988dc78ad4ede3aaf4fa430346a",
     "verification/quint/src/main.rs": "254e5a5c63ebe730ae23151d8eb509ed48ded061e1fda25680bf0eb298823763",
-    "verification/quint/src/model.rs": "293608536f9889cd39e0d6e81cf0b24efc898cc98e543fc165941b86681abce3",
+    "verification/quint/src/model.rs": "6755fd0c949010ed0a1be85a77678fc1a6bb804d2aacb557be917101f1c3df7c",
     "verification/quint/src/process.rs": "1657b6af09d982ac32776e64ef84d4db310ed1366cc0097d0c53357c502793ba",
-    "verification/quint/tests/cli_contract.rs": "d83e5ea41270c48e110bef5c4aedc271f9b1dc747a487da8209bd045a67912ae",
+    "verification/quint/tests/cli_contract.rs": "c352a83f4c48b5fc65e81ae59e4df0b87d818068fe75a99ae10bcf20b2cf9d5a",
     "verification/quint/tests/compatibility_selection_connect.rs": "4ab90f3ed4f7637d6ea9643aa292f8c8ba59b10bd57297d842a266c78e873fe3",
     "verification/quint/tests/evidence_contract.rs": "dce0d71712d23419937b359c820a47f7241c4023f55df653fe6cf6fdee32b79a",
-    "verification/quint/tests/model_registry.rs": "6291dfac5055adabfbb37e9a87f2248853ea13161adb32dc0fb501dd451088d8"
+    "verification/quint/tests/model_registry.rs": "23e7c1916839fe3fbd72d02eb6b425e643f2b0011226bb21201e059a89d491a2"
   },
   "invariants": [
     "TypeOK",
@@ -99,7 +99,9 @@
     "RequestedNodeBreaksCapabilityTies",
     "ExplicitSelectionIsStable"
   ],
-  "temporalProperties": [],
+  "temporalProperties": [
+
+  ],
   "mutations": [
     {
       "id": "M-FORMAL-COMPAT-STORE-ALIAS-001",

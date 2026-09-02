@@ -6,13 +6,14 @@ use std::path::PathBuf;
 
 use fireemu_verification_quint::model::{all_models, model};
 
-const AUTHORITY_MODELS: [&str; 12] = [
+const AUTHORITY_MODELS: [&str; 13] = [
     "AtomicCommitOutbox",
     "AtomicExportPublication",
     "AuthTotp",
     "AwaitIdle",
     "CompatibilitySelection",
     "EventDelivery",
+    "FirestoreListenRefresh",
     "RegexAuthorization",
     "RegexLinearRepeat",
     "RulesetActivation",
@@ -22,7 +23,7 @@ const AUTHORITY_MODELS: [&str; 12] = [
 ];
 
 #[test]
-fn registry_contains_the_twelve_authority_models() {
+fn registry_contains_the_thirteen_authority_models() {
     let names = all_models()
         .map(|descriptor| descriptor.name)
         .collect::<Vec<_>>();

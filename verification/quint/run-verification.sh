@@ -184,6 +184,7 @@ while [ "$pass" -le "$passes" ]; do
     AwaitIdle:await_idle_connect \
     CompatibilitySelection:compatibility_selection_connect \
     EventDelivery:event_delivery_connect \
+    FirestoreListenRefresh:firestore_listen_refresh_connect \
     RegexAuthorization:regex_authorization_connect \
     RegexLinearRepeat:regex_linear_repeat_connect \
     RulesetActivation:ruleset_activation_connect \

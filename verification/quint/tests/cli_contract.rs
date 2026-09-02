@@ -527,6 +527,7 @@ fn authority_script_declares_all_models_and_ordered_gates() {
         "AwaitIdle",
         "CompatibilitySelection",
         "EventDelivery",
+        "FirestoreListenRefresh",
         "RegexAuthorization",
         "RegexLinearRepeat",
         "RulesetActivation",
@@ -624,11 +625,12 @@ fn authority_lock_serializes_two_processes() {
 }
 
 #[test]
-fn readme_declares_the_twelve_model_authority_and_generated_conformance() {
+fn readme_declares_the_thirteen_model_authority_and_generated_conformance() {
     let readme = fs::read_to_string(readme_path()).expect("authority README must exist");
     assert!(readme.contains("repository's formal verification authority"));
     assert!(readme.contains("`AwaitIdle`"));
     assert!(readme.contains("`CompatibilitySelection`"));
+    assert!(readme.contains("`FirestoreListenRefresh`"));
     assert!(readme.contains("`RegexLinearRepeat`"));
     assert!(readme.contains("`StorageGeneration`"));
     assert!(readme.contains("`TransactionConditionalLock`"));

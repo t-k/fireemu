@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "model": "FirestoreListenRefresh",
+  "mutations": [
+    {
+      "id": "M-FORMAL-LISTEN-CONTIGUOUS-001",
+      "property": "ExactContiguousVersionBoundary",
+      "operator": "skip-one-version-for-contiguous-notification",
+      "from": "throughVersion: observable.throughVersion + 1,",
+      "to": "throughVersion: observable.throughVersion + 2,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-UNION-001",
+      "property": "ChangedPathsAreUnioned",
+      "operator": "replace-accumulated-changed-paths",
+      "from": "changedPaths: observable.changedPaths.union(Set(path)),",
+      "to": "changedPaths: Set(path),"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-GAP-001",
+      "property": "VersionGapFallsBack",
+      "operator": "treat-version-gap-as-delta",
+      "from": "throughVersion: observable.throughVersion + 2,\n      refreshMode: \"Full\",",
+      "to": "throughVersion: observable.throughVersion + 2,\n      refreshMode: \"Delta\","
+    },
+    {
+      "id": "M-FORMAL-LISTEN-RESET-001",
+      "property": "ResetFallsBack",
+      "operator": "retain-delta-mode-after-reset",
+      "from": "throughVersion: observable.throughVersion,\n      refreshMode: \"Full\",\n      changedPaths: Set(),",
+      "to": "throughVersion: observable.throughVersion,\n      refreshMode: \"Delta\",\n      changedPaths: Set(),"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-GENERATION-001",
+      "property": "GenerationChangeInvalidatesTarget",
+      "operator": "preserve-generation-on-reset",
+      "from": "generation: observable.generation + 1,",
+      "to": "generation: observable.generation,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-INVALIDATION-001",
+      "property": "GenerationChangeInvalidatesTarget",
+      "operator": "keep-target-current-after-reset",
+      "from": "targetCurrent: false,",
+      "to": "targetCurrent: true,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-UNSAFE-001",
+      "property": "UnsafeQueryFallsBack",
+      "operator": "retain-safe-query-classification",
+      "from": "safeQuery: false,",
+      "to": "safeQuery: true,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-BOUNDARY-001",
+      "property": "RefreshCommitsExactBoundary",
+      "operator": "retain-prior-snapshot-version",
+      "from": "lastVersion: observable.throughVersion,",
+      "to": "lastVersion: observable.lastVersion,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-INCREMENTAL-GUARD-001",
+      "property": "IncrementalOnlyForSafeExactDelta",
+      "operator": "allow-full-refresh-to-use-delta",
+      "from": "val useIncremental = observable.refreshMode == \"Delta\" and observable.safeQuery",
+      "to": "val useIncremental = observable.refreshMode != \"Idle\" and observable.safeQuery"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-EQUIVALENCE-001",
+      "property": "IncrementalProjectionEquivalent",
+      "operator": "accept-divergent-incremental-projection",
+      "from": "projectionEquivalent: true,\n        incrementalUsed: useIncremental,",
+      "to": "projectionEquivalent: false,\n        incrementalUsed: useIncremental,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-FIFTY-001",
+      "property": "FiftyTargetsOneChangeIsLinear",
+      "operator": "add-one-global-scan-unit",
+      "from": "examinedCount: if (useIncremental) observable.changedPaths.size() * observable.targetCount else 0,",
+      "to": "examinedCount: if (useIncremental) observable.changedPaths.size() * observable.targetCount + 1 else 0,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-FULL-001",
+      "property": "FullRefreshExaminesNoDeltaRows",
+      "operator": "charge-full-refresh-as-one-delta-row",
+      "from": "examinedCount: if (useIncremental) observable.changedPaths.size() * observable.targetCount else 0,",
+      "to": "examinedCount: if (useIncremental) observable.changedPaths.size() * observable.targetCount else 1,"
+    },
+    {
+      "id": "M-FORMAL-LISTEN-REPLAY-001",
+      "property": "GenerationResetReplaysEveryTarget",
+      "operator": "omit-generation-reset-replay",
+      "from": "replayCount: if (observable.resetPending) observable.targetCount else 0,",
+      "to": "replayCount: 0,"
+    }
+  ]
+}

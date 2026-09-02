@@ -1863,6 +1863,32 @@ impl AuthStore {
         Ok(token)
     }
 
+    /// Replaces one provisional refresh session with its post-policy session atomically.
+    ///
+    /// Blocking Auth evaluates policy before a sign-in response is committed. The replayed
+    /// authentication may already have issued a session, so that exact credential must be
+    /// retired when the policy-adjusted token is created.
+    pub fn replace_refresh_session(
+        &mut self,
+        provisional_token: &str,
+        uid: &LocalId,
+        now: LogicalInstant,
+        provider: Option<Provider>,
+        claims: CustomClaims,
+        second_factor: Option<SecondFactorAssertion>,
+    ) -> Result<String, AuthError> {
+        let belongs_to_user = self
+            .refresh_tokens
+            .get(provisional_token)
+            .is_some_and(|session| session.uid == *uid);
+        if !belongs_to_user {
+            return Err(AuthError::InvalidRefreshToken);
+        }
+        let committed = self.issue_refresh_session(uid, now, provider, claims, second_factor)?;
+        self.refresh_tokens.remove(provisional_token);
+        Ok(committed)
+    }
+
     /// The session behind a refresh token (validated like [`Self::redeem_refresh_token`]).
     pub fn refresh_session(&self, token: &str) -> Result<&RefreshSession, AuthError> {
         self.validate_refresh_token(token, true)?;

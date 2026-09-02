@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-gen1-options",
+  "private": true,
+  "main": "index.js",
+  "description": "First-generation capacity option discovery fixture."
+}

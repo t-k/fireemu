@@ -2,7 +2,7 @@
 //!
 //! ```json
 //! {"functions": [
-//!   {"name": "onTodo", "region": "us-central1", "entryPoint": "onTodo",
+//!   {"name": "onTodo", "region": "us-central1", "entryPoint": "onTodo", "generation": 2,
 //!    "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created",
 //!                "database": "(default)", "document": "todos/{id}"},
 //!    "timeoutSeconds": 60, "retry": false, "concurrency": 1},
@@ -412,7 +412,8 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 .ok_or_else(|| format!("manifest: function {name:?}: {k} must be an integer")),
         }
     };
-    let generation = match f.get("generation") {
+    let generation_value = f.get("generation");
+    let generation = match generation_value {
         None | Some(Value::Null) => FunctionGeneration::First,
         Some(Value::Number(number)) if number.as_u64() == Some(1) => FunctionGeneration::First,
         Some(Value::Number(number)) if number.as_u64() == Some(2) => FunctionGeneration::Second,
@@ -434,6 +435,22 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
         ),
     };
     let platform_options = parse_platform_options(&name, f.get("platformOptions"))?;
+    if generation_value.is_none_or(Value::is_null) {
+        let gen2_only_field = if concurrency.is_some() {
+            Some("concurrency")
+        } else if platform_options.cpu.is_some() {
+            Some("platformOptions.cpu")
+        } else if !platform_options.network_interfaces.is_empty() {
+            Some("platformOptions.networkInterfaces")
+        } else {
+            None
+        };
+        if let Some(field) = gen2_only_field {
+            return Err(format!(
+                "manifest: function {name:?}: generation is required when {field} is set"
+            ));
+        }
+    }
     Ok(FunctionSpec {
         region: s(f, "region").unwrap_or_else(|| DEFAULT_REGION.to_owned()),
         entry_point: s(f, "entryPoint").unwrap_or_else(|| name.clone()),

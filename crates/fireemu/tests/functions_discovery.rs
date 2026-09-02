@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
+use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 
 /// The fixture codebases live beside the smoke's functions project so that Node resolves
@@ -29,14 +30,6 @@ fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tools/sdk-smoke/functions-project/fixtures")
         .join(name)
-}
-
-/// Whether the smoke's `node_modules` is installed; without it there is no codebase to load
-/// and the scenario has nothing to say.
-fn have_sdk() -> bool {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tools/sdk-smoke/node_modules/firebase-functions")
-        .exists()
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -85,13 +78,27 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+fn invoke_blocking_runner(port: u16, function: &str, body: &str) -> (u16, serde_json::Value) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "POST /demo-blocking/us-central1/{function} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: test-secret\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .unwrap();
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).unwrap();
+    let response = fireemu_adapter_functions::http::parse_response(&raw, "POST").unwrap();
+    let body = serde_json::from_slice(&response.body).unwrap();
+    (response.status, body)
+}
+
 /// Functions scenario 5: an export whose product fireemu does not serve is named, not
 /// dropped -- and by default it stops the run rather than pretending the trigger is live.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn a_trigger_of_a_product_the_daemon_does_not_serve_fails_discovery_by_name() {
-    if !have_sdk() {
-        return;
-    }
     let out = exec(&fixture("unserved-triggers"), None);
     let err = stderr(&out);
     assert_eq!(out.status.code(), Some(1), "{err}");
@@ -113,10 +120,8 @@ fn a_trigger_of_a_product_the_daemon_does_not_serve_fails_discovery_by_name() {
 /// `functions.unservedTriggers = "report"` is the official emulator's carry-on: every ignored
 /// export gets a line naming it and the rest of the codebase runs.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn the_report_policy_names_every_ignored_export_and_serves_the_rest() {
-    if !have_sdk() {
-        return;
-    }
     let dir = scratch("report");
     let config = dir.join("fireemu.json");
     std::fs::write(
@@ -139,10 +144,8 @@ fn the_report_policy_names_every_ignored_export_and_serves_the_rest() {
 /// An export whose describing throws -- the shape the v1 SDK's lazily-computed endpoints can
 /// take -- is one malformed function, not a dead runner.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn an_export_that_cannot_describe_itself_is_reported_rather_than_killing_the_runner() {
-    if !have_sdk() {
-        return;
-    }
     let dir = scratch("malformed");
     let config = dir.join("fireemu.json");
     std::fs::write(
@@ -164,10 +167,8 @@ fn an_export_that_cannot_describe_itself_is_reported_rather_than_killing_the_run
 /// beforeUserCreated and beforeUserSignedIn are served synchronous triggers, not ignored
 /// inventory entries.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn blocking_identity_exports_are_discovered_as_served_triggers() {
-    if !have_sdk() {
-        return;
-    }
     let out = exec(&fixture("blocking-auth"), None);
     let err = stderr(&out);
     assert_eq!(out.status.code(), Some(0), "{err}");
@@ -231,24 +232,45 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
     })
     .to_string();
     for function in ["fxBeforeCreate", "fxLegacyBeforeCreate"] {
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(
-            stream,
-            "POST /demo-blocking/us-central1/{function} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: test-secret\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        )
-        .unwrap();
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).unwrap();
-        let response = fireemu_adapter_functions::http::parse_response(&raw, "POST").unwrap();
-        assert_eq!(response.status, 200, "{function}");
-        let response = serde_json::from_slice::<serde_json::Value>(&response.body).unwrap();
+        let (status, response) = invoke_blocking_runner(port, function, &body);
+        assert_eq!(status, 200, "{function}");
         assert_eq!(
             response["userRecord"]["displayName"], "observed:Input name",
             "{function}"
         );
         assert_eq!(response["userRecord"]["updateMask"], "displayName");
+    }
+    for (function, status, canonical, message) in [
+        (
+            "fxPermissionDenied",
+            403,
+            "PERMISSION_DENIED",
+            "fixture rejected",
+        ),
+        (
+            "fxExplicitDeadline",
+            504,
+            "DEADLINE_EXCEEDED",
+            "fixture deadline",
+        ),
+        (
+            "fxEsmPermissionDenied",
+            403,
+            "PERMISSION_DENIED",
+            "ESM fixture rejected",
+        ),
+        (
+            "fxUnhandled",
+            503,
+            "UNAVAILABLE",
+            "An unexpected error occurred.",
+        ),
+    ] {
+        let (actual_status, response) = invoke_blocking_runner(port, function, &body);
+        assert_eq!(actual_status, status, "{function}");
+        assert_eq!(response["error"]["status"], canonical, "{function}");
+        assert_eq!(response["error"]["message"], message, "{function}");
+        assert!(!response.to_string().contains("private fixture marker"));
     }
     runner.shutdown().await;
 }
@@ -256,10 +278,8 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
 /// `GlobalOptions` with local runtime meaning and every `ScheduleOptions` retry field survive
 /// real SDK discovery; `omit` deliberately removes an export from emulation.
 #[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 async fn global_and_schedule_options_reach_the_runtime_manifest() {
-    if !have_sdk() {
-        return;
-    }
     let runner_script =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
     let source = fixture("function-options");
@@ -276,6 +296,7 @@ async fn global_and_schedule_options_reach_the_runtime_manifest() {
         env: vec![
             ("GCLOUD_PROJECT".to_owned(), "demo-options".to_owned()),
             ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
+            ("GLOBAL_CONCURRENCY".to_owned(), "3".to_owned()),
         ],
         hello_timeout: Duration::from_secs(20),
     };
@@ -370,19 +391,98 @@ async fn second_generation_omitted_concurrency_remains_defaultable() {
     })
     .await
     .unwrap();
-    let function = &runner.hello().manifest.as_ref().unwrap()["functions"][0];
-
+    let discovered_json = runner.hello().manifest.as_ref().unwrap().clone();
+    runner.shutdown().await;
+    let function = &discovered_json["functions"][0];
     assert_eq!(function["generation"], 2);
     assert!(function["concurrency"].is_null());
     assert_eq!(function["platformOptions"]["availableMemoryMb"], 2048);
-    runner.shutdown().await;
+
+    let discovered = parse_manifest(&discovered_json).unwrap();
+    let configured = parse_manifest(&serde_json::json!({"functions": [{
+        "name": function["name"],
+        "generation": 2,
+        "trigger": {"type": "http"},
+        "platformOptions": {"availableMemoryMb": 2048}
+    }]}))
+    .unwrap();
+    assert_eq!(
+        discovered.functions[0].effective_concurrency(),
+        configured.functions[0].effective_concurrency()
+    );
+    assert_eq!(
+        discovered.functions[0].http_capacity(100),
+        configured.functions[0].http_capacity(100)
+    );
 }
 
 #[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+async fn first_generation_capacity_matches_an_equivalent_configured_manifest() {
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("gen1-options");
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![
+            ("GCLOUD_PROJECT".to_owned(), "demo-options".to_owned()),
+            ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
+            ("GEN1_MEMORY_MB".to_owned(), "512".to_owned()),
+            ("GEN1_MIN_INSTANCES".to_owned(), "1".to_owned()),
+            ("GEN1_MAX_INSTANCES".to_owned(), "3".to_owned()),
+        ],
+        hello_timeout: Duration::from_secs(20),
+    })
+    .await
+    .unwrap();
+    let discovered_json = runner.hello().manifest.as_ref().unwrap().clone();
+    runner.shutdown().await;
+
+    let discovered = parse_manifest(&discovered_json).unwrap();
+    let configured = parse_manifest(&serde_json::json!({"functions": [{
+        "name": "fxV1",
+        "generation": 1,
+        "trigger": {"type": "http"},
+        "platformOptions": {
+            "availableMemoryMb": 512,
+            "minInstances": 1,
+            "maxInstances": 3,
+            "ingressSettings": "ALLOW_INTERNAL_ONLY",
+            "serviceAccountEmail": "runner@example.iam.gserviceaccount.com",
+            "vpcConnector": "projects/demo-options/locations/us-central1/connectors/default",
+            "vpcEgressSettings": "PRIVATE_RANGES_ONLY",
+            "labels": {"fixture": "gen1"},
+            "secrets": ["API_KEY"]
+        }
+    }]}))
+    .unwrap();
+    let discovered = &discovered.functions[0];
+    let configured = &configured.functions[0];
+    assert_eq!(
+        discovered.generation,
+        fireemu_core_functions::manifest::FunctionGeneration::First
+    );
+    assert!(discovered.concurrency.is_none());
+    assert_eq!(discovered.platform_options, configured.platform_options);
+    assert_eq!(
+        discovered.effective_concurrency(),
+        configured.effective_concurrency()
+    );
+    assert_eq!(discovered.http_capacity(100), configured.http_capacity(100));
+    assert_eq!(discovered.http_capacity(100), 3);
+}
+
+#[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 async fn esm_callable_app_check_options_are_observed_by_the_loaded_module_graph() {
-    if !have_sdk() {
-        return;
-    }
     let runner_script =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
     let source = fixture("app-check-esm");

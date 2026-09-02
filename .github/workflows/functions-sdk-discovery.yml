@@ -30,7 +30,9 @@ jobs:
           key: functions-sdk-discovery
       - name: install the real Functions SDK fixture
         run: npm ci --prefix tools/sdk-smoke --ignore-scripts
-      - name: real SDK discovery preserves blocking records and omitted concurrency
-        run: |
-          cargo test -p fireemu --test functions_discovery blocking_identity_exports_have_a_synchronous_runner_endpoint -- --ignored --exact
-          cargo test -p fireemu --test functions_discovery second_generation_omitted_concurrency_remains_defaultable -- --ignored --exact
+      - name: run every real SDK discovery scenario
+        run: cargo test -p fireemu --test functions_discovery -- --ignored --test-threads=1
+      - name: run every real SDK multi-codebase scenario
+        run: cargo test -p fireemu --test functions_codebases -- --ignored --test-threads=1
+      - name: verify Blocking Function error trust boundary
+        run: node --test tools/runner-node/blocking-error.test.mjs

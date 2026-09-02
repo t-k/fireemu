@@ -340,6 +340,35 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     }
 }
 
+#[test]
+fn replacing_a_refresh_session_invalidates_the_provisional_token() {
+    use fireemu_core_auth::claims::CustomClaims;
+
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("blocking@example.com"), t0())
+        .unwrap();
+    let provisional = s.issue_refresh_token(&uid, t(1)).unwrap();
+
+    let committed = s
+        .replace_refresh_session(
+            &provisional,
+            &uid,
+            t(1),
+            None,
+            CustomClaims::default(),
+            None,
+        )
+        .unwrap();
+
+    assert_ne!(committed, provisional);
+    assert_eq!(
+        s.redeem_refresh_token(&provisional),
+        Err(AuthError::InvalidRefreshToken)
+    );
+    assert_eq!(s.redeem_refresh_token(&committed), Ok(uid));
+}
+
 fn federated(
     provider: &str,
     raw: &str,

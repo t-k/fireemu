@@ -222,6 +222,10 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
             "FN-EVT-1 still publishes {name} as unimplemented"
         );
     }
+    let notes = text_of(&published["capabilities"]["FN-EVT-1"]["notes"]);
+    for term in ["seven-second", "503", "Error code: 47"] {
+        assert!(notes.contains(term), "FN-EVT-1 does not publish {term}");
+    }
 
     let contract: Value =
         serde_json::from_str(include_str!("../../../spec/compatibility/contract.json"))
@@ -273,6 +277,10 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
             evidence.contains("crates/fireemu-adapter-http/tests/identity_toolkit.rs")
                 && evidence.contains("crates/fireemu/tests/functions_discovery.rs"),
             "claim {claim_id} does not bind both Blocking Functions integration paths"
+        );
+        assert!(
+            evidence.contains("auth/blocking-function-error-status"),
+            "claim {claim_id} does not bind the production differential fixture"
         );
         let statement = claim["statement"]
             .as_str()

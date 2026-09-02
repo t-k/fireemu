@@ -1,4 +1,8 @@
-const { beforeUserCreated, beforeUserSignedIn } = require("firebase-functions/v2/identity");
+const {
+  beforeUserCreated,
+  beforeUserSignedIn,
+  HttpsError,
+} = require("firebase-functions/v2/identity");
 const functionsV1 = require("firebase-functions/v1");
 
 function validatedMutation(user) {
@@ -20,3 +24,16 @@ function validatedMutation(user) {
 exports.fxBeforeCreate = beforeUserCreated((event) => validatedMutation(event.data));
 exports.fxBeforeSignIn = beforeUserSignedIn(() => ({ sessionClaims: { source: "blocking" } }));
 exports.fxLegacyBeforeCreate = functionsV1.auth.user().beforeCreate(validatedMutation);
+exports.fxPermissionDenied = beforeUserCreated(() => {
+  throw new HttpsError("permission-denied", "fixture rejected");
+});
+exports.fxExplicitDeadline = beforeUserCreated(() => {
+  throw new HttpsError("deadline-exceeded", "fixture deadline");
+});
+exports.fxEsmPermissionDenied = beforeUserCreated(async () => {
+  const { HttpsError: EsmHttpsError } = await import("firebase-functions/https");
+  throw new EsmHttpsError("permission-denied", "ESM fixture rejected");
+});
+exports.fxUnhandled = beforeUserCreated(() => {
+  throw new Error("private fixture marker");
+});

@@ -847,7 +847,7 @@
         },
         {
           "id": "AUTH-CLAIM-BLOCKING-FUNCTIONS",
-          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, a rejection or malformed response rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
+          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, explicit SDK error classes retain their canonical status, unhandled and seven-second transport failures return production-compatible 503 responses, every failure rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -860,7 +860,9 @@
               "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
               "crates/fireemu/tests/functions_discovery.rs"
             ],
-            "conformance": []
+            "conformance": [
+              "auth/blocking-function-error-status"
+            ]
           },
           "officialLimitations": [
             "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; SDK email and SMS send hooks are production-only and are outside Local Emulator Suite parity"
@@ -1133,7 +1135,7 @@
         },
         {
           "id": "FN-CLAIM-BLOCKING-AUTH",
-          "statement": "v2 beforeUserCreated / beforeUserSignedIn and v1 auth.user().beforeCreate / beforeSignIn exports are discovered as served synchronous triggers and invoked by Auth through the guarded runner endpoint.",
+          "statement": "v2 beforeUserCreated / beforeUserSignedIn and v1 auth.user().beforeCreate / beforeSignIn exports are discovered as served synchronous triggers and invoked by Auth through the guarded runner endpoint, which validates bounded canonical SDK failures and enforces the production seven-second deadline.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1146,7 +1148,9 @@
               "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
               "crates/fireemu/tests/functions_discovery.rs"
             ],
-            "conformance": []
+            "conformance": [
+              "auth/blocking-function-error-status"
+            ]
           },
           "officialLimitations": [
             "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; SDK email and SMS send hooks are production-only and are outside Local Emulator Suite parity"
@@ -1576,7 +1580,7 @@
       "notes": [],
       "gaps": [
         "--ui",
-        "a second Functions codebase, per-database Firestore rules and per-target Storage rules are reported, not loaded",
+        "per-database Firestore rules and per-target Storage rules are reported, not loaded",
         "an export carries the Firestore, Auth and Storage sections only: Realtime Database and SQL Connect are deferred products and their sections are refused rather than written"
       ],
       "prohibitedClaimTerms": [],

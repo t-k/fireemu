@@ -2,7 +2,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use fireemu_adapter_http::identity_toolkit::{handle, AuthBlockingHook, AuthState};
+use fireemu_adapter_http::identity_toolkit::{
+    handle, AuthBlockingHook, AuthState, BlockingFunctionCode, BlockingFunctionFailure,
+};
 use fireemu_core_auth::base32;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -23,6 +25,12 @@ struct RecordingBlockingHook {
 
 struct UpdatingBlockingHook;
 
+struct UnhandledBlockingHook;
+
+struct BeforeSignInTimeoutHook;
+
+struct FixtureFailureHook(BlockingFunctionFailure);
+
 struct ClearingClaimsHook;
 
 struct MalformedBeforeSignInHook;
@@ -38,7 +46,7 @@ impl AuthBlockingHook for NamespaceRecordingHook {
         &self,
         _event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         panic!("namespace-aware dispatch must use invoke_for")
     }
 
@@ -48,7 +56,7 @@ impl AuthBlockingHook for NamespaceRecordingHook {
         tenant: Option<&str>,
         event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.calls
             .lock()
             .unwrap()
@@ -62,7 +70,7 @@ impl AuthBlockingHook for MalformedBeforeSignInHook {
         &self,
         event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         Ok(match event {
             BlockingAuthEvent::BeforeCreate => json!({
                 "userRecord": {
@@ -80,7 +88,7 @@ impl AuthBlockingHook for ClearingClaimsHook {
         &self,
         event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         Ok(match event {
             BlockingAuthEvent::BeforeCreate => json!({}),
             BlockingAuthEvent::BeforeSignIn => json!({
@@ -95,7 +103,7 @@ impl AuthBlockingHook for UpdatingBlockingHook {
         &self,
         event: BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         match event {
             BlockingAuthEvent::BeforeCreate => Ok(json!({
                 "userRecord": {
@@ -119,15 +127,52 @@ impl AuthBlockingHook for UpdatingBlockingHook {
     }
 }
 
+impl AuthBlockingHook for UnhandledBlockingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Err(BlockingFunctionFailure::unhandled())
+    }
+}
+
+impl AuthBlockingHook for BeforeSignInTimeoutHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        match event {
+            BlockingAuthEvent::BeforeCreate => Ok(json!({})),
+            BlockingAuthEvent::BeforeSignIn => Err(BlockingFunctionFailure::timeout()),
+        }
+    }
+}
+
+impl AuthBlockingHook for FixtureFailureHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Err(self.0.clone())
+    }
+}
+
 impl AuthBlockingHook for RecordingBlockingHook {
     fn invoke(
         &self,
         event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         self.events.lock().unwrap().push(event);
         if self.reject == Some(event) {
-            Err("BLOCKING_FUNCTION_ERROR_RESPONSE : denied by test".to_owned())
+            Err(BlockingFunctionFailure::from_function(
+                BlockingFunctionCode::PermissionDenied,
+                "denied by test",
+            )
+            .unwrap())
         } else {
             Ok(json!({}))
         }
@@ -197,7 +242,7 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
     assert_eq!(status, 400, "{body}");
     assert_eq!(
         body["error"]["message"],
-        "BLOCKING_FUNCTION_ERROR_RESPONSE : denied by test"
+        "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: 403, Status: \"PERMISSION_DENIED\", Message: \"denied by test\""
     );
     assert_eq!(
         *events.lock().unwrap(),
@@ -209,6 +254,121 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
         .unwrap()
         .user_by_email("blocked@example.com")
         .is_none());
+}
+
+#[test]
+fn unhandled_blocking_auth_failure_is_unavailable_and_rolls_back_creation() {
+    let mut s = state();
+    s.blocking = Some(Arc::new(UnhandledBlockingHook));
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "unavailable@example.com", "password": "hunter22"}),
+    );
+
+    assert_eq!(status, 503, "{body}");
+    assert!(body["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.starts_with("BLOCKING_FUNCTION_ERROR_RESPONSE")));
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("unavailable@example.com")
+        .is_none());
+}
+
+#[test]
+fn blocking_before_sign_in_timeout_issues_no_token_and_preserves_the_user() {
+    let mut s = state();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "timeout@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let before = s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("timeout@example.com")
+        .unwrap()
+        .clone();
+    s.blocking = Some(Arc::new(BeforeSignInTimeoutHook));
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "timeout@example.com", "password": "hunter22"}),
+    );
+
+    assert_eq!(status, 503, "{body}");
+    assert_eq!(body["error"]["message"], "Error code: 47");
+    assert!(body.get("idToken").is_none(), "{body}");
+    assert!(body.get("refreshToken").is_none(), "{body}");
+    assert_eq!(
+        s.store
+            .lock()
+            .unwrap()
+            .user_by_email("timeout@example.com")
+            .unwrap(),
+        &before
+    );
+}
+
+#[test]
+fn production_blocking_failure_fixture_matches_identity_toolkit() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../conformance/fixtures/auth/blocking-function-error-status.json"
+    ))
+    .unwrap();
+    let failures = [
+        BlockingFunctionFailure::from_function(
+            BlockingFunctionCode::PermissionDenied,
+            "Registration rejected",
+        )
+        .unwrap(),
+        BlockingFunctionFailure::unhandled(),
+        BlockingFunctionFailure::timeout(),
+    ];
+    for (step, failure) in fixture["steps"].as_array().unwrap().iter().zip(failures) {
+        let expected = &step["value"];
+        let mut s = state();
+        s.blocking = Some(Arc::new(FixtureFailureHook(failure)));
+        let email = format!("{}@example.com", step["id"].as_str().unwrap());
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "hunter22"}),
+        );
+        assert_eq!(
+            status,
+            u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
+            "{step}"
+        );
+        let message = body["error"]["message"].as_str().unwrap();
+        if let Some(expected_message) = expected.get("message").and_then(Value::as_str) {
+            assert_eq!(message, expected_message, "{step}");
+        }
+        for marker in expected["messageContains"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            assert!(message.contains(marker), "{message}");
+        }
+        for marker in expected["messageExcludes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            assert!(!message.contains(marker), "{message}");
+        }
+        assert!(s.store.lock().unwrap().user_by_email(&email).is_none());
+    }
 }
 
 #[test]
@@ -306,6 +466,23 @@ fn blocking_auth_applies_user_and_session_claim_updates_before_issuing_tokens() 
     );
     assert_eq!(
         claims
+            .get("risk")
+            .and_then(fireemu_core_types::json::JsonValue::as_str),
+        Some("low")
+    );
+    let refresh = body["refreshToken"].as_str().unwrap();
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    let refreshed_claims =
+        fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
+            .unwrap()
+            .payload;
+    assert_eq!(
+        refreshed_claims
             .get("risk")
             .and_then(fireemu_core_types::json::JsonValue::as_str),
         Some("low")
@@ -855,7 +1032,7 @@ impl AuthBlockingHook for TenantMutatingHook {
         &self,
         event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         if event == BlockingAuthEvent::BeforeSignIn
             && self.enabled.load(std::sync::atomic::Ordering::SeqCst)
         {
@@ -864,18 +1041,18 @@ impl AuthBlockingHook for TenantMutatingHook {
                     let mut metadata = self
                         .registry
                         .tenant_metadata("demo-app", "customer")
-                        .ok_or("tenant disappeared")?;
+                        .ok_or_else(BlockingFunctionFailure::unhandled)?;
                     metadata.disable_auth = true;
                     if !self
                         .registry
                         .update_tenant("demo-app", "customer", metadata)
                     {
-                        return Err("tenant update failed".to_owned());
+                        return Err(BlockingFunctionFailure::unhandled());
                     }
                 }
                 TenantMutation::Delete => {
                     if !self.registry.delete_tenant("demo-app", "customer") {
-                        return Err("tenant delete failed".to_owned());
+                        return Err(BlockingFunctionFailure::unhandled());
                     }
                 }
             }
@@ -893,9 +1070,12 @@ impl AuthBlockingHook for CreatingAdminHook {
         &self,
         event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         if event == BlockingAuthEvent::BeforeCreate {
-            let state = self.state.upgrade().ok_or("test state disappeared")?;
+            let state = self
+                .state
+                .upgrade()
+                .ok_or_else(BlockingFunctionFailure::unhandled)?;
             let response = handle_with(
                 &state,
                 "POST",
@@ -904,7 +1084,7 @@ impl AuthBlockingHook for CreatingAdminHook {
                 &json!({"email": "admin-created@example.com", "password": "hunter22"}),
             );
             if response.status != 200 {
-                return Err(format!("Admin callback failed: {}", response.body));
+                return Err(BlockingFunctionFailure::unhandled());
             }
         }
         Ok(json!({}))
@@ -916,11 +1096,14 @@ impl AuthBlockingHook for ReentrantAdminHook {
         &self,
         event: BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, BlockingFunctionFailure> {
         if event == BlockingAuthEvent::BeforeSignIn
             && self.mutate.load(std::sync::atomic::Ordering::SeqCst)
         {
-            let state = self.state.upgrade().ok_or("test state disappeared")?;
+            let state = self
+                .state
+                .upgrade()
+                .ok_or_else(BlockingFunctionFailure::unhandled)?;
             let response = handle_with(
                 &state,
                 "POST",
@@ -929,7 +1112,7 @@ impl AuthBlockingHook for ReentrantAdminHook {
                 &json!({"localId": user.local_id.as_str(), "disableUser": true}),
             );
             if response.status != 200 {
-                return Err(format!("Admin callback failed: {}", response.body));
+                return Err(BlockingFunctionFailure::unhandled());
             }
         }
         Ok(json!({}))

@@ -722,8 +722,8 @@ impl RuntimeConfig {
     ///   `index` spelling), with named databases isolated from `(default)`;
     /// - `storage` in object or array form: the `rules` of the entry without a `target`, or
     ///   of the first one;
-    /// - `functions` in object or array form: every codebase is parsed and validated, and the
-    ///   selected one (`--only functions:<codebase>`, or the only one there is) is loaded;
+    /// - `functions` in object or array form: every codebase is parsed, validated and loaded;
+    ///   `--only functions:<codebase>` narrows the run to one codebase;
     /// - `emulators.<name>.host` / `.port` for every served product plus `hub` and `ui`, and
     ///   `emulators.singleProjectMode`.
     ///
@@ -1000,6 +1000,7 @@ impl RuntimeConfig {
                 })
                 .transpose()?
                 .unwrap_or_else(|| "default".to_owned());
+            check_codebase_name(&codebase, &path)?;
             let runtime = entry
                 .get("runtime")
                 .map(|v| {
@@ -1105,6 +1106,19 @@ impl RuntimeConfig {
             })
             .collect()
     }
+}
+
+fn check_codebase_name(codebase: &str, path: &str) -> Result<(), ConfigError> {
+    if !(1..=63).contains(&codebase.len())
+        || !codebase
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
+    {
+        return Err(ConfigError(format!(
+            "firebase.json: {path}.codebase must be 1 to 63 characters of lowercase letters, digits, underscores or dashes"
+        )));
+    }
+    Ok(())
 }
 
 /// Refuses a codebase whose declared `runtime` is not one the bundled runner can execute.
@@ -2540,6 +2554,44 @@ mod tests {
             .unwrap_err()
             .0;
         assert!(message.contains("nodejs-latest"), "{message}");
+    }
+
+    #[test]
+    fn codebase_names_follow_the_firebase_deploy_contract() {
+        let base = std::path::Path::new("/proj");
+        for name in [
+            "a",
+            "api-2_workers",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            let mut cfg = RuntimeConfig::default();
+            cfg.apply_firebase_json(
+                &json!({"functions": {"source": "functions", "codebase": name}}),
+                base,
+                &Selection::default(),
+            )
+            .unwrap_or_else(|error| panic!("valid codebase {name:?} was refused: {error}"));
+        }
+
+        for name in [
+            "",
+            "Team-API",
+            "api.backend",
+            "api/backend",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            let mut cfg = RuntimeConfig::default();
+            let error = cfg
+                .apply_firebase_json(
+                    &json!({"functions": {"source": "functions", "codebase": name}}),
+                    base,
+                    &Selection::default(),
+                )
+                .expect_err("the official Firebase codebase-name bounds must be enforced")
+                .0;
+            assert!(error.contains("functions.codebase"), "{error}");
+            assert!(error.contains("1 to 63"), "{error}");
+        }
     }
 
     #[test]

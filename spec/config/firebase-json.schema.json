@@ -20,7 +20,7 @@
       ]
     },
     "functions": {
-      "description": "One codebase, or an array of them. fireemu runs one runner, so a multi-codebase project names the codebase to load with --only functions:<codebase>.",
+      "description": "One codebase, or an array of them. fireemu loads every declared codebase with one runner each; --only functions:<codebase> narrows the run to one.",
       "oneOf": [
         { "$ref": "#/$defs/functionsEntry" },
         { "type": "array", "items": { "$ref": "#/$defs/functionsEntry" }, "minItems": 1 }
@@ -73,7 +73,7 @@
       "required": ["source"],
       "properties": {
         "source": { "type": "string", "minLength": 1 },
-        "codebase": { "type": "string", "minLength": 1 },
+        "codebase": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9_-]+$" },
         "runtime": { "type": "string", "minLength": 1 },
         "ignore": { "type": "array", "items": { "type": "string" } },
         "predeploy": {},

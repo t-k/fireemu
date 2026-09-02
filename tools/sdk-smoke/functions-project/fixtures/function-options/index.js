@@ -1,14 +1,15 @@
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, onRequest } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { defineSecret } = require("firebase-functions/params");
+const { defineInt, defineSecret } = require("firebase-functions/params");
 
 const apiKey = defineSecret("API_KEY");
+const concurrency = defineInt("GLOBAL_CONCURRENCY");
 
 setGlobalOptions({
   region: "asia-northeast1",
   timeoutSeconds: 17,
-  concurrency: 3,
+  concurrency,
   enforceAppCheck: true,
   memory: "512MiB",
   cpu: 1,

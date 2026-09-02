@@ -4,8 +4,8 @@ use fireemu_core_functions::cron::{
     fixed_offset_seconds, Civil, FixedOffset, RunCount, Schedule, ScheduleError, ZoneRules,
 };
 use fireemu_core_functions::manifest::{
-    DocumentEvent, FunctionGeneration, FunctionManifest, FunctionSpec, ObjectEvent,
-    PlatformOptions, Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    DocumentEvent, FunctionGeneration, FunctionManifest, FunctionSpec, ManifestError, ObjectEvent,
+    PlatformOptions, Trigger, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::{PathPattern, PatternError};
 use fireemu_core_types::time::LogicalInstant;
@@ -53,9 +53,17 @@ fn function(name: &str, trigger: Trigger) -> FunctionSpec {
         timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
         retry: false,
         generation: FunctionGeneration::First,
-        concurrency: Some(DEFAULT_CONCURRENCY),
+        concurrency: None,
         platform_options: PlatformOptions::default(),
     }
+}
+
+fn validate_function(spec: &FunctionSpec) -> Result<(), ManifestError> {
+    FunctionManifest {
+        functions: vec![spec.clone()],
+        ignored: Vec::new(),
+    }
+    .validate()
 }
 
 #[test]
@@ -191,6 +199,81 @@ fn second_generation_concurrency_resolves_per_instance_defaults_and_virtual_capa
     spec.concurrency = Some(1);
     spec.platform_options.max_instances = Some(2);
     assert_eq!(spec.http_capacity(8), 2);
+}
+
+#[test]
+fn manifest_validation_rejects_gen1_only_capacity_options() {
+    let mut spec = function("http", Trigger::http(false));
+    spec.concurrency = Some(1);
+    let error = validate_function(&spec).unwrap_err();
+    assert!(error.to_string().contains("concurrency"));
+
+    spec.concurrency = None;
+    spec.platform_options.cpu = Some("gcf_gen1".to_owned());
+    assert!(validate_function(&spec).is_err());
+
+    spec.platform_options.cpu = None;
+    spec.platform_options.network_interfaces = vec!["{\"network\":\"default\"}".to_owned()];
+    assert!(validate_function(&spec).is_err());
+}
+
+#[test]
+fn manifest_validation_rejects_invalid_gen2_cpu_and_concurrency_combinations() {
+    let mut spec = function("http", Trigger::http(false));
+    spec.generation = FunctionGeneration::Second;
+    spec.concurrency = Some(1_001);
+    assert!(validate_function(&spec).is_err());
+
+    spec.concurrency = Some(2);
+    spec.platform_options.cpu = Some("0.5".to_owned());
+    assert!(validate_function(&spec).is_err());
+
+    spec.concurrency = Some(2);
+    spec.platform_options.cpu = Some("gcf_gen1".to_owned());
+    spec.platform_options.available_memory_mb = Some(1_024);
+    assert!(validate_function(&spec).is_err());
+
+    for (cpu, memory_mb, concurrency) in [
+        (None, None, Some(1_000)),
+        (Some("0.5"), None, None),
+        (Some("0.5"), None, Some(1)),
+        (Some("1"), None, Some(2)),
+        (Some("gcf_gen1"), Some(1_024), Some(1)),
+        (Some("gcf_gen1"), Some(2_048), Some(2)),
+    ] {
+        spec.platform_options.cpu = cpu.map(str::to_owned);
+        spec.platform_options.available_memory_mb = memory_mb;
+        spec.concurrency = concurrency;
+        validate_function(&spec).unwrap();
+    }
+
+    for cpu in ["invalid", "0", "NaN"] {
+        spec.platform_options.cpu = Some(cpu.to_owned());
+        spec.concurrency = None;
+        assert!(validate_function(&spec).is_err());
+    }
+}
+
+#[test]
+fn manifest_validation_rejects_invalid_memory_and_instance_limits() {
+    let mut spec = function("http", Trigger::http(false));
+    spec.generation = FunctionGeneration::Second;
+    spec.platform_options.cpu = None;
+    spec.platform_options.available_memory_mb = Some(0);
+    assert!(validate_function(&spec).is_err());
+
+    spec.platform_options.available_memory_mb = None;
+    spec.platform_options.min_instances = Some(0);
+    spec.platform_options.max_instances = Some(0);
+    assert!(validate_function(&spec).is_err());
+
+    spec.platform_options.min_instances = Some(4);
+    spec.platform_options.max_instances = Some(3);
+    assert!(validate_function(&spec).is_err());
+
+    spec.platform_options.min_instances = Some(1);
+    spec.platform_options.max_instances = Some(1);
+    validate_function(&spec).unwrap();
 }
 
 #[test]

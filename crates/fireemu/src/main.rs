@@ -2225,10 +2225,11 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     eprintln!("note: --import {}: {notice}", dir.display());
                 }
             }
-            import_export::apply(&prepared, &exporter.endpoints())
+            let summary = prepared.summary();
+            import_export::apply(prepared, &exporter.endpoints())
                 .map_err(|e| format!("--import {}: {e}", dir.display()))?;
             if !quiet {
-                println!("  imported: {} ({})", dir.display(), prepared.summary());
+                println!("  imported: {} ({summary})", dir.display());
             }
         }
         let hub_state = Arc::new(hub::HubState {

@@ -326,37 +326,35 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
 /// can violate a Firestore limit, an account can repeat a local id -- and a failure leaves
 /// the products applied before it in place; `prepare` is what makes that vanishingly
 /// unlikely, and the CLI turns any failure here into a refusal to start at all.
-pub fn apply(prepared: &Prepared, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), ArtifactError> {
     let now = endpoints.now();
     let barrier = endpoints.backend.barrier();
     let _exclusive = barrier.exclusive();
 
-    if let Some(databases) = &prepared.firestore {
+    if let Some(databases) = prepared.firestore.take() {
         let mut snapshot = FirestoreSnapshot {
             databases: BTreeMap::new(),
             ids: None,
         };
         for (key, documents) in databases {
             let mut state = FirestoreState::new();
-            state
-                .import_documents(documents.clone(), now)
-                .map_err(|e| {
-                    ArtifactError::new(
-                        "firestore",
-                        PathBuf::from(FIRESTORE_PATH),
-                        format!("database {}/{}: {e}", key.0, key.1),
-                    )
-                })?;
+            state.import_documents(documents, now).map_err(|e| {
+                ArtifactError::new(
+                    "firestore",
+                    PathBuf::from(FIRESTORE_PATH),
+                    format!("database {}/{}: {e}", key.0, key.1),
+                )
+            })?;
             snapshot.databases.insert(key.clone(), state);
         }
         endpoints.backend.restore_databases(snapshot.databases);
     }
 
-    if let Some(auth) = &prepared.auth {
+    if let Some(auth) = prepared.auth.take() {
         apply_auth(auth, endpoints)?;
     }
 
-    if let Some((objects, _)) = &prepared.storage {
+    if let Some((objects, _)) = prepared.storage.take() {
         let mut store = endpoints.storage.store.lock().map_err(|_| {
             ArtifactError::new(
                 "storage",
@@ -367,22 +365,20 @@ pub fn apply(prepared: &Prepared, endpoints: &Endpoints) -> Result<(), ArtifactE
         store.clear();
         for (object, bytes) in objects {
             let name = object.name.as_str().to_owned();
-            store
-                .insert_imported(object.clone(), bytes.clone())
-                .map_err(|e| {
-                    ArtifactError::new(
-                        "storage",
-                        PathBuf::from(STORAGE_PATH).join(BLOBS_DIR),
-                        format!("object {name}: {e}"),
-                    )
-                })?;
+            store.insert_imported(object, bytes).map_err(|e| {
+                ArtifactError::new(
+                    "storage",
+                    PathBuf::from(STORAGE_PATH).join(BLOBS_DIR),
+                    format!("object {name}: {e}"),
+                )
+            })?;
         }
         let _ = store.drain_events();
     }
     Ok(())
 }
 
-fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+fn apply_auth(auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
     let store = endpoints.auth.default_store();
     let mut store = store.lock().map_err(|_| {
         ArtifactError::new(
@@ -393,9 +389,9 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
     })?;
     store.clear();
     store.set_config(auth.config);
-    for user in &auth.users {
+    for user in auth.users {
         let id = user.local_id.clone();
-        store.import_user(user.clone()).map_err(|e| {
+        store.import_user(user).map_err(|e| {
             ArtifactError::new(
                 "auth",
                 PathBuf::from(AUTH_PATH).join(ACCOUNTS_FILE),
@@ -410,10 +406,10 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
     for tenant in endpoints.auth.tenants(endpoints.project) {
         endpoints.auth.delete_tenant(endpoints.project, &tenant);
     }
-    for (tenant, users) in &auth.tenants {
+    for (tenant, users) in auth.tenants {
         let tenant_store = endpoints
             .auth
-            .ensure_tenant(endpoints.project, tenant)
+            .ensure_tenant(endpoints.project, &tenant)
             .ok_or_else(|| {
                 ArtifactError::new(
                     "auth",
@@ -432,7 +428,7 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
         tenant_store.set_config(auth.config);
         for user in users {
             let id = user.local_id.clone();
-            tenant_store.import_user(user.clone()).map_err(|e| {
+            tenant_store.import_user(user).map_err(|e| {
                 ArtifactError::new(
                     "auth",
                     PathBuf::from(AUTH_PATH).join(format!("accounts-{tenant}.json")),
@@ -1272,15 +1268,30 @@ fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject,
         // artifact's defined-but-empty `customMetadata: {}` imports as undefined; only the
         // Firebase dialect's metadata JSON can observe that difference.
         custom_defined: !meta.custom_metadata.is_empty(),
-        time_created: rfc3339_instant(meta.time_created.as_deref())
-            .unwrap_or(LogicalInstant::from_unix_seconds(0)),
-        updated: rfc3339_instant(meta.updated.as_deref())
-            .unwrap_or(LogicalInstant::from_unix_seconds(0)),
+        time_created: imported_instant(meta.time_created.as_deref(), "timeCreated", path)?,
+        updated: imported_instant(meta.updated.as_deref(), "updated", path)?,
         download_tokens: meta.download_tokens.clone(),
         md5: meta.md5_hash.as_deref().and_then(decode_md5),
         crc32c: meta.crc32c.as_deref().and_then(|c| c.parse().ok()),
         size: Some(meta.size),
     })
+}
+
+fn imported_instant(
+    text: Option<&str>,
+    field: &str,
+    path: &Path,
+) -> Result<LogicalInstant, ArtifactError> {
+    match text {
+        None => Ok(LogicalInstant::from_unix_seconds(0)),
+        Some(text) => LogicalInstant::parse_rfc3339(text).map_err(|error| {
+            ArtifactError::new(
+                "storage",
+                path,
+                format!("{field} is not a valid RFC 3339 timestamp: {error}"),
+            )
+        }),
+    }
 }
 
 fn decode_md5(base64: &str) -> Option<[u8; 16]> {
@@ -1310,31 +1321,11 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 
 /// `2026-08-30T15:58:33.194Z` -> a logical instant. The emulator writes exactly this shape.
 fn rfc3339_instant(text: Option<&str>) -> Option<LogicalInstant> {
-    let text = text?;
-    let (date, rest) = text.split_once('T')?;
-    let time = rest.trim_end_matches('Z');
-    let mut date_parts = date.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: i64 = date_parts.next()?.parse().ok()?;
-    let day: i64 = date_parts.next()?.parse().ok()?;
-    let (clock, fraction) = time.split_once('.').unwrap_or((time, "0"));
-    let mut clock_parts = clock.split(':');
-    let hour: i64 = clock_parts.next()?.parse().ok()?;
-    let minute: i64 = clock_parts.next()?.parse().ok()?;
-    let second: i64 = clock_parts.next()?.parse().ok()?;
-    let mut nanos: i128 = 0;
-    for (index, digit) in fraction.chars().take(9).enumerate() {
-        let value = i128::from(digit.to_digit(10)?);
-        nanos += value * 10i128.pow(8 - u32::try_from(index).ok()?);
-    }
-    let days = days_from_civil(year, month, day);
-    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
-    Some(LogicalInstant::from_nanos(
-        i128::from(seconds) * 1_000_000_000 + nanos,
-    ))
+    text.and_then(|text| LogicalInstant::parse_rfc3339(text).ok())
 }
 
 /// Days since the Unix epoch (Howard Hinnant's civil-from-days, inverted).
+#[cfg(test)]
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -2237,8 +2228,8 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
 mod tests {
     use super::{
         civil_from_days, days_from_civil, decode_base32, decode_base64,
-        enforce_storage_object_count, may_overwrite, read_inside_budgeted, read_inside_limited,
-        rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
+        enforce_storage_object_count, imported_instant, may_overwrite, read_inside_budgeted,
+        read_inside_limited, rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
         IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
     use fireemu_core_types::time::LogicalInstant;
@@ -2523,6 +2514,21 @@ mod tests {
         assert!(rfc3339_instant(None).is_none());
         assert!(rfc3339_instant(Some("yesterday")).is_none());
         assert!(rfc3339_instant(Some("2026-08-30")).is_none());
+    }
+
+    #[test]
+    fn malformed_storage_timestamps_are_positioned_import_errors() {
+        let path = std::path::Path::new("storage_export/metadata/object.json");
+        let error = imported_instant(Some("yesterday"), "updated", path)
+            .expect_err("a present malformed timestamp is rejected");
+        assert_eq!(error.product, "storage");
+        assert_eq!(error.path, path);
+        assert!(error.message.contains("updated"));
+        assert!(error.message.contains("RFC 3339"));
+        assert_eq!(
+            imported_instant(None, "updated", path).unwrap(),
+            LogicalInstant::from_unix_seconds(0)
+        );
     }
 
     #[test]

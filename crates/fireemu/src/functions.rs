@@ -17,7 +17,7 @@ use fireemu_adapter_http::control::FunctionsHook;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
 
-use crate::config::{CompatibilityProfile, RuntimeConfig};
+use crate::config::{CompatibilityProfile, FunctionsCodebase, RuntimeConfig};
 
 /// One Pub/Sub topic and emulator subscription required by a loaded function manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +160,10 @@ fn ignored_reload_path(relative: &Path, configured: &[String]) -> bool {
     })
 }
 
+fn update_watch_hash(hash: u64, byte: u8) -> u64 {
+    hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
+}
+
 fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, String> {
     fn visit(root: &Path, path: &Path, ignores: &[String], hash: &mut u64) -> Result<(), String> {
         let mut entries = std::fs::read_dir(path)
@@ -180,12 +184,12 @@ fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, St
                 visit(root, &child, ignores, hash)?;
             } else if kind.is_file() {
                 for byte in relative.to_string_lossy().bytes().chain([0]) {
-                    *hash = hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte);
+                    *hash = update_watch_hash(*hash, byte);
                 }
                 let bytes =
                     std::fs::read(&child).map_err(|e| format!("watch {}: {e}", child.display()))?;
                 for byte in bytes {
-                    *hash = hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte);
+                    *hash = update_watch_hash(*hash, byte);
                 }
             } else if kind.is_symlink() {
                 return Err(format!(
@@ -200,6 +204,102 @@ fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, St
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     visit(root, root, ignores, &mut hash)?;
     Ok(hash)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FunctionsSourceStamp(u64);
+
+fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
+    fn hash_bytes(hash: &mut u64, bytes: impl IntoIterator<Item = u8>) {
+        for byte in bytes {
+            *hash = update_watch_hash(*hash, byte);
+        }
+    }
+
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        ignores: &[String],
+        hash: &mut u64,
+    ) -> Result<(), String> {
+        let mut entries = std::fs::read_dir(directory)
+            .map_err(|error| format!("watch {}: {error}", directory.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("watch {}: {error}", directory.display()))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let child = entry.path();
+            let relative = child.strip_prefix(root).unwrap_or(&child);
+            if ignored_reload_path(relative, ignores) {
+                continue;
+            }
+            let kind = entry
+                .file_type()
+                .map_err(|error| format!("watch {}: {error}", child.display()))?;
+            if kind.is_dir() {
+                visit(root, &child, ignores, hash)?;
+            } else if kind.is_file() {
+                let metadata = entry
+                    .metadata()
+                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |duration| duration.as_nanos());
+                hash_bytes(hash, relative.to_string_lossy().bytes().chain([0]));
+                hash_bytes(hash, metadata.len().to_le_bytes());
+                hash_bytes(hash, modified.to_le_bytes());
+            } else if kind.is_symlink() {
+                return Err(format!(
+                    "watch {}: symbolic links outside node_modules are not supported",
+                    child.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    visit(root, root, ignores, &mut hash)?;
+    Ok(FunctionsSourceStamp(hash))
+}
+
+async fn functions_source_stamp_off_thread(
+    root: &Path,
+    ignores: &[String],
+) -> Result<FunctionsSourceStamp, String> {
+    let root = root.to_owned();
+    let ignores = ignores.to_owned();
+    tokio::task::spawn_blocking(move || functions_source_stamp(&root, &ignores))
+        .await
+        .map_err(|error| format!("watch worker failed: {error}"))?
+}
+
+async fn functions_source_signature_off_thread(
+    root: &Path,
+    ignores: &[String],
+) -> Result<u64, String> {
+    let root = root.to_owned();
+    let ignores = ignores.to_owned();
+    tokio::task::spawn_blocking(move || functions_source_signature(&root, &ignores))
+        .await
+        .map_err(|error| format!("watch worker failed: {error}"))?
+}
+
+async fn snapshot_functions_source_off_thread(
+    root: &Path,
+    ignores: &[String],
+) -> Result<PathBuf, String> {
+    let root = root.to_owned();
+    let ignores = ignores.to_owned();
+    tokio::task::spawn_blocking(move || snapshot_functions_source(&root, &ignores))
+        .await
+        .map_err(|error| format!("snapshot worker failed: {error}"))?
+}
+
+async fn remove_snapshot_off_thread(snapshot: PathBuf) {
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(snapshot)).await;
 }
 
 fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf, String> {
@@ -304,85 +404,111 @@ fn start_reload_supervisors(
     callable_trusted_protocol: bool,
 ) {
     for codebase in cfg.functions_to_load() {
-        let root = PathBuf::from(&codebase.source);
-        let mut observed = functions_source_signature(&root, &codebase.ignore).ok();
-        let weak_runtime = Arc::downgrade(runtime);
-        let cfg = cfg.clone();
-        let hosts = hosts.clone();
-        let secret = runner_secret.to_owned();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(750)).await;
-                let Some(runtime) = weak_runtime.upgrade() else {
-                    return;
-                };
-                let next = match functions_source_signature(&root, &codebase.ignore) {
-                    Ok(signature) => signature,
-                    Err(reason) => {
-                        eprintln!(
-                            "warning: functions[{}] reload scan failed: {reason}",
-                            codebase.codebase
-                        );
-                        continue;
-                    }
-                };
-                if observed == Some(next) {
-                    continue;
+        tokio::spawn(supervise_codebase_reloads(
+            Arc::downgrade(runtime),
+            cfg.clone(),
+            codebase,
+            hosts.clone(),
+            runner_secret.to_owned(),
+            callable_trusted_protocol,
+        ));
+    }
+}
+
+async fn supervise_codebase_reloads(
+    weak_runtime: std::sync::Weak<FunctionsRuntime>,
+    cfg: RuntimeConfig,
+    codebase: FunctionsCodebase,
+    hosts: EmulatorHosts,
+    secret: String,
+    callable_trusted_protocol: bool,
+) {
+    let root = PathBuf::from(&codebase.source);
+    let mut observed_stamp = functions_source_stamp(&root, &codebase.ignore).ok();
+    let mut observed_signature = functions_source_signature(&root, &codebase.ignore).ok();
+    loop {
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        let Some(runtime) = weak_runtime.upgrade() else {
+            return;
+        };
+        let next_stamp = match functions_source_stamp_off_thread(&root, &codebase.ignore).await {
+            Ok(stamp) => stamp,
+            Err(reason) => {
+                eprintln!(
+                    "warning: functions[{}] reload scan failed: {reason}",
+                    codebase.codebase
+                );
+                continue;
+            }
+        };
+        if observed_stamp == Some(next_stamp) {
+            continue;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let stable_stamp = functions_source_stamp_off_thread(&root, &codebase.ignore)
+            .await
+            .unwrap_or(next_stamp);
+        if stable_stamp != next_stamp {
+            continue;
+        }
+        let stable = match functions_source_signature_off_thread(&root, &codebase.ignore).await {
+            Ok(signature) => signature,
+            Err(reason) => {
+                eprintln!(
+                    "warning: functions[{}] reload scan failed: {reason}",
+                    codebase.codebase
+                );
+                continue;
+            }
+        };
+        if observed_signature == Some(stable) {
+            observed_stamp = Some(stable_stamp);
+            continue;
+        }
+        let snapshot = match snapshot_functions_source_off_thread(&root, &codebase.ignore).await {
+            Ok(snapshot) => snapshot,
+            Err(reason) => {
+                eprintln!(
+                    "warning: functions[{}] reload snapshot failed: {reason}",
+                    codebase.codebase
+                );
+                continue;
+            }
+        };
+        let (snapshot_signature, current_signature) = tokio::join!(
+            functions_source_signature_off_thread(&snapshot, &codebase.ignore),
+            functions_source_signature_off_thread(&root, &codebase.ignore),
+        );
+        if snapshot_signature.as_ref() != Ok(&stable) || current_signature.as_ref() != Ok(&stable) {
+            remove_snapshot_off_thread(snapshot).await;
+            continue;
+        }
+        observed_stamp = Some(stable_stamp);
+        observed_signature = Some(stable);
+        let mut staged = codebase.clone();
+        staged.source = snapshot.to_string_lossy().into_owned();
+        match start_codebase(&cfg, &staged, &hosts, &secret, callable_trusted_protocol).await {
+            Ok(mut spec) => {
+                spec.cleanup_dir = Some(snapshot);
+                match runtime.reload_codebase(spec) {
+                    Ok(generation) => eprintln!(
+                        "note: functions[{}]: reloaded generation {generation}",
+                        codebase.codebase
+                    ),
+                    Err(reason) => eprintln!(
+                        "warning: functions[{}]: reload rejected: {reason}",
+                        codebase.codebase
+                    ),
                 }
-                // Build tools commonly replace several files in one burst. Wait for one quiet
-                // interval and use the newest complete content signature as the candidate.
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                let stable = functions_source_signature(&root, &codebase.ignore).unwrap_or(next);
-                let snapshot = match snapshot_functions_source(&root, &codebase.ignore) {
-                    Ok(snapshot) => snapshot,
-                    Err(reason) => {
-                        eprintln!(
-                            "warning: functions[{}] reload snapshot failed: {reason}",
-                            codebase.codebase
-                        );
-                        continue;
-                    }
-                };
-                let snapshot_signature = functions_source_signature(&snapshot, &codebase.ignore);
-                let current_signature = functions_source_signature(&root, &codebase.ignore);
-                if snapshot_signature.as_ref() != Ok(&stable)
-                    || current_signature.as_ref() != Ok(&stable)
-                {
-                    let _ = std::fs::remove_dir_all(&snapshot);
-                    continue;
-                }
-                // The runner reads only this immutable generation. If the live source changes
-                // again while Node starts, the next scan necessarily differs from `observed`
-                // and schedules a corrective generation instead of hiding an A-to-B-to-A race.
-                observed = Some(stable);
-                let mut staged = codebase.clone();
-                staged.source = snapshot.to_string_lossy().into_owned();
-                match start_codebase(&cfg, &staged, &hosts, &secret, callable_trusted_protocol)
-                    .await
-                {
-                    Ok(mut spec) => {
-                        spec.cleanup_dir = Some(snapshot);
-                        match runtime.reload_codebase(spec) {
-                            Ok(generation) => eprintln!(
-                                "note: functions[{}]: reloaded generation {generation}",
-                                codebase.codebase
-                            ),
-                            Err(reason) => eprintln!(
-                                "warning: functions[{}]: reload rejected: {reason}",
-                                codebase.codebase
-                            ),
-                        }
-                    }
-                    Err(reason) => {
-                        let _ = std::fs::remove_dir_all(snapshot);
-                        eprintln!(
+            }
+            Err(reason) => {
+                remove_snapshot_off_thread(snapshot).await;
+                eprintln!(
                             "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
                             codebase.codebase
                         );
-                    }
-                }
             }
-        });
+        }
     }
 }
 
@@ -2253,9 +2379,10 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_signature, node_engine_matches, package_node_engine, parse_node_version,
-        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        NodeInstallation, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        functions_source_signature, functions_source_stamp, node_engine_matches,
+        package_node_engine, parse_node_version, provision_function_pubsub_resources,
+        select_node_installation, snapshot_functions_source, update_watch_hash, NodeInstallation,
+        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
@@ -2639,6 +2766,10 @@ mod tests {
 
     #[test]
     fn reload_signature_tracks_build_and_env_files_but_ignores_configured_paths() {
+        assert_eq!(
+            update_watch_hash(0xcbf2_9ce4_8422_2325, b'a'),
+            0xaf63_bd4c_8601_b7be
+        );
         let root =
             std::env::temp_dir().join(format!("fireemu-functions-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -2648,12 +2779,15 @@ mod tests {
         std::fs::write(root.join(".env"), "VALUE=one\n").unwrap();
         std::fs::write(root.join("node_modules/pkg/index.js"), "ignored").unwrap();
         let first = functions_source_signature(&root, &[]).unwrap();
+        let first_stamp = functions_source_stamp(&root, &[]).unwrap();
 
         std::fs::write(root.join("node_modules/pkg/index.js"), "still ignored").unwrap();
         assert_eq!(functions_source_signature(&root, &[]).unwrap(), first);
-        std::fs::write(root.join("lib/index.js"), "export const value = 2;").unwrap();
+        assert_eq!(functions_source_stamp(&root, &[]).unwrap(), first_stamp);
+        std::fs::write(root.join("lib/index.js"), "export const value = 22;").unwrap();
         let build_changed = functions_source_signature(&root, &[]).unwrap();
         assert_ne!(build_changed, first);
+        assert_ne!(functions_source_stamp(&root, &[]).unwrap(), first_stamp);
         std::fs::write(root.join(".env"), "VALUE=two\n").unwrap();
         assert_ne!(
             functions_source_signature(&root, &[]).unwrap(),

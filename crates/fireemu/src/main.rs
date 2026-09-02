@@ -1076,16 +1076,45 @@ fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
     }
 }
 
-fn watched_file_signature(path: &str) -> Result<u64, String> {
-    watched_file(path).map(|(signature, _)| signature)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WatchedFileStamp {
+    len: u64,
+    modified_nanos: u128,
 }
 
-fn watched_file(path: &str) -> Result<(u64, Vec<u8>), String> {
+fn watched_file_stamp(path: &str) -> Result<WatchedFileStamp, String> {
+    let metadata = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos());
+    Ok(WatchedFileStamp {
+        len: metadata.len(),
+        modified_nanos,
+    })
+}
+
+fn watched_file(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let signature = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(*byte)
     });
-    Ok((signature, bytes))
+    Ok((watched_file_stamp(path)?, signature, bytes))
+}
+
+async fn watched_file_stamp_off_thread(path: &str) -> Result<WatchedFileStamp, String> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || watched_file_stamp(&path))
+        .await
+        .map_err(|error| format!("watch worker failed: {error}"))?
+}
+
+async fn watched_file_off_thread(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || watched_file(&path))
+        .await
+        .map_err(|error| format!("watch worker failed: {error}"))?
 }
 
 fn start_rules_reload_supervisor(
@@ -1096,15 +1125,17 @@ fn start_rules_reload_supervisor(
 ) {
     let weak = Arc::downgrade(rules);
     let barrier = barrier.clone();
-    let mut observed = watched_file_signature(&path).ok();
+    let initial = watched_file(&path).ok();
+    let mut observed_stamp = initial.as_ref().map(|(stamp, _, _)| *stamp);
+    let mut observed_signature = initial.as_ref().map(|(_, signature, _)| *signature);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
             let Some(rules) = weak.upgrade() else {
                 return;
             };
-            let signature = match watched_file_signature(&path) {
-                Ok(signature) if observed != Some(signature) => signature,
+            let stamp = match watched_file_stamp_off_thread(&path).await {
+                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
                 Ok(_) => continue,
                 Err(reason) => {
                     eprintln!("warning: {label} reload scan failed: {reason}");
@@ -1112,19 +1143,24 @@ fn start_rules_reload_supervisor(
                 }
             };
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_signature, bytes) = match watched_file(&path) {
-                Ok(candidate) => candidate,
-                Err(error) => {
-                    eprintln!(
+            let (candidate_stamp, candidate_signature, bytes) =
+                match watched_file_off_thread(&path).await {
+                    Ok(candidate) => candidate,
+                    Err(error) => {
+                        eprintln!(
                         "warning: {label} reload failed; keeping the last-known-good rules: {error}"
                     );
-                    continue;
-                }
-            };
-            if candidate_signature == observed.unwrap_or(signature) {
+                        continue;
+                    }
+                };
+            if candidate_stamp != stamp {
                 continue;
             }
-            observed = Some(candidate_signature);
+            observed_stamp = Some(candidate_stamp);
+            if observed_signature == Some(candidate_signature) {
+                continue;
+            }
+            observed_signature = Some(candidate_signature);
             let source = match String::from_utf8(bytes) {
                 Ok(source) => source,
                 Err(error) => {
@@ -1154,15 +1190,17 @@ fn start_rules_reload_supervisor(
 
 fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<LocalBackend>) {
     let weak = Arc::downgrade(backend);
-    let mut observed = watched_file_signature(&path).ok();
+    let initial = watched_file(&path).ok();
+    let mut observed_stamp = initial.as_ref().map(|(stamp, _, _)| *stamp);
+    let mut observed_signature = initial.as_ref().map(|(_, signature, _)| *signature);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
             let Some(backend) = weak.upgrade() else {
                 return;
             };
-            let signature = match watched_file_signature(&path) {
-                Ok(signature) if observed != Some(signature) => signature,
+            let stamp = match watched_file_stamp_off_thread(&path).await {
+                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
                 Ok(_) => continue,
                 Err(reason) => {
                     eprintln!("warning: Firestore index reload scan failed: {reason}");
@@ -1170,7 +1208,9 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                 }
             };
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_signature, bytes) = match watched_file(&path) {
+            let (candidate_stamp, candidate_signature, bytes) = match watched_file_off_thread(&path)
+                .await
+            {
                 Ok(candidate) => candidate,
                 Err(error) => {
                     eprintln!(
@@ -1179,10 +1219,14 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                     continue;
                 }
             };
-            if candidate_signature == observed.unwrap_or(signature) {
+            if candidate_stamp != stamp {
                 continue;
             }
-            observed = Some(candidate_signature);
+            observed_stamp = Some(candidate_stamp);
+            if observed_signature == Some(candidate_signature) {
+                continue;
+            }
+            observed_signature = Some(candidate_signature);
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
                 Err(error) => {
@@ -2597,6 +2641,33 @@ mod config_reload_tests {
         std::fs::write(&path, hostile).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
         assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_ONE));
+
+        std::fs::write(&path, RULES_TWO).unwrap();
+        for _ in 0..30 {
+            if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_TWO));
+        drop(rules);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn rules_reload_publishes_a_file_created_after_supervisor_start() {
+        let dir = scratch("rules-created-later");
+        let path = dir.join("firestore.rules");
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_rules_reload_supervisor(
+            path.display().to_string(),
+            "Firestore rules",
+            &rules,
+            &barrier,
+        );
 
         std::fs::write(&path, RULES_TWO).unwrap();
         for _ in 0..30 {

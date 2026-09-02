@@ -725,16 +725,16 @@ impl FirestoreState {
     /// `FS-LIMIT-TRANSACTION-TOTAL-TIME` / `FS-LIMIT-TRANSACTION-IDLE-TIME`) and records the
     /// activity. A transaction that has run out its budget is finished and reported as
     /// `ABORTED` with the message the official emulator gives a transaction that is no longer
-    /// valid -- the code the SDKs retry on, which is what lets a client whose out-of-band
-    /// write can start a fresh transaction snapshot after the expired attempt is rejected.
+    /// valid -- the code the SDKs retry on. After the expired attempt is rejected, the client
+    /// can begin a fresh transaction snapshot that observes an out-of-band write.
     pub fn touch_transaction(
         &mut self,
         id: &TransactionId,
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
         let t = self.transaction(id)?;
-        // Expiry is inclusive at the deadline (`now >= deadline`), the same boundary
-        // The transaction is considered gone by its own commit at the exact deadline.
+        // Expiry is inclusive at the deadline (`now >= deadline`). Commit validation uses
+        // this same boundary, so the transaction is gone at the exact deadline.
         let total_deadline = t
             .started_at
             .checked_add(transaction_ttl())

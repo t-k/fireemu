@@ -1173,6 +1173,13 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
     );
     // No claims is an absent customAttributes, as the official record has it.
     assert!(looked["users"][0]["customAttributes"].is_null());
+    advance(&s, 1);
+    let (status, refreshed_before_update) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 200, "{refreshed_before_update}");
     let (status, _) = admin(
         &s,
         "POST",
@@ -1180,10 +1187,19 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &json!({"localId": uid, "password": "password2"}),
     );
     assert_eq!(status, 200);
+    let (status, looked_up_after_update) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": refreshed_before_update["id_token"]}),
+    );
+    assert_eq!(status, 200, "{looked_up_after_update}");
     let (status, _) = post(
         &s,
         "/securetoken.googleapis.com/v1/token",
-        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+        &json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refreshed_before_update["refresh_token"]
+        }),
     );
     assert_eq!(
         status, 200,
@@ -1195,6 +1211,34 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
         &json!({"email": "p@example.com", "password": "password2", "returnSecureToken": true}),
     );
     assert_eq!(status, 200);
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": uid, "disableUser": true}),
+    );
+    assert_eq!(status, 200);
+    let (status, disabled) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 400, "{disabled}");
+    assert_eq!(disabled["error"]["message"], "USER_DISABLED");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": uid}),
+    );
+    assert_eq!(status, 200);
+    let (status, deleted) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(status, 400, "{deleted}");
+    assert_eq!(deleted["error"]["message"], "INVALID_REFRESH_TOKEN");
 }
 
 #[test]

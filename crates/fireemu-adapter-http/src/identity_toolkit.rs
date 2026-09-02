@@ -1289,7 +1289,7 @@ fn dispatch(
         Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
         Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
-        Handler::Token => refresh(store, body, at),
+        Handler::Token => refresh(store, body, at, options.stateless_refresh_tokens),
         Handler::AdminCreate => admin_create(store, body, at),
         Handler::AdminLookup => lookup(store, body, at, true),
         Handler::AdminDelete => delete_account(store, body, at, true),
@@ -1724,7 +1724,7 @@ fn select_store(
         }
     }
     if let Some(token) = str_field(body, "refresh_token") {
-        if let Some(store) = registry.find(|s| s.refresh_session(token).is_ok()) {
+        if let Some(store) = registry.find(|s| s.owns_refresh_token(token)) {
             return Ok(store);
         }
     }
@@ -3532,14 +3532,23 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     }
 }
 
-fn refresh(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn refresh(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    stateless_refresh_tokens: bool,
+) -> JsonResponse {
     if str_field(body, "grant_type") != Some("refresh_token") {
         return error(400, "INVALID_GRANT_TYPE");
     }
     let Some(token) = str_field(body, "refresh_token") else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
-    let session = match store.refresh_session(token) {
+    let session = match if stateless_refresh_tokens {
+        store.stateless_refresh_session(token)
+    } else {
+        store.refresh_session(token)
+    } {
         Ok(s) => s.clone(),
         Err(e) => return auth_error(&e),
     };

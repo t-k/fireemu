@@ -199,6 +199,72 @@ fn published() -> &'static (Value, Value) {
     })
 }
 
+/// The synchronous Auth-to-Functions bridge and the two public metadata authorities must agree
+/// on the Blocking Functions surface. This keeps an implemented trigger from returning to a
+/// whole-feature gap after the runtime and its integration coverage move ahead.
+#[test]
+fn blocking_functions_metadata_matches_the_served_runtime() {
+    let published = manifest();
+    let implemented = text_of(&published["capabilities"]["FN-EVT-1"]["implemented"]);
+    let unimplemented = text_of(&published["capabilities"]["FN-EVT-1"]["unimplemented"]);
+    for name in [
+        "beforeUserCreated",
+        "beforeUserSignedIn",
+        "beforeCreate",
+        "beforeSignIn",
+    ] {
+        assert!(
+            implemented.contains(name),
+            "FN-EVT-1 does not publish {name} as implemented"
+        );
+        assert!(
+            !unimplemented.contains(name),
+            "FN-EVT-1 still publishes {name} as unimplemented"
+        );
+    }
+
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../spec/compatibility/contract.json"))
+            .expect("the compatibility contract is JSON");
+    for surface_id in ["auth", "functions"] {
+        let surface = contract["surfaces"]
+            .as_array()
+            .expect("the contract lists surfaces")
+            .iter()
+            .find(|surface| surface["id"] == surface_id)
+            .unwrap_or_else(|| panic!("the contract lists the {surface_id} surface"));
+        assert!(
+            !text_of(&surface["gaps"])
+                .to_ascii_lowercase()
+                .contains("blocking"),
+            "the {surface_id} surface still publishes Blocking Functions as a gap"
+        );
+        assert!(
+            surface["claims"]
+                .as_array()
+                .expect("an active surface lists claims")
+                .iter()
+                .any(|claim| {
+                    let has_capability =
+                        claim["capabilities"]
+                            .as_array()
+                            .is_some_and(|capabilities| {
+                                capabilities.iter().any(|capability| {
+                                    capability["id"] == "FN-EVT-1"
+                                        && capability["status"] == "implemented"
+                                })
+                            });
+                    let evidence = text_of(&claim["evidence"]);
+                    has_capability
+                        && evidence
+                            .contains("crates/fireemu-adapter-http/tests/identity_toolkit.rs")
+                        && evidence.contains("crates/fireemu/tests/functions_discovery.rs")
+                }),
+            "the {surface_id} surface has no evidence-backed FN-EVT-1 claim"
+        );
+    }
+}
+
 /// `LIMIT-META-03`: the `FS-LIM-1` capability entry, the Standard catalog and `/v1/limits`
 /// name the same set of enforced limits, and it is exactly the set the runtime enforces
 /// (`fireemu_core_firestore::limits::ENFORCED_LIMIT_IDS`). A limit the runtime can refuse a

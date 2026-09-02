@@ -1,7 +1,9 @@
 //! Firestore REST surface at the handler level: documents, queries, transactions, errors and
 //! rules (the JSON mapping is exercised end-to-end by tools/sdk-smoke/lite.mjs).
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
@@ -11,7 +13,7 @@ use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -44,7 +46,7 @@ fn state_with(rules: Option<&str>, acceptance: TokenAcceptance) -> RestState {
             SplitMix64::new(3),
             TotpPolicy::default(),
         )));
-        let loaded = Arc::new(RwLock::new(LoadedRules::from_source(src).unwrap()));
+        let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(src).unwrap()));
         Arc::new(RulesEnforcer::new(loaded, auth, clock).with_token_acceptance(acceptance))
     });
     RestState {
@@ -506,6 +508,36 @@ fn the_emulator_security_rules_route_replaces_the_ruleset_and_reports_the_compil
         None,
     );
     assert_eq!(status, 400);
+}
+
+#[test]
+fn security_rules_publication_waits_for_exclusive_snapshot_work() {
+    const DENY: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
+    const ALLOW: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
+
+    let state = Arc::new(state(Some(DENY)));
+    let barrier = state.local.barrier();
+    let exclusive = barrier.exclusive();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let worker_state = state.clone();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal publication start");
+        let result = put_rules(&worker_state, ALLOW);
+        finished_tx.send(result).expect("signal publication finish");
+    });
+
+    started_rx.recv().expect("publication worker started");
+    assert!(
+        finished_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "rules publication must wait while snapshot work owns the exclusive barrier"
+    );
+    drop(exclusive);
+    let (status, body) = finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("publication resumes after snapshot work");
+    assert_eq!(status, 200, "{body}");
+    worker.join().expect("publication worker exits");
 }
 
 #[test]

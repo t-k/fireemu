@@ -34,7 +34,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::jwt::{verify_rules_token, verify_rules_token_for_project, TokenAcceptance};
 use fireemu_core_auth::store::AuthStore;
@@ -49,7 +49,7 @@ use fireemu_core_rules::eval::{
     evaluate_request_traced, try_compare, Decision, DenyReason, DocumentAccess, Method,
     RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RangeBound, RulesValue, ValueRange};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
@@ -345,14 +345,14 @@ pub fn check_audience(principal: &Principal, project: &str) -> Result<(), Status
 pub enum RulesLoadError {
     /// The source does not compile; the position is the compiler's.
     Compile(fireemu_core_rules::parse::ParseError),
-    /// The rules lock is poisoned.
-    Poisoned,
+    /// Atomic publication failed after the source compiled.
+    Publish(String),
 }
 
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
-    rules: Arc<RwLock<LoadedRules>>,
-    database_rules: BTreeMap<String, Arc<RwLock<LoadedRules>>>,
+    rules: Arc<RulesetSlot>,
+    database_rules: BTreeMap<String, Arc<RulesetSlot>>,
     auth: Arc<Mutex<AuthStore>>,
     clock: Arc<Mutex<VirtualClock>>,
     /// Stores of the other session projects (tokens are verified against the store of
@@ -367,7 +367,7 @@ impl RulesEnforcer {
     /// Creates the enforcer over the shared rules, user store and clock.
     #[must_use]
     pub fn new(
-        rules: Arc<RwLock<LoadedRules>>,
+        rules: Arc<RulesetSlot>,
         auth: Arc<Mutex<AuthStore>>,
         clock: Arc<Mutex<VirtualClock>>,
     ) -> Self {
@@ -383,7 +383,7 @@ impl RulesEnforcer {
 
     /// The loaded rules, whose `diagnostics` a coverage report and a request trace read.
     #[must_use]
-    pub fn rules(&self) -> &Arc<RwLock<LoadedRules>> {
+    pub fn rules(&self) -> &Arc<RulesetSlot> {
         &self.rules
     }
 
@@ -396,15 +396,12 @@ impl RulesEnforcer {
 
     /// Installs rulesets declared for named Firestore databases.
     #[must_use]
-    pub fn with_database_rules(
-        mut self,
-        rules: BTreeMap<String, Arc<RwLock<LoadedRules>>>,
-    ) -> Self {
+    pub fn with_database_rules(mut self, rules: BTreeMap<String, Arc<RulesetSlot>>) -> Self {
         self.database_rules = rules;
         self
     }
 
-    fn rules_for_database(&self, database: &str) -> &Arc<RwLock<LoadedRules>> {
+    fn rules_for_database(&self, database: &str) -> &Arc<RulesetSlot> {
         self.database_rules.get(database).unwrap_or(&self.rules)
     }
 
@@ -430,19 +427,18 @@ impl RulesEnforcer {
     /// up.
     pub fn replace_source(&self, source: &str) -> Result<(), RulesLoadError> {
         let loaded = LoadedRules::from_source(source).map_err(RulesLoadError::Compile)?;
-        let mut slot = self.rules.write().map_err(|_| RulesLoadError::Poisoned)?;
-        // The new ruleset brings its own diagnostics store, so every position recorded
-        // against the old source goes with it.
-        *slot = loaded;
+        self.rules
+            .replace_loaded(loaded)
+            .map_err(RulesLoadError::Publish)?;
         Ok(())
     }
 
     /// Whether a ruleset is loaded (poisoned state is an error, never "no rules").
     pub fn loaded(&self) -> Result<bool, Status> {
         self.rules
-            .read()
-            .map(|r| r.is_loaded())
-            .map_err(|_| Status::internal("rules lock poisoned"))
+            .snapshot()
+            .map(|rules| rules.is_loaded())
+            .map_err(Status::internal)
     }
 
     /// Resolves the caller from the request metadata.
@@ -575,8 +571,8 @@ impl RulesEnforcer {
         }
         let rules = self
             .rules_for_database(path.database().as_str())
-            .read()
-            .map_err(|_| Status::internal("rules lock poisoned"))?;
+            .snapshot()
+            .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
             return Ok(());
         };
@@ -628,8 +624,8 @@ impl RulesEnforcer {
                     .first()
                     .map_or("(default)", |(path, _)| path.database().as_str()),
             )
-            .read()
-            .map_err(|_| Status::internal("rules lock poisoned"))?;
+            .snapshot()
+            .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
             return Ok(());
         };
@@ -680,8 +676,8 @@ impl RulesEnforcer {
         }
         let rules = self
             .rules_for_database(parent.database.as_str())
-            .read()
-            .map_err(|_| Status::internal("rules lock poisoned"))?;
+            .snapshot()
+            .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
             return Ok(());
         };
@@ -744,8 +740,8 @@ impl RulesEnforcer {
         }
         let rules = self
             .rules_for_database(parent.database.as_str())
-            .read()
-            .map_err(|_| Status::internal("rules lock poisoned"))?;
+            .snapshot()
+            .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
             return Ok(());
         };

@@ -15,7 +15,7 @@ use fireemu_adapter_ui::{handle, AppCheckInfo, RuntimeInfo, UiBody, UiRequest, U
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -50,8 +50,8 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         SplitMix64::new(5),
         TotpPolicy::default(),
     )));
-    let rules = Arc::new(RwLock::new(LoadedRules::default()));
-    let storage_rules = Arc::new(RwLock::new(LoadedRules::default()));
+    let rules = Arc::new(RulesetSlot::default());
+    let storage_rules = Arc::new(RulesetSlot::default());
     let storage = Arc::new(StorageState {
         store: Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
         clock: clock.clone(),

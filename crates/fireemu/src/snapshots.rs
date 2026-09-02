@@ -9,14 +9,14 @@
 //! rather than turned into an empty part: a snapshot that silently captured nothing would
 //! wipe the session the next time it was restored.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_functions::runtime::FunctionsRuntime;
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_adapter_http::control::{SnapshotHook, SnapshotPart, TransitionFailure};
 use fireemu_core_auth::store::{AuthRegistry, AuthSnapshot, AuthStore};
 use fireemu_core_firestore::text_index::TextIndexCatalog;
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_session::fault::{FaultRegistry, FaultState};
 use fireemu_core_session::tenancy::Scope;
@@ -292,7 +292,7 @@ impl SnapshotHook for SessionClock {
 }
 
 /// A ruleset slot (shared).
-pub struct Rules(pub &'static str, pub Arc<RwLock<LoadedRules>>);
+pub struct Rules(pub &'static str, pub Arc<RulesetSlot>);
 
 impl SnapshotHook for Rules {
     fn name(&self) -> &'static str {
@@ -302,18 +302,18 @@ impl SnapshotHook for Rules {
         true
     }
     fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
-        let copy = self
+        let snapshot = self
             .1
-            .read()
-            .map_err(|_| poisoned(self.name(), "the ruleset"))?
-            .clone();
+            .snapshot()
+            .map_err(|_| poisoned(self.name(), "the ruleset"))?;
+        let copy = (*snapshot).clone();
         Ok(Arc::new(copy))
     }
     fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         part.downcast_ref::<LoadedRules>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         self.1
-            .write()
+            .snapshot()
             .map(|_| ())
             .map_err(|_| poisoned(self.name(), "the ruleset"))
     }
@@ -321,12 +321,10 @@ impl SnapshotHook for Rules {
         let rules = part
             .downcast_ref::<LoadedRules>()
             .ok_or_else(|| wrong_shape(self.name()))?;
-        let mut slot = self
-            .1
-            .write()
-            .map_err(|_| poisoned(self.name(), "the ruleset"))?;
-        *slot = rules.clone();
-        Ok(())
+        self.1
+            .replace_loaded(rules.clone())
+            .map(|_| ())
+            .map_err(|_| poisoned(self.name(), "the ruleset"))
     }
 }
 
@@ -405,12 +403,51 @@ mod tests {
     //! registrations of the scope and then rotates its epoch, so no token issued against the
     //! replaced state survives it (specification section 14).
 
-    use super::{AppCheck, Scope, SnapshotHook};
+    use super::{AppCheck, Rules, Scope, SnapshotHook};
     use crate::sessions::tests::{admits_for, gate, token_for, APP_ID};
 
+    use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
     use fireemu_core_types::time::LogicalInstant;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
 
     const AT: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+    #[test]
+    fn named_database_rules_restore_their_own_fresh_generations() {
+        const DENY: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
+        const ALLOW: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
+
+        let staging = Arc::new(RulesetSlot::new(LoadedRules::from_source(DENY).unwrap()));
+        let analytics = Arc::new(RulesetSlot::new(LoadedRules::from_source(ALLOW).unwrap()));
+        let staging_hook = Rules("named database rules", staging.clone());
+        let analytics_hook = Rules("named database rules", analytics.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let staging_part = staging_hook.capture(&scope).expect("capture staging rules");
+        let analytics_part = analytics_hook
+            .capture(&scope)
+            .expect("capture analytics rules");
+
+        staging.replace_source(ALLOW).expect("change staging");
+        analytics.replace_source(DENY).expect("change analytics");
+        staging_hook
+            .restore(&scope, &staging_part)
+            .expect("restore staging rules");
+        analytics_hook
+            .restore(&scope, &analytics_part)
+            .expect("restore analytics rules");
+
+        let staging = staging.snapshot().expect("staging snapshot");
+        let analytics = analytics.snapshot().expect("analytics snapshot");
+        assert_eq!(
+            (staging.source.as_deref(), staging.generation()),
+            (Some(DENY), 2)
+        );
+        assert_eq!(
+            (analytics.source.as_deref(), analytics.generation()),
+            (Some(ALLOW), 2)
+        );
+    }
 
     #[test]
     fn a_restore_replaces_the_dynamic_debug_tokens_and_rotates_the_epoch() {

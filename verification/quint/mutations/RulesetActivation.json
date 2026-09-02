@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "model": "RulesetActivation",
+  "mutations": [
+    {
+      "id": "M-FORMAL-RULES-CHECKS-001",
+      "property": "ActivationRequiresAllChecks",
+      "operator": "activate-before-limit-check",
+      "from": "candidatePhase == \"Checked\",\n    record(\"Activate\"",
+      "to": "candidatePhase == \"Compiled\",\n    record(\"Activate\""
+    },
+    {
+      "id": "M-FORMAL-RULES-REJECTED-001",
+      "property": "FailedCandidateNeverActivates",
+      "operator": "activate-rejected-candidate",
+      "from": "candidatePhase == \"Checked\",\n    record(\"Activate\"",
+      "to": "candidatePhase == \"Rejected\",\n    record(\"Activate\""
+    },
+    {
+      "id": "M-FORMAL-RULES-REQUEST-PIN-001",
+      "property": "RequestVersionIsImmutable",
+      "operator": "rebind-inflight-request-to-active-version",
+      "from": "record(\"ProgressRequest\", request, observable)",
+      "to": "record(\"ProgressRequest\", request, { activeVersion: observable.activeVersion, generation: observable.generation, requestVersion: observable.requestVersion.set(request, observable.activeVersion), requestGeneration: observable.requestGeneration })"
+    },
+    {
+      "id": "M-FORMAL-RULES-REQUEST-GENERATION-001",
+      "property": "RequestVersionIsImmutable",
+      "operator": "rebind-inflight-request-to-current-generation",
+      "from": "record(\"ProgressRequest\", request, observable)",
+      "to": "record(\"ProgressRequest\", request, { activeVersion: observable.activeVersion, generation: observable.generation, requestVersion: observable.requestVersion, requestGeneration: observable.requestGeneration.set(request, observable.generation) })"
+    },
+    {
+      "id": "M-FORMAL-RULES-ACTIVE-ATOMIC-001",
+      "property": "ActiveVersionChangesAtomically",
+      "operator": "publish-active-pointer-during-compile",
+      "from": "record(\"Compile\", \"\", observable)",
+      "to": "record(\"Compile\", \"\", { activeVersion: \"v2\", generation: observable.generation, requestVersion: observable.requestVersion, requestGeneration: observable.requestGeneration })"
+    },
+    {
+      "id": "M-FORMAL-RULES-ATOMIC-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "publish-generation-before-active-version",
+      "from": "activeVersion: observable.activeVersion,\n      generation: observable.generation,\n      requestVersion: observable.requestVersion.set(request, observable.activeVersion),\n      requestGeneration: observable.requestGeneration.set(request, observable.generation)",
+      "to": "activeVersion: observable.activeVersion,\n      generation: observable.generation + 1,\n      requestVersion: observable.requestVersion.set(request, observable.activeVersion),\n      requestGeneration: observable.requestGeneration.set(request, observable.generation)"
+    }
+  ]
+}

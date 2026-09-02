@@ -11,7 +11,7 @@ use fireemu_adapter_http::storage_server::{
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::StorageState as ObjectStore;
@@ -39,9 +39,11 @@ fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> Storage
             ))),
         )),
         tenancy: None,
-        rules: Arc::new(RwLock::new(rules.map_or_else(LoadedRules::default, |r| {
-            LoadedRules::from_source(r).unwrap()
-        }))),
+        rules: Arc::new(RulesetSlot::new(
+            rules.map_or_else(LoadedRules::default, |r| {
+                LoadedRules::from_source(r).unwrap()
+            }),
+        )),
         project: "demo-app".to_owned(),
         events: None,
         barrier: None,

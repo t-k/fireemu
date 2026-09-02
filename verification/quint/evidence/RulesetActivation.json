@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
-  "model": "StorageGeneration",
-  "spec": "specs/StorageGeneration.qnt",
-  "main": "StorageGenerationProof",
-  "config": "configs/StorageGeneration.json",
-  "mutationManifest": "mutations/StorageGeneration.json",
+  "model": "RulesetActivation",
+  "spec": "specs/RulesetActivation.qnt",
+  "main": "RulesetActivationProof",
+  "config": "configs/RulesetActivation.json",
+  "mutationManifest": "mutations/RulesetActivation.json",
   "tools": {
     "quint": "0.32.0",
     "quintConnect": "0.1.2",
@@ -12,123 +12,145 @@
     "backend": "tlc"
   },
   "bounds": {
-    "ImportedGeneration": "2",
-    "MaxGeneration": "3",
-    "MaxMetageneration": "3"
+    "Requests": "{r1,r2}",
+    "Versions": "{v1,v2}"
   },
   "boundInputs": [
     ".github/workflows/ci.yml",
     "Cargo.lock",
     "Cargo.toml",
-    "crates/fireemu-core-storage/src/store.rs",
+    "crates/fireemu-adapter-grpc/src/rest/mod.rs",
+    "crates/fireemu-adapter-grpc/src/rules.rs",
+    "crates/fireemu-adapter-grpc/src/streams.rs",
+    "crates/fireemu-adapter-http/src/control.rs",
+    "crates/fireemu-adapter-http/src/storage.rs",
+    "crates/fireemu-core-rules/src/runtime.rs",
+    "crates/fireemu/src/main.rs",
+    "crates/fireemu/src/snapshots.rs",
     "verification/quint/Cargo.toml",
     "verification/quint/README.md",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
-    "verification/quint/configs/StorageGeneration.json",
-    "verification/quint/mutations/StorageGeneration.json",
+    "verification/quint/configs/RulesetActivation.json",
+    "verification/quint/mutations/RulesetActivation.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-pilot.sh",
-    "verification/quint/specs/StorageGeneration.qnt",
+    "verification/quint/specs/RulesetActivation.qnt",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
-    "verification/quint/src/storage_generation.rs",
+    "verification/quint/src/ruleset_activation.rs",
     "verification/quint/tests/cli_contract.rs",
     "verification/quint/tests/evidence_contract.rs",
     "verification/quint/tests/model_registry.rs",
-    "verification/quint/tests/storage_generation_connect.rs"
+    "verification/quint/tests/ruleset_activation_connect.rs"
   ],
   "digests": {
     ".github/workflows/ci.yml": "e813033b9f67c87d9ce61a9295ce4594573fbe06a8be170c1e94499be7e96a08",
     "Cargo.lock": "91fed9c26a7d5e0a7a9b0a115c2e1b35f6e5b7f96b6290666c61bde6a2a80fcf",
     "Cargo.toml": "dfbc561aadb7e9de517b9450d40d44af10dfe23a246d244ec5144737ce55681b",
-    "crates/fireemu-core-storage/src/store.rs": "da3f8b0f0d881181feb2ed9e120a725875a12d05cf6301f5f982c603a67df57f",
+    "crates/fireemu-adapter-grpc/src/rest/mod.rs": "4529cd4ffbcd95bb663ebd847c83096bb9140c0cf5fb7b58483430ff312eaa26",
+    "crates/fireemu-adapter-grpc/src/rules.rs": "c582d70e01bc9ee8264911b2ee8de404d855c9e9bfcea2c90d2398454064ac90",
+    "crates/fireemu-adapter-grpc/src/streams.rs": "c399b861915020a148b8ae55913e79947d24a1df4fd8d19907e40e4e5a010bb9",
+    "crates/fireemu-adapter-http/src/control.rs": "b6fdd87dea30b5064afd7cda3900770322a5fe93c6d7e30b7c3e594d16c7f080",
+    "crates/fireemu-adapter-http/src/storage.rs": "3f297508cc45aed0121cfbd6b0ea003cda08739f8db83c4f7c2afa1db8a67d51",
+    "crates/fireemu-core-rules/src/runtime.rs": "7d4ef138c63b5d0d20201b32e1e5bff1dc0bb1e6687092a82a0e7ff49d64b6a9",
+    "crates/fireemu/src/main.rs": "0c7a842489c97ef40a6b33e9e18bc241426e3fe6e17f5b0b2cc759ae2523cf49",
+    "crates/fireemu/src/snapshots.rs": "b063fddf87be4d520c5febb70dfee7a60ff76fcd6812fee9789d301721f07b7c",
     "verification/quint/Cargo.toml": "3292a811eeab2d963d17c302ce0c01e9225c02020be8b52a4bcf83ddeb0099d7",
     "verification/quint/README.md": "8c94c58608b4c1580dcd9a6162235a9828fc030f70b0cc932932978c9f6c22b7",
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
-    "verification/quint/configs/StorageGeneration.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/mutations/StorageGeneration.json": "f81d08b3aa0ca0054462cc7dfd76ccba9c1b934bd73bd29d644bf53ef740f0fe",
+    "verification/quint/configs/RulesetActivation.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
+    "verification/quint/mutations/RulesetActivation.json": "34a88ed21220002ad2267d8a06e38989c59c81bf627415b94750fb2c0b564f19",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-pilot.sh": "c5d389f864a17516a30c921872b49133fbfd8e41f06dffd698ea859c3cc06151",
-    "verification/quint/specs/StorageGeneration.qnt": "7629903c4fe34242978d31af130e4f54239215ceb20805a31cb0a8babe9112c6",
+    "verification/quint/specs/RulesetActivation.qnt": "543d841454e45d14f7b9175111b8d504e4fa96438614c8ff91ab6bbfc964f574",
     "verification/quint/src/evidence.rs": "206166ece32f6241d35918f447f05203aac72efc280f7da6c6001644de508307",
     "verification/quint/src/lib.rs": "a8749076ba02935b0063325ca12fae9077f022cc74ba887cf6b17f9a945547db",
     "verification/quint/src/main.rs": "daa7c3ace8c42b14e73b2d876d16bf53a25068b923fe9642a1ca843d8d600537",
     "verification/quint/src/model.rs": "f264deb58f798798fa7e8ffc1f3ff38bdc74c0654f425f2590f26b7122f622b1",
     "verification/quint/src/process.rs": "1303a4536c64d82f3b5eff44caabf27fd81974cca415185594badc75d48794b4",
-    "verification/quint/src/storage_generation.rs": "14c6960457d875c80672618680445bfb0150adad7129bbd2a1676850c089b864",
+    "verification/quint/src/ruleset_activation.rs": "7df04a458a8460a757f303cbacedcf782bca29fccc6ed84d0cf85d7686e68f8b",
     "verification/quint/tests/cli_contract.rs": "6ca66cd92b83b837742bc902cd043eca4b5fc80efebdf56e85d9cb0cbee404ac",
     "verification/quint/tests/evidence_contract.rs": "59621a018f49b5a659a0e3b12a9bc46025b4e66aa107e2e990f91e181cdecf8a",
     "verification/quint/tests/model_registry.rs": "5b45606854388ad3dc4ded732cd7fec986928f7c7c34051020e783dd08ee6a84",
-    "verification/quint/tests/storage_generation_connect.rs": "8752e7a554a1585b52fab1533ede0c9682386c8c32a53137f8940d29001cd991"
+    "verification/quint/tests/ruleset_activation_connect.rs": "c22a7f7fcb7661e90ba15f1453d6a095c8b656949316fbeec5750725ac917c8c"
   },
   "invariants": [
     "TypeOK",
-    "GenerationMonotonicity",
-    "GenerationNeverReused",
-    "MetadataOnlyPreservesGeneration",
-    "RestorePreservesGenerationHighWater"
+    "ActivationRequiresAllChecks",
+    "FailedCandidateNeverActivates",
+    "RequestVersionIsImmutable",
+    "ActiveVersionChangesAtomically",
+    "AtomicRulesetActivation"
   ],
   "temporalProperties": [],
   "mutations": [
     {
-      "id": "M-FORMAL-STORAGE-REUSE-001",
-      "property": "GenerationNeverReused",
+      "id": "M-FORMAL-RULES-CHECKS-001",
+      "property": "ActivationRequiresAllChecks",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-STORAGE-METADATA-GENERATION-001",
-      "property": "MetadataOnlyPreservesGeneration",
+      "id": "M-FORMAL-RULES-REJECTED-001",
+      "property": "FailedCandidateNeverActivates",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-STORAGE-METAGENERATION-001",
-      "property": "MetadataOnlyPreservesGeneration",
+      "id": "M-FORMAL-RULES-REQUEST-PIN-001",
+      "property": "RequestVersionIsImmutable",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-STORAGE-RESTORE-HIGH-WATER-001",
-      "property": "RestorePreservesGenerationHighWater",
+      "id": "M-FORMAL-RULES-REQUEST-GENERATION-001",
+      "property": "RequestVersionIsImmutable",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-STORAGE-MONOTONIC-001",
-      "property": "GenerationMonotonicity",
+      "id": "M-FORMAL-RULES-ACTIVE-ATOMIC-001",
+      "property": "ActiveVersionChangesAtomically",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-ATOMIC-001",
+      "property": "AtomicRulesetActivation",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
-    "write",
-    "metadata",
-    "deleteThenPut",
-    "snapshotRestore",
-    "importRestore"
+    "activate",
+    "reject",
+    "pinRequest",
+    "pinGeneration"
   ],
   "actions": [
-    "PutData",
-    "PatchMetadata",
-    "Delete",
-    "CaptureSnapshot",
-    "RestoreSnapshot",
-    "ImportData"
+    "Create",
+    "Parse",
+    "Compile",
+    "Check",
+    "Reject",
+    "Activate",
+    "Republish",
+    "StartRequest",
+    "ProgressRequest",
+    "FinishRequest"
   ],
   "projectionFields": [
+    "activeVersion",
     "generation",
-    "metageneration",
-    "highWater",
-    "exists",
-    "issued"
+    "requestVersion",
+    "requestGeneration"
   ],
   "simulation": {
     "seeds": [

@@ -14,7 +14,7 @@ use fireemu_adapter_http::identity_toolkit::RequestHeaders;
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass};
 use fireemu_core_app_check::header::HeaderClassification;
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_types::edition::FirestoreEdition;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::json;
@@ -30,8 +30,8 @@ fn state(app_check: Option<fireemu_core_app_check::AppCheckGate>) -> ControlStat
         require_demo_prefix: true,
         edition: FirestoreEdition::Standard,
         capabilities: json!({"schemaVersion": 1}),
-        rules: Arc::new(RwLock::new(LoadedRules::default())),
-        storage_rules: Arc::new(RwLock::new(LoadedRules::default())),
+        rules: Arc::new(RulesetSlot::default()),
+        storage_rules: Arc::new(RulesetSlot::default()),
         reset_hooks: Vec::new(),
         functions: None,
         control_token: TOKEN.to_owned(),

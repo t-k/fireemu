@@ -2,7 +2,8 @@
 //! per-method evaluation with `resource` / `request.resource`, and the list approximation.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::decode::Parent;
 use fireemu_adapter_grpc::gateway::Gateway;
@@ -14,7 +15,9 @@ use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::eval::DocumentAccess;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+use fireemu_core_rules::value::RulesValue;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -88,13 +91,13 @@ fn named_databases_select_their_own_ruleset() {
     let deny = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
     let allow = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
     let enforcer = RulesEnforcer::new(
-        Arc::new(RwLock::new(LoadedRules::from_source(deny).unwrap())),
+        Arc::new(RulesetSlot::new(LoadedRules::from_source(deny).unwrap())),
         auth,
         clock,
     )
     .with_database_rules(BTreeMap::from([(
         "staging".to_owned(),
-        Arc::new(RwLock::new(LoadedRules::from_source(allow).unwrap())),
+        Arc::new(RulesetSlot::new(LoadedRules::from_source(allow).unwrap())),
     )]));
     let project = ProjectId::try_new("demo-app").unwrap();
     let default_database = DatabaseId::default_database();
@@ -118,6 +121,64 @@ fn named_databases_select_their_own_ruleset() {
 }
 
 #[test]
+fn multi_document_authorization_pins_one_generation_during_publication() {
+    const V1: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /items/a { allow get: if get(/databases/$(database)/documents/flags/swap).data.ok == true; } match /items/b { allow get: if false; } } }";
+    const V2: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /items/a { allow get: if false; } match /items/b { allow get: if true; } } }";
+
+    struct ActivatingAccess {
+        slot: Arc<RulesetSlot>,
+        activated: AtomicBool,
+    }
+
+    impl DocumentAccess for ActivatingAccess {
+        fn get(&self, _: &[String]) -> Option<RulesValue> {
+            if !self.activated.swap(true, Ordering::SeqCst) {
+                self.slot.replace_source(V2).expect("publish v2");
+            }
+            Some(RulesValue::Map(BTreeMap::from([(
+                "data".to_owned(),
+                RulesValue::Map(BTreeMap::from([("ok".to_owned(), RulesValue::Bool(true))])),
+            )])))
+        }
+    }
+
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let slot = Arc::new(RulesetSlot::new(LoadedRules::from_source(V1).unwrap()));
+    let enforcer = RulesEnforcer::new(slot.clone(), auth, clock);
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let items = [
+        (
+            DocumentPath::parse(&project, &database, "items/a").unwrap(),
+            None,
+        ),
+        (
+            DocumentPath::parse(&project, &database, "items/b").unwrap(),
+            None,
+        ),
+    ];
+    let access = ActivatingAccess {
+        slot: slot.clone(),
+        activated: AtomicBool::new(false),
+    };
+
+    let error = enforcer
+        .authorize_gets(&Principal::Anonymous, &items, &access)
+        .expect_err("v1 must deny item b even though v2 publishes during item a");
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    let active = slot.snapshot().expect("active v2 snapshot");
+    assert_eq!(
+        (active.source.as_deref(), active.generation()),
+        (Some(V2), 1)
+    );
+}
+
+#[test]
 fn tenant_tokens_build_a_firestore_rules_principal() {
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let parent = Arc::new(Mutex::new(AuthStore::new(
@@ -133,8 +194,8 @@ fn tenant_tokens_build_a_firestore_rules_principal() {
         .unwrap();
     let token = encode_unsigned(&tenant.id_token_claims(&uid, None, START).unwrap());
     drop(tenant);
-    let enforcer = RulesEnforcer::new(Arc::new(RwLock::new(LoadedRules::default())), parent, clock)
-        .with_registry(registry);
+    let enforcer =
+        RulesEnforcer::new(Arc::new(RulesetSlot::default()), parent, clock).with_registry(registry);
 
     assert!(matches!(
         enforcer.principal_from_authorization(Some(&format!("Bearer {token}"))),
@@ -145,7 +206,7 @@ fn tenant_tokens_build_a_firestore_rules_principal() {
 struct Harness {
     client: FirestoreClient<tonic::transport::Channel>,
     auth: Arc<Mutex<AuthStore>>,
-    rules: Arc<RwLock<LoadedRules>>,
+    rules: Arc<RulesetSlot>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -172,7 +233,7 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         SplitMix64::new(3),
         TotpPolicy::default(),
     )));
-    let rules = Arc::new(RwLock::new(LoadedRules::from_source(RULES).unwrap()));
+    let rules = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
     let enforcer = Arc::new(
         RulesEnforcer::new(rules.clone(), auth.clone(), clock).with_token_acceptance(acceptance),
     );
@@ -549,7 +610,7 @@ async fn list_is_authorized_from_the_query_constraints() {
     assert!(h.client.run_query(list("public")).await.is_ok());
 
     // Rules can be swapped at runtime through the shared slot.
-    *h.rules.write().unwrap() = LoadedRules::default();
+    h.rules.clear().unwrap();
     assert!(
         h.client.run_query(list("notes")).await.is_ok(),
         "no rules = allow"
@@ -561,8 +622,9 @@ async fn list_is_authorized_from_the_query_constraints() {
 async fn query_proofs_are_sound_for_shapes_arrays_and_collection_groups() {
     let mut h = start().await;
     let (alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /shape/{id} { allow read: if !('blocked' in resource.data); }
@@ -572,8 +634,8 @@ service cloud.firestore {
     match /{path=**}/comments/{id} { allow read: if request.auth != null; }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     let denied = |code: tonic::Code| assert_eq!(code, tonic::Code::PermissionDenied);
     // Map-shape conditions cannot be proven for an unfiltered query.
     denied(
@@ -643,7 +705,7 @@ async fn rules_can_read_other_documents_with_get_and_exists() {
     let mut h = start().await;
     let (alice, alice_token) = h.user("alice@example.com");
     let (_bob, bob_token) = h.user("bob@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
+    h.rules.replace_source(
         "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -713,8 +775,9 @@ service cloud.firestore {
 async fn rules_document_access_reads_the_snapshot_being_served() {
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /gated/{id} {
@@ -722,8 +785,8 @@ service cloud.firestore {
     }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     let first = h
         .client
         .commit(with_bearer(
@@ -767,8 +830,9 @@ service cloud.firestore {
 async fn multi_document_commits_share_the_document_access_budget() {
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /items/{id} {
@@ -776,8 +840,8 @@ service cloud.firestore {
     }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     let writes = |n: usize| {
         (0..n)
             .map(|i| set_write(&format!("items/{i}"), &[("v", s("1"))]))
@@ -807,16 +871,17 @@ service cloud.firestore {
 async fn refused_transactional_reads_leave_no_trace_in_the_read_set() {
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /secret/{id} { allow read: if false; }
     match /mine/{id} { allow read, write: if true; }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     h.client
         .commit(with_bearer(
             commit(vec![set_write("secret/x", &[("v", s("1"))])]),
@@ -865,8 +930,9 @@ service cloud.firestore {
 async fn batch_gets_share_the_multi_document_access_budget() {
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /items/{id} {
@@ -874,8 +940,8 @@ service cloud.firestore {
     }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     let batch = |n: usize| pb::BatchGetDocumentsRequest {
         database: DB.to_owned(),
         documents: (0..n).map(|i| format!("{DOCS}/items/{i}")).collect(),
@@ -931,16 +997,17 @@ async fn queries_are_proven_from_inequality_constraints_and_request_query() {
     use sq::field_filter::Operator as Op;
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /people/{id} { allow list: if resource.data.age >= 18; }
     match /paged/{id} { allow list: if request.query.limit <= 20; }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     let int = |v: i64| pb::Value {
         value_type: Some(pb::value::ValueType::IntegerValue(v)),
     };
@@ -1043,8 +1110,9 @@ async fn queries_are_proven_from_in_not_in_not_equal_and_order_by() {
     use sq::field_filter::Operator as Op;
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /posts/{id} { allow list: if resource.data.status in ['published', 'archived']; }
@@ -1053,8 +1121,8 @@ service cloud.firestore {
     match /ordered/{id} { allow list: if request.query.orderBy['createdAt'] == 'DESC'; }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     let denied = Err(tonic::Code::PermissionDenied);
     // `in` with candidates all inside the rule's set proves it; one outside does not.
     assert_eq!(
@@ -1197,8 +1265,9 @@ service cloud.firestore {
 async fn get_after_reads_the_state_the_whole_commit_leaves_behind() {
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     // A post may be created only together with the counter increment.
@@ -1211,8 +1280,8 @@ service cloud.firestore {
     }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     let int = |v: i64| pb::Value {
         value_type: Some(pb::value::ValueType::IntegerValue(v)),
     };
@@ -1246,7 +1315,7 @@ service cloud.firestore {
         .await
         .is_ok());
     // A read cannot use getAfter(): fails closed with the reason.
-    *h.rules.write().unwrap() = LoadedRules::from_source(
+    h.rules.replace_source(
         "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -1270,16 +1339,17 @@ async fn array_contains_any_queries_are_proven_soundly() {
     use sq::field_filter::Operator as Op;
     let mut h = start().await;
     let (_alice, alice_token) = h.user("alice@example.com");
-    *h.rules.write().unwrap() = LoadedRules::from_source(
-        "rules_version = '2';
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /tagged/{id} { allow list: if resource.data.tags.hasAny(['x', 'y']); }
     match /strict/{id} { allow list: if resource.data.tags.hasAll(['x', 'y']); }
   }
 }",
-    )
-    .unwrap();
+        )
+        .unwrap();
     // Every candidate is accepted by the rule: proven.
     assert_eq!(
         query_code(
@@ -1483,7 +1553,7 @@ async fn the_firebase_profile_binds_unknown_mock_tokens_to_the_requested_project
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
 
-    *firebase.rules.write().unwrap() = LoadedRules::from_source(
+    firebase.rules.replace_source(
         "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }",
     )
     .unwrap();

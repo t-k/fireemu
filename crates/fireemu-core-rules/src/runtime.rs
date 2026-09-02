@@ -1,6 +1,7 @@
 //! Loaded ruleset shared between adapters (hot-reloadable through the control API).
 
-use std::sync::{Arc, Mutex};
+use std::ops::Deref;
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::ast::Ruleset;
 use crate::coverage::RulesDiagnostics;
@@ -88,5 +89,147 @@ impl LoadedRules {
     #[must_use]
     pub const fn is_loaded(&self) -> bool {
         self.ruleset.is_some()
+    }
+}
+
+#[derive(Debug)]
+struct ActiveRules {
+    generation: u64,
+    loaded: Arc<LoadedRules>,
+}
+
+/// One immutable ruleset generation retained by an admitted evaluation.
+#[derive(Clone, Debug)]
+pub struct RulesetSnapshot(Arc<ActiveRules>);
+
+impl RulesetSnapshot {
+    /// Monotonic generation assigned at atomic publication.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.0.generation
+    }
+
+    /// The immutable loaded rules and generation-local diagnostics.
+    #[must_use]
+    pub fn loaded(&self) -> Arc<LoadedRules> {
+        Arc::clone(&self.0.loaded)
+    }
+}
+
+impl Deref for RulesetSnapshot {
+    type Target = LoadedRules;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.loaded
+    }
+}
+
+/// Atomically published rulesets with immutable request snapshots.
+#[derive(Debug)]
+pub struct RulesetSlot {
+    active: RwLock<Arc<ActiveRules>>,
+}
+
+impl RulesetSlot {
+    /// Creates generation zero from the initial loaded rules.
+    #[must_use]
+    pub fn new(loaded: LoadedRules) -> Self {
+        Self {
+            active: RwLock::new(Arc::new(ActiveRules {
+                generation: 0,
+                loaded: Arc::new(loaded),
+            })),
+        }
+    }
+
+    /// Captures one immutable generation for a complete logical evaluation.
+    pub fn snapshot(&self) -> Result<RulesetSnapshot, String> {
+        self.active
+            .read()
+            .map(|active| RulesetSnapshot(Arc::clone(&active)))
+            .map_err(|_| "ruleset slot is poisoned".to_owned())
+    }
+
+    /// Publishes a fully checked candidate and returns its fresh generation.
+    pub fn replace_loaded(&self, loaded: LoadedRules) -> Result<u64, String> {
+        let mut active = self
+            .active
+            .write()
+            .map_err(|_| "ruleset slot is poisoned".to_owned())?;
+        let generation = active
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| "ruleset generation is exhausted".to_owned())?;
+        *active = Arc::new(ActiveRules {
+            generation,
+            loaded: Arc::new(loaded),
+        });
+        Ok(generation)
+    }
+
+    /// Checks a source completely before publishing it.
+    pub fn replace_source(&self, source: &str) -> Result<u64, String> {
+        let loaded = LoadedRules::from_source(source).map_err(|error| error.to_string())?;
+        self.replace_loaded(loaded)
+    }
+
+    /// Publishes an empty rules generation.
+    pub fn clear(&self) -> Result<u64, String> {
+        self.replace_loaded(LoadedRules::default())
+    }
+}
+
+impl Default for RulesetSlot {
+    fn default() -> Self {
+        Self::new(LoadedRules::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LoadedRules, RulesetSlot};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::Arc;
+
+    const V1: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
+    const V2: &str = "service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
+
+    #[test]
+    fn generation_exhaustion_preserves_the_active_arc() {
+        let slot = RulesetSlot::new(LoadedRules::from_source(V1).unwrap());
+        {
+            let mut active = slot.active.write().unwrap();
+            *active = Arc::new(super::ActiveRules {
+                generation: u64::MAX,
+                loaded: active.loaded.clone(),
+            });
+        }
+        let before = slot.snapshot().unwrap();
+
+        let error = slot
+            .replace_source(V2)
+            .expect_err("generation must be exhausted");
+
+        assert!(error.contains("exhausted"));
+        let after = slot.snapshot().unwrap();
+        assert_eq!(after.generation(), u64::MAX);
+        assert_eq!(after.source.as_deref(), Some(V1));
+        assert!(Arc::ptr_eq(&before.0, &after.0));
+    }
+
+    #[test]
+    fn poisoned_slot_refuses_reads_and_publications() {
+        let slot = RulesetSlot::new(LoadedRules::from_source(V1).unwrap());
+        let retained = slot.snapshot().unwrap();
+        let poisoned = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = slot.active.write().unwrap();
+            panic!("poison ruleset slot for fail-closed coverage");
+        }));
+        assert!(poisoned.is_err());
+
+        assert!(slot.snapshot().is_err());
+        assert!(slot.replace_source(V2).is_err());
+        assert_eq!(retained.source.as_deref(), Some(V1));
+        assert_eq!(retained.generation(), 0);
     }
 }

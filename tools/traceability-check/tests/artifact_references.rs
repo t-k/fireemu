@@ -646,6 +646,7 @@ fn tla_backed_requirements_need_fresh_killed_property_mutations() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn quint_backed_requirements_need_safe_fresh_killed_property_evidence() {
     #[derive(Clone, Copy)]
     enum Change {
@@ -671,70 +672,70 @@ fn quint_backed_requirements_need_safe_fresh_killed_property_evidence() {
         EvidenceCase {
             name: "quint-evidence-valid",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::None,
             expected: None,
         },
         EvidenceCase {
             name: "quint-unsafe-path",
             reference: "../EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::None,
             expected: Some("quint artifact must be Model.qnt::Property"),
         },
         EvidenceCase {
             name: "quint-property-unregistered",
             reference: "EventDelivery.qnt::UnknownProperty",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::None,
             expected: Some("does not register UnknownProperty"),
         },
         EvidenceCase {
             name: "quint-spec-missing",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::MissingSpec,
             expected: Some("Quint spec EventDelivery.qnt is missing"),
         },
         EvidenceCase {
             name: "quint-evidence-missing",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::MissingEvidence,
             expected: Some("Quint evidence for EventDelivery is invalid"),
         },
         EvidenceCase {
             name: "quint-spec-stale",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::StaleSpec,
             expected: Some("digest mismatch for verification/quint/specs/EventDelivery.qnt"),
         },
         EvidenceCase {
             name: "quint-manifest-stale",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::StaleManifest,
             expected: Some("mutation manifest"),
         },
         EvidenceCase {
             name: "quint-mutant-survived",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::Survived,
             expected: Some("is not killed"),
         },
         EvidenceCase {
             name: "quint-property-mismatch",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::PropertyMismatch,
             expected: Some("mutation evidence mismatch"),
         },
         EvidenceCase {
             name: "quint-unknown-evidence-field",
             reference: "EventDelivery.qnt::LegalStateTransitions",
-            mutation_ids: &["M-FIX-001", "M-TLA-EVENT-LEGAL-001"],
+            mutation_ids: &["M-FIX-001", "M-FORMAL-EVENT-LEGAL-001"],
             change: Change::UnknownEvidenceField,
             expected: Some("unknown field"),
         },

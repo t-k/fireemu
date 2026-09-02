@@ -9,5 +9,6 @@ pub mod evidence;
 pub mod model;
 pub mod process;
 pub mod regex_authorization;
+pub mod ruleset_activation;
 pub mod session_epoch;
 pub mod storage_generation;

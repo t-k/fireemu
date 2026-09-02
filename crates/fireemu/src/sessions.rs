@@ -187,7 +187,7 @@ pub(crate) mod tests {
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_auth::store::{AuthRegistry, AuthStore};
     use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
-    use fireemu_core_rules::runtime::LoadedRules;
+    use fireemu_core_rules::runtime::RulesetSlot;
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
     use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -274,7 +274,7 @@ pub(crate) mod tests {
                 clock,
                 auth: Arc::new(AuthRegistry::new("demo-app", auth_store.clone())),
                 tenancy: None,
-                rules: Arc::new(RwLock::new(LoadedRules::default())),
+                rules: Arc::new(RulesetSlot::default()),
                 project: "demo-app".to_owned(),
                 events: None,
                 barrier: None,

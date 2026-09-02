@@ -416,6 +416,8 @@ impl RestState {
         let source = file["content"].as_str().ok_or_else(|| {
             Status::invalid_argument("rules.files[0].content must be the rules source")
         })?;
+        let barrier = self.local.barrier();
+        let _admitted = barrier.admit();
         match rules.replace_source(source) {
             // No issues: `{}`, the proto3 JSON of an empty list (what the official
             // emulator answers).
@@ -424,7 +426,9 @@ impl RestState {
                 "Error compiling rules:\nL{}:{} {}",
                 e.line, e.column, e.message
             ))),
-            Err(rules::RulesLoadError::Poisoned) => Err(Status::internal("rules lock poisoned")),
+            Err(rules::RulesLoadError::Publish(error)) => Err(Status::internal(format!(
+                "rules publication failed: {error}"
+            ))),
         }
     }
 
@@ -451,10 +455,7 @@ impl RestState {
                 "this daemon evaluates no Security Rules, so it reports no coverage",
             ));
         };
-        let loaded = rules
-            .rules()
-            .read()
-            .map_err(|_| Status::internal("rules lock poisoned"))?;
+        let loaded = rules.rules().snapshot().map_err(Status::internal)?;
         let diagnostics = loaded
             .diagnostics
             .lock()

@@ -25,7 +25,7 @@
 //! interpreted as paths. Only loopback origins reach either surface.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
@@ -34,7 +34,7 @@ use fireemu_core_auth::jwt::{verify_rules_token, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
 };
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RulesValue};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::hash::{crc32c, md5};
@@ -102,7 +102,7 @@ pub struct StorageState {
     /// Which session owns which bucket; `None` puts every bucket in `project`.
     pub tenancy: Option<fireemu_core_session::tenancy::SharedTenancy>,
     /// Storage Security Rules (`service firebase.storage`).
-    pub rules: Arc<RwLock<LoadedRules>>,
+    pub rules: Arc<RulesetSlot>,
     /// Project (default buckets `{project}.appspot.com` / `{project}.firebasestorage.app`).
     pub project: String,
     /// Observer of object events (Storage triggers), called inside the store's critical
@@ -437,8 +437,8 @@ fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
     let Ok(loaded) = LoadedRules::from_source(content) else {
         return set_rules_error("There was an error updating rules, see logs for more details");
     };
-    match state.rules.write() {
-        Ok(mut active) => *active = loaded,
+    match state.rules.replace_loaded(loaded) {
+        Ok(_) => {}
         Err(_) => {
             return StorageResponse::json(500, &json!({"message": "Internal error updating rules"}))
         }
@@ -1276,7 +1276,7 @@ impl StorageState {
         }
         let rules = self
             .rules
-            .read()
+            .snapshot()
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {
             return Ok(());

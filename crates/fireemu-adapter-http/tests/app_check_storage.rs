@@ -11,14 +11,14 @@
 mod app_check_support;
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use app_check_support as fixture;
 use fireemu_adapter_http::storage::{handle, StorageRequest, StorageResponse, StorageState};
 use fireemu_core_app_check::verify::BaselineMode;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_storage::store::StorageState as ObjectStore;
 use fireemu_core_types::determinism::SplitMix64;
 use serde_json::Value;
@@ -47,7 +47,7 @@ fn harness(mode: BaselineMode) -> Harness {
             ))),
         )),
         tenancy: None,
-        rules: Arc::new(RwLock::new(LoadedRules::default())),
+        rules: Arc::new(RulesetSlot::default()),
         project: "demo-app".to_owned(),
         events: None,
         barrier: None,

@@ -1,7 +1,7 @@
 //! `Write` and `Listen` streams through a real tonic client: handshake, sequential commits,
 //! initial snapshots, live diffs after commits, target removal and rules denials.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
@@ -14,7 +14,7 @@ use fireemu_core_firestore::index::{
     IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
     PlanningContext,
 };
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -75,7 +75,7 @@ async fn start(
             SplitMix64::new(3),
             TotpPolicy::default(),
         )));
-        let rules = Arc::new(RwLock::new(LoadedRules::from_source(RULES).unwrap()));
+        let rules = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
         service = service.with_rules(Arc::new(RulesEnforcer::new(rules, auth, clock)));
     }
     let svc = FirestoreServer::new(service);

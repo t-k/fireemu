@@ -26,7 +26,7 @@ use fireemu_core_app_check::verify::BaselineMode;
 use fireemu_core_auth::jwt::encode_unsigned;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::ids::SessionId;
@@ -308,7 +308,7 @@ async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
             .map(Arc::new)
             .expect("unenforced is a policy");
         let verifier = Arc::new(RulesEnforcer::new(
-            Arc::new(RwLock::new(LoadedRules::default())),
+            Arc::new(RulesetSlot::default()),
             auth.clone(),
             clock,
         ));

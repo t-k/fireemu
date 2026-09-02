@@ -681,22 +681,19 @@ fn refresh_target(
     let resumed = resolve_resume(db, id, state)?;
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => {
-            let mut docs = Vec::new();
-            for path in paths {
-                let doc = db.get(path).cloned();
-                if let Some(rules) = &ctx.rules {
-                    let reader = crate::rules::StateReader {
-                        db,
-                        parent: &state.parent,
-                        version: None,
-                    };
-                    rules.authorize_get(principal, path, doc.as_ref(), &reader)?;
-                }
-                if let Some(d) = doc {
-                    docs.push(d);
-                }
+            let items = paths
+                .iter()
+                .map(|path| (path.clone(), db.get(path).cloned()))
+                .collect::<Vec<_>>();
+            if let Some(rules) = &ctx.rules {
+                let reader = crate::rules::StateReader {
+                    db,
+                    parent: &state.parent,
+                    version: None,
+                };
+                rules.authorize_gets(principal, &items, &reader)?;
             }
-            docs
+            items.into_iter().filter_map(|(_, doc)| doc).collect()
         }
         TargetKind::Query(query) => {
             if let Some(rules) = &ctx.rules {

@@ -8,7 +8,7 @@ use fireemu_adapter_http::control::{
     MAX_SNAPSHOTS_PER_SESSION,
 };
 use fireemu_adapter_http::identity_toolkit::RequestHeaders;
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_session::tenancy::Scope;
 use fireemu_core_types::edition::FirestoreEdition;
@@ -23,8 +23,8 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         require_demo_prefix: true,
         edition: FirestoreEdition::Standard,
         capabilities: json!({"schemaVersion": 1}),
-        rules: Arc::new(RwLock::new(LoadedRules::default())),
-        storage_rules: Arc::new(RwLock::new(LoadedRules::default())),
+        rules: Arc::new(RulesetSlot::default()),
+        storage_rules: Arc::new(RulesetSlot::default()),
         reset_hooks: vec![Arc::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
         })],
@@ -69,13 +69,13 @@ fn rules_can_be_loaded_replaced_and_dropped_at_runtime() {
         &json!({"source": "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{doc=**} { allow read: if true; } } }"}),
     );
     assert_eq!(good.status, 200, "{}", good.body);
-    assert!(s.rules.read().unwrap().is_loaded());
+    assert!(s.rules.snapshot().unwrap().is_loaded());
     assert_eq!(
         handle(&s, "GET", "/v1/rules", &json!({})).body["loaded"],
         true
     );
     assert_eq!(handle(&s, "DELETE", "/v1/rules", &json!({})).status, 200);
-    assert!(!s.rules.read().unwrap().is_loaded());
+    assert!(!s.rules.snapshot().unwrap().is_loaded());
 }
 
 #[test]
@@ -1513,7 +1513,7 @@ fn the_rules_request_trace_lists_decided_requests_newest_first_with_their_expres
         };
         let (_, coverage) = evaluate_request_traced(&ruleset, &ctx, None);
         let expressions = coverage.entries().into_iter().cloned().collect();
-        let rules = s.rules.read().unwrap();
+        let rules = s.rules.snapshot().unwrap();
         rules
             .diagnostics
             .lock()

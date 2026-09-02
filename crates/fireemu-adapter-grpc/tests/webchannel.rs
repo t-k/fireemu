@@ -2,7 +2,7 @@
 //! contiguous array ids, forward-channel acknowledgements and error payloads.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
@@ -17,7 +17,7 @@ use fireemu_core_firestore::index::{
     IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
     PlanningContext,
 };
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -55,7 +55,7 @@ fn hub_with_acceptance(rules: Option<&str>, acceptance: TokenAcceptance) -> Hub 
         )));
         Arc::new(
             RulesEnforcer::new(
-                Arc::new(RwLock::new(LoadedRules::from_source(src).unwrap())),
+                Arc::new(RulesetSlot::new(LoadedRules::from_source(src).unwrap())),
                 auth,
                 clock,
             )

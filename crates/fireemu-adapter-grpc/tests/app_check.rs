@@ -30,7 +30,7 @@ use fireemu_core_auth::jwt::encode_unsigned;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -243,7 +243,7 @@ async fn start(mode: BaselineMode) -> Harness {
         SplitMix64::new(3),
         TotpPolicy::default(),
     )));
-    let rules = Arc::new(RwLock::new(
+    let rules = Arc::new(RulesetSlot::new(
         LoadedRules::from_source(RULES).expect("the fixture ruleset compiles"),
     ));
     let enforcer = Arc::new(RulesEnforcer::new(rules, auth.clone(), enforcer_clock));

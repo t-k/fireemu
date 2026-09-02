@@ -62,7 +62,7 @@ use fireemu_core_auth::jwt::IdTokenSigner;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, PlanningContext};
-use fireemu_core_rules::runtime::LoadedRules;
+use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -1081,9 +1081,11 @@ fn watched_file(path: &str) -> Result<(u64, Vec<u8>), String> {
 fn start_rules_reload_supervisor(
     path: String,
     label: &'static str,
-    rules: &Arc<RwLock<LoadedRules>>,
+    rules: &Arc<RulesetSlot>,
+    barrier: &Arc<fireemu_core_session::barrier::AdmissionBarrier>,
 ) {
     let weak = Arc::downgrade(rules);
+    let barrier = barrier.clone();
     let mut observed = watched_file_signature(&path).ok();
     tokio::spawn(async move {
         loop {
@@ -1124,9 +1126,12 @@ fn start_rules_reload_supervisor(
             };
             match LoadedRules::from_source(&source) {
                 Ok(candidate) => {
-                    if let Ok(mut current) = rules.write() {
-                        *current = candidate;
-                        eprintln!("note: reloaded {label} from {path}");
+                    let _admitted = barrier.admit();
+                    match rules.replace_loaded(candidate) {
+                        Ok(_) => eprintln!("note: reloaded {label} from {path}"),
+                        Err(error) => eprintln!(
+                            "warning: {label} reload failed; keeping the last-known-good rules: {error}"
+                        ),
                     }
                 }
                 Err(error) => eprintln!(
@@ -1193,9 +1198,10 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
 fn start_firestore_config_reload_supervisors(
     cfg: &RuntimeConfig,
     backend: &Arc<LocalBackend>,
-    rules: &Arc<RwLock<LoadedRules>>,
-    database_rules: &std::collections::BTreeMap<String, Arc<RwLock<LoadedRules>>>,
-    storage_rules: &Arc<RwLock<LoadedRules>>,
+    rules: &Arc<RulesetSlot>,
+    database_rules: &std::collections::BTreeMap<String, Arc<RulesetSlot>>,
+    storage_rules: &Arc<RulesetSlot>,
+    barrier: &Arc<fireemu_core_session::barrier::AdmissionBarrier>,
 ) {
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.rules {
@@ -1205,17 +1211,17 @@ fn start_firestore_config_reload_supervisors(
                 database_rules.get(database)
             };
             if let Some(slot) = slot {
-                start_rules_reload_supervisor(path.clone(), "Firestore rules", slot);
+                start_rules_reload_supervisor(path.clone(), "Firestore rules", slot, barrier);
             }
         }
     }
     if cfg.firestore_databases.is_empty() {
         if let Some(path) = &cfg.rules_file {
-            start_rules_reload_supervisor(path.clone(), "Firestore rules", rules);
+            start_rules_reload_supervisor(path.clone(), "Firestore rules", rules, barrier);
         }
     }
     if let Some(path) = &cfg.storage_rules_file {
-        start_rules_reload_supervisor(path.clone(), "Storage rules", storage_rules);
+        start_rules_reload_supervisor(path.clone(), "Storage rules", storage_rules, barrier);
     }
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.indexes {
@@ -1235,7 +1241,7 @@ fn storage_state(
     clock: &Arc<Mutex<VirtualClock>>,
     registry: &Arc<fireemu_core_auth::store::AuthRegistry>,
     tenancy: &fireemu_core_session::tenancy::SharedTenancy,
-    storage_rules: &Arc<RwLock<LoadedRules>>,
+    storage_rules: &Arc<RulesetSlot>,
     events: Option<fireemu_adapter_http::storage::StorageEventSink>,
     backend: &Arc<LocalBackend>,
     faults: &fireemu_core_session::fault::SharedFaultRegistry,
@@ -1658,8 +1664,9 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
 fn control_state(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
-    rules: &Arc<RwLock<LoadedRules>>,
-    storage_rules: &Arc<RwLock<LoadedRules>>,
+    rules: &Arc<RulesetSlot>,
+    database_rules: &std::collections::BTreeMap<String, Arc<RulesetSlot>>,
+    storage_rules: &Arc<RulesetSlot>,
     backend: &Arc<LocalBackend>,
     auth_store: &Arc<Mutex<AuthStore>>,
     storage: &Arc<fireemu_adapter_http::storage::StorageState>,
@@ -1683,8 +1690,17 @@ fn control_state(
         Arc::new(snapshots::TextIndexes(text_indexes.clone())),
         Arc::new(snapshots::SessionClock(clock.clone())),
         Arc::new(snapshots::Rules("firestore rules", rules.clone())),
-        Arc::new(snapshots::Rules("storage rules", storage_rules.clone())),
     ];
+    for slot in database_rules.values() {
+        snapshot_hooks.push(Arc::new(snapshots::Rules(
+            "named database rules",
+            slot.clone(),
+        )));
+    }
+    snapshot_hooks.push(Arc::new(snapshots::Rules(
+        "storage rules",
+        storage_rules.clone(),
+    )));
     if let Some(runtime) = functions {
         snapshot_hooks.push(Arc::new(snapshots::Functions(runtime.clone())));
     }
@@ -1843,7 +1859,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             &cfg.auth_project,
             auth_store.clone(),
         ));
-        let rules = Arc::new(RwLock::new(load_rules(&cfg)?));
+        let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
             if database == "(default)" {
@@ -1858,15 +1874,16 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 }
                 None => LoadedRules::default(),
             };
-            database_rules.insert(database.clone(), Arc::new(RwLock::new(loaded)));
+            database_rules.insert(database.clone(), Arc::new(RulesetSlot::new(loaded)));
         }
-        let storage_rules = Arc::new(RwLock::new(load_storage_rules(&cfg)?));
+        let storage_rules = Arc::new(RulesetSlot::new(load_storage_rules(&cfg)?));
         start_firestore_config_reload_supervisors(
             &cfg,
             &backend,
             &rules,
             &database_rules,
             &storage_rules,
+            &barrier,
         );
         let Listeners {
             firestore: grpc_listener,
@@ -2050,7 +2067,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;
                 let verifier = Arc::new(
                     RulesEnforcer::new(
-                        Arc::new(RwLock::new(LoadedRules::default())),
+                        Arc::new(RulesetSlot::default()),
                         auth_store.clone(),
                         clock.clone(),
                     )
@@ -2069,6 +2086,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             &cfg,
             &clock,
             &rules,
+            &database_rules,
             &storage_rules,
             &backend,
             &auth_store,
@@ -2150,7 +2168,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             if let Some(note) = ui_note {
                 println!("{note}");
             }
-            print_rules_status(&cfg, rules.read().is_ok_and(|r| r.is_loaded()));
+            print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
             if let Some(runtime) = &functions_runtime {
                 let names: Vec<&str> = runtime
                     .manifest()
@@ -2423,21 +2441,29 @@ mod config_reload_tests {
         let dir = scratch("rules");
         let path = dir.join("firestore.rules");
         std::fs::write(&path, RULES_ONE).unwrap();
-        let rules = Arc::new(RwLock::new(LoadedRules::from_source(RULES_ONE).unwrap()));
-        start_rules_reload_supervisor(path.display().to_string(), "Firestore rules", &rules);
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_rules_reload_supervisor(
+            path.display().to_string(),
+            "Firestore rules",
+            &rules,
+            &barrier,
+        );
 
         std::fs::write(&path, "not a rules program").unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
-        assert_eq!(rules.read().unwrap().source.as_deref(), Some(RULES_ONE));
+        assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_ONE));
 
         std::fs::write(&path, RULES_TWO).unwrap();
         for _ in 0..30 {
-            if rules.read().unwrap().source.as_deref() == Some(RULES_TWO) {
+            if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        assert_eq!(rules.read().unwrap().source.as_deref(), Some(RULES_TWO));
+        assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_TWO));
         drop(rules);
         let _ = std::fs::remove_dir_all(dir);
     }

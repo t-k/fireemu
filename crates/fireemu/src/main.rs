@@ -2532,17 +2532,6 @@ mod config_reload_tests {
 
     #[tokio::test]
     async fn a_selected_product_wins_a_port_shared_with_the_default_hub() {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = probe.local_addr().unwrap().to_string();
-        drop(probe);
-
-        let cfg = RuntimeConfig {
-            firestore_addr: addr.clone(),
-            hub_addr: addr,
-            hub_addr_explicit: false,
-            logging_enabled: false,
-            ..RuntimeConfig::default()
-        };
         let only = Selection {
             firestore: true,
             auth: false,
@@ -2553,10 +2542,31 @@ mod config_reload_tests {
             explicit: true,
             functions_codebase: None,
         };
-
-        let listeners = bind_listeners(&cfg, &only).await.unwrap();
-        assert!(listeners.firestore.is_some());
-        assert!(listeners.hub.is_none());
+        let mut last_error = None;
+        for _ in 0..32 {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = probe.local_addr().unwrap().to_string();
+            drop(probe);
+            let cfg = RuntimeConfig {
+                firestore_addr: addr.clone(),
+                hub_addr: addr,
+                hub_addr_explicit: false,
+                logging_enabled: false,
+                ..RuntimeConfig::default()
+            };
+            match bind_listeners(&cfg, &only).await {
+                Ok(listeners) => {
+                    assert!(listeners.firestore.is_some());
+                    assert!(listeners.hub.is_none());
+                    return;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        panic!(
+            "could not reacquire any freshly selected loopback port: {}",
+            last_error.unwrap_or_else(|| "no bind attempt was made".to_owned())
+        );
     }
 
     #[tokio::test]

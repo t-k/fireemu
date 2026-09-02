@@ -102,6 +102,10 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
             "GOOGLE_APPLICATION_CREDENTIALS",
             "/must/not/reach-functions.json",
         )
+        .env("CLOUDSDK_CONFIG", "/must/not/reach-gcloud")
+        .env("FIREBASE_DEBUG_MODE", "must-not-reach")
+        .env("FIREBASE_DEBUG_FEATURES", "must-not-reach")
+        .env("FIREEMU_RUNNER_SECRET", "must-not-reach")
         .stdin(Stdio::null())
         .output()
         .unwrap()
@@ -142,6 +146,14 @@ fn the_firebase_profile_inherits_the_parent_environment_but_strict_stays_isolate
         observed(&firebase)["googleCredentials"],
         "/must/not/reach-functions.json"
     );
+    for field in [
+        "cloudSdkConfigIsParent",
+        "debugModeIsParent",
+        "debugFeaturesIsParent",
+        "runnerSecretIsParent",
+    ] {
+        assert_eq!(observed(&firebase)[field], false, "{field}");
+    }
 
     let strict = exec_with_profile(&dir, "demo-parent-env", "strict");
     assert_eq!(

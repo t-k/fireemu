@@ -54,6 +54,8 @@ cargo run -p tla-verification -- verify-triage
 
 `RegexAuthorization.tla` models the authorization consequence of regex budget exhaustion. `RegexLinearRepeat.tla` separately models the implementation boundary between constant-depth iteration for capture-free one-character alternatives and the depth-charged general matcher. Its semantic manifest is frozen in `tla-mutant-RegexLinearRepeat.json`; the external full-property mutant run found no non-equivalent survivor, while state-equal candidates are recorded outside the public verification contract because state invariants cannot distinguish stuttering-equivalent transitions.
 
+`TransactionConditionalLock.tla` models two concurrent read-write attempts on one conditional lock. It verifies that only one stale snapshot commits, at most one protected action runs, and the aborted attempt retries against the committed lock before the winner releases it.
+
 ## EventDelivery implementation conformance
 
 `EventDeliveryTrace.tla` is a counterexample harness, not a standalone proof model. It deliberately violates `TraceGoalNotReached` after reaching one bounded scenario goal. Generate all four canonical structured traces with the pinned JAR:

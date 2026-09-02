@@ -360,6 +360,40 @@
       }
     },
     {
+      "id": "INV-TXN-002",
+      "statement": "Of two transactions that read the same unlocked document version, at most one stale attempt commits the conditional lock.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "TransactionConditionalLock.tla::OneWinner",
+        "mutation": [
+          "M-TLA-TXN-LOCK-WINNER-001"
+        ],
+        "integration": [
+          "conformance/src/corpus/firestore.mjs",
+          "conformance/src/corpus/functions.mjs"
+        ]
+      }
+    },
+    {
+      "id": "INV-TXN-003",
+      "statement": "An aborted conditional-lock transaction retries against the committed document version before it can enter the protected action.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "artifacts": {
+        "tla": "TransactionConditionalLock.tla::RetryReadsCommittedLock",
+        "mutation": [
+          "M-TLA-TXN-LOCK-RETRY-001"
+        ],
+        "integration": [
+          "conformance/src/corpus/firestore.mjs",
+          "conformance/src/corpus/functions.mjs"
+        ]
+      }
+    },
+    {
       "id": "INV-STORAGE-001",
       "statement": "A generation number is never reused for the same object.",
       "criticality": "critical",

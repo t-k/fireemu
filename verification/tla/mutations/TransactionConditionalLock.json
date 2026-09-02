@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "model": "TransactionConditionalLock",
+  "mutations": [
+    {
+      "id": "M-TLA-TXN-LOCK-WINNER-001",
+      "property": "OneWinner",
+      "operator": "allow-a-stale-transaction-to-commit",
+      "from": "/\\ ~locked\n    /\\ phase' = [phase EXCEPT ![c] = \"Committed\"]",
+      "to": "/\\ TRUE\n    /\\ phase' = [phase EXCEPT ![c] = \"Committed\"]"
+    },
+    {
+      "id": "M-TLA-TXN-LOCK-RETRY-001",
+      "property": "RetryReadsCommittedLock",
+      "operator": "retry-reuses-the-stale-lock-observation",
+      "from": "Retry(c) ==\n    /\\ phase[c] = \"Aborted\"\n    /\\ phase' = [phase EXCEPT ![c] = \"Retried\"]\n    /\\ observations' = [observations EXCEPT ![c] = Append(@, locked)]",
+      "to": "Retry(c) ==\n    /\\ phase[c] = \"Aborted\"\n    /\\ phase' = [phase EXCEPT ![c] = \"Retried\"]\n    /\\ observations' = [observations EXCEPT ![c] = Append(@, FALSE)]"
+    }
+  ]
+}

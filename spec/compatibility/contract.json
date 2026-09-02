@@ -369,7 +369,7 @@
       "claims": [
         {
           "id": "FS-CLAIM-RPC",
-          "statement": "The Firestore v1 gRPC service serves documents, atomic commits, serializable transactions, queries, aggregations and the Write and Listen streams against local state, with the same status codes and error shapes as the pinned official emulator except for the documented transaction concurrency rows: fireemu uses optimistic commit validation where the official Local Emulator Suite locks the read set. A committed server timestamp is immediately available to a transaction query, including a combined equality and timestamp-range filter with limit(1). Removing and replacing a listener target never delivers the removed target's changes, and replacing a WebChannel backchannel cancels the superseded response before it can deliver queued arrays.",
+          "statement": "The Firestore v1 gRPC service serves documents, atomic commits, serializable transactions, queries, aggregations and the Write and Listen streams against local state, with the same status codes and error shapes as the pinned official emulator except for the documented transaction concurrency rows: fireemu uses optimistic commit validation where the official Local Emulator Suite locks the read set. A committed server timestamp is immediately available to a transaction query, including a combined equality and timestamp-range filter with limit(1). Removing and replacing a listener target never delivers the removed target's changes, replacing a WebChannel backchannel cancels the superseded response before it can deliver queued arrays, and a long-poll response remains attached until its HTTP body reaches EOF or is dropped.",
           "capabilities": [
             {
               "id": "FS-RPC-1",
@@ -393,10 +393,12 @@
             "integration": [
               "crates/fireemu-adapter-grpc/tests/local.rs",
               "crates/fireemu-adapter-grpc/tests/streams.rs",
+              "crates/fireemu-adapter-grpc/tests/webchannel.rs",
               "crates/fireemu-core-firestore/tests/query_execution.rs",
               "crates/fireemu-core-firestore/tests/store.rs",
               "conformance/firestore-matrix.json",
               "tools/sdk-smoke/server-timestamp-transaction-query.mjs",
+              "tools/sdk-smoke/listener-replacement.firebase.json",
               "tools/sdk-smoke/listener-replacement.mjs"
             ],
             "conformance": [

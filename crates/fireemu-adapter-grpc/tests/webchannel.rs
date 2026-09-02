@@ -216,7 +216,6 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
     assert_eq!(handshake[0][0][1][1], sid);
 
     // Give the stream task a moment to answer the first message.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
         kind: StreamKind::Listen,
         method: "GET".to_owned(),
@@ -293,6 +292,151 @@ async fn handshake_backchannel_and_forward_channel_keep_array_ids_contiguous() {
         body: String::new(),
     }));
     assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn a_long_poll_stays_attached_until_its_response_body_is_released() {
+    let hub = hub(None);
+    let first = listen_target(2, "open");
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1"), ("CVER", "22")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
+    }));
+    assert_eq!(status, 200);
+    let sid = headers
+        .iter()
+        .find(|(key, _)| *key == "x-http-session-id")
+        .map(|(_, value)| value.clone())
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "rpc"),
+            ("AID", "0"),
+            ("CI", "1"),
+            ("TYPE", "xmlhttp"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    }) else {
+        panic!("expected a streamed back channel");
+    };
+
+    // Consume the queued batch but leave the response stream alive before its final EOF poll.
+    // The HTTP layer is still responsible for this response throughout that interval.
+    let first_chunk = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(!first_chunk.is_empty());
+    let second = listen_target(4, "other");
+    let forward = || {
+        full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: params(&[("SID", &sid), ("RID", "2"), ("AID", "0")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: form(&[("count", "1"), ("ofs", "1"), ("req0___data__", &second)]),
+        }))
+    };
+    let (status, _, body_text) = forward();
+    assert_eq!(status, 200);
+    assert_eq!(
+        chunks(&body_text)[0][0],
+        1,
+        "the back channel remains attached until its HTTP response reaches EOF"
+    );
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(chunks(&forward().2)[0][0], 0);
+}
+
+#[tokio::test]
+async fn dropping_a_body_releases_only_the_generation_it_owns() {
+    let hub = hub(None);
+    let first = listen_target(2, "open");
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1"), ("CVER", "22")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &first)]),
+    }));
+    assert_eq!(status, 200);
+    let sid = headers
+        .iter()
+        .find(|(key, _)| *key == "x-http-session-id")
+        .map(|(_, value)| value.clone())
+        .unwrap();
+
+    let open_body = || {
+        let ChannelResponse::Stream { body, .. } = hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "GET".to_owned(),
+            params: params(&[
+                ("SID", &sid),
+                ("RID", "rpc"),
+                ("AID", "0"),
+                ("CI", "0"),
+                ("TYPE", "xmlhttp"),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        }) else {
+            panic!("expected a streamed back channel");
+        };
+        body
+    };
+    let forward_attached = || {
+        let (_, _, body) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: params(&[("SID", &sid), ("RID", "2"), ("AID", "0")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: form(&[("count", "0"), ("ofs", "1")]),
+        }));
+        chunks(&body)[0][0].as_u64().unwrap()
+    };
+
+    let superseded = open_body();
+    let current = open_body();
+    drop(superseded);
+    assert_eq!(
+        forward_attached(),
+        1,
+        "a stale body cannot release its replacement"
+    );
+    drop(current);
+    assert_eq!(
+        forward_attached(),
+        0,
+        "dropping the current body releases it"
+    );
 }
 
 #[tokio::test]

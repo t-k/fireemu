@@ -510,8 +510,9 @@
   },
   "FS-TXN-1": {
     "notes": [
-      "serializable: read sets and executed queries are re-validated at commit",
-      "conformance: firestore/transaction-read-set-abort (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
+      "optimistic MVCC keeps transactions serializable: document read sets and executed query result sets are re-validated at commit, and a stale transaction is refused with retryable ABORTED without publishing its staged writes",
+      "the official Local Emulator Suite instead locks documents read by a transaction and collection ranges scanned by its queries, then refuses a conflicting out-of-band writer with ABORTED 'Transaction lock timeout.'; the five affected transaction-concurrency rows are a documented emulator divergence, and no production behavior is inferred from either local model",
+      "conformance: firestore/transaction-read-set-abort (conformance/README.md)"
     ],
     "precision": "boundary-conformance",
     "status": "implemented"

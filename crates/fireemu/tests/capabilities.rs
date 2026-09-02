@@ -235,7 +235,11 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
         (
             "functions",
             "FN-CLAIM-BLOCKING-AUTH",
-            ["served synchronous triggers", "guarded runner endpoint", "invoked by auth"],
+            [
+                "served synchronous triggers",
+                "guarded runner endpoint",
+                "invoked by auth",
+            ],
         ),
     ] {
         let surface = contract["surfaces"]
@@ -260,8 +264,7 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
             claim["capabilities"]
                 .as_array()
                 .is_some_and(|capabilities| capabilities.iter().any(|capability| {
-                    capability["id"] == "FN-EVT-1"
-                        && capability["status"] == "implemented"
+                    capability["id"] == "FN-EVT-1" && capability["status"] == "implemented"
                 })),
             "claim {claim_id} does not publish FN-EVT-1 as implemented"
         );

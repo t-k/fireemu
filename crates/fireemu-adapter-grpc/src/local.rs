@@ -23,8 +23,8 @@ use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
-    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreError,
-    FirestoreState, Precondition, TransactionId, Write, WriteOp,
+    Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
+    Precondition, TransactionId, Write, WriteOp,
 };
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
@@ -47,24 +47,7 @@ pub const DEFAULT_LIST_PAGE_SIZE: usize = 100;
 /// How far back a `read_time` selector may reach (Firestore: one hour without PITR).
 pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 
-/// How long a write waits on the virtual clock for a lock held by another transaction before
-/// it is refused with `ABORTED` "Transaction lock timeout." (pessimistic concurrency, the
-/// official emulator's model). Chosen shorter than a transaction's idle deadline
-/// (`FS-LIMIT-TRANSACTION-IDLE-TIME`, 60 s) so that a single out-of-band writer contending
-/// with a live transaction loses the wait -- as the official emulator makes it -- while a
-/// client that keeps retrying its write (the Admin SDK does) still eventually wins once the
-/// idle holder expires. The wait is simulated by advancing the virtual clock, never by
-/// sleeping on wall time, so it stays deterministic and cannot block a thread.
-const LOCK_WAIT_SECONDS: i64 = 30;
-
-/// Outcome of one commit attempt inside the lock-wait loop.
-enum Attempt<T> {
-    /// The commit was applied (and any post-processing ran).
-    Done(T),
-    /// The commit is blocked by a lock another transaction holds; the value is the soonest
-    /// that lock is released (the holder's expiry on the virtual clock).
-    Contended(fireemu_core_types::time::LogicalInstant),
-}
+// Transactions use optimistic read-set validation in the core store.
 
 /// One database: its state and its own lock. The catalog hands out `Arc` references to
 /// it, so an operation holds this lock alone and never the catalog's.
@@ -678,61 +661,6 @@ impl LocalBackend {
         }
     }
 
-    /// Moves the virtual clock forward to `instant` (never backwards) and notifies observers.
-    fn advance_clock_to(&self, instant: fireemu_core_types::time::LogicalInstant) {
-        if let Ok(mut clock) = self.clock.lock() {
-            let _ = clock.advance_to(instant);
-        }
-        self.clock_moved();
-    }
-
-    /// Runs a commit attempt under the pessimistic lock-wait policy. `attempt` executes inside
-    /// the database critical section at the current virtual time and either finishes the
-    /// commit or reports that a lock another live transaction holds blocks it (with the
-    /// instant that lock is released). On contention the virtual clock is advanced: if the
-    /// lock frees within the wait window (`LOCK_WAIT_SECONDS`) the attempt is retried against
-    /// the now-released state, otherwise the commit is refused with `ABORTED`
-    /// "Transaction lock timeout." -- the answer the official emulator gives an out-of-band
-    /// writer that a transaction has kept waiting. The wait is virtual (the clock is advanced,
-    /// never slept on), so the loop always terminates: every iteration either returns or moves
-    /// the clock strictly forward past a holder's expiry, and there are finitely many holders.
-    fn with_lock_wait<T>(
-        &self,
-        parent: &Parent,
-        mut attempt: impl FnMut(
-            &mut FirestoreState,
-            fireemu_core_types::time::LogicalInstant,
-        ) -> Result<Attempt<T>, Status>,
-    ) -> Result<T, Status> {
-        let start = self.now();
-        let wait_until = start
-            .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(
-                LOCK_WAIT_SECONDS,
-            ))
-            .unwrap_or(fireemu_core_types::time::LogicalInstant::MAX);
-        loop {
-            let write_time = self.write_time();
-            match self.with_db(parent, |db| attempt(db, write_time))? {
-                Attempt::Done(value) => return Ok(value),
-                Attempt::Contended(release) => {
-                    // Advance to whichever comes first: the lock's release, or our patience.
-                    self.advance_clock_to(release.min(wait_until));
-                    if release > wait_until {
-                        return Err(Status::aborted("Transaction lock timeout."));
-                    }
-                    // The holder's lock is released only once the clock has reached its
-                    // expiry. If the clock did not actually advance there (it can only fail to
-                    // move forward, never backward -- e.g. a poisoned clock lock), stop instead
-                    // of retrying forever: refuse the write rather than hang the request.
-                    if self.now() < release {
-                        return Err(Status::aborted("Transaction lock timeout."));
-                    }
-                    // The holder has now expired; retry against the released state.
-                }
-            }
-        }
-    }
-
     /// The fault plan check (`fault`) for the surfaces outside this module (Listen refreshes).
     pub fn consult_faults(&self, project: &str, operation: &str) -> Result<(), Status> {
         self.fault(project, operation)
@@ -831,18 +759,14 @@ impl LocalBackend {
         guard: WriteGuard<'_>,
     ) -> Result<crate::streams::WireCommit, Status> {
         self.fault(parent.project.as_str(), "firestore.commit")?;
-        let result = self.with_lock_wait(parent, |db, now| {
+        let now = self.write_time();
+        let result = self.with_db(parent, |db| {
             guard(db, writes, now)?;
-            match db.commit(writes, None, now) {
-                Ok(result) => {
-                    self.publish(parent, &result);
-                    Ok(Attempt::Done(result))
-                }
-                Err(FirestoreError::LockContended { earliest_release }) => {
-                    Ok(Attempt::Contended(earliest_release))
-                }
-                Err(e) => Err(status_from_error(&e)),
-            }
+            let result = db
+                .commit(writes, None, now)
+                .map_err(|error| status_from_error(&error))?;
+            self.publish(parent, &result);
+            Ok(result)
         })?;
         Ok(crate::streams::WireCommit::from_result(&result))
     }
@@ -1537,22 +1461,18 @@ impl LocalBackend {
         self.fault(parent.project.as_str(), "firestore.commit")?;
         let mask = decode_mask(mask).map_err(status)?;
         let path = write.op.path().clone();
-        let doc = self.with_lock_wait(parent, |db, now| {
+        let now = self.write_time();
+        let doc = self.with_db(parent, |db| {
             guard(db, std::slice::from_ref(write), now)?;
-            match db.commit(std::slice::from_ref(write), None, now) {
-                Ok(result) => {
-                    let doc = db
-                        .get(&path)
-                        .map(|d| encode_masked(d, mask.as_deref()))
-                        .ok_or_else(|| Status::internal("document vanished after commit"))?;
-                    self.publish(parent, &result);
-                    Ok(Attempt::Done(doc))
-                }
-                Err(FirestoreError::LockContended { earliest_release }) => {
-                    Ok(Attempt::Contended(earliest_release))
-                }
-                Err(e) => Err(status_from_error(&e)),
-            }
+            let result = db
+                .commit(std::slice::from_ref(write), None, now)
+                .map_err(|error| status_from_error(&error))?;
+            let doc = db
+                .get(&path)
+                .map(|document| encode_masked(document, mask.as_deref()))
+                .ok_or_else(|| Status::internal("document vanished after commit"))?;
+            self.publish(parent, &result);
+            Ok(doc)
         })?;
         Ok(doc)
     }
@@ -1608,18 +1528,14 @@ impl LocalBackend {
     ) -> Result<(), Status> {
         let (parent, write) = Self::plan_delete(req)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
-        self.with_lock_wait(&parent, |db, now| {
+        let now = self.write_time();
+        self.with_db(&parent, |db| {
             guard(db, std::slice::from_ref(&write), now)?;
-            match db.commit(std::slice::from_ref(&write), None, now) {
-                Ok(result) => {
-                    self.publish(&parent, &result);
-                    Ok(Attempt::Done(()))
-                }
-                Err(FirestoreError::LockContended { earliest_release }) => {
-                    Ok(Attempt::Contended(earliest_release))
-                }
-                Err(e) => Err(status_from_error(&e)),
-            }
+            let result = db
+                .commit(std::slice::from_ref(&write), None, now)
+                .map_err(|error| status_from_error(&error))?;
+            self.publish(&parent, &result);
+            Ok(())
         })
     }
 
@@ -1697,18 +1613,14 @@ impl LocalBackend {
         let (parent, writes) = Self::plan_commit(req)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
         let txn = Self::txn(&parent, &req.transaction)?;
-        let result = self.with_lock_wait(&parent, |db, now| {
+        let now = self.write_time();
+        let result = self.with_db(&parent, |db| {
             guard(db, &writes, now)?;
-            match db.commit(&writes, txn.as_ref(), now) {
-                Ok(result) => {
-                    self.publish(&parent, &result);
-                    Ok(Attempt::Done(result))
-                }
-                Err(FirestoreError::LockContended { earliest_release }) => {
-                    Ok(Attempt::Contended(earliest_release))
-                }
-                Err(e) => Err(status_from_error(&e)),
-            }
+            let result = db
+                .commit(&writes, txn.as_ref(), now)
+                .map_err(|error| status_from_error(&error))?;
+            self.publish(&parent, &result);
+            Ok(result)
         })?;
         Ok(encode_commit(&result))
     }

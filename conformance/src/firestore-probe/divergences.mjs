@@ -17,6 +17,16 @@ const document = (path, fields) => ({
   updateTime: "<now>",
 });
 
+const committed = { commitTime: "<now>", writeResults: [{ updateTime: "<now>" }] };
+
+const OPTIMISTIC =
+  "fireemu runs transactions optimistically (MVCC with read-set validation at commit): a " +
+  "write outside the transaction always commits, and the transaction that read the document " +
+  "is ABORTED when it commits, which the SDKs retry. The official emulator takes locks on " +
+  "the documents a transaction reads, refuses the out-of-band write with ABORTED " +
+  "'Transaction lock timeout.' after waiting, and commits the transaction. Both models " +
+  "keep the read set serializable; they differ in which side is told to retry.";
+
 export const DIVERGENCES = {
   "values/type-order#descending-name-only": {
     fireemu: {
@@ -114,12 +124,33 @@ export const DIVERGENCES = {
       "(`?transaction=`): it logs 'Unmapped JavaType: BYTE_STRING' and never answers the " +
       "request. fireemu serves the read at the transaction's snapshot.",
   },
-  // The transaction contention family (`out-of-band-write`, `contended-commit-is-aborted`,
-  // `counter-keeps-the-out-of-band-value`, `phantom-write`, `commit-after-a-phantom-row`)
-  // is no longer a divergence: fireemu now takes pessimistic locks like the official
-  // emulator, so a write against a document a live read-write transaction has read (or a
-  // collection its query scanned) waits and is refused with ABORTED "Transaction lock
-  // timeout.", and the transaction commits. Those rows are gated directly against the oracle.
+  "transactions/lifecycle#out-of-band-write": {
+    fireemu: { status: 200, code: "OK", body: committed },
+    reason: OPTIMISTIC,
+  },
+  "transactions/lifecycle#contended-commit-is-aborted": {
+    fireemu: { status: 409, code: "ABORTED" },
+    reason: OPTIMISTIC,
+  },
+  "transactions/lifecycle#counter-keeps-the-out-of-band-value": {
+    fireemu: {
+      status: 200,
+      code: "OK",
+      body: document("tx/counter", { value: { integerValue: "100" } }),
+    },
+    reason: `${OPTIMISTIC} Here the out-of-band value (100) is what remains.`,
+  },
+  "transactions/lifecycle#phantom-write": {
+    fireemu: { status: 200, code: "OK", body: committed },
+    reason:
+      `${OPTIMISTIC} A query run inside a transaction pins its result set the same way: a ` +
+      "document that would join the result (a phantom row) aborts the transaction at commit " +
+      "on fireemu, while the official emulator refuses the write that would create it.",
+  },
+  "transactions/lifecycle#commit-after-a-phantom-row": {
+    fireemu: { status: 409, code: "ABORTED" },
+    reason: "The transaction side of the phantom-write row.",
+  },
   "errors/rest-shapes#run-query-without-from": {
     fireemu: { status: 400, code: "INVALID_ARGUMENT" },
     reason:

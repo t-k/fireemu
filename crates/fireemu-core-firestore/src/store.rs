@@ -237,15 +237,6 @@ pub enum FirestoreError {
     NotFound(DocumentPath),
     /// Transaction conflict.
     Aborted(String),
-    /// A write is blocked by a lock another live transaction holds on one of its documents
-    /// (pessimistic concurrency). Carries the soonest that lock is released -- the earlier of
-    /// the holding transaction's idle and total deadlines. This never reaches the client: the
-    /// adapter waits it out on the virtual clock and either retries the commit (the holder
-    /// released the lock in time) or refuses it with `ABORTED` "Transaction lock timeout.".
-    LockContended {
-        /// The instant the blocking lock is released (the holder's expiry).
-        earliest_release: LogicalInstant,
-    },
     /// Limit violated.
     ResourceExhausted(LimitViolation),
     /// Not implemented.
@@ -260,9 +251,6 @@ impl fmt::Display for FirestoreError {
             Self::AlreadyExists(p) => write!(f, "document already exists: {p}"),
             Self::NotFound(p) => write!(f, "document not found: {p}"),
             Self::Aborted(m) => write!(f, "aborted: {m}"),
-            Self::LockContended { earliest_release } => {
-                write!(f, "lock contended (released at {earliest_release})")
-            }
             Self::ResourceExhausted(v) => write!(f, "resource exhausted: {v}"),
             Self::Unimplemented(m) => write!(f, "unimplemented: {m}"),
         }
@@ -291,6 +279,7 @@ struct Transaction {
 enum TransactionState {
     Active,
     RetryableAborted,
+    RolledBack,
     Retried,
     Finished,
 }
@@ -610,7 +599,10 @@ impl FirestoreState {
                 "read-only transaction cannot be retried as read-write".into(),
             ));
         }
-        if previous_attempt.state != TransactionState::RetryableAborted {
+        if !matches!(
+            previous_attempt.state,
+            TransactionState::RetryableAborted | TransactionState::RolledBack
+        ) {
             return Err(FirestoreError::InvalidArgument(
                 "Invalid retry transaction.".into(),
             ));
@@ -981,7 +973,7 @@ impl FirestoreState {
     pub fn rollback(&mut self, id: &TransactionId) -> Result<(), FirestoreError> {
         self.transaction(id)?;
         if let Some(t) = self.transactions.get_mut(id) {
-            t.state = TransactionState::Finished;
+            t.state = TransactionState::RolledBack;
         }
         Ok(())
     }

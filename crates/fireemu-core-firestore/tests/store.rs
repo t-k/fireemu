@@ -431,6 +431,20 @@ fn a_concurrent_write_invalidates_the_transaction_read_set() {
 }
 
 #[test]
+fn a_rolled_back_read_write_transaction_can_seed_one_retry() {
+    let mut state = FirestoreState::new();
+    let original = state.begin_transaction(false, t(0)).unwrap();
+    state.rollback(&original).unwrap();
+
+    let retry = state.retry_transaction(&original, t(1)).unwrap();
+    assert_ne!(retry, original);
+    assert!(matches!(
+        state.retry_transaction(&original, t(2)),
+        Err(FirestoreError::InvalidArgument(_))
+    ));
+}
+
+#[test]
 fn transaction_snapshot_reads_are_stable() {
     let mut s = FirestoreState::new();
     s.commit(&[set("k/1", &[("v", Value::Integer(1))])], None, t(0))

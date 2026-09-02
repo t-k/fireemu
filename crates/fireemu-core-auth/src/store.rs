@@ -563,6 +563,9 @@ pub struct AuthStore {
     /// has one active lookup target, matching the official emulator's `email -> localId`
     /// index: the most recently created or updated account wins.
     local_id_for_email: BTreeMap<String, LocalId>,
+    /// User IDs in stable creation order. This makes list-user pagination a bounded range
+    /// lookup instead of a full-store collection and sort for every page.
+    by_sequence: BTreeMap<u64, LocalId>,
     counter: u64,
     refresh_tokens: BTreeMap<String, RefreshSession>,
     next_id_override: Option<String>,
@@ -657,6 +660,7 @@ impl AuthStore {
             policy,
             users: BTreeMap::new(),
             local_id_for_email: BTreeMap::new(),
+            by_sequence: BTreeMap::new(),
             counter: 0,
             refresh_tokens: BTreeMap::new(),
             next_id_override: None,
@@ -808,6 +812,7 @@ impl AuthStore {
         if let Some(email) = &user.email {
             self.local_id_for_email.remove(email);
         }
+        self.by_sequence.remove(&user.sequence);
         self.refresh_tokens.retain(|_, s| s.uid != key);
         self.pending_sign_in_owners.retain(|_, owner| *owner != key);
         self.verification_codes.retain(|_, c| match &c.purpose {
@@ -824,6 +829,7 @@ impl AuthStore {
     pub fn clear(&mut self) {
         self.users.clear();
         self.local_id_for_email.clear();
+        self.by_sequence.clear();
         self.refresh_tokens.clear();
         self.oob_codes.clear();
         self.verification_codes.clear();
@@ -995,6 +1001,7 @@ impl AuthStore {
                 password,
             }),
         );
+        self.by_sequence.insert(sequence, local_id.clone());
         if let Some(email) = email {
             self.local_id_for_email.insert(email, local_id.clone());
         }
@@ -1004,9 +1011,22 @@ impl AuthStore {
     /// Users in creation order (stable `listUsers` paging).
     #[must_use]
     pub fn users_by_creation(&self) -> Vec<&UserRecord> {
-        let mut users: Vec<&UserRecord> = self.users.values().map(Arc::as_ref).collect();
-        users.sort_by_key(|u| u.sequence);
-        users
+        self.by_sequence
+            .values()
+            .filter_map(|id| self.users.get(id).map(Arc::as_ref))
+            .collect()
+    }
+
+    /// At most `limit` users created after `sequence`, in stable creation order.
+    #[must_use]
+    pub fn users_after_sequence(&self, sequence: u64, limit: usize) -> Vec<&UserRecord> {
+        use std::ops::Bound::{Excluded, Unbounded};
+
+        self.by_sequence
+            .range((Excluded(sequence), Unbounded))
+            .take(limit)
+            .filter_map(|(_, id)| self.users.get(id).map(Arc::as_ref))
+            .collect()
     }
 
     /// User by phone number.
@@ -1172,6 +1192,8 @@ impl AuthStore {
             return Err(AuthError::LocalIdExists);
         };
         let email = new.email.clone();
+        self.next_sequence += 1;
+        let sequence = self.next_sequence;
         slot.insert(Arc::new(UserRecord {
             local_id: local_id.clone(),
             email: new.email,
@@ -1179,10 +1201,7 @@ impl AuthStore {
             display_name: None,
             photo_url: None,
             phone_number: None,
-            sequence: {
-                self.next_sequence += 1;
-                self.next_sequence
-            },
+            sequence,
             disabled: false,
             provider: new.provider,
             custom_claims: CustomClaims::default(),
@@ -1196,6 +1215,7 @@ impl AuthStore {
         if let Some(email) = email {
             self.local_id_for_email.insert(email, local_id.clone());
         }
+        self.by_sequence.insert(sequence, local_id.clone());
         self.created_users.push(local_id.clone());
         Ok(local_id)
     }
@@ -1424,10 +1444,9 @@ impl AuthStore {
     /// login widget offers for reuse (`listProviderInfosByProviderId`).
     #[must_use]
     pub fn provider_infos(&self, provider_id: &str) -> Vec<FederatedIdentity> {
-        let mut users: Vec<&UserRecord> = self.users.values().map(Arc::as_ref).collect();
-        users.sort_by_key(|u| u.sequence);
-        users
-            .into_iter()
+        self.by_sequence
+            .values()
+            .filter_map(|id| self.users.get(id).map(Arc::as_ref))
             .filter_map(|u| {
                 u.federated
                     .iter()

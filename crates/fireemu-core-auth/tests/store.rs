@@ -69,6 +69,12 @@ fn explicit_local_ids_are_validated_and_unique() {
     assert_eq!(s.all_user_ids().len(), 4);
     let sequences: Vec<u64> = s.users_by_creation().iter().map(|u| u.sequence).collect();
     assert!(sequences.windows(2).all(|w| w[1] == w[0] + 1));
+    let page: Vec<&str> = s
+        .users_after_sequence(sequences[0], 2)
+        .iter()
+        .map(|user| user.local_id.as_str())
+        .collect();
+    assert_eq!(page, [longest.as_str(), e.as_str()]);
     // Deleting removes the user and its refresh tokens; unknown users are an error.
     let token = s.issue_refresh_token(&e, t(2)).unwrap();
     assert!(s.redeem_refresh_token(&token).is_ok());
@@ -79,6 +85,10 @@ fn explicit_local_ids_are_validated_and_unique() {
     );
     assert_eq!(s.delete_user_by_id("nobody"), Err(AuthError::UserNotFound));
     assert_eq!(s.all_user_ids().len(), 3);
+    assert!(s
+        .users_after_sequence(sequences[2], 1)
+        .iter()
+        .all(|user| user.local_id != e));
     s.clear();
     assert!(s.all_user_ids().is_empty());
     assert!(s.users_by_creation().is_empty());

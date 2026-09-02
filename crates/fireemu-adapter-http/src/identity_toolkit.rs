@@ -3539,12 +3539,8 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
             None => return error(400, "INVALID_PAGE_TOKEN"),
         },
     };
-    let page: Vec<&fireemu_core_auth::store::UserRecord> = store
-        .users_by_creation()
-        .into_iter()
-        .filter(|u| u.sequence > after)
-        .take(max + 1)
-        .collect();
+    let page: Vec<&fireemu_core_auth::store::UserRecord> =
+        store.users_after_sequence(after, max.saturating_add(1));
     let has_more = page.len() > max;
     let page = &page[..page.len().min(max)];
     let users: Vec<Value> = page.iter().map(|u| user_json(store, &u.local_id)).collect();

@@ -1820,7 +1820,10 @@ fn control_state(
         clock: clock.clone(),
         require_demo_prefix: cfg.require_demo_prefix,
         edition: cfg.edition,
-        capabilities: control::capabilities_manifest(cfg.profile),
+        capabilities: fireemu_adapter_http::control::CapabilityManifest::lazy({
+            let profile = cfg.profile;
+            move || control::capabilities_manifest(profile)
+        }),
         rules: rules.clone(),
         storage_rules: storage_rules.clone(),
         reset_hooks,

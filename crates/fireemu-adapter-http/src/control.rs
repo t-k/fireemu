@@ -17,7 +17,7 @@
 //! The daemon currently runs one implicit session; every session name maps to it. Sessions,
 //! snapshots and `await-idle` arrive with the session runtime.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
@@ -99,6 +99,40 @@ pub trait ProjectHooks: Send + Sync {
 /// One adapter's part of a session snapshot: an opaque copy of its state.
 pub type SnapshotPart = Arc<dyn std::any::Any + Send + Sync>;
 
+/// A capability manifest that may defer its comparatively large JSON parse until requested.
+pub struct CapabilityManifest {
+    value: OnceLock<Value>,
+    loader: Box<dyn Fn() -> Value + Send + Sync>,
+}
+
+impl CapabilityManifest {
+    /// Creates a manifest whose loader runs at most once, on the first read.
+    #[must_use]
+    pub fn lazy(loader: impl Fn() -> Value + Send + Sync + 'static) -> Self {
+        Self {
+            value: OnceLock::new(),
+            loader: Box::new(loader),
+        }
+    }
+
+    /// Returns the manifest value, loading it on the first call.
+    #[must_use]
+    pub fn value(&self) -> Value {
+        self.value.get_or_init(|| (self.loader)()).clone()
+    }
+}
+
+impl From<Value> for CapabilityManifest {
+    fn from(value: Value) -> Self {
+        let cell = OnceLock::new();
+        let _ = cell.set(value);
+        Self {
+            value: cell,
+            loader: Box::new(|| Value::Null),
+        }
+    }
+}
+
 /// Captures and restores one adapter's state (Firestore databases, Storage objects, Auth
 /// users, the clock, ...). `restore` runs under the exclusive session barrier, in the
 /// order the hooks were registered.
@@ -174,7 +208,7 @@ pub struct ControlState {
     /// Configured edition.
     pub edition: FirestoreEdition,
     /// Capability manifest served at `/v1/capabilities`.
-    pub capabilities: Value,
+    pub capabilities: CapabilityManifest,
     /// Loaded Firestore Security Rules (shared with the gRPC adapter).
     pub rules: Arc<RulesetSlot>,
     /// Loaded Storage Security Rules (shared with the Storage adapter).
@@ -357,7 +391,7 @@ pub fn handle_with(
     let path = path.split('?').next().unwrap_or(path);
     match (method, path) {
         ("GET", "/health/live" | "/health/ready") => ok(json!({"status": "ok"})),
-        ("GET", "/v1/capabilities") => ok(state.capabilities.clone()),
+        ("GET", "/v1/capabilities") => ok(state.capabilities.value()),
         ("GET", "/v1/limits") => ok(json!({
             "catalogs": fireemu_core_limits::catalogs::ALL_CATALOGS.iter().map(|c| json!({
                 "id": c.meta.id,
@@ -2074,5 +2108,28 @@ fn clock_route(
             }
         }
         _ => error(404, "NOT_FOUND"),
+    }
+}
+
+#[cfg(test)]
+mod capability_manifest_tests {
+    use super::CapabilityManifest;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn a_lazy_manifest_is_loaded_once_on_first_read() {
+        let loads = Arc::new(AtomicUsize::new(0));
+        let observed = loads.clone();
+        let manifest = CapabilityManifest::lazy(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            json!({"schemaVersion": 1})
+        });
+
+        assert_eq!(loads.load(Ordering::SeqCst), 0);
+        assert_eq!(manifest.value(), json!({"schemaVersion": 1}));
+        assert_eq!(manifest.value(), json!({"schemaVersion": 1}));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
     }
 }

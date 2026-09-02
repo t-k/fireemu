@@ -22,7 +22,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         ))),
         require_demo_prefix: true,
         edition: FirestoreEdition::Standard,
-        capabilities: json!({"schemaVersion": 1}),
+        capabilities: json!({"schemaVersion": 1}).into(),
         rules: Arc::new(RulesetSlot::default()),
         storage_rules: Arc::new(RulesetSlot::default()),
         reset_hooks: vec![Arc::new(move || {

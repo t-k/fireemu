@@ -75,7 +75,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         clock: clock.clone(),
         require_demo_prefix: true,
         edition: FirestoreEdition::Standard,
-        capabilities: json!({"schemaVersion": 1}),
+        capabilities: json!({"schemaVersion": 1}).into(),
         rules,
         storage_rules,
         reset_hooks: Vec::new(),

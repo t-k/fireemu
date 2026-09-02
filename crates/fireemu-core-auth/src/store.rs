@@ -563,6 +563,12 @@ pub struct AuthStore {
     /// has one active lookup target, matching the official emulator's `email -> localId`
     /// index: the most recently created or updated account wins.
     local_id_for_email: BTreeMap<String, LocalId>,
+    /// Phone owners in canonical local-ID order. Imported artifacts may contain duplicates,
+    /// so the first owner preserves the previous `BTreeMap` scan result.
+    local_ids_for_phone: BTreeMap<String, BTreeSet<LocalId>>,
+    /// Federated identity owners in canonical local-ID order, with the same import-safe
+    /// duplicate handling as phone numbers.
+    local_ids_for_federated: BTreeMap<(String, String), BTreeSet<LocalId>>,
     /// User IDs in stable creation order. This makes list-user pagination a bounded range
     /// lookup instead of a full-store collection and sort for every page.
     by_sequence: BTreeMap<u64, LocalId>,
@@ -663,6 +669,8 @@ impl AuthStore {
             policy,
             users: BTreeMap::new(),
             local_id_for_email: BTreeMap::new(),
+            local_ids_for_phone: BTreeMap::new(),
+            local_ids_for_federated: BTreeMap::new(),
             by_sequence: BTreeMap::new(),
             counter: 0,
             refresh_tokens: BTreeMap::new(),
@@ -816,6 +824,13 @@ impl AuthStore {
         if let Some(email) = &user.email {
             self.local_id_for_email.remove(email);
         }
+        if let Some(phone) = &user.phone_number {
+            Self::remove_index_owner(&mut self.local_ids_for_phone, phone, &key);
+        }
+        for identity in &user.federated {
+            let identity_key = (identity.provider_id.clone(), identity.raw_id.clone());
+            Self::remove_index_owner(&mut self.local_ids_for_federated, &identity_key, &key);
+        }
         self.by_sequence.remove(&user.sequence);
         self.refresh_tokens.retain(|_, s| s.uid != key);
         self.pending_sign_in_owners.retain(|_, owner| *owner != key);
@@ -834,6 +849,8 @@ impl AuthStore {
     pub fn clear(&mut self) {
         self.users.clear();
         self.local_id_for_email.clear();
+        self.local_ids_for_phone.clear();
+        self.local_ids_for_federated.clear();
         self.by_sequence.clear();
         self.refresh_tokens.clear();
         self.oob_codes.clear();
@@ -993,6 +1010,12 @@ impl AuthStore {
         mfa.import_factors(user.totp_factors, user.phone_factors)
             .map_err(ImportUserError::SecondFactor)?;
         let email = user.email.clone();
+        let phone = user.phone_number.clone();
+        let identities: Vec<(String, String)> = user
+            .federated
+            .iter()
+            .map(|identity| (identity.provider_id.clone(), identity.raw_id.clone()))
+            .collect();
         self.users.insert(
             local_id.clone(),
             Arc::new(UserRecord {
@@ -1017,6 +1040,18 @@ impl AuthStore {
         self.by_sequence.insert(sequence, local_id.clone());
         if let Some(email) = email {
             self.local_id_for_email.insert(email, local_id.clone());
+        }
+        if let Some(phone) = phone {
+            self.local_ids_for_phone
+                .entry(phone)
+                .or_default()
+                .insert(local_id.clone());
+        }
+        for identity in identities {
+            self.local_ids_for_federated
+                .entry(identity)
+                .or_default()
+                .insert(local_id.clone());
         }
         Ok(local_id)
     }
@@ -1045,9 +1080,10 @@ impl AuthStore {
     /// User by phone number.
     #[must_use]
     pub fn user_by_phone(&self, phone: &str) -> Option<&UserRecord> {
-        self.users
-            .values()
-            .find(|u| u.phone_number.as_deref() == Some(phone))
+        self.local_ids_for_phone
+            .get(phone)
+            .and_then(|owners| owners.first())
+            .and_then(|uid| self.users.get(uid))
             .map(Arc::as_ref)
     }
 
@@ -1096,21 +1132,47 @@ impl AuthStore {
     ) -> Result<(), AuthError> {
         if let Some(phone) = phone {
             Self::validate_phone_number(phone)?;
-            if self
-                .users
-                .values()
-                .any(|u| u.local_id != *uid && u.phone_number.as_deref() == Some(phone))
-            {
+            if self.local_ids_for_phone.get(phone).is_some_and(|owners| {
+                owners.len() > 1 || owners.first().is_some_and(|owner| owner != uid)
+            }) {
                 return Err(AuthError::PhoneNumberExists);
             }
         }
-        let user = self
+        let old_phone = self
             .users
+            .get(uid)
+            .ok_or(AuthError::UserNotFound)?
+            .phone_number
+            .clone();
+        if let Some(old_phone) = old_phone {
+            Self::remove_index_owner(&mut self.local_ids_for_phone, &old_phone, uid);
+        }
+        self.users
             .get_mut(uid)
             .map(Arc::make_mut)
-            .ok_or(AuthError::UserNotFound)?;
-        user.phone_number = phone.map(str::to_owned);
+            .ok_or(AuthError::UserNotFound)?
+            .phone_number = phone.map(str::to_owned);
+        if let Some(phone) = phone {
+            self.local_ids_for_phone
+                .entry(phone.to_owned())
+                .or_default()
+                .insert(uid.clone());
+        }
         Ok(())
+    }
+
+    fn remove_index_owner<K: Ord>(
+        index: &mut BTreeMap<K, BTreeSet<LocalId>>,
+        key: &K,
+        uid: &LocalId,
+    ) {
+        let remove_key = index.get_mut(key).is_some_and(|owners| {
+            owners.remove(uid);
+            owners.is_empty()
+        });
+        if remove_key {
+            index.remove(key);
+        }
     }
 
     /// All user IDs in canonical order.
@@ -1443,13 +1505,10 @@ impl AuthStore {
     /// User owning a federated identity.
     #[must_use]
     pub fn user_by_federated(&self, provider_id: &str, raw_id: &str) -> Option<&UserRecord> {
-        self.users
-            .values()
-            .find(|u| {
-                u.federated
-                    .iter()
-                    .any(|f| f.provider_id == provider_id && f.raw_id == raw_id)
-            })
+        self.local_ids_for_federated
+            .get(&(provider_id.to_owned(), raw_id.to_owned()))
+            .and_then(|owners| owners.first())
+            .and_then(|uid| self.users.get(uid))
             .map(Arc::as_ref)
     }
 
@@ -1481,6 +1540,14 @@ impl AuthStore {
         {
             return Err(AuthError::FederatedUserIdAlreadyLinked);
         }
+        let previous = self
+            .users
+            .get(uid)
+            .ok_or(AuthError::UserNotFound)?
+            .federated
+            .iter()
+            .find(|existing| existing.provider_id == identity.provider_id)
+            .map(|existing| (existing.provider_id.clone(), existing.raw_id.clone()));
         let user = self
             .users
             .get_mut(uid)
@@ -1488,7 +1555,15 @@ impl AuthStore {
             .ok_or(AuthError::UserNotFound)?;
         user.federated
             .retain(|f| f.provider_id != identity.provider_id);
+        let identity_key = (identity.provider_id.clone(), identity.raw_id.clone());
         user.federated.push(identity);
+        if let Some(previous) = previous {
+            Self::remove_index_owner(&mut self.local_ids_for_federated, &previous, uid);
+        }
+        self.local_ids_for_federated
+            .entry(identity_key)
+            .or_default()
+            .insert(uid.clone());
         Ok(())
     }
 
@@ -1498,6 +1573,15 @@ impl AuthStore {
         uid: &LocalId,
         provider_id: &str,
     ) -> Result<bool, AuthError> {
+        let removed: Vec<(String, String)> = self
+            .users
+            .get(uid)
+            .ok_or(AuthError::UserNotFound)?
+            .federated
+            .iter()
+            .filter(|identity| identity.provider_id == provider_id)
+            .map(|identity| (identity.provider_id.clone(), identity.raw_id.clone()))
+            .collect();
         let user = self
             .users
             .get_mut(uid)
@@ -1505,7 +1589,11 @@ impl AuthStore {
             .ok_or(AuthError::UserNotFound)?;
         let before = user.federated.len();
         user.federated.retain(|f| f.provider_id != provider_id);
-        Ok(user.federated.len() != before)
+        let changed = user.federated.len() != before;
+        for identity in &removed {
+            Self::remove_index_owner(&mut self.local_ids_for_federated, identity, uid);
+        }
+        Ok(changed)
     }
 
     /// Signs in with a federated identity, matching the official emulator's create-or-link
@@ -1572,11 +1660,37 @@ impl AuthStore {
                     // password, phone and any other providers are dropped and its tokens are
                     // invalidated so nothing minted under the old owner survives.
                     if !owner_email_verified {
+                        let old_phone = self
+                            .users
+                            .get(&uid)
+                            .and_then(|user| user.phone_number.clone());
+                        let old_identities: Vec<(String, String)> = self
+                            .users
+                            .get(&uid)
+                            .map(|user| {
+                                user.federated
+                                    .iter()
+                                    .map(|identity| {
+                                        (identity.provider_id.clone(), identity.raw_id.clone())
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         if let Some(user) = self.users.get_mut(&uid).map(Arc::make_mut) {
                             user.password = None;
                             user.phone_number = None;
                             user.federated.clear();
                             user.tokens_valid_after = Self::whole_second(now);
+                        }
+                        if let Some(phone) = old_phone {
+                            Self::remove_index_owner(&mut self.local_ids_for_phone, &phone, &uid);
+                        }
+                        for identity in &old_identities {
+                            Self::remove_index_owner(
+                                &mut self.local_ids_for_federated,
+                                identity,
+                                &uid,
+                            );
                         }
                     }
                     self.set_email_verified_flag(&uid, true);

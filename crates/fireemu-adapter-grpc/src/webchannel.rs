@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
@@ -172,6 +172,9 @@ struct Session {
     /// Bumped whenever a back channel attaches; older back channels stop.
     backchannel_generation: AtomicU64,
     backchannel_attached: AtomicBool,
+    /// Cancellation handle for the attached response. A replacement signals it before the
+    /// new response starts, so the superseded task cannot race a queued array delivery.
+    backchannel_cancel: Mutex<Option<oneshot::Sender<()>>>,
     /// Data arrived (permit-keeping wakeup) / channel replaced (broadcast wakeup).
     notify: Notify,
     last_seen: Mutex<Instant>,
@@ -635,6 +638,7 @@ impl Hub {
             next_aid: AtomicU64::new(0),
             backchannel_generation: AtomicU64::new(0),
             backchannel_attached: AtomicBool::new(false),
+            backchannel_cancel: Mutex::new(None),
             notify: Notify::new(),
             last_seen: Mutex::new(Instant::now()),
             maps: Mutex::new((0, BTreeMap::new())),
@@ -735,14 +739,28 @@ impl Hub {
             .backchannel_generation
             .fetch_add(1, Ordering::SeqCst)
             + 1;
+        let (cancel_tx, mut cancelled) = oneshot::channel();
+        if let Ok(mut active) = session.backchannel_cancel.lock() {
+            if let Some(previous) = active.replace(cancel_tx) {
+                let _ = previous.send(());
+            }
+        }
         session.backchannel_attached.store(true, Ordering::SeqCst);
         // Wake a previous back channel so it notices it was replaced.
         session.notify.notify_waiters();
         let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, Status>>(64);
         tokio::spawn(async move {
             let mut cursor = acked;
-            let outcome =
-                backchannel_loop(&session, generation, long_poll, wait, &tx, &mut cursor).await;
+            let outcome = backchannel_loop(
+                &session,
+                generation,
+                long_poll,
+                wait,
+                &tx,
+                &mut cursor,
+                &mut cancelled,
+            )
+            .await;
             if session.backchannel_generation.load(Ordering::SeqCst) == generation {
                 session.backchannel_attached.store(false, Ordering::SeqCst);
                 session.touch();
@@ -768,8 +786,12 @@ async fn backchannel_loop(
     wait: Duration,
     tx: &mpsc::Sender<Result<bytes::Bytes, Status>>,
     cursor: &mut u64,
+    cancelled: &mut oneshot::Receiver<()>,
 ) -> &'static str {
     loop {
+        if session.backchannel_generation.load(Ordering::SeqCst) != generation {
+            return "superseded";
+        }
         let pending = session.pending_after(*cursor);
         if let Some((last, _)) = pending.last() {
             let texts: Vec<&str> = pending.iter().map(|(_, t)| t.as_str()).collect();
@@ -778,7 +800,12 @@ async fn backchannel_loop(
                 "backchannel send",
                 &format!("{} gen={generation} arrays={}", session.sid, pending.len()),
             );
-            if tx.send(Ok(bytes::Bytes::from(chunk(&text)))).await.is_err() {
+            let delivered = tokio::select! {
+                biased;
+                _ = &mut *cancelled => return "superseded",
+                delivered = tx.send(Ok(bytes::Bytes::from(chunk(&text)))) => delivered,
+            };
+            if delivered.is_err() {
                 return "receiver gone";
             }
             // The cursor is the last id actually sent; arrays pushed meanwhile are picked
@@ -792,7 +819,11 @@ async fn backchannel_loop(
             return "session closed";
         }
         let idle = if long_poll { wait } else { KEEPALIVE };
-        let waited = tokio::time::timeout(idle, session.notify.notified()).await;
+        let waited = tokio::select! {
+            biased;
+            _ = &mut *cancelled => return "superseded",
+            waited = tokio::time::timeout(idle, session.notify.notified()) => waited,
+        };
         if session.backchannel_generation.load(Ordering::SeqCst) != generation {
             // Hand a possibly consumed data permit to the newer back channel.
             session.notify.notify_one();
@@ -802,7 +833,12 @@ async fn backchannel_loop(
             // Silence: a framed keep-alive (a completed request with no bytes would be
             // treated as an error by the client).
             let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
-            if tx.send(Ok(bytes::Bytes::from(chunk(&noop)))).await.is_err() {
+            let delivered = tokio::select! {
+                biased;
+                _ = &mut *cancelled => return "superseded",
+                delivered = tx.send(Ok(bytes::Bytes::from(chunk(&noop)))) => delivered,
+            };
+            if delivered.is_err() {
                 return "receiver gone";
             }
             if long_poll {
@@ -950,6 +986,51 @@ fn error_chunk(e: &Status) -> ChannelResponse {
 pub struct MappedStream<S, F> {
     inner: S,
     f: F,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_superseded_backchannel_cannot_send_queued_arrays() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "session-one".to_owned(),
+            kind: StreamKind::Listen,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            outbound: Mutex::new(VecDeque::from([(1, "[1,[{\"current\":true}]]".to_owned())])),
+            next_aid: AtomicU64::new(1),
+            backchannel_generation: AtomicU64::new(2),
+            backchannel_attached: AtomicBool::new(true),
+            backchannel_cancel: Mutex::new(None),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            closed: AtomicBool::new(false),
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let (_cancel_tx, mut cancelled) = oneshot::channel();
+        let mut cursor = 0;
+
+        let outcome = backchannel_loop(
+            &session,
+            1,
+            true,
+            Duration::from_secs(1),
+            &tx,
+            &mut cursor,
+            &mut cancelled,
+        )
+        .await;
+
+        assert_eq!(outcome, "superseded");
+        assert_eq!(cursor, 0);
+        assert!(rx.try_recv().is_err());
+    }
 }
 
 impl<S, F, U> tokio_stream::Stream for MappedStream<S, F>

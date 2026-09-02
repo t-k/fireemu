@@ -16,7 +16,8 @@
     "smoke:rules-unit-testing-explicit-rules": "node rules-unit-testing-explicit-rules.mjs",
     "smoke:recursive-delete": "node recursive-delete.mjs",
     "smoke:firestore-contention": "node firestore-contention.mjs",
-    "smoke:server-timestamp-query": "node server-timestamp-transaction-query.mjs"
+    "smoke:server-timestamp-query": "node server-timestamp-transaction-query.mjs",
+    "smoke:listener-replacement": "node listener-replacement.mjs"
   },
   "dependencies": {
     "firebase": "^12",

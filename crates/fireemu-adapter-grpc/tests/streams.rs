@@ -460,6 +460,87 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
 }
 
 #[tokio::test]
+async fn a_removed_target_id_can_be_reused_without_delivering_the_old_query() {
+    let (mut client, handle) = start(false).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                set_write("first/a", &[("v", s("first"))]),
+                set_write("second/b", &[("v", s("second"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+
+    tx.send(add_query_target(1, "first")).await.unwrap();
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec![
+            "ADD[1]",
+            "CHANGE a",
+            "CURRENT[1]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[]"
+        ]
+    );
+    tx.send(pb::ListenRequest {
+        database: DB.to_owned(),
+        target_change: Some(pb::listen_request::TargetChange::RemoveTarget(1)),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        next_until(&mut responses, "REMOVE[1]").await,
+        vec!["REMOVE[1]"]
+    );
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("first/late", &[("v", s("stale"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    tx.send(add_query_target(1, "second")).await.unwrap();
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec![
+            "ADD[1]",
+            "CHANGE b",
+            "CURRENT[1]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[]"
+        ]
+    );
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                set_write("first/new", &[("v", s("must-not-deliver"))]),
+                set_write("second/c", &[("v", s("replacement"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec!["CHANGE c", "NO_CHANGE[1]", "NO_CHANGE[]"]
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 async fn streams_end_when_the_session_is_reset() {
     let (mut client, handle) = start(false).await;
     // The write stream is opened before the reset...

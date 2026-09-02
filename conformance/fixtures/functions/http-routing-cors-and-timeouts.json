@@ -10,8 +10,8 @@
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
     "parity": 9,
-    "documented-divergence": 2,
-    "debt": 1,
+    "documented-divergence": 3,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
@@ -80,7 +80,7 @@
     },
     {
       "id": "preflight-on-a-callable-from-a-loopback-origin",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "allowHeaders": "content-type",
         "allowMethods": "POST",
@@ -94,7 +94,9 @@
         "allowOrigin": "http://<host>",
         "status": 204,
         "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode"
-      }
+      },
+      "documents": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse."
     },
     {
       "id": "preflight-on-an-onrequest-from-a-loopback-origin",

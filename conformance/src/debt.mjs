@@ -55,7 +55,7 @@ export function renderDebtDoc(fixtures) {
       : divergences
           .map(
             ({ fixture, step }) =>
-              `- \`${fixture}#${step.id}\` -- ${step.reason}  \n  documented in: ${step.documents}`,
+              `- \`${fixture}#${step.id}\` -- ${step.reason}\n  documented in: ${step.documents}`,
           )
           .join("\n");
 

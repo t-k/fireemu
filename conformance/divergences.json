@@ -146,6 +146,10 @@
       "documents": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3",
       "reason": "`Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity."
     },
+    "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-loopback-origin": {
+      "documents": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse."
+    },
     "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin": {
       "documents": "README.md, \"Functions\"",
       "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 \"forbidden origin\" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend."

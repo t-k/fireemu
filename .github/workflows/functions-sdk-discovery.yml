@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -13,17 +16,21 @@ jobs:
   real-sdk-discovery:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: tools/sdk-smoke/package-lock.json
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: functions-sdk-discovery
       - name: install the real Functions SDK fixture
         run: npm ci --prefix tools/sdk-smoke --ignore-scripts
-      - name: runner discovery preserves generation and reset-value metadata
-        run: cargo test -p fireemu --test functions_discovery second_generation_omitted_concurrency_remains_defaultable -- --ignored --exact
+      - name: real SDK discovery preserves blocking records and omitted concurrency
+        run: |
+          cargo test -p fireemu --test functions_discovery blocking_identity_exports_have_a_synchronous_runner_endpoint -- --ignored --exact
+          cargo test -p fireemu --test functions_discovery second_generation_omitted_concurrency_remains_defaultable -- --ignored --exact

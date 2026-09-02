@@ -1,5 +1,5 @@
 //! Local execution backend: one `FirestoreState` per (project, database), each behind its
-//! own mutex, a shared virtual clock, strict gateway validation before every query.
+//! own read-write lock, a shared virtual clock, strict gateway validation before every query.
 //!
 //! Locking layers, outermost first:
 //!
@@ -53,14 +53,14 @@ pub const READ_TIME_RETENTION_SECONDS: i64 = 3600;
 /// it, so an operation holds this lock alone and never the catalog's.
 #[derive(Debug, Default)]
 struct DatabaseEntry {
-    cell: Mutex<DatabaseCell>,
+    cell: RwLock<DatabaseCell>,
 }
 
 impl DatabaseEntry {
     /// A fresh, attached entry holding a restored state.
     fn restored(state: FirestoreState) -> Self {
         Self {
-            cell: Mutex::new(DatabaseCell {
+            cell: RwLock::new(DatabaseCell {
                 detached: false,
                 state,
             }),
@@ -103,7 +103,7 @@ impl DatabaseHandle {
         &self,
         f: impl FnOnce(&mut FirestoreState) -> Result<T, Status>,
     ) -> Result<T, Status> {
-        let mut cell = self.0.cell.lock().map_err(|_| lock_poisoned())?;
+        let mut cell = self.0.cell.write().map_err(|_| lock_poisoned())?;
         if cell.detached {
             return Err(detached());
         }
@@ -112,20 +112,30 @@ impl DatabaseHandle {
 
     /// Reads under this database's own lock; `None` once detached or poisoned.
     fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
-        let cell = self.0.cell.lock().ok()?;
-        (!cell.detached).then(|| f(&cell.state))
+        self.read_status(|state| Ok(f(state))).ok()
+    }
+
+    fn read_status<T>(
+        &self,
+        f: impl FnOnce(&FirestoreState) -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let cell = self.0.cell.read().map_err(|_| lock_poisoned())?;
+        if cell.detached {
+            return Err(detached());
+        }
+        f(&cell.state)
     }
 
     /// Whether a reset or restore has retired this database.
     #[must_use]
     pub fn is_detached(&self) -> bool {
-        self.0.cell.lock().is_ok_and(|c| c.detached)
+        self.0.cell.read().is_ok_and(|c| c.detached)
     }
 
     /// Retires the database under its own lock: the caller has already removed it from the
     /// catalog, and this waits for whatever operation is still running inside it.
     fn detach(&self) {
-        if let Ok(mut cell) = self.0.cell.lock() {
+        if let Ok(mut cell) = self.0.cell.write() {
             cell.detached = true;
         }
     }
@@ -874,7 +884,7 @@ impl LocalBackend {
         parent: &Parent,
     ) -> Result<(CommitVersion, fireemu_core_types::time::LogicalInstant), Status> {
         let now = self.write_time();
-        self.with_db(parent, |db| Ok((db.current_version(), db.read_time(now))))
+        self.read_db(parent, |db| Ok((db.current_version(), db.read_time(now))))
     }
 
     /// Runs `f` against one consistent database snapshot and wipe generation (version,
@@ -891,7 +901,7 @@ impl LocalBackend {
         ) -> T,
     ) -> Result<T, Status> {
         let now = self.write_time();
-        self.with_db(parent, |db| {
+        self.read_db(parent, |db| {
             Ok(f(
                 db,
                 db.current_version(),
@@ -984,7 +994,7 @@ impl LocalBackend {
         parent: &Parent,
         query: &Query,
     ) -> Result<Vec<Document>, Status> {
-        self.with_db(parent, |db| {
+        self.read_db(parent, |db| {
             db.run_query(query, None).map_err(|e| status_from_error(&e))
         })
     }
@@ -1217,6 +1227,16 @@ impl LocalBackend {
         // thread is dropped here, and whatever this one stages is dropped on the way out.
         let _actor = ActorScope::enter();
         handle.with(f)
+    }
+
+    fn read_db<T>(
+        &self,
+        parent: &Parent,
+        f: impl FnOnce(&FirestoreState) -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        let _admitted = self.barrier.admit();
+        let handle = self.database_handle(parent)?;
+        handle.read_status(f)
     }
 
     fn auto_id(&self) -> String {
@@ -1521,7 +1541,7 @@ impl LocalBackend {
         parent: &Parent,
         path: &DocumentPath,
     ) -> Result<Option<Document>, Status> {
-        self.with_db(parent, |db| Ok(db.get(path).cloned()))
+        self.read_db(parent, |db| Ok(db.get(path).cloned()))
     }
 
     /// Result of `write` against the current state without publishing it.
@@ -2608,5 +2628,44 @@ fn grpc_code(name: &str) -> tonic::Code {
         "DATA_LOSS" => tonic::Code::DataLoss,
         "UNAUTHENTICATED" => tonic::Code::Unauthenticated,
         _ => tonic::Code::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn two_readers_enter_the_same_database_concurrently() {
+        let handle = DatabaseHandle(Arc::new(DatabaseEntry::restored(FirestoreState::new())));
+        let first = handle.clone();
+        let second = handle;
+        let (first_entered_tx, first_entered_rx) = mpsc::channel();
+        let (second_entered_tx, second_entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let first_thread = std::thread::spawn(move || {
+            first.read(|_| {
+                first_entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+        });
+        first_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let second_thread = std::thread::spawn(move || {
+            second.read(|_| {
+                second_entered_tx.send(()).unwrap();
+            })
+        });
+
+        let concurrent = second_entered_rx.recv_timeout(Duration::from_secs(1));
+        release_tx.send(()).unwrap();
+        assert!(first_thread.join().unwrap().is_some());
+        assert!(second_thread.join().unwrap().is_some());
+        assert!(concurrent.is_ok(), "the second reader waited for the first");
     }
 }

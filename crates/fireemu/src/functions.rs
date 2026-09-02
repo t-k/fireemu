@@ -932,12 +932,28 @@ fn package_node_engine(source: &Path) -> Result<Option<String>, String> {
 }
 
 fn push_node_candidate(out: &mut Vec<PathBuf>, candidate: PathBuf) {
-    if !candidate.is_file() {
+    if !node_candidate_is_executable(&candidate) {
         return;
     }
     let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
     if !out.contains(&canonical) {
         out.push(canonical);
+    }
+}
+
+fn node_candidate_is_executable(candidate: &Path) -> bool {
+    if !candidate.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(candidate)
+            .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        true
     }
 }
 
@@ -951,7 +967,7 @@ fn path_node_candidates(path: &std::ffi::OsStr) -> Vec<PathBuf> {
         let candidate = directory.join("node");
         #[cfg(windows)]
         let candidate = directory.join("node.exe");
-        if candidate.is_file() {
+        if node_candidate_is_executable(&candidate) {
             push_node_candidate(&mut candidates, candidate);
             break;
         }
@@ -962,7 +978,7 @@ fn path_node_candidates(path: &std::ffi::OsStr) -> Vec<PathBuf> {
 fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
     if let Some(program) = std::env::var_os("FIREEMU_NODE") {
         let program = PathBuf::from(program);
-        if !program.is_absolute() || !program.is_file() {
+        if !program.is_absolute() || !node_candidate_is_executable(&program) {
             return Err(format!(
                 "FIREEMU_NODE names {}, which is not an executable file",
                 program.display()
@@ -2043,15 +2059,20 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
+        let non_executable = root.join("non-executable/node");
         let first = root.join("first/node");
         let second = root.join("second/node");
-        for program in [&first, &second] {
+        for program in [&non_executable, &first, &second] {
             std::fs::create_dir_all(program.parent().unwrap()).unwrap();
             std::fs::write(program, "#!/bin/sh\nexit 0\n").unwrap();
+        }
+        std::fs::set_permissions(&non_executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        for program in [&first, &second] {
             std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         let path = std::env::join_paths([
             root.join("missing"),
+            non_executable.parent().unwrap().to_owned(),
             first.parent().unwrap().to_owned(),
             second.parent().unwrap().to_owned(),
         ])

@@ -47,7 +47,7 @@ fn commit(changes: Vec<DocumentChange>) -> CommitEvent {
         database: "(default)".into(),
         version: 1,
         commit_time: Some(START),
-        changes: Arc::new(changes),
+        changes: Arc::from(changes),
     }
 }
 

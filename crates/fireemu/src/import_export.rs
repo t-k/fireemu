@@ -1527,7 +1527,8 @@ fn export_auth(
     let store = endpoints.auth.default_store();
     let store = store
         .lock()
-        .map_err(|_| ArtifactError::new("auth", &section_dir, "the Auth store is poisoned"))?;
+        .map_err(|_| ArtifactError::new("auth", &section_dir, "the Auth store is poisoned"))?
+        .clone();
     let mut file = AccountsFile::default();
     for user in store.users_by_creation() {
         file.users.push(exported_account(&store, user, None));
@@ -1544,8 +1545,6 @@ fn export_auth(
     };
     write_private_file(&config_path, document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
-    drop(store);
-
     for tenant in endpoints.auth.tenants(endpoints.project) {
         let tenant_store = endpoints
             .auth
@@ -1557,13 +1556,16 @@ fn export_auth(
                     format!("tenant {tenant:?} disappeared during export"),
                 )
             })?;
-        let tenant_store = tenant_store.lock().map_err(|_| {
-            ArtifactError::new(
-                "auth",
-                &section_dir,
-                format!("tenant {tenant:?} store is poisoned"),
-            )
-        })?;
+        let tenant_store = tenant_store
+            .lock()
+            .map_err(|_| {
+                ArtifactError::new(
+                    "auth",
+                    &section_dir,
+                    format!("tenant {tenant:?} store is poisoned"),
+                )
+            })?
+            .clone();
         let mut file = AccountsFile::default();
         for user in tenant_store.users_by_creation() {
             file.users
@@ -1701,10 +1703,12 @@ fn export_storage(
     create_private_dir(&metadata_dir)
         .map_err(|e| ArtifactError::new("storage", &metadata_dir, e))?;
 
-    let store =
-        endpoints.storage.store.lock().map_err(|_| {
-            ArtifactError::new("storage", &section_dir, "the object store is poisoned")
-        })?;
+    let store = endpoints
+        .storage
+        .store
+        .lock()
+        .map_err(|_| ArtifactError::new("storage", &section_dir, "the object store is poisoned"))?
+        .capture_buckets(|_| true);
     let mut buckets: Vec<String> = store
         .buckets()
         .iter()

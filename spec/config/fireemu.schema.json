@@ -156,6 +156,7 @@
         "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
         "totp": {
           "type": "object",
+          "description": "Explicitly enables fireemu's TOTP extension. When absent, TOTP enrollment matches the official Auth emulator and is rejected.",
           "additionalProperties": false,
           "properties": {
             "periodSeconds": { "type": "integer", "minimum": 1 },

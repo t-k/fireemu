@@ -43,6 +43,8 @@ fn harness(mode: BaselineMode) -> Harness {
             TotpPolicy::default(),
         ))),
         clock,
+        wall_clock: None,
+        totp_extension_enabled: false,
         barrier: None,
         events: None,
         blocking: None,

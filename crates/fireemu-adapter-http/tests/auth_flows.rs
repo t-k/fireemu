@@ -26,6 +26,8 @@ fn state() -> AuthState {
         clock: Arc::new(Mutex::new(VirtualClock::new(
             LogicalInstant::from_unix_seconds(1_788_004_860),
         ))),
+        wall_clock: None,
+        totp_extension_enabled: false,
         barrier: None,
         events: None,
         blocking: None,

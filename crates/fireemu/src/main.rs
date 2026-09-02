@@ -57,9 +57,8 @@ use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::rules::RulesEnforcer;
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
-use fireemu_adapter_http::identity_toolkit::AuthState;
+use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
 use fireemu_core_auth::jwt::IdTokenSigner;
-use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, PlanningContext};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
@@ -1859,7 +1858,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),
-            TotpPolicy::default(),
+            cfg.auth_totp.unwrap_or_default(),
         )));
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
@@ -2073,6 +2072,8 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let auth = Arc::new(AuthState {
             store: auth_store.clone(),
             clock: clock.clone(),
+            wall_clock: (!cfg.clock_start_pinned).then(|| AuthWallClock::new(cfg.clock_start)),
+            totp_extension_enabled: cfg.auth_totp.is_some(),
             barrier: Some(barrier.clone()),
             events: functions_runtime.as_ref().map(functions::auth_sink),
             blocking: functions_runtime.as_ref().map(|runtime| {

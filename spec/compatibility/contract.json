@@ -798,7 +798,7 @@
       "claims": [
         {
           "id": "AUTH-CLAIM-IDENTITY-TOOLKIT",
-          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration.",
+          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
           "capabilities": [
             {
               "id": "AUTH-CORE-1",
@@ -813,7 +813,8 @@
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-http/tests/auth_flows.rs",
-              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "tools/sdk-smoke/auth.mjs"
             ],
             "conformance": [
               "auth/sign-up-and-sign-in-errors",
@@ -882,7 +883,7 @@
         },
         {
           "id": "AUTH-CLAIM-MFA",
-          "statement": "TOTP and SMS second factors are enrolled, signed in with and withdrawn through the Identity Platform routes the official emulator serves, with the official eligibility refusals (first factor, verified email, duplicate number) and pending-credential shape.",
+          "statement": "SMS second factors are enrolled, signed in with and withdrawn through the Identity Platform routes the official emulator serves, with the official eligibility refusals (first factor, verified email, duplicate number) and pending-credential shape. The official emulator's TOTP enrollment refusal is the default; declaring auth.totp explicitly enables fireemu's local TOTP extension.",
           "capabilities": [
             {
               "id": "AUTH-MFA-TOTP-1",
@@ -910,7 +911,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "the TOTP acceptance window and the enrolment session TTL are local policies driven by the virtual clock",
+              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal",
               "precision": "boundary-conformance"
             },
             {

@@ -1101,23 +1101,20 @@ fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> 
     }
 }
 
-fn atomic_leaf_end(leaf: &AtomicLeaf, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> {
+fn atomic_leaf_matches(leaf: &AtomicLeaf, ctx: &MatchContext<'_>, pos: usize) -> bool {
     match leaf {
         AtomicLeaf::Char(expected) => ctx
             .chars
             .get(pos)
-            .is_some_and(|actual| chars_equal(*actual, *expected, ctx.flags))
-            .then_some(pos + 1),
+            .is_some_and(|actual| chars_equal(*actual, *expected, ctx.flags)),
         AtomicLeaf::Any => ctx
             .chars
             .get(pos)
-            .is_some_and(|character| ctx.flags.dot_all || *character != '\n')
-            .then_some(pos + 1),
+            .is_some_and(|character| ctx.flags.dot_all || *character != '\n'),
         AtomicLeaf::Class { negated, items } => ctx
             .chars
             .get(pos)
-            .is_some_and(|character| class_matches(*negated, items, *character, ctx.flags))
-            .then_some(pos + 1),
+            .is_some_and(|character| class_matches(*negated, items, *character, ctx.flags)),
     }
 }
 
@@ -1186,7 +1183,7 @@ fn deterministic_end(
                                 .analysis
                                 .get(&node_key(branch))
                                 .and_then(|analysis| analysis.single_leaf.as_ref());
-                            if leaf.is_some_and(|leaf| atomic_leaf_end(leaf, ctx, end).is_some()) {
+                            if leaf.is_some_and(|leaf| atomic_leaf_matches(leaf, ctx, end)) {
                                 selected = Some(branch);
                                 break;
                             }

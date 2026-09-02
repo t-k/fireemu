@@ -348,6 +348,17 @@ fn replacement_group_reference_overflow_is_an_absent_group() {
             .unwrap(),
         "$999999999999999999999999999999"
     );
+    assert_eq!(regex.replace_all("a", "$x").unwrap(), "$x");
+}
+
+#[test]
+fn deterministic_dot_alternatives_respect_newline_mode() {
+    assert!(!Regex::new("(?:.|x)").unwrap().is_full_match("\n").unwrap());
+    assert!(Regex::new("(?s)(?:.|x)")
+        .unwrap()
+        .is_full_match("\n")
+        .unwrap());
+    assert!(Regex::new("(?:.|x)").unwrap().is_full_match("q").unwrap());
 }
 
 #[test]

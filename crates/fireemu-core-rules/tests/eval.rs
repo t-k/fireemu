@@ -794,10 +794,7 @@ service cloud.firestore {
     )
     .unwrap();
     let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
-    request.resource = Some(doc(&[(
-        "pattern",
-        RulesValue::String("a+".to_owned()),
-    )]));
+    request.resource = Some(doc(&[("pattern", RulesValue::String("a+".to_owned()))]));
 
     let first = evaluate_request(&ruleset, &request);
     assert!(matches!(first.decision, Decision::Allow), "{first:?}");

@@ -342,6 +342,8 @@ struct Evaluator<'a> {
     cause: Option<UndefinedCause>,
 }
 
+const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
+
 /// Evaluates a request against a ruleset without document access (`get()` / `exists()` are
 /// unsupported and fail closed).
 #[must_use]
@@ -377,6 +379,7 @@ pub fn evaluate_request_with(
     evaluate_with_coverage(ruleset, ctx, access, None)
 }
 
+#[allow(clippy::too_many_lines)]
 fn evaluate_with_coverage(
     ruleset: &Ruleset,
     ctx: &RequestContext,
@@ -1583,9 +1586,9 @@ impl<'a> Evaluator<'a> {
         self.regex_diagnostics.runtime_compiles =
             self.regex_diagnostics.runtime_compiles.saturating_add(1);
         let compiled = crate::regex::Regex::new(pattern).map(Arc::new);
-        const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
         if self.regex_cache.len() < DYNAMIC_REGEX_CACHE_CAPACITY {
-            self.regex_cache.insert(pattern.to_owned(), compiled.clone());
+            self.regex_cache
+                .insert(pattern.to_owned(), compiled.clone());
             self.regex_diagnostics.peak_cache_entries = self
                 .regex_diagnostics
                 .peak_cache_entries
@@ -1961,29 +1964,6 @@ fn method_call(
                 ),
                 _ => return Err(soft("split() expects a string")),
             }
-        }
-        (V::String(s), "matches") => {
-            arity(1)?;
-            let V::String(pattern) = &args[0] else {
-                return Err(soft("matches() expects a string pattern"));
-            };
-            let re = crate::regex::Regex::new(pattern).map_err(|error| {
-                EvalError::Unsupported(crate::regex::escape_diagnostic_text(&error.to_string()))
-            })?;
-            V::Bool(re.is_full_match(s).map_err(regex_runtime_error)?)
-        }
-        (V::String(s), "replace") => {
-            arity(2)?;
-            let (V::String(pattern), V::String(replacement)) = (&args[0], &args[1]) else {
-                return Err(soft("replace() expects a pattern and a replacement"));
-            };
-            let re = crate::regex::Regex::new(pattern).map_err(|error| {
-                EvalError::Unsupported(crate::regex::escape_diagnostic_text(&error.to_string()))
-            })?;
-            V::String(
-                re.replace_all(s, replacement)
-                    .map_err(regex_runtime_error)?,
-            )
         }
         (V::List(items) | V::Set(items), "size") => {
             arity(0)?;

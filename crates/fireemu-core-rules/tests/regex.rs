@@ -515,6 +515,18 @@ fn capture_snapshot_work_is_bounded_before_candidates_accumulate() {
 }
 
 #[test]
+fn matcher_uses_compile_time_structure_metadata_and_skips_group_free_capture_copies() {
+    let diagnostics = Regex::new("^(?:a|b)+$")
+        .unwrap()
+        .full_match_diagnostics("abba");
+
+    assert_eq!(diagnostics.result, Ok(true));
+    assert_eq!(diagnostics.structure_nodes_visited, 0, "{diagnostics:?}");
+    assert_eq!(diagnostics.capture_slots_copied, 0, "{diagnostics:?}");
+    assert!(diagnostics.attempted_branch_probes > 0, "{diagnostics:?}");
+}
+
+#[test]
 fn compile_nesting_preflight_ignores_escaped_and_class_parentheses() {
     assert!(Regex::new(&"\\(".repeat(20))
         .unwrap()

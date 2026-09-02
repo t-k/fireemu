@@ -18,3 +18,7 @@ fireemu-core-auth = { path = "../fireemu-core-auth" }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "regex_match"
+harness = false

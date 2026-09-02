@@ -15,6 +15,8 @@
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Compilation error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +97,10 @@ pub struct RegexMatchDiagnostics {
     pub attempted_branch_probes: u64,
     /// Attempted alternative probes that consumed a matcher step.
     pub charged_branch_probes: u64,
+    /// Matcher-time syntax-tree nodes visited to rediscover structural properties.
+    pub structure_nodes_visited: u64,
+    /// Capture slots copied while saving matcher state.
+    pub capture_slots_copied: u64,
 }
 
 /// Maximum backtracking steps per match attempt.
@@ -230,12 +236,35 @@ struct Flags {
 /// The span of each capturing group in the current match attempt, indexed 1-based.
 type Captures = Vec<Option<(usize, usize)>>;
 
+#[derive(Debug, Clone)]
+enum AtomicLeaf {
+    Char(char),
+    Any,
+    Class {
+        negated: bool,
+        items: Vec<ClassItem>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct NodeAnalysis {
+    deterministic: bool,
+    single_leaf: Option<AtomicLeaf>,
+}
+
 /// A compiled pattern.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Regex {
-    node: Node,
+    node: Arc<Node>,
+    analysis: Arc<HashMap<usize, NodeAnalysis>>,
     flags: Flags,
     groups: usize,
+}
+
+impl PartialEq for Regex {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node && self.flags == other.flags && self.groups == other.groups
+    }
 }
 
 struct Parser<'a> {
@@ -615,6 +644,74 @@ impl Parser<'_> {
     }
 }
 
+fn node_key(node: &Node) -> usize {
+    std::ptr::from_ref(node).addr()
+}
+
+fn analyze_node(node: &Node, analyses: &mut HashMap<usize, NodeAnalysis>) -> NodeAnalysis {
+    let metadata = match node {
+        Node::Char(character) => NodeAnalysis {
+            deterministic: true,
+            single_leaf: Some(AtomicLeaf::Char(*character)),
+        },
+        Node::Any => NodeAnalysis {
+            deterministic: true,
+            single_leaf: Some(AtomicLeaf::Any),
+        },
+        Node::Class { negated, items } => NodeAnalysis {
+            deterministic: true,
+            single_leaf: Some(AtomicLeaf::Class {
+                negated: *negated,
+                items: items.clone(),
+            }),
+        },
+        Node::Start | Node::End => NodeAnalysis {
+            deterministic: true,
+            single_leaf: None,
+        },
+        Node::Group(index, inner) => {
+            let inner = analyze_node(inner, analyses);
+            NodeAnalysis {
+                deterministic: inner.deterministic,
+                single_leaf: index.is_none().then_some(inner.single_leaf).flatten(),
+            }
+        }
+        Node::Seq(items) => {
+            let children = items
+                .iter()
+                .map(|item| analyze_node(item, analyses))
+                .collect::<Vec<_>>();
+            NodeAnalysis {
+                deterministic: children.iter().all(|child| child.deterministic),
+                single_leaf: match children.as_slice() {
+                    [child] => child.single_leaf.clone(),
+                    _ => None,
+                },
+            }
+        }
+        Node::Alt(branches) => {
+            let children = branches
+                .iter()
+                .map(|branch| analyze_node(branch, analyses))
+                .collect::<Vec<_>>();
+            NodeAnalysis {
+                deterministic: !children.is_empty()
+                    && children.iter().all(|child| child.single_leaf.is_some()),
+                single_leaf: None,
+            }
+        }
+        Node::Repeat { node, .. } => {
+            analyze_node(node, analyses);
+            NodeAnalysis {
+                deterministic: false,
+                single_leaf: None,
+            }
+        }
+    };
+    analyses.insert(node_key(node), metadata.clone());
+    metadata
+}
+
 impl Regex {
     /// Compiles a pattern.
     pub fn new(pattern: &str) -> Result<Self, RegexError> {
@@ -630,12 +727,15 @@ impl Regex {
             depth: 0,
             _src: pattern,
         };
-        let node = p.parse_alt()?;
+        let node = Arc::new(p.parse_alt()?);
         if p.pos < p.chars.len() {
             return Err(RegexError("unexpected )".into()));
         }
+        let mut analysis = HashMap::new();
+        analyze_node(&node, &mut analysis);
         Ok(Self {
             node,
+            analysis: Arc::new(analysis),
             flags: p.flags,
             groups: p.groups,
         })
@@ -658,7 +758,13 @@ impl Regex {
         let peak_depth = Cell::new(0);
         let attempted_branch_probes = Cell::new(0);
         let charged_branch_probes = Cell::new(0);
-        let caps = RefCell::new(vec![None; self.groups + 1]);
+        let structure_nodes_visited = Cell::new(0);
+        let capture_slots_copied = Cell::new(0);
+        let caps = RefCell::new(if self.groups == 0 {
+            Vec::new()
+        } else {
+            vec![None; self.groups + 1]
+        });
         let ctx = MatchContext {
             chars: &chars,
             steps: &steps,
@@ -666,8 +772,10 @@ impl Regex {
             peak_depth: &peak_depth,
             attempted_branch_probes: &attempted_branch_probes,
             charged_branch_probes: &charged_branch_probes,
+            capture_slots_copied: &capture_slots_copied,
             caps: &caps,
             flags: self.flags,
+            analysis: &self.analysis,
         };
         let result = match_node(&self.node, &ctx, 0, &mut |end| Ok(end == chars.len()));
         RegexMatchDiagnostics {
@@ -676,6 +784,8 @@ impl Regex {
             maximum_depth: peak_depth.get(),
             attempted_branch_probes: attempted_branch_probes.get(),
             charged_branch_probes: charged_branch_probes.get(),
+            structure_nodes_visited: structure_nodes_visited.get(),
+            capture_slots_copied: capture_slots_copied.get(),
         }
     }
 
@@ -690,8 +800,13 @@ impl Regex {
         let peak_depth = Cell::new(0);
         let attempted_branch_probes = Cell::new(0);
         let charged_branch_probes = Cell::new(0);
+        let capture_slots_copied = Cell::new(0);
         while i <= chars.len() {
-            let caps = RefCell::new(vec![None; self.groups + 1]);
+            let caps = RefCell::new(if self.groups == 0 {
+                Vec::new()
+            } else {
+                vec![None; self.groups + 1]
+            });
             let ctx = MatchContext {
                 chars: &chars,
                 steps: &steps,
@@ -699,12 +814,14 @@ impl Regex {
                 peak_depth: &peak_depth,
                 attempted_branch_probes: &attempted_branch_probes,
                 charged_branch_probes: &charged_branch_probes,
+                capture_slots_copied: &capture_slots_copied,
                 caps: &caps,
                 flags: self.flags,
+                analysis: &self.analysis,
             };
             let mut best: Option<(usize, Captures)> = None;
             let found = match_node(&self.node, &ctx, i, &mut |end| {
-                best = Some((end, caps.borrow().clone()));
+                best = Some((end, clone_current_captures(&ctx)));
                 Ok(true)
             })?;
             match (found, best) {
@@ -863,8 +980,10 @@ struct MatchContext<'a> {
     peak_depth: &'a Cell<u64>,
     attempted_branch_probes: &'a Cell<u64>,
     charged_branch_probes: &'a Cell<u64>,
+    capture_slots_copied: &'a Cell<u64>,
     caps: &'a RefCell<Captures>,
     flags: Flags,
+    analysis: &'a HashMap<usize, NodeAnalysis>,
 }
 
 type MatchResult = Result<bool, RegexRuntimeError>;
@@ -909,7 +1028,29 @@ fn charge_steps(ctx: &MatchContext<'_>, amount: u64) -> Result<(), RegexRuntimeE
 fn capture_snapshot(ctx: &MatchContext<'_>) -> Result<Captures, RegexRuntimeError> {
     let slots = u64::try_from(ctx.caps.borrow().len()).unwrap_or(u64::MAX);
     charge_steps(ctx, slots)?;
-    Ok(ctx.caps.borrow().clone())
+    Ok(clone_current_captures(ctx))
+}
+
+fn record_capture_copy(ctx: &MatchContext<'_>, slots: usize) {
+    let slots = u64::try_from(slots).unwrap_or(u64::MAX);
+    ctx.capture_slots_copied
+        .set(ctx.capture_slots_copied.get().saturating_add(slots));
+}
+
+fn clone_current_captures(ctx: &MatchContext<'_>) -> Captures {
+    let captures = ctx.caps.borrow();
+    record_capture_copy(ctx, captures.len());
+    captures.clone()
+}
+
+fn clone_captures(ctx: &MatchContext<'_>, captures: &Captures) -> Captures {
+    record_capture_copy(ctx, captures.len());
+    captures.clone()
+}
+
+fn restore_captures(ctx: &MatchContext<'_>, captures: &Captures) {
+    record_capture_copy(ctx, captures.len());
+    ctx.caps.borrow_mut().clone_from(captures);
 }
 
 fn class_matches(negated: bool, items: &[ClassItem], c: char, flags: Flags) -> bool {
@@ -960,41 +1101,30 @@ fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> 
     }
 }
 
-fn single_character_leaf(node: &Node) -> Option<&Node> {
-    match node {
-        Node::Char(_) | Node::Any | Node::Class { .. } => Some(node),
-        Node::Seq(items) if items.len() == 1 => single_character_leaf(&items[0]),
-        Node::Group(None, inner) => single_character_leaf(inner),
-        Node::Seq(_)
-        | Node::Group(Some(_), _)
-        | Node::Start
-        | Node::End
-        | Node::Alt(_)
-        | Node::Repeat { .. } => None,
+fn atomic_leaf_end(leaf: &AtomicLeaf, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> {
+    match leaf {
+        AtomicLeaf::Char(expected) => ctx
+            .chars
+            .get(pos)
+            .is_some_and(|actual| chars_equal(*actual, *expected, ctx.flags))
+            .then_some(pos + 1),
+        AtomicLeaf::Any => ctx
+            .chars
+            .get(pos)
+            .is_some_and(|character| ctx.flags.dot_all || *character != '\n')
+            .then_some(pos + 1),
+        AtomicLeaf::Class { negated, items } => ctx
+            .chars
+            .get(pos)
+            .is_some_and(|character| class_matches(*negated, items, *character, ctx.flags))
+            .then_some(pos + 1),
     }
 }
 
-fn has_single_character_branches(branches: &[Node]) -> bool {
-    !branches.is_empty()
-        && branches
-            .iter()
-            .all(|branch| single_character_leaf(branch).is_some())
-}
-
-fn is_deterministic(node: &Node, _flags: Flags) -> bool {
-    let mut pending = vec![node];
-    while let Some(node) = pending.pop() {
-        match node {
-            Node::Char(_) | Node::Any | Node::Class { .. } | Node::Start | Node::End => {}
-            Node::Group(_, inner) => pending.push(inner),
-            Node::Seq(items) => pending.extend(items),
-            Node::Alt(branches) if has_single_character_branches(branches) => {
-                pending.extend(branches);
-            }
-            Node::Alt(_) | Node::Repeat { .. } => return false,
-        }
-    }
-    true
+fn is_precomputed_deterministic(node: &Node, ctx: &MatchContext<'_>) -> bool {
+    ctx.analysis
+        .get(&node_key(node))
+        .is_some_and(|analysis| analysis.deterministic)
 }
 
 enum DeterministicTask<'a> {
@@ -1007,7 +1137,7 @@ fn deterministic_end(
     ctx: &MatchContext<'_>,
     pos: usize,
 ) -> Result<Option<usize>, RegexRuntimeError> {
-    let original_captures = ctx.caps.borrow().clone();
+    let original_captures = clone_current_captures(ctx);
     let mut end = pos;
     let mut pending = vec![DeterministicTask::Match(node)];
     while let Some(task) = pending.pop() {
@@ -1052,9 +1182,11 @@ fn deterministic_end(
                                     .set(ctx.charged_branch_probes.get().saturating_add(1));
                             }
                             charge?;
-                            let leaf = single_character_leaf(branch)
-                                .expect("deterministic alternatives have one-character branches");
-                            if atomic_end(leaf, ctx, end).is_some() {
+                            let leaf = ctx
+                                .analysis
+                                .get(&node_key(branch))
+                                .and_then(|analysis| analysis.single_leaf.as_ref());
+                            if leaf.is_some_and(|leaf| atomic_leaf_end(leaf, ctx, end).is_some()) {
                                 selected = Some(branch);
                                 break;
                             }
@@ -1089,8 +1221,8 @@ fn match_node(
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
-    if is_deterministic(node, ctx.flags) {
-        let original_captures = ctx.caps.borrow().clone();
+    if is_precomputed_deterministic(node, ctx) {
+        let original_captures = clone_current_captures(ctx);
         let end = match deterministic_end(node, ctx, pos) {
             Ok(Some(end)) => end,
             Ok(None) => return Ok(false),
@@ -1154,11 +1286,11 @@ fn match_seq(
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
-    let original_captures = ctx.caps.borrow().clone();
+    let original_captures = clone_current_captures(ctx);
     let mut remaining = items;
     let mut end = pos;
     while let Some((first, rest)) = remaining.split_first() {
-        if !is_deterministic(first, ctx.flags) {
+        if !is_precomputed_deterministic(first, ctx) {
             break;
         }
         let next = match deterministic_end(first, ctx, end) {
@@ -1199,7 +1331,7 @@ fn match_repeat(
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
-    if is_deterministic(node, ctx.flags) {
+    if is_precomputed_deterministic(node, ctx) {
         charge_step(ctx)?;
         return match_deterministic_repeat(node, min, max, greedy, ctx, pos, count, k);
     }
@@ -1223,7 +1355,7 @@ fn repeat_candidates(
     ctx: &MatchContext<'_>,
     pos: usize,
 ) -> Result<Vec<(usize, Captures)>, RegexRuntimeError> {
-    let original_captures = ctx.caps.borrow().clone();
+    let original_captures = clone_current_captures(ctx);
     let mut candidates = Vec::new();
     let result = match_node(node, ctx, pos, &mut |end| {
         if end > pos {
@@ -1247,11 +1379,11 @@ fn match_backtracking_repeat(
     count: usize,
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
-    let original_captures = ctx.caps.borrow().clone();
+    let original_captures = clone_current_captures(ctx);
     let mut tasks = vec![RepeatTask::Explore {
         pos,
         count,
-        captures: original_captures.clone(),
+        captures: clone_captures(ctx, &original_captures),
     }];
 
     while let Some(task) = tasks.pop() {
@@ -1272,7 +1404,7 @@ fn match_backtracking_repeat(
                 count,
                 captures,
             } => {
-                ctx.caps.borrow_mut().clone_from(&captures);
+                restore_captures(ctx, &captures);
                 if let Err(error) = charge_step(ctx) {
                     *ctx.caps.borrow_mut() = original_captures;
                     return Err(error);
@@ -1283,7 +1415,7 @@ fn match_backtracking_repeat(
                 if !greedy && can_stop {
                     match k(pos) {
                         Ok(true) => return Ok(true),
-                        Ok(false) => ctx.caps.borrow_mut().clone_from(&captures),
+                        Ok(false) => restore_captures(ctx, &captures),
                         Err(error) => {
                             *ctx.caps.borrow_mut() = original_captures;
                             return Err(error);
@@ -1294,7 +1426,7 @@ fn match_backtracking_repeat(
                 if greedy && can_stop {
                     tasks.push(RepeatTask::Stop {
                         pos,
-                        captures: captures.clone(),
+                        captures: clone_captures(ctx, &captures),
                     });
                 }
                 if !can_more {
@@ -1334,12 +1466,12 @@ fn match_deterministic_repeat(
     count: usize,
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
-    let original_captures = ctx.caps.borrow().clone();
+    let original_captures = clone_current_captures(ctx);
     if !greedy {
         let mut end = pos;
         let mut current_count = count;
         loop {
-            let candidate_captures = ctx.caps.borrow().clone();
+            let candidate_captures = clone_current_captures(ctx);
             if current_count >= min {
                 match k(end) {
                     Ok(true) => return Ok(true),
@@ -1363,7 +1495,7 @@ fn match_deterministic_repeat(
         return Ok(false);
     }
 
-    let mut candidates = vec![(pos, original_captures.clone())];
+    let mut candidates = vec![(pos, clone_captures(ctx, &original_captures))];
     while max.is_none_or(|maximum| count + candidates.len() - 1 < maximum) {
         let current = candidates.last().map_or(pos, |(end, _)| *end);
         let Some(end) = deterministic_end(node, ctx, current)? else {

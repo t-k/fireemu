@@ -1304,10 +1304,13 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 .map_err(|e| format!("bind {addr}: {e}"))
         }
     };
-    // Bind an explicitly requested Hub address before any port-zero listeners. Apart from
-    // reporting configuration errors sooner, this closes the handoff race used by launchers
-    // that probe a free port and immediately start the suite.
-    let hub = hub::bind(&cfg.hub_addr, cfg.hub_addr_explicit).await?;
+    // An explicit Hub address wins over every port-zero listener. The default remains late
+    // and best effort: a selected product configured on 4400 must win and disable discovery.
+    let prebound_hub = if cfg.hub_addr_explicit {
+        hub::bind(&cfg.hub_addr, true).await?
+    } else {
+        None
+    };
     let firestore = if only.firestore {
         Some(bind(&cfg.firestore_addr).await?)
     } else {
@@ -1335,6 +1338,11 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         Some(bind(&cfg.pubsub_addr).await?)
     } else {
         None
+    };
+    let hub = if cfg.hub_addr_explicit {
+        prebound_hub
+    } else {
+        hub::bind(&cfg.hub_addr, false).await?
     };
     // The Logging emulator is not a `--only` service (the official suite configures it through
     // `emulators.logging`), so it is bound on every run unless it was turned off. Best effort
@@ -2479,6 +2487,35 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn a_selected_product_wins_a_port_shared_with_the_default_hub() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap().to_string();
+        drop(probe);
+
+        let cfg = RuntimeConfig {
+            firestore_addr: addr.clone(),
+            hub_addr: addr,
+            hub_addr_explicit: false,
+            logging_enabled: false,
+            ..RuntimeConfig::default()
+        };
+        let only = Selection {
+            firestore: true,
+            auth: false,
+            storage: false,
+            functions: false,
+            pubsub: false,
+            appcheck: false,
+            explicit: true,
+            functions_codebase: None,
+        };
+
+        let listeners = bind_listeners(&cfg, &only).await.unwrap();
+        assert!(listeners.firestore.is_some());
+        assert!(listeners.hub.is_none());
     }
 
     #[tokio::test]

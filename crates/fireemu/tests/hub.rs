@@ -8,8 +8,8 @@
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const STARTUP_TRANSCRIPT_LIMIT: usize = 32 * 1024;
@@ -36,15 +36,7 @@ fn drain_startup_pipe<R: std::io::BufRead>(reader: R, transcript: &Mutex<String>
     }
 }
 
-static HUB_TESTS: Mutex<()> = Mutex::new(());
-
-fn hub_test_guard() -> MutexGuard<'static, ()> {
-    HUB_TESTS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// A port nothing is listening on, released while this process runs one Hub scenario.
+/// A port nothing is listening on at the time of the probe.
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
@@ -99,6 +91,19 @@ fn request_with_headers(
     (status, head.to_owned(), body.to_owned())
 }
 
+fn complete_http_response(raw: &str) -> bool {
+    let Some((head, body)) = raw.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let content_length = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())
+            .flatten()
+    });
+    content_length.is_some_and(|length| body.len() >= length)
+}
+
 fn json(port: u16, method: &str, path: &str) -> serde_json::Value {
     let (status, body) = request(port, method, path, "127.0.0.1");
     assert_eq!(status, 200, "{method} {path} -> {body}");
@@ -112,9 +117,57 @@ struct Daemon {
     hub_port: u16,
 }
 
+struct StartupFailure {
+    reason: String,
+    pid: u32,
+    status: Option<ExitStatus>,
+    stdout: String,
+    stderr: String,
+}
+
+impl StartupFailure {
+    fn is_address_in_use(&self) -> bool {
+        self.stderr.contains("Address already in use")
+    }
+
+    fn report(&self) -> String {
+        let Self {
+            reason,
+            pid,
+            status,
+            stdout,
+            stderr,
+        } = self;
+        format!(
+            "the daemon became ready: {reason}; pid={pid}; status={status:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        )
+    }
+}
+
 impl Daemon {
     fn start(project: &str, extra: &[&str]) -> Self {
-        let hub_port = free_port();
+        const MAX_BIND_ATTEMPTS: usize = 8;
+
+        let mut last_collision = None;
+        for attempt in 0..MAX_BIND_ATTEMPTS {
+            let hub_port = free_port();
+            match Self::start_once(project, hub_port, extra) {
+                Ok(daemon) => return daemon,
+                Err(failure) if failure.is_address_in_use() && attempt + 1 < MAX_BIND_ATTEMPTS => {
+                    last_collision = Some(failure);
+                }
+                Err(failure) => panic!("{}", failure.report()),
+            }
+        }
+        panic!(
+            "{}",
+            last_collision
+                .expect("a failed bind attempt was recorded")
+                .report()
+        );
+    }
+
+    fn start_once(project: &str, hub_port: u16, extra: &[&str]) -> Result<Self, StartupFailure> {
         let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args([
                 "up",
@@ -195,15 +248,19 @@ impl Daemon {
             let _ = stderr_thread.join();
             let stdout = stdout_transcript.lock().unwrap().clone();
             let stderr = stderr_transcript.lock().unwrap().clone();
-            panic!(
-                "the daemon became ready: {reason}; pid={pid}; status={status:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            );
+            return Err(StartupFailure {
+                reason,
+                pid,
+                status,
+                stdout,
+                stderr,
+            });
         }
-        Self {
+        Ok(Self {
             child,
             project: project.to_owned(),
             hub_port,
-        }
+        })
     }
 
     fn hub_port(&self) -> u16 {
@@ -237,7 +294,6 @@ impl Drop for Daemon {
 
 #[test]
 fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
-    let _scenario = hub_test_guard();
     let daemon = Daemon::start("demo-hub-shape", &[]);
     let port = daemon.hub_port();
     let emulators = json(port, "GET", "/emulators");
@@ -321,7 +377,6 @@ fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
 
 #[test]
 fn the_locator_file_is_written_at_start_and_removed_at_exit() {
-    let _scenario = hub_test_guard();
     let daemon = Daemon::start("demo-hub-locator", &[]);
     let port = daemon.hub_port();
     let path = daemon.locator();
@@ -362,7 +417,6 @@ fn the_locator_file_is_written_at_start_and_removed_at_exit() {
 fn the_hub_discovery_file_never_follows_a_symlink() {
     use std::os::unix::fs::symlink;
 
-    let _scenario = hub_test_guard();
     let project = format!("demo-hub-symlink-{}", std::process::id());
     let path = std::env::temp_dir().join(format!("hub-{project}.json"));
     let target = scratch("locator-symlink-target").join("target.txt");
@@ -385,7 +439,6 @@ fn the_hub_discovery_file_never_follows_a_symlink() {
 
 #[test]
 fn a_daemon_that_could_not_bind_the_hub_serves_the_suite_anyway() {
-    let _scenario = hub_test_guard();
     // The default Hub port is best effort, exactly like the UI's: a busy one disables
     // discovery and nothing else. An explicit one that cannot be bound is an error.
     let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -421,7 +474,6 @@ fn a_daemon_that_could_not_bind_the_hub_serves_the_suite_anyway() {
 
 #[test]
 fn the_hub_switches_background_triggers_and_says_so() {
-    let _scenario = hub_test_guard();
     // No functions codebase is loaded, so the switch has nothing to act on and says that
     // rather than reporting a state it did not reach.
     let daemon = Daemon::start("demo-hub-triggers", &[]);
@@ -531,7 +583,6 @@ fn assert_hub_preflight_admitted(port: u16, path: &str, local_origin: &str) {
 
 #[test]
 fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
-    let _scenario = hub_test_guard();
     let daemon = Daemon::start("demo-hub-mutation-security", &[]);
     let port = daemon.hub_port();
     let token = daemon.control_token();
@@ -617,33 +668,39 @@ fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
 
 #[test]
 fn exec_exports_the_hub_address_to_its_command() {
-    let _scenario = hub_test_guard();
     let dir = scratch("env");
     let out = dir.join("env.txt");
-    let port = free_port();
-    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
-        .args([
-            "exec",
-            "--firestore-port",
-            "0",
-            "--http-port",
-            "0",
-            "--storage-port",
-            "0",
-            "--logging-port",
-            "0",
-            "--ui-port",
-            "0",
-            "--project",
-            "demo-hub-env",
-            "--hub-port",
-        ])
-        .arg(port.to_string())
-        .args(["--", "sh", "-c"])
-        .arg(format!("env > {}", out.display()))
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let (port, output) = (0..8)
+        .find_map(|attempt| {
+            let port = free_port();
+            let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+                .args([
+                    "exec",
+                    "--firestore-port",
+                    "0",
+                    "--http-port",
+                    "0",
+                    "--storage-port",
+                    "0",
+                    "--logging-port",
+                    "0",
+                    "--ui-port",
+                    "0",
+                    "--project",
+                    "demo-hub-env",
+                    "--hub-port",
+                ])
+                .arg(port.to_string())
+                .args(["--", "sh", "-c"])
+                .arg(format!("env > {}", out.display()))
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let collision =
+                String::from_utf8_lossy(&output.stderr).contains("Address already in use");
+            (output.status.success() || !collision || attempt == 7).then_some((port, output))
+        })
+        .expect("one bounded Hub bind attempt completes");
     assert!(
         output.status.success(),
         "{}",
@@ -666,7 +723,6 @@ fn exec_exports_the_hub_address_to_its_command() {
 
 #[test]
 fn turning_the_hub_off_leaves_no_listener_and_no_variable() {
-    let _scenario = hub_test_guard();
     let dir = scratch("off");
     let out = dir.join("env.txt");
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
@@ -716,7 +772,6 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     use std::net::TcpStream;
     use std::time::Duration;
 
-    let _scenario = hub_test_guard();
     let dir = std::env::temp_dir().join(format!("fireemu-hub-export-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let daemon = Daemon::start("demo-hub-export", &[]);
@@ -744,12 +799,22 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
         )
         .unwrap();
         let mut raw = String::new();
-        stream.read_to_string(&mut raw).unwrap();
-        raw.lines()
+        let read = stream.read_to_string(&mut raw);
+        let status = raw
+            .lines()
             .next()
             .and_then(|l| l.split_whitespace().nth(1))
             .and_then(|c| c.parse().ok())
-            .unwrap_or(0)
+            .unwrap_or(0);
+        if let Err(error) = read {
+            assert!(
+                error.kind() == std::io::ErrorKind::ConnectionReset
+                    && status != 0
+                    && complete_http_response(&raw),
+                "the Hub response failed before it was complete: {error}; {raw}"
+            );
+        }
+        status
     };
     // A page (any Origin, loopback included) is refused and writes nothing.
     let bearer = format!("Bearer {token}");

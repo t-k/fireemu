@@ -98,7 +98,7 @@ struct ActiveRules {
     loaded: Arc<LoadedRules>,
 }
 
-/// One immutable ruleset generation retained by an admitted evaluation.
+/// One immutable ruleset generation retained by an admitted authorization evaluation.
 #[derive(Clone, Debug)]
 pub struct RulesetSnapshot(Arc<ActiveRules>);
 
@@ -124,7 +124,7 @@ impl Deref for RulesetSnapshot {
     }
 }
 
-/// Atomically published rulesets with immutable request snapshots.
+/// Atomically published rulesets with immutable authorization-evaluation snapshots.
 #[derive(Debug)]
 pub struct RulesetSlot {
     active: RwLock<Arc<ActiveRules>>,

@@ -83,83 +83,85 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it.
 
 
-## Documented divergences (38)
+## Documented divergences (39)
 
-- `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.  
+- `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
-- `appcheck/enforced-header-matrix#firestore-rest-valid-token` -- Both sides admit, but the oracle admits because it never looked and cannot present a token; the row is marked `noTokenIssuedBySide` so the agreement is not read as parity.  
+- `appcheck/enforced-header-matrix#firestore-rest-valid-token` -- Both sides admit, but the oracle admits because it never looked and cannot present a token; the row is marked `noTokenIssuedBySide` so the agreement is not read as parity.
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/enforced-header-matrix#firestore-rest-unverifiable-token` -- Same: no enforcement on the oracle; 403 PERMISSION_DENIED on fireemu.  
+- `appcheck/enforced-header-matrix#firestore-rest-unverifiable-token` -- Same: no enforcement on the oracle; 403 PERMISSION_DENIED on fireemu.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
-- `appcheck/enforced-header-matrix#firestore-rest-duplicate-fields` -- Same: no enforcement on the oracle; fireemu treats duplicate fields as malformed and denies.  
+- `appcheck/enforced-header-matrix#firestore-rest-duplicate-fields` -- Same: no enforcement on the oracle; fireemu treats duplicate fields as malformed and denies.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/enforced-header-matrix#auth-signup-no-app-check-field` -- No enforcement on the oracle; fireemu denies the end-user Identity Toolkit route with 403 and consumes no credential.  
+- `appcheck/enforced-header-matrix#auth-signup-no-app-check-field` -- No enforcement on the oracle; fireemu denies the end-user Identity Toolkit route with 403 and consumes no credential.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.3
-- `appcheck/enforced-header-matrix#auth-signup-valid-token` -- Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.  
+- `appcheck/enforced-header-matrix#auth-signup-valid-token` -- Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/enforced-header-matrix#auth-signup-unverifiable-token` -- Same as the missing-field row.  
+- `appcheck/enforced-header-matrix#auth-signup-unverifiable-token` -- Same as the missing-field row.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.3
-- `appcheck/enforced-header-matrix#auth-signup-duplicate-fields` -- Same as the missing-field row, for an ambiguous duplicate field.  
+- `appcheck/enforced-header-matrix#auth-signup-duplicate-fields` -- Same as the missing-field row, for an ambiguous duplicate field.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/enforced-header-matrix#storage-metadata-no-app-check-field` -- No enforcement on the oracle; fireemu denies the Firebase Storage dialect with the 403 Storage JSON error envelope.  
+- `appcheck/enforced-header-matrix#storage-metadata-no-app-check-field` -- No enforcement on the oracle; fireemu denies the Firebase Storage dialect with the 403 Storage JSON error envelope.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.2
-- `appcheck/enforced-header-matrix#storage-metadata-valid-token` -- Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.  
+- `appcheck/enforced-header-matrix#storage-metadata-valid-token` -- Both admit; the oracle only because it never looked. Marked `noTokenIssuedBySide`.
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/enforced-header-matrix#storage-metadata-unverifiable-token` -- Same as the missing-field row.  
+- `appcheck/enforced-header-matrix#storage-metadata-unverifiable-token` -- Same as the missing-field row.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.2
-- `appcheck/enforced-header-matrix#storage-metadata-duplicate-fields` -- Same as the missing-field row, for an ambiguous duplicate field.  
+- `appcheck/enforced-header-matrix#storage-metadata-duplicate-fields` -- Same as the missing-field row, for an ambiguous duplicate field.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/enforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401; fireemu presents a verified token and the handler runs with request.app.  
+- `appcheck/enforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401; fireemu presents a verified token and the handler runs with request.app.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)
-- `appcheck/enforced-header-matrix#callable-enforcing-unverifiable-token` -- The official Functions emulator skips token verification and admits an unverifiable token; fireemu refuses it with the callable 401 envelope before the handler runs.  
+- `appcheck/enforced-header-matrix#callable-enforcing-unverifiable-token` -- The official Functions emulator skips token verification and admits an unverifiable token; fireemu refuses it with the callable 401 envelope before the handler runs.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/enforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate fields are admitted by the official emulator and refused by fireemu.  
+- `appcheck/enforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate fields are admitted by the official emulator and refused by fireemu.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/exchange-and-jwks#exchange-a-registered-debug-secret` -- The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. fireemu issues a locally signed token for a registered debug secret.  
+- `appcheck/exchange-and-jwks#exchange-a-registered-debug-secret` -- The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. fireemu issues a locally signed token for a registered debug secret.
   documented in: capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.1
-- `appcheck/exchange-and-jwks#exchange-an-unknown-secret` -- No route on the oracle (404) against the specified 403 PERMISSION_DENIED "App attestation failed." that fireemu returns for an unknown project, app, disabled app or secret alike.  
+- `appcheck/exchange-and-jwks#exchange-an-unknown-secret` -- No route on the oracle (404) against the specified 403 PERMISSION_DENIED "App attestation failed." that fireemu returns for an unknown project, app, disabled app or secret alike.
   documented in: capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 17
-- `appcheck/exchange-and-jwks#exchange-a-limited-use-token` -- No route on the oracle (404). fireemu fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request.  
+- `appcheck/exchange-and-jwks#exchange-a-limited-use-token` -- No route on the oracle (404). fireemu fails closed with 501 UNIMPLEMENTED / APP_CHECK_REPLAY_UNSUPPORTED rather than issuing a reusable token for a limited-use request.
   documented in: capability manifest APPCHECK-REPLAY-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 17 and 23
-- `appcheck/exchange-and-jwks#jwks` -- The official suite serves no JWKS route (404). fireemu publishes this instance's single public App Check key as an RFC 7517 JWK Set.  
+- `appcheck/exchange-and-jwks#jwks` -- The official suite serves no JWKS route (404). fireemu publishes this instance's single public App Check key as an RFC 7517 JWK Set.
   documented in: capability manifest APPCHECK-JWKS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.2
-- `appcheck/unenforced-header-matrix#firestore-rest-valid-token` -- The oracle issues no App Check token, so it cannot run the valid-token column at all; the row records the same request without the field and marks itself `noTokenIssuedBySide`.  
+- `appcheck/unenforced-header-matrix#firestore-rest-valid-token` -- The oracle issues no App Check token, so it cannot run the valid-token column at all; the row records the same request without the field and marks itself `noTokenIssuedBySide`.
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/unenforced-header-matrix#auth-signup-valid-token` -- The oracle issues no App Check token; see the Firestore row.  
+- `appcheck/unenforced-header-matrix#auth-signup-valid-token` -- The oracle issues no App Check token; see the Firestore row.
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/unenforced-header-matrix#storage-metadata-valid-token` -- The oracle issues no App Check token; see the Firestore row.  
+- `appcheck/unenforced-header-matrix#storage-metadata-valid-token` -- The oracle issues no App Check token; see the Firestore row.
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `appcheck/unenforced-header-matrix#callable-unenforcing-valid-token` -- The oracle issues no token, so its callable sees no app. fireemu forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable.  
+- `appcheck/unenforced-header-matrix#callable-unenforcing-valid-token` -- The oracle issues no token, so its callable sees no app. fireemu forwards the verified token and the callable receives request.app with the registered app id, which is what section 13.4 requires of an unenforcing callable.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/unenforced-header-matrix#callable-unenforcing-unverifiable-token` -- The official Functions emulator runs the runtime with token verification skipped, so any value in the field becomes an app with a null id. fireemu removes an unverifiable field before the runner can decode it, so the callable sees no app: strictly safer, and deliberately different.  
+- `appcheck/unenforced-header-matrix#callable-unenforcing-unverifiable-token` -- The official Functions emulator runs the runtime with token verification skipped, so any value in the field becomes an app with a null id. fireemu removes an unverifiable field before the runner can decode it, so the callable sees no app: strictly safer, and deliberately different.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/unenforced-header-matrix#callable-unenforcing-duplicate-fields` -- Two App Check fields are ambiguous. The official emulator accepts the folded value as an app; fireemu classifies it as malformed and removes it.  
+- `appcheck/unenforced-header-matrix#callable-unenforcing-duplicate-fields` -- Two App Check fields are ambiguous. The official emulator accepts the folded value as an app; fireemu classifies it as malformed and removes it.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/unenforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401. fireemu presents a verified token and the callable runs with request.app populated.  
+- `appcheck/unenforced-header-matrix#callable-enforcing-valid-token` -- The oracle issues no token, so its enforcing callable answers 401. fireemu presents a verified token and the callable runs with request.app populated.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs)
-- `appcheck/unenforced-header-matrix#callable-enforcing-unverifiable-token` -- With verification skipped, the official emulator admits an unverifiable token into an enforceAppCheck callable. fireemu refuses it with the callable 401 UNAUTHENTICATED envelope before the handler runs.  
+- `appcheck/unenforced-header-matrix#callable-enforcing-unverifiable-token` -- With verification skipped, the official emulator admits an unverifiable token into an enforceAppCheck callable. fireemu refuses it with the callable 401 UNAUTHENTICATED envelope before the handler runs.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 13.4
-- `appcheck/unenforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate App Check fields are admitted by the official emulator and refused by fireemu, for the same reason as the unenforcing row.  
+- `appcheck/unenforced-header-matrix#callable-enforcing-duplicate-fields` -- Duplicate App Check fields are admitted by the official emulator and refused by fireemu, for the same reason as the unenforcing row.
   documented in: capability manifest APPCHECK-FUNCTIONS-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 7.3
-- `appcheck/unenforced-header-matrix#on-request-valid-token` -- The oracle issues no token, so it sends no field and its onRequest handler counts zero. Both sides pass the raw field list through unclassified, which is what the row is about.  
+- `appcheck/unenforced-header-matrix#on-request-valid-token` -- The oracle issues no token, so it sends no field and its onRequest handler counts zero. Both sides pass the raw field list through unclassified, which is what the row is about.
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
-- `firestore/lite-rest-transport#query-needing-a-composite-index` -- The same policy difference over the REST transport, where the SDK surfaces it as `failed-precondition`.  
+- `firestore/lite-rest-transport#query-needing-a-composite-index` -- The same policy difference over the REST transport, where the SDK surfaces it as `failed-precondition`.
   documented in: README.md, "Composite indexes"
-- `firestore/missing-composite-index#admin-two-equality-filters` -- Under firestore.indexValidationPolicy = firebase, a query whose composite index is not in the index file is refused with FAILED_PRECONDITION and the fragment production would need. The official Firestore emulator serves the query as if the index existed; fireemu offers that as the `emulator` policy instead of as the default.  
+- `firestore/missing-composite-index#admin-two-equality-filters` -- Under firestore.indexValidationPolicy = firebase, a query whose composite index is not in the index file is refused with FAILED_PRECONDITION and the fragment production would need. The official Firestore emulator serves the query as if the index existed; fireemu offers that as the `emulator` policy instead of as the default.
   documented in: README.md, "Composite indexes"
-- `firestore/missing-composite-index#admin-equality-plus-inequality` -- Same policy difference for an equality plus an inequality on another field.  
+- `firestore/missing-composite-index#admin-equality-plus-inequality` -- Same policy difference for an equality plus an inequality on another field.
   documented in: README.md, "Composite indexes"
-- `firestore/missing-composite-index#client-two-equality-filters` -- The same refusal reaches the gRPC client SDK: the target is removed with FAILED_PRECONDITION and the query resolves empty rather than failing the whole stream, so the client stays usable.  
+- `firestore/missing-composite-index#client-two-equality-filters` -- The same refusal reaches the gRPC client SDK: the target is removed with FAILED_PRECONDITION and the query resolves empty rather than failing the whole stream, so the client stays usable.
   documented in: README.md, "Composite indexes"
-- `firestore/rest-error-shapes#runQuery-needing-a-composite-index` -- The REST envelope of the same refusal: HTTP 400 FAILED_PRECONDITION with the index fragment, where the official emulator answers 200 with results.  
+- `firestore/rest-error-shapes#runQuery-needing-a-composite-index` -- The REST envelope of the same refusal: HTTP 400 FAILED_PRECONDITION with the index fragment, where the official emulator answers 200 with results.
   documented in: README.md, "Composite indexes"
-- `functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity` -- The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all.  
+- `functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity` -- The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all.
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
-- `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity.  
+- `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity.
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
-- `functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin` -- The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={"skipTokenVerification":true,"enableCors":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 "forbidden origin" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend.  
+- `functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-loopback-origin` -- The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse.
+  documented in: capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)
+- `functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin` -- The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={"skipTokenVerification":true,"enableCors":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 "forbidden origin" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend.
   documented in: README.md, "Functions"
-- `functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable` -- The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected.  
+- `functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable` -- The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected.
   documented in: README.md, "Functions"
 
 ## Standing proposal: precision of the App Check boundary rows

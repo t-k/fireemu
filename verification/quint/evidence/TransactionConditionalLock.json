@@ -1,10 +1,10 @@
 {
   "schemaVersion": 3,
-  "model": "RulesetActivation",
-  "spec": "specs/RulesetActivation.qnt",
-  "main": "RulesetActivationProof",
-  "config": "configs/RulesetActivation.json",
-  "mutationManifest": "mutations/RulesetActivation.json",
+  "model": "TransactionConditionalLock",
+  "spec": "specs/TransactionConditionalLock.qnt",
+  "main": "TransactionConditionalLockProof",
+  "config": "configs/TransactionConditionalLock.json",
+  "mutationManifest": "mutations/TransactionConditionalLock.json",
   "tools": {
     "quint": "0.32.0",
     "quintConnect": "0.1.2",
@@ -17,16 +17,18 @@
     "backend": "tlc"
   },
   "bounds": {
-    "Evaluations": "{r1,r2}",
-    "Versions": "{v1,v2}"
+    "Clients": "{c1,c2}"
   },
   "boundInputs": [
     ".github/workflows/ci.yml",
     "Cargo.lock",
     "Cargo.toml",
-    "crates/fireemu-adapter-grpc/tests/rules.rs",
-    "crates/fireemu-core-rules/src/runtime.rs",
-    "crates/fireemu-core-rules/tests/activation.rs",
+    "conformance/fixtures/firestore/transaction-read-set-abort.json",
+    "conformance/fixtures/functions/concurrent-conditional-lock.json",
+    "conformance/functions/index.js",
+    "conformance/src/corpus/firestore.mjs",
+    "conformance/src/corpus/functions.mjs",
+    "crates/fireemu-core-firestore/src/store.rs",
     "verification/quint/Cargo.toml",
     "verification/quint/README.md",
     "verification/quint/apalache.lock.json",
@@ -34,30 +36,33 @@
     "verification/quint/bin/install-apalache",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
-    "verification/quint/configs/RulesetActivation.json",
-    "verification/quint/mutations/RulesetActivation.json",
+    "verification/quint/configs/TransactionConditionalLock.json",
+    "verification/quint/mutations/TransactionConditionalLock.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-verification.sh",
-    "verification/quint/specs/RulesetActivation.qnt",
+    "verification/quint/specs/TransactionConditionalLock.qnt",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
-    "verification/quint/src/ruleset_activation.rs",
+    "verification/quint/src/transaction_conditional_lock.rs",
     "verification/quint/tests/cli_contract.rs",
     "verification/quint/tests/evidence_contract.rs",
     "verification/quint/tests/model_registry.rs",
-    "verification/quint/tests/ruleset_activation_connect.rs"
+    "verification/quint/tests/transaction_conditional_lock_connect.rs"
   ],
   "digests": {
     ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
     "Cargo.lock": "15e11f752c34b411232a7706a8a58ec40ddb4664cda72fc59476fed24f30a265",
     "Cargo.toml": "58e5be6aa303158de17183219fd293d24c7d261543ef33db2f9bc324cfde8245",
-    "crates/fireemu-adapter-grpc/tests/rules.rs": "4e0bcce987a2085dcc1e12671394879c109859509688722dbfb3a84acf7090e0",
-    "crates/fireemu-core-rules/src/runtime.rs": "6396c578613da6ceb70e56fa281ee48efe817416792024bb9ee58d1f3eddc25b",
-    "crates/fireemu-core-rules/tests/activation.rs": "5209b04e5c911cd326cdc2a76d2c43fe60cabe0475959bb3acff863d552ec202",
+    "conformance/fixtures/firestore/transaction-read-set-abort.json": "d04ff10ca155a770c02b5a2c8ee78b21f44a83aa2c206168e01d13998ce53536",
+    "conformance/fixtures/functions/concurrent-conditional-lock.json": "5fab49ede191c66808eccb7c3f46fa616e5db23884c6f4f8e8d1fa0640fb2759",
+    "conformance/functions/index.js": "5131d917e57e6fed4702e79169a91c09f49cbd875324274ebe00ca18d76c4b98",
+    "conformance/src/corpus/firestore.mjs": "11d359a57a3c716989845399663a30c2d1c61d3add71fdc3748d6ac53777ea76",
+    "conformance/src/corpus/functions.mjs": "4ab78d4b52a99df721427d4c64ec12e7d5b1edc68aa012fcc58c2b1707067b7d",
+    "crates/fireemu-core-firestore/src/store.rs": "9059d5cbba1db385345b75d4631ff41d762e569558448f9a3856c69e5cd651df",
     "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
     "verification/quint/README.md": "beb8675e2520a3d60dcc1f5045310f0ea869258b91131f6daa223310482dede1",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
@@ -65,93 +70,63 @@
     "verification/quint/bin/install-apalache": "6a12dbd4ec229d3b004205251027dbd758b26b3477a4672274e3ad3301373d11",
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
-    "verification/quint/configs/RulesetActivation.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/mutations/RulesetActivation.json": "09965fb4f9793604d3ff476fec1fd086a7b7b34143883164b38fd75af44a0010",
+    "verification/quint/configs/TransactionConditionalLock.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
+    "verification/quint/mutations/TransactionConditionalLock.json": "a99e9cb33f338e97a6edf4c99b631699ad411b4d098f68fb22a786bb8aea6eed",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "e77c9a278fd5b17e8c6ecf89a32a2454f7bc64f5bab7f36cf07c6eaf1af1c8cc",
-    "verification/quint/specs/RulesetActivation.qnt": "66c9f84b48b1cc9ffce6c4f9c321c999a1d258d36c0037352293d96ae0224562",
+    "verification/quint/specs/TransactionConditionalLock.qnt": "0531a2f7894e8df991455ca20c0e2f01dcd5a7f9135e491d999c2c16c0d62d10",
     "verification/quint/src/evidence.rs": "2699af66039588f3dd87c85899a6e537aae90d19f6e127d58fbe6b621462577f",
     "verification/quint/src/lib.rs": "4e16c4a8e887c5cd8fb133c1ed0370051ca5d676941ae05bdef3b2152a617ced",
     "verification/quint/src/main.rs": "254e5a5c63ebe730ae23151d8eb509ed48ded061e1fda25680bf0eb298823763",
     "verification/quint/src/model.rs": "293608536f9889cd39e0d6e81cf0b24efc898cc98e543fc165941b86681abce3",
     "verification/quint/src/process.rs": "1657b6af09d982ac32776e64ef84d4db310ed1366cc0097d0c53357c502793ba",
-    "verification/quint/src/ruleset_activation.rs": "4124018df50bda98aadcd0624e11d2e095b6bcff7b1e404c38aea81434b592ac",
+    "verification/quint/src/transaction_conditional_lock.rs": "856568ddc9a2377dc31f4700104495cfe9d4693556ebd0244bc388d21dda4a3c",
     "verification/quint/tests/cli_contract.rs": "d83e5ea41270c48e110bef5c4aedc271f9b1dc747a487da8209bd045a67912ae",
     "verification/quint/tests/evidence_contract.rs": "dce0d71712d23419937b359c820a47f7241c4023f55df653fe6cf6fdee32b79a",
     "verification/quint/tests/model_registry.rs": "6291dfac5055adabfbb37e9a87f2248853ea13161adb32dc0fb501dd451088d8",
-    "verification/quint/tests/ruleset_activation_connect.rs": "389b2b15a5f13fcd7682ac5cd7d7e6b1c71e164326622cc664fa79bb86374cf3"
+    "verification/quint/tests/transaction_conditional_lock_connect.rs": "4324374391586248292595870c4007dab91317677011993ab0300e4127372504"
   },
   "invariants": [
     "TypeOK",
-    "ActivationRequiresAllChecks",
-    "FailedCandidateNeverActivates",
-    "EvaluationSnapshotIsImmutable",
-    "ActiveVersionChangesAtomically",
-    "AtomicRulesetActivation"
+    "OneWinner",
+    "AtMostOneProtectedAction",
+    "RetryReadsCommittedLock"
   ],
   "temporalProperties": [],
   "mutations": [
     {
-      "id": "M-FORMAL-RULES-CHECKS-001",
-      "property": "ActivationRequiresAllChecks",
+      "id": "M-FORMAL-TXN-LOCK-WINNER-001",
+      "property": "OneWinner",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-RULES-REJECTED-001",
-      "property": "FailedCandidateNeverActivates",
-      "outcome": "killed_safety",
-      "diagnostic": "TLC invariant violation"
-    },
-    {
-      "id": "M-FORMAL-RULES-REQUEST-PIN-001",
-      "property": "EvaluationSnapshotIsImmutable",
-      "outcome": "killed_safety",
-      "diagnostic": "TLC invariant violation"
-    },
-    {
-      "id": "M-FORMAL-RULES-REQUEST-GENERATION-001",
-      "property": "EvaluationSnapshotIsImmutable",
-      "outcome": "killed_safety",
-      "diagnostic": "TLC invariant violation"
-    },
-    {
-      "id": "M-FORMAL-RULES-ACTIVE-ATOMIC-001",
-      "property": "ActiveVersionChangesAtomically",
-      "outcome": "killed_safety",
-      "diagnostic": "TLC invariant violation"
-    },
-    {
-      "id": "M-FORMAL-RULES-ATOMIC-001",
-      "property": "AtomicRulesetActivation",
+      "id": "M-FORMAL-TXN-LOCK-RETRY-001",
+      "property": "RetryReadsCommittedLock",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
-    "activate",
-    "reject",
-    "pinEvaluation",
-    "pinGeneration"
+    "firstClientWins",
+    "secondClientWins",
+    "retrySeesCommittedLock"
   ],
   "actions": [
-    "Create",
-    "Parse",
-    "Compile",
-    "Check",
-    "Reject",
-    "Activate",
-    "Republish",
-    "StartEvaluation",
-    "ProgressEvaluation",
-    "FinishEvaluation"
+    "ReadUnlocked",
+    "Commit",
+    "AbortStale",
+    "Retry",
+    "RejectLocked",
+    "RunProtectedAction",
+    "Release"
   ],
   "projectionFields": [
-    "activeVersion",
-    "generation",
-    "evaluationVersion",
-    "evaluationGeneration"
+    "phase",
+    "locked",
+    "observations",
+    "acted"
   ],
   "simulation": {
     "seeds": [

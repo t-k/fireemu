@@ -1,10 +1,15 @@
 // Callable Cloud Functions for the conformance corpus.
 //
-// Deliberately narrow: only callables and one onRequest function, no Admin SDK and no
-// triggers, so that both the official Functions emulator and the fireemu runner load
-// the same codebase quickly and the rows compare callable envelopes rather than trigger
-// scheduling.
+// Deliberately narrow: HTTP handlers and one Admin SDK transaction probe, with no triggers,
+// so that both the official Functions emulator and the fireemu runner load the same codebase
+// quickly and the rows compare request handling rather than trigger scheduling.
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
+const { getApps, initializeApp } = require("firebase-admin/app");
+const { FieldValue, getFirestore } = require("firebase-admin/firestore");
+const { bearerToken, tokenMatches } = require("./conditional-lock-auth");
+
+const adminApp = getApps()[0] ?? initializeApp();
+const adminDb = getFirestore(adminApp);
 
 // The happy path plus every callable error the corpus asks for.
 exports.confAdd = onCall((request) => {
@@ -65,4 +70,75 @@ exports.confRegional = onRequest({ region: "europe-west1" }, (req, res) => {
 exports.confSlow = onRequest({ timeoutSeconds: 1 }, async (_req, res) => {
   await new Promise((resolve) => setTimeout(resolve, 4000));
   res.status(200).send("this answer arrives after the deadline");
+});
+
+exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => {
+  const participant = Number(req.body?.participant);
+  if (participant !== 0 && participant !== 1) {
+    res.status(400).json({ error: "participant must be 0 or 1" });
+    return;
+  }
+  const presentedBarrierToken = bearerToken(req.headers.authorization);
+  if (presentedBarrierToken === null) {
+    res.status(403).json({ error: "conditional lock credential is required" });
+    return;
+  }
+  const contextRef = adminDb.doc("conf_fn_lock/context");
+  const lockRef = adminDb.doc("conf_fn_lock/lock");
+  const actionsRef = adminDb.doc("conf_fn_lock/actions");
+  let attempts = 0;
+  const observations = [];
+  const reachLatch = async (phase, barrierPort, barrierToken) => {
+    const barrier = await fetch(
+      `http://127.0.0.1:${barrierPort}/${phase}/${barrierToken}/${participant}`,
+      { method: "POST", signal: AbortSignal.timeout(20_000) },
+    );
+    if (barrier.status !== 204) throw new Error(`conditional lock ${phase} failed`);
+  };
+  const result = await adminDb.runTransaction(async (tx) => {
+    attempts += 1;
+    const context = await tx.get(contextRef);
+    if (!context.exists || context.data().enabled !== true) {
+      throw new Error("conditional lock fixtures are missing");
+    }
+    const barrierPort = context.data().barrierPort;
+    const barrierToken = context.data().barrierToken;
+    if (
+      !Number.isSafeInteger(barrierPort) ||
+      barrierPort < 1 ||
+      barrierPort > 65535 ||
+      typeof barrierToken !== "string" ||
+      !/^[0-9a-f]{32}$/.test(barrierToken)
+    ) {
+      throw new Error("conditional lock barrier configuration is invalid");
+    }
+    if (!tokenMatches(presentedBarrierToken, barrierToken)) {
+      return { authorized: false };
+    }
+    const lock = await tx.get(lockRef);
+    if (!lock.exists) throw new Error("conditional lock fixtures are missing");
+    const locked = lock.data().locked === true;
+    observations.push(locked);
+    if (attempts === 1) {
+      await reachLatch("arrive", barrierPort, barrierToken);
+    }
+    if (locked) return { authorized: true, acquired: false, barrierPort, barrierToken };
+    tx.update(lockRef, { locked: true, owner: participant });
+    return { authorized: true, acquired: true, barrierPort, barrierToken };
+  });
+  if (!result.authorized) {
+    res.status(403).json({ error: "conditional lock credential is invalid" });
+    return;
+  }
+  const { acquired, barrierPort, barrierToken } = result;
+  if (acquired) {
+    await actionsRef.update({ count: FieldValue.increment(1) });
+    await reachLatch("await-retry", barrierPort, barrierToken);
+    await lockRef.update({ locked: false });
+  } else {
+    // The winner may release only after this read-only retry has completed. Signalling from
+    // inside the callback would let the unlock abort it and permit a third attempt to acquire.
+    await reachLatch("retry-observed", barrierPort, barrierToken);
+  }
+  res.status(acquired ? 200 : 409).json({ acquired, attempts, observations });
 });

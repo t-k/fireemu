@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fireemu_verification_quint::evidence::validate_evidence_json;
-use fireemu_verification_quint::model::{model, ModelDescriptor};
+use fireemu_verification_quint::evidence::{validate_evidence_file, validate_evidence_json};
+use fireemu_verification_quint::model::{all_models, model, ModelDescriptor};
 
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
 const TAMPER_TARGETS: [&str; 9] = [
@@ -44,6 +44,40 @@ fn assert_rejected(value: &serde_json::Value) {
 fn checked_in_evidence_satisfies_the_generic_contract() {
     validate_evidence_json(EVIDENCE, descriptor(), Some(&repository_root()))
         .expect("checked-in evidence must validate");
+}
+
+#[test]
+fn every_registered_model_has_current_checked_in_evidence() {
+    let root = repository_root();
+    for descriptor in all_models() {
+        let path = root
+            .join("verification/quint/evidence")
+            .join(format!("{}.json", descriptor.name));
+        validate_evidence_file(&root, &path, descriptor).unwrap_or_else(|error| {
+            panic!(
+                "{} checked-in evidence is invalid: {error}",
+                descriptor.name
+            )
+        });
+    }
+}
+
+#[test]
+fn checked_in_evidence_binds_the_apalache_distribution() {
+    let evidence: serde_json::Value = serde_json::from_str(EVIDENCE).expect("valid evidence JSON");
+    assert_eq!(evidence["tools"]["apalache"], "0.56.1");
+    assert_eq!(
+        evidence["tools"]["apalacheArchiveSha256"],
+        "91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1"
+    );
+    assert_eq!(
+        evidence["tools"]["apalacheLauncherSha256"],
+        "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7"
+    );
+    assert_eq!(
+        evidence["tools"]["apalacheJarSha256"],
+        "4753c0ebb2cbb266e2c6ac19ab5ca3827d726cc80fd1fc5d7c1eeb64736cd60b"
+    );
 }
 
 #[test]

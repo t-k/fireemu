@@ -1,4 +1,4 @@
-//! Conformance boundary tests for ruleset publication and request snapshots.
+//! Conformance boundary tests for ruleset publication and evaluation snapshots.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -24,11 +24,11 @@ fn initial_state() -> RulesetActivationState {
     RulesetActivationState {
         active_version: "v1".to_owned(),
         generation: 0,
-        request_version: BTreeMap::from([
+        evaluation_version: BTreeMap::from([
             ("r1".to_owned(), "v1".to_owned()),
             ("r2".to_owned(), "v1".to_owned()),
         ]),
-        request_generation: BTreeMap::from([("r1".to_owned(), 0), ("r2".to_owned(), 0)]),
+        evaluation_generation: BTreeMap::from([("r1".to_owned(), 0), ("r2".to_owned(), 0)]),
     }
 }
 
@@ -54,8 +54,8 @@ fn checked_candidate_is_published_as_one_fresh_generation() {
         RulesetActivationState {
             active_version: "v2".to_owned(),
             generation: 1,
-            request_version: initial_state().request_version,
-            request_generation: initial_state().request_generation,
+            evaluation_version: initial_state().evaluation_version,
+            evaluation_generation: initial_state().evaluation_generation,
         }
     );
 }
@@ -80,17 +80,19 @@ fn rejected_candidate_and_disabled_activation_preserve_production_state() {
 }
 
 #[test]
-fn running_request_retains_v1_across_v2_publication() {
+fn running_evaluation_retains_v1_across_v2_publication() {
     let mut driver = initialized_driver();
-    driver.start_request("r1").expect("start request on v1");
+    driver
+        .start_evaluation("r1")
+        .expect("start evaluation on v1");
     driver.create().expect("create candidate");
     driver.parse().expect("parse candidate");
     driver.compile().expect("compile candidate");
     driver.check().expect("check candidate");
     driver.activate().expect("activate v2");
     driver
-        .progress_request("r1")
-        .expect("progress retained v1 request");
+        .progress_evaluation("r1")
+        .expect("progress retained v1 evaluation");
 
     let during = driver.project().expect("running projection");
     assert_eq!(
@@ -98,28 +100,30 @@ fn running_request_retains_v1_across_v2_publication() {
         ("v2", 1)
     );
     assert_eq!(
-        during.request_version.get("r1").map(String::as_str),
+        during.evaluation_version.get("r1").map(String::as_str),
         Some("v1")
     );
 
     driver
-        .finish_request("r1")
-        .expect("finish retained request");
+        .finish_evaluation("r1")
+        .expect("finish retained evaluation");
     assert_eq!(
         driver
             .project()
             .expect("finished projection")
-            .request_version
+            .evaluation_version
             .get("r1")
             .map(String::as_str),
         Some("v1")
     );
-    driver.start_request("r2").expect("start request on v2");
+    driver
+        .start_evaluation("r2")
+        .expect("start evaluation on v2");
     assert_eq!(
         driver
             .project()
-            .expect("new request projection")
-            .request_version
+            .expect("new evaluation projection")
+            .evaluation_version
             .get("r2")
             .map(String::as_str),
         Some("v2")
@@ -127,21 +131,23 @@ fn running_request_retains_v1_across_v2_publication() {
 }
 
 #[test]
-fn running_request_retains_exact_generation_across_same_source_republication() {
+fn running_evaluation_retains_exact_generation_across_same_source_republication() {
     let mut driver = initialized_driver();
     driver.create().expect("create candidate");
     driver.parse().expect("parse candidate");
     driver.compile().expect("compile candidate");
     driver.check().expect("check candidate");
     driver.activate().expect("activate v2 generation one");
-    driver.start_request("r1").expect("start on generation one");
+    driver
+        .start_evaluation("r1")
+        .expect("start on generation one");
     driver.republish().expect("republish v2 as generation two");
     driver
-        .progress_request("r1")
-        .expect("progress retained generation one request");
+        .progress_evaluation("r1")
+        .expect("progress retained generation one evaluation");
     driver
-        .finish_request("r1")
-        .expect("finish retained request");
+        .finish_evaluation("r1")
+        .expect("finish retained evaluation");
 
     let projected = driver.project().expect("republished projection");
     assert_eq!(
@@ -149,10 +155,10 @@ fn running_request_retains_exact_generation_across_same_source_republication() {
         ("v2", 2)
     );
     assert_eq!(
-        projected.request_version.get("r1").map(String::as_str),
+        projected.evaluation_version.get("r1").map(String::as_str),
         Some("v2")
     );
-    assert_eq!(projected.request_generation.get("r1"), Some(&1));
+    assert_eq!(projected.evaluation_generation.get("r1"), Some(&1));
 }
 
 #[test]
@@ -167,9 +173,9 @@ fn modeled_action_inventory_is_exact() {
             "Reject",
             "Activate",
             "Republish",
-            "StartRequest",
-            "ProgressRequest",
-            "FinishRequest",
+            "StartEvaluation",
+            "ProgressEvaluation",
+            "FinishEvaluation",
         ]
     );
 }
@@ -177,8 +183,8 @@ fn modeled_action_inventory_is_exact() {
 const PROJECTION_FAULTS: [ProjectionFault; 4] = [
     ProjectionFault::ActiveVersion,
     ProjectionFault::Generation,
-    ProjectionFault::RequestVersion,
-    ProjectionFault::RequestGeneration,
+    ProjectionFault::EvaluationVersion,
+    ProjectionFault::EvaluationGeneration,
 ];
 
 #[test]
@@ -195,12 +201,12 @@ fn projection_fault_changes_exactly_one_production_field() {
             ),
             ("generation", baseline.generation != perturbed.generation),
             (
-                "requestVersion",
-                baseline.request_version != perturbed.request_version,
+                "evaluationVersion",
+                baseline.evaluation_version != perturbed.evaluation_version,
             ),
             (
-                "requestGeneration",
-                baseline.request_generation != perturbed.request_generation,
+                "evaluationGeneration",
+                baseline.evaluation_generation != perturbed.evaluation_generation,
             ),
         ]
         .into_iter()
@@ -210,7 +216,7 @@ fn projection_fault_changes_exactly_one_production_field() {
     }
 }
 
-const SCENARIOS: [&str; 4] = ["activate", "reject", "pinRequest", "pinGeneration"];
+const SCENARIOS: [&str; 4] = ["activate", "reject", "pinEvaluation", "pinGeneration"];
 
 #[test]
 #[ignore = "requires the pinned local Quint CLI"]

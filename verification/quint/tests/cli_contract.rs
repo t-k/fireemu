@@ -31,6 +31,18 @@ fn authority_script_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run-verification.sh")
 }
 
+fn apalache_lock_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("apalache.lock.json")
+}
+
+fn apalache_installer_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/install-apalache")
+}
+
+fn authority_lock_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/authority-lock")
+}
+
 fn readme_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md")
 }
@@ -95,6 +107,29 @@ fn make_executable(paths: &[&Path]) {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).expect("script must be executable");
     }
+}
+
+#[cfg(unix)]
+fn prepare_authority_backend_fixture(
+    temporary: &Path,
+    quint_dir: &Path,
+    fake_bin: &Path,
+) -> PathBuf {
+    fs::create_dir_all(quint_dir.join("bin")).expect("temporary Quint bin must be created");
+    fs::create_dir_all(fake_bin).expect("temporary fixture bin must be created");
+    let authority_lock = quint_dir.join("bin/authority-lock");
+    fs::copy(authority_lock_path(), &authority_lock).expect("authority lock must be copied");
+    let installer = quint_dir.join("bin/install-apalache");
+    fs::write(&installer, "#!/bin/sh\nexit 0\n").expect("installer fixture must be written");
+    let quint_home = temporary.join("quint-home");
+    let apalache_lib = quint_home.join("apalache-dist-0.56.1/apalache/lib");
+    fs::create_dir_all(&apalache_lib).expect("Apalache fixture directory must be created");
+    fs::write(apalache_lib.join("apalache.jar"), b"fixture")
+        .expect("Apalache fixture JAR must be written");
+    let shasum = fake_bin.join("shasum");
+    fs::write(&shasum, "#!/bin/sh\nexit 0\n").expect("shasum fixture must be written");
+    make_executable(&[&authority_lock, &installer, &shasum]);
+    quint_home
 }
 
 #[cfg(unix)]
@@ -325,6 +360,61 @@ fn package_manifest_pins_quint_and_pnpm_exactly() {
 }
 
 #[test]
+fn apalache_lock_binds_the_reviewed_distribution() {
+    let json = fs::read_to_string(apalache_lock_path()).expect("Apalache lock must be readable");
+    let lock: serde_json::Value = serde_json::from_str(&json).expect("valid Apalache lock JSON");
+    assert_eq!(lock["version"], "0.56.1");
+    assert_eq!(
+        lock["archiveSha256"],
+        "91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1"
+    );
+    assert_eq!(
+        lock["launcherSha256"],
+        "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7"
+    );
+    assert_eq!(
+        lock["jarSha256"],
+        "4753c0ebb2cbb266e2c6ac19ab5ca3827d726cc80fd1fc5d7c1eeb64736cd60b"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apalache_installer_is_executable_and_rejects_a_corrupt_cache() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let installer = apalache_installer_path();
+    let metadata = fs::metadata(&installer).expect("Apalache installer must exist");
+    assert!(metadata.is_file());
+    assert_ne!(metadata.permissions().mode() & 0o111, 0);
+
+    let temporary = OwnedTestDirectory::create("apalache-corrupt-cache");
+    let jar = temporary
+        .0
+        .join("apalache-dist-0.56.1/apalache/lib/apalache.jar");
+    let launcher = temporary
+        .0
+        .join("apalache-dist-0.56.1/apalache/bin/apalache-mc");
+    fs::create_dir_all(jar.parent().expect("JAR parent")).expect("create corrupt cache");
+    fs::create_dir_all(launcher.parent().expect("launcher parent"))
+        .expect("create corrupt launcher cache");
+    fs::write(&jar, b"not the pinned JAR").expect("write corrupt JAR");
+    fs::write(&launcher, b"not the pinned launcher").expect("write corrupt launcher");
+    let mut permissions = fs::metadata(&launcher)
+        .expect("corrupt launcher metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&launcher, permissions).expect("make corrupt launcher executable");
+    let output = Command::new(installer)
+        .arg("--verify-only")
+        .env("QUINT_HOME", &temporary.0)
+        .output()
+        .expect("installer must launch");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("digest mismatch"));
+}
+
+#[test]
 #[ignore = "requires the pinned local Quint CLI"]
 fn pinned_quint_version_is_exact() {
     let path = pinned_quint_path();
@@ -442,6 +532,7 @@ fn authority_script_declares_all_models_and_ordered_gates() {
         "RulesetActivation",
         "SessionEpoch",
         "StorageGeneration",
+        "TransactionConditionalLock",
     ] {
         assert!(script.contains(model), "missing authority model {model}");
     }
@@ -480,13 +571,67 @@ fn authority_script_declares_all_models_and_ordered_gates() {
 }
 
 #[test]
-fn readme_declares_the_eleven_model_authority_and_generated_conformance() {
+fn authority_script_serializes_the_fixed_backend_endpoint_and_checks_its_digest() {
+    let script = fs::read_to_string(authority_script_path()).expect("authority script must exist");
+    assert!(script.contains("bin/authority-lock"));
+    assert!(script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_FD"));
+    assert!(!script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_HELD"));
+    assert!(script.contains("APALACHE_JAR_SHA256"));
+    assert!(script.contains("shasum -a 256"));
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_lock_serializes_two_processes() {
+    let temporary = OwnedTestDirectory::create("authority-lock-serialization");
+    let lock_path = temporary.0.join("authority.lock");
+    let first_ready = temporary.0.join("first.ready");
+    let second_ready = temporary.0.join("second.ready");
+    let mut first = Command::new(authority_lock_path())
+        .args([
+            "/bin/sh",
+            "-c",
+            "printf ready > \"$FIRST_READY\"; exec sleep 30",
+        ])
+        .env("FIREEMU_QUINT_AUTHORITY_LOCK", &lock_path)
+        .env("FIRST_READY", &first_ready)
+        .spawn()
+        .expect("first lock holder must launch");
+    assert!(wait_until(Duration::from_secs(3), || first_ready.exists()));
+
+    let mut second = Command::new(authority_lock_path())
+        .args(["/bin/sh", "-c", "printf ready > \"$SECOND_READY\""])
+        .env("FIREEMU_QUINT_AUTHORITY_LOCK", &lock_path)
+        .env("SECOND_READY", &second_ready)
+        .spawn()
+        .expect("second lock holder must launch");
+    std::thread::sleep(Duration::from_millis(250));
+    assert!(!second_ready.exists(), "second process bypassed the lock");
+    assert!(second
+        .try_wait()
+        .expect("second status must be readable")
+        .is_none());
+
+    let signal = Command::new("/bin/kill")
+        .args(["-TERM", &first.id().to_string()])
+        .status()
+        .expect("first lock holder must be signalled");
+    assert!(signal.success());
+    let _ = first.wait();
+    let status = second.wait().expect("second lock holder must finish");
+    assert!(status.success());
+    assert!(second_ready.exists());
+}
+
+#[test]
+fn readme_declares_the_twelve_model_authority_and_generated_conformance() {
     let readme = fs::read_to_string(readme_path()).expect("authority README must exist");
     assert!(readme.contains("repository's formal verification authority"));
     assert!(readme.contains("`AwaitIdle`"));
     assert!(readme.contains("`CompatibilitySelection`"));
     assert!(readme.contains("`RegexLinearRepeat`"));
     assert!(readme.contains("`StorageGeneration`"));
+    assert!(readme.contains("`TransactionConditionalLock`"));
     assert!(readme.contains("Generated conformance campaigns"));
 }
 
@@ -495,7 +640,8 @@ fn readme_declares_the_eleven_model_authority_and_generated_conformance() {
 fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
     let temporary = OwnedTestDirectory::create("authority-signal");
     let quint_dir = temporary.0.join("verification/quint");
-    fs::create_dir_all(&quint_dir).expect("temporary Quint directory must be created");
+    let fake_bin = temporary.0.join("bin");
+    let quint_home = prepare_authority_backend_fixture(&temporary.0, &quint_dir, &fake_bin);
 
     let authority = quint_dir.join("run-verification.sh");
     fs::copy(authority_script_path(), &authority).expect("authority script must be copied");
@@ -503,8 +649,6 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
     fs::create_dir_all(launcher.parent().expect("launcher must have a parent"))
         .expect("temporary launcher directory must be created");
     fs::copy(process_group_launcher_path(), &launcher).expect("group launcher must be copied");
-    let fake_bin = temporary.0.join("bin");
-    fs::create_dir_all(&fake_bin).expect("temporary bin directory must be created");
     let gate = fake_bin.join("cargo");
     fs::write(
         &gate,
@@ -522,6 +666,7 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
     let mut child = Command::new(&authority)
         .current_dir(&temporary.0)
         .env("AUTHORITY_CHILD_PID_FILE", &pid_file)
+        .env("QUINT_HOME", &quint_home)
         .env("QUINT_REAL_BIN", "/bin/sh")
         .env(
             "PATH",
@@ -598,7 +743,8 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
 fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
     let temporary = OwnedTestDirectory::create("authority-nested-signal");
     let quint_dir = temporary.0.join("verification/quint");
-    fs::create_dir_all(quint_dir.join("bin")).expect("temporary Quint bin must be created");
+    let fake_bin = temporary.0.join("fixture-bin");
+    let quint_home = prepare_authority_backend_fixture(&temporary.0, &quint_dir, &fake_bin);
 
     let authority = quint_dir.join("run-verification.sh");
     let launcher = quint_dir.join("bin/process-group");
@@ -613,8 +759,6 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
         "#!/bin/sh\nsleep 30 &\nchild=$!\ntimeout_pid=$(ps -o ppid= -p \"$$\" | tr -d ' ')\nprintf '%s %s %s\\n' \"$timeout_pid\" \"$$\" \"$child\" > \"$NESTED_PID_FILE\"\nwait \"$child\"\n",
     )
     .expect("fake Quint must be written");
-    let fake_bin = temporary.0.join("fixture-bin");
-    fs::create_dir_all(&fake_bin).expect("temporary fixture bin must be created");
     let gate = fake_bin.join("cargo");
     fs::write(
         &gate,
@@ -633,6 +777,7 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
         .current_dir(&temporary.0)
         .env("NESTED_PID_FILE", &pid_file)
         .env("AUTHORITY_QUINT_WRAPPER", &wrapper)
+        .env("QUINT_HOME", &quint_home)
         .env("QUINT_REAL_BIN", &real_quint)
         .env("QUINT_TIMEOUT_SECONDS", "30")
         .env(

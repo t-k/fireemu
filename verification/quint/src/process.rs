@@ -7,10 +7,26 @@ use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::model::{model, ModelDescriptor, PropertyDescriptor, PropertyKind};
 
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+/// Apalache release required by Quint 0.32.0 for translation and TLC execution.
+pub const APALACHE_VERSION: &str = "0.56.1";
+/// Reviewed SHA-256 of the actual Apalache JAR executed by the TLC backend.
+pub const APALACHE_JAR_SHA256: &str =
+    "4753c0ebb2cbb266e2c6ac19ab5ca3827d726cc80fd1fc5d7c1eeb64736cd60b";
+/// Reviewed SHA-256 of the release archive installed before verification.
+pub const APALACHE_ARCHIVE_SHA256: &str =
+    "91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1";
+/// Reviewed SHA-256 of the Apalache launcher that starts the translation server.
+pub const APALACHE_LAUNCHER_SHA256: &str =
+    "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7";
+/// Exact release archive used by the fail-closed installer.
+pub const APALACHE_ARCHIVE_URL: &str =
+    "https://github.com/apalache-mc/apalache/releases/download/v0.56.1/apalache.tgz";
+const APALACHE_SERVER_ENDPOINT: &str = "127.0.0.1:8822";
 
 /// Strict source-mutation manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -125,6 +141,10 @@ impl VerifyRequest {
             self.descriptor.main.to_owned(),
             "--backend".to_owned(),
             "tlc".to_owned(),
+            "--apalache-version".to_owned(),
+            APALACHE_VERSION.to_owned(),
+            "--server-endpoint".to_owned(),
+            APALACHE_SERVER_ENDPOINT.to_owned(),
             "--tlc-config".to_owned(),
             self.descriptor.config.to_owned(),
         ];
@@ -370,6 +390,7 @@ pub fn mutate_model(
     descriptor: &'static ModelDescriptor,
     evidence_path: Option<&Path>,
 ) -> Result<Vec<MutationResult>, String> {
+    validate_apalache_distribution()?;
     let workdir = repository_root.join("verification/quint");
     let source_path = workdir.join(descriptor.spec);
     let config_path = workdir.join(descriptor.config);
@@ -457,6 +478,10 @@ fn mutation_arguments(
         descriptor.main.to_owned(),
         "--backend".to_owned(),
         "tlc".to_owned(),
+        "--apalache-version".to_owned(),
+        APALACHE_VERSION.to_owned(),
+        "--server-endpoint".to_owned(),
+        APALACHE_SERVER_ENDPOINT.to_owned(),
         "--tlc-config".to_owned(),
         descriptor.config.to_owned(),
     ];
@@ -537,6 +562,7 @@ pub fn verify_model(
     repository_root: &Path,
     descriptor: &'static ModelDescriptor,
 ) -> Result<Execution, String> {
+    validate_apalache_distribution()?;
     let workdir = repository_root.join("verification/quint");
     if !workdir.is_dir() {
         return Err(format!(
@@ -572,6 +598,43 @@ pub fn verify_model(
             descriptor.name, execution.elapsed, execution.stdout, execution.stderr
         )),
     }
+}
+
+/// Verifies the exact backend artifact before any model or mutation can execute it.
+pub fn validate_apalache_distribution() -> Result<PathBuf, String> {
+    let quint_home = std::env::var_os("QUINT_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".quint")))
+        .ok_or_else(|| "QUINT_HOME or HOME is required to locate Apalache".to_owned())?;
+    let jar = quint_home
+        .join(format!("apalache-dist-{APALACHE_VERSION}"))
+        .join("apalache/lib/apalache.jar");
+    let launcher = quint_home
+        .join(format!("apalache-dist-{APALACHE_VERSION}"))
+        .join("apalache/bin/apalache-mc");
+    let launcher_bytes = fs::read(&launcher).map_err(|error| {
+        format!(
+            "cannot read pinned Apalache launcher {}: {error}",
+            launcher.display()
+        )
+    })?;
+    let launcher_digest = format!("{:x}", Sha256::digest(launcher_bytes));
+    if launcher_digest != APALACHE_LAUNCHER_SHA256 {
+        return Err(format!(
+            "Apalache launcher digest mismatch for {}: expected {APALACHE_LAUNCHER_SHA256}, found {launcher_digest}",
+            launcher.display()
+        ));
+    }
+    let bytes = fs::read(&jar)
+        .map_err(|error| format!("cannot read pinned Apalache JAR {}: {error}", jar.display()))?;
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    if digest != APALACHE_JAR_SHA256 {
+        return Err(format!(
+            "Apalache JAR digest mismatch for {}: expected {APALACHE_JAR_SHA256}, found {digest}",
+            jar.display()
+        ));
+    }
+    Ok(jar)
 }
 
 /// Compatibility wrapper for the original `EventDelivery` authority API.
@@ -640,6 +703,10 @@ mod tests {
                 "EventDeliveryProof",
                 "--backend",
                 "tlc",
+                "--apalache-version",
+                "0.56.1",
+                "--server-endpoint",
+                "127.0.0.1:8822",
                 "--tlc-config",
                 "configs/EventDelivery.json",
                 "--invariants",

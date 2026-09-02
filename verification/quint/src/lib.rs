@@ -15,3 +15,4 @@ pub mod regex_linear_repeat;
 pub mod ruleset_activation;
 pub mod session_epoch;
 pub mod storage_generation;
+pub mod transaction_conditional_lock;

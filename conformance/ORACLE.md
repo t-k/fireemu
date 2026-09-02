@@ -14,6 +14,7 @@ integrity.
 
 | Package | Version |
 | --- | --- |
+| `@google-cloud/pubsub` | `4.11.0` |
 | `firebase` | `12.18.0` |
 | `firebase-admin` | `14.3.0` |
 | `firebase-functions` | `7.3.2` |
@@ -47,6 +48,7 @@ uses `firestore` and `storage`; the rest are listed so an upstream bump is visib
 Cached on the machine that recorded the fixtures:
 
 - `cloud-firestore-emulator-v1.22.0.jar` (136707194 bytes)
+- `pubsub-emulator-0.8.35.zip` (53015972 bytes)
 - `cloud-storage-rules-runtime-v1.1.3.jar` (52892936 bytes)
 - `ui-v1.15.0.zip` (3538469 bytes)
 
@@ -58,7 +60,7 @@ Cached on the machine that recorded the fixtures:
 
 ## Corpus
 
-22 scenarios, 207 recorded steps.
+23 scenarios, 210 recorded steps.
 
 ## What the oracle cannot answer
 

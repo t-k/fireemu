@@ -9,8 +9,8 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 10,
-    "documented-divergence": 2,
+    "parity": 9,
+    "documented-divergence": 3,
     "debt": 0,
     "pending": 0
   },
@@ -19,7 +19,7 @@
       "id": "unknown-function-names-the-key-and-lists-the-valid-ones",
       "status": "parity",
       "value": {
-        "body": "Function us-central1-confNotThere does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, europe-west1-confRegional",
+        "body": "Function us-central1-confNotThere does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, us-central1-confConditionalLock, europe-west1-confRegional",
         "contentType": "text/html; charset=utf-8",
         "status": 404
       }
@@ -28,7 +28,7 @@
       "id": "an-existing-function-in-the-wrong-region-is-a-different-key",
       "status": "parity",
       "value": {
-        "body": "Function europe-west1-confAdd does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, europe-west1-confRegional",
+        "body": "Function europe-west1-confAdd does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, us-central1-confConditionalLock, europe-west1-confRegional",
         "contentType": "text/html; charset=utf-8",
         "status": 404
       }
@@ -64,7 +64,7 @@
       "id": "a-regional-function-is-absent-from-the-default-region",
       "status": "parity",
       "value": {
-        "body": "Function us-central1-confRegional does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, europe-west1-confRegional",
+        "body": "Function us-central1-confRegional does not exist, valid functions are: us-central1-confAdd, us-central1-confThrow, us-central1-confCrash, us-central1-confWhoAmI, us-central1-confGuarded, us-central1-confEcho, us-central1-confSlow, us-central1-confConditionalLock, europe-west1-confRegional",
         "contentType": "text/html; charset=utf-8",
         "status": 404
       }
@@ -80,14 +80,23 @@
     },
     {
       "id": "preflight-on-a-callable-from-a-loopback-origin",
-      "status": "parity",
-      "value": {
+      "status": "documented-divergence",
+      "oracle": {
         "allowHeaders": "content-type",
         "allowMethods": "POST",
         "allowOrigin": "http://<host>",
         "status": 204,
         "vary": "Origin, Access-Control-Request-Headers"
-      }
+      },
+      "testd": {
+        "allowHeaders": "content-type",
+        "allowMethods": "POST",
+        "allowOrigin": "http://<host>",
+        "status": 204,
+        "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode"
+      },
+      "documents": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse."
     },
     {
       "id": "preflight-on-an-onrequest-from-a-loopback-origin",

@@ -18,31 +18,31 @@
     },
     {
       "id": "M-FORMAL-RULES-REQUEST-PIN-001",
-      "property": "RequestVersionIsImmutable",
-      "operator": "rebind-inflight-request-to-active-version",
-      "from": "record(\"ProgressRequest\", request, observable)",
-      "to": "record(\"ProgressRequest\", request, { activeVersion: observable.activeVersion, generation: observable.generation, requestVersion: observable.requestVersion.set(request, observable.activeVersion), requestGeneration: observable.requestGeneration })"
+      "property": "EvaluationSnapshotIsImmutable",
+      "operator": "rebind-inflight-evaluation-to-active-version",
+      "from": "record(\"ProgressEvaluation\", evaluation, observable)",
+      "to": "record(\"ProgressEvaluation\", evaluation, { activeVersion: observable.activeVersion, generation: observable.generation, evaluationVersion: observable.evaluationVersion.set(evaluation, observable.activeVersion), evaluationGeneration: observable.evaluationGeneration })"
     },
     {
       "id": "M-FORMAL-RULES-REQUEST-GENERATION-001",
-      "property": "RequestVersionIsImmutable",
-      "operator": "rebind-inflight-request-to-current-generation",
-      "from": "record(\"ProgressRequest\", request, observable)",
-      "to": "record(\"ProgressRequest\", request, { activeVersion: observable.activeVersion, generation: observable.generation, requestVersion: observable.requestVersion, requestGeneration: observable.requestGeneration.set(request, observable.generation) })"
+      "property": "EvaluationSnapshotIsImmutable",
+      "operator": "rebind-inflight-evaluation-to-current-generation",
+      "from": "record(\"ProgressEvaluation\", evaluation, observable)",
+      "to": "record(\"ProgressEvaluation\", evaluation, { activeVersion: observable.activeVersion, generation: observable.generation, evaluationVersion: observable.evaluationVersion, evaluationGeneration: observable.evaluationGeneration.set(evaluation, observable.generation) })"
     },
     {
       "id": "M-FORMAL-RULES-ACTIVE-ATOMIC-001",
       "property": "ActiveVersionChangesAtomically",
       "operator": "publish-active-pointer-during-compile",
       "from": "record(\"Compile\", \"\", observable)",
-      "to": "record(\"Compile\", \"\", { activeVersion: \"v2\", generation: observable.generation, requestVersion: observable.requestVersion, requestGeneration: observable.requestGeneration })"
+      "to": "record(\"Compile\", \"\", { activeVersion: \"v2\", generation: observable.generation, evaluationVersion: observable.evaluationVersion, evaluationGeneration: observable.evaluationGeneration })"
     },
     {
       "id": "M-FORMAL-RULES-ATOMIC-001",
       "property": "AtomicRulesetActivation",
       "operator": "publish-generation-before-active-version",
-      "from": "activeVersion: observable.activeVersion,\n      generation: observable.generation,\n      requestVersion: observable.requestVersion.set(request, observable.activeVersion),\n      requestGeneration: observable.requestGeneration.set(request, observable.generation)",
-      "to": "activeVersion: observable.activeVersion,\n      generation: observable.generation + 1,\n      requestVersion: observable.requestVersion.set(request, observable.activeVersion),\n      requestGeneration: observable.requestGeneration.set(request, observable.generation)"
+      "from": "activeVersion: observable.activeVersion,\n      generation: observable.generation,\n      evaluationVersion: observable.evaluationVersion.set(evaluation, observable.activeVersion),\n      evaluationGeneration: observable.evaluationGeneration.set(evaluation, observable.generation)",
+      "to": "activeVersion: observable.activeVersion,\n      generation: observable.generation + 1,\n      evaluationVersion: observable.evaluationVersion.set(evaluation, observable.activeVersion),\n      evaluationGeneration: observable.evaluationGeneration.set(evaluation, observable.generation)"
     }
   ]
 }

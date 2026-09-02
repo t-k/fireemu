@@ -17,7 +17,7 @@
     "pubsub-probe": "node src/pubsub-probe/run.mjs record",
     "pubsub-probe:check": "node src/pubsub-probe/run.mjs check",
     "corpus": "node src/list.mjs",
-    "selftest": "node --test src/diff.test.mjs",
+    "selftest": "node --test src/*.test.mjs",
     "lint": "oxlint src functions",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check ."

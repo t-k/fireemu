@@ -180,6 +180,11 @@ jobs:
           cache-dependency-path: verification/quint/pnpm-lock.yaml
       - name: install pinned Quint
         run: pnpm -C verification/quint install --frozen-lockfile
+      - name: install verified Apalache backend
+        run: |
+          quint_home="$RUNNER_TEMP/quint-home"
+          QUINT_HOME="$quint_home" verification/quint/bin/install-apalache
+          echo "QUINT_HOME=$quint_home" >> "$GITHUB_ENV"
       - name: configure guarded Quint path
         run: |
           echo "QUINT_REAL_BIN=$GITHUB_WORKSPACE/verification/quint/node_modules/.bin/quint" >> "$GITHUB_ENV"

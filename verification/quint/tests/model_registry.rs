@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use fireemu_verification_quint::model::{all_models, model};
 
-const AUTHORITY_MODELS: [&str; 11] = [
+const AUTHORITY_MODELS: [&str; 12] = [
     "AtomicCommitOutbox",
     "AtomicExportPublication",
     "AuthTotp",
@@ -18,14 +18,24 @@ const AUTHORITY_MODELS: [&str; 11] = [
     "RulesetActivation",
     "SessionEpoch",
     "StorageGeneration",
+    "TransactionConditionalLock",
 ];
 
 #[test]
-fn registry_contains_the_eleven_authority_models() {
+fn registry_contains_the_twelve_authority_models() {
     let names = all_models()
         .map(|descriptor| descriptor.name)
         .collect::<Vec<_>>();
     assert_eq!(names, AUTHORITY_MODELS);
+}
+
+#[test]
+fn ruleset_activation_names_the_production_evaluation_boundary() {
+    let descriptor = model("RulesetActivation").expect("RulesetActivation must be registered");
+    descriptor
+        .property("EvaluationSnapshotIsImmutable")
+        .expect("the immutable boundary must be one production rules evaluation");
+    assert!(descriptor.property("RequestVersionIsImmutable").is_err());
 }
 
 #[test]

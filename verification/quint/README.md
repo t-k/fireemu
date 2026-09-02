@@ -1,15 +1,16 @@
 # Quint formal verification authority
 
-This directory is the repository's formal verification authority. Eleven bounded Quint models define the checked safety and liveness properties, and Quint Connect replays deterministic and generated traces against the production Rust state machines.
+This directory is the repository's formal verification authority. Twelve bounded Quint models define the checked safety and liveness properties, and Quint Connect replays deterministic and generated traces against the production Rust state machines.
 
 ## Pinned tools
 
-`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. The verification runner also requires Java for Quint's TLC backend and Python 3 to create an owned process group without third-party packages.
+`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. `apalache.lock.json` pins the release URL and reviewed archive, launcher, and JAR digests for Apalache 0.56.1. The verification runner also requires Java for Quint's TLC backend and Python 3 to install the backend safely, serialize the fixed translation endpoint, and create owned process groups.
 
 Install the JavaScript dependency with:
 
 ```sh
 pnpm -C verification/quint install --frozen-lockfile
+QUINT_HOME="$HOME/.quint" verification/quint/bin/install-apalache
 ```
 
 The CI path invokes `bin/quint`, which requires an absolute `QUINT_REAL_BIN` and GNU `timeout`. The wrapper terminates the owned checker process group after the configured limit and maps timeout exits to status 124. Install GNU Coreutils and make its `timeout` command available on `PATH` before running the complete authority pass. Individual development tests may invoke the pinned real CLI directly, but the complete authority pass must use the guarded wrapper.
@@ -35,6 +36,7 @@ The registry in `src/model.rs` is the single inventory for these authority model
 - `RulesetActivation`
 - `SessionEpoch`
 - `StorageGeneration`
+- `TransactionConditionalLock`
 
 Every descriptor binds its Quint specification, checker configuration, properties, semantic mutations, production sources, deterministic scenarios, and projection fields. Its Quint Connect driver dispatches model actions through production Rust APIs and compares the resulting production-derived projection after every action. Independent projection faults prove that each declared field can detect drift.
 

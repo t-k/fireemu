@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Install or verify the exact Apalache distribution used by Quint."""
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import stat
+import tarfile
+import tempfile
+import urllib.request
+
+
+ROOT = Path(__file__).resolve().parent.parent
+LOCK_PATH = ROOT / "apalache.lock.json"
+LOCK_KEYS = {
+    "schemaVersion",
+    "version",
+    "archiveUrl",
+    "archiveSha256",
+    "launcherSha256",
+    "jarSha256",
+    "tlcVersion",
+}
+
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def load_lock() -> dict[str, object]:
+    lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+    if set(lock) != LOCK_KEYS or lock["schemaVersion"] != 1:
+        raise SystemExit("error: unsupported Apalache lock schema")
+    for key in LOCK_KEYS - {"schemaVersion"}:
+        if not isinstance(lock[key], str) or not lock[key]:
+            raise SystemExit(f"error: invalid Apalache lock field {key}")
+    return lock
+
+
+def regular_file(path: Path, label: str) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise SystemExit(f"error: pinned Apalache {label} is missing: {path}") from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(f"error: pinned Apalache {label} must be a regular file: {path}")
+
+
+def verify_distribution(destination: Path, lock: dict[str, object]) -> None:
+    launcher = destination / "apalache/bin/apalache-mc"
+    jar = destination / "apalache/lib/apalache.jar"
+    for path, label, expected in (
+        (launcher, "launcher", lock["launcherSha256"]),
+        (jar, "JAR", lock["jarSha256"]),
+    ):
+        regular_file(path, label)
+        actual = digest(path)
+        if actual != expected:
+            raise SystemExit(
+                f"error: pinned Apalache {label} digest mismatch: expected {expected}, found {actual}"
+            )
+    if launcher.stat().st_mode & 0o111 == 0:
+        raise SystemExit(f"error: pinned Apalache launcher is not executable: {launcher}")
+
+
+def safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    members = archive.getmembers()
+    for member in members:
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "apalache":
+            raise SystemExit(f"error: unsafe Apalache archive member: {member.name}")
+        if not (member.isdir() or member.isfile()):
+            raise SystemExit(f"error: unsupported Apalache archive member: {member.name}")
+    return members
+
+
+def install(destination: Path, lock: dict[str, object]) -> None:
+    if destination.exists():
+        verify_distribution(destination, lock)
+        return
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".apalache-install-", dir=destination.parent) as owned:
+        owned_path = Path(owned)
+        archive_path = owned_path / "apalache.tgz"
+        request = urllib.request.Request(str(lock["archiveUrl"]), headers={"User-Agent": "fireemu-verification"})
+        with urllib.request.urlopen(request, timeout=60) as response, archive_path.open("wb") as output:
+            if response.status != 200:
+                raise SystemExit(f"error: Apalache download returned HTTP {response.status}")
+            shutil.copyfileobj(response, output)
+            output.flush()
+            os.fsync(output.fileno())
+        actual = digest(archive_path)
+        if actual != lock["archiveSha256"]:
+            raise SystemExit(
+                f"error: Apalache archive digest mismatch: expected {lock['archiveSha256']}, found {actual}"
+            )
+        stage = owned_path / "distribution"
+        stage.mkdir()
+        with tarfile.open(archive_path, "r:gz") as archive:
+            archive.extractall(stage, members=safe_members(archive))
+        verify_distribution(stage, lock)
+        os.rename(stage, destination)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verify-only", action="store_true")
+    arguments = parser.parse_args()
+    quint_home_value = os.environ.get("QUINT_HOME")
+    if not quint_home_value:
+        raise SystemExit("error: QUINT_HOME must be an explicit absolute path")
+    quint_home = Path(quint_home_value)
+    if not quint_home.is_absolute():
+        raise SystemExit("error: QUINT_HOME must be an explicit absolute path")
+    lock = load_lock()
+    destination = quint_home / f"apalache-dist-{lock['version']}"
+    if arguments.verify_only:
+        verify_distribution(destination, lock)
+    else:
+        install(destination, lock)
+
+
+if __name__ == "__main__":
+    main()

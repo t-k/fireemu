@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "model": "TransactionConditionalLock",
+  "mutations": [
+    {
+      "id": "M-FORMAL-TXN-LOCK-WINNER-001",
+      "property": "OneWinner",
+      "operator": "allow-a-stale-transaction-to-commit",
+      "from": "CLIENTS.forall(other => observable.observations.get(other) == List(false)),\n    not(observable.locked),",
+      "to": "CLIENTS.forall(other => observable.observations.get(other) == List(false)),\n    true,"
+    },
+    {
+      "id": "M-FORMAL-TXN-LOCK-RETRY-001",
+      "property": "RetryReadsCommittedLock",
+      "operator": "retry-reuses-the-stale-lock-observation",
+      "from": "client, observable.observations.get(client).append(observable.locked)),\n      acted: observable.acted,\n    }),\n  }\n\n  action rejectLocked",
+      "to": "client, observable.observations.get(client).append(false)),\n      acted: observable.acted,\n    }),\n  }\n\n  action rejectLocked"
+    }
+  ]
+}

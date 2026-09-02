@@ -1,4 +1,4 @@
-//! Quint Connect driver for atomic ruleset publication and request pinning.
+//! Quint Connect driver for atomic ruleset publication and evaluation pinning.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -17,19 +17,19 @@ pub const MODELED_ACTIONS: [&str; 10] = [
     "Reject",
     "Activate",
     "Republish",
-    "StartRequest",
-    "ProgressRequest",
-    "FinishRequest",
+    "StartEvaluation",
+    "ProgressEvaluation",
+    "FinishEvaluation",
 ];
 
 /// Reproducible seeds used by generated conformance campaigns.
 pub const GENERATED_TRACE_SEEDS: [&str; 4] = ["0x1", "0x2", "0x3", "0x4"];
 
-const REQUESTS: [&str; 2] = ["r1", "r2"];
+const EVALUATIONS: [&str; 2] = ["r1", "r2"];
 const V1: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
 const V2: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
 
-/// Production ruleset identity and request snapshot versions.
+/// Production ruleset identity and evaluation snapshot versions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RulesetActivationState {
@@ -37,10 +37,10 @@ pub struct RulesetActivationState {
     pub active_version: String,
     /// Monotonic generation assigned by the production publication boundary.
     pub generation: u64,
-    /// Version pinned from production for each bounded logical request.
-    pub request_version: BTreeMap<String, String>,
-    /// Generation pinned from production for each bounded logical request.
-    pub request_generation: BTreeMap<String, u64>,
+    /// Version pinned from production for each bounded logical evaluation.
+    pub evaluation_version: BTreeMap<String, String>,
+    /// Generation pinned from production for each bounded logical evaluation.
+    pub evaluation_generation: BTreeMap<String, u64>,
 }
 
 /// Test-only perturbation after reading production state.
@@ -50,10 +50,10 @@ pub enum ProjectionFault {
     ActiveVersion,
     /// Change only the generation.
     Generation,
-    /// Change only one request version.
-    RequestVersion,
-    /// Change only one request generation.
-    RequestGeneration,
+    /// Change only one evaluation version.
+    EvaluationVersion,
+    /// Change only one evaluation generation.
+    EvaluationGeneration,
 }
 
 impl ProjectionFault {
@@ -63,8 +63,8 @@ impl ProjectionFault {
         match self {
             Self::ActiveVersion => "activeVersion",
             Self::Generation => "generation",
-            Self::RequestVersion => "requestVersion",
-            Self::RequestGeneration => "requestGeneration",
+            Self::EvaluationVersion => "evaluationVersion",
+            Self::EvaluationGeneration => "evaluationGeneration",
         }
     }
 }
@@ -75,10 +75,10 @@ pub struct RulesetActivationDriver {
     candidate_phase: String,
     candidate_source: Option<String>,
     candidate_loaded: Option<LoadedRules>,
-    request_state: BTreeMap<String, String>,
-    request_version: BTreeMap<String, String>,
-    request_generation: BTreeMap<String, u64>,
-    request_snapshots: BTreeMap<String, RulesetSnapshot>,
+    evaluation_state: BTreeMap<String, String>,
+    evaluation_version: BTreeMap<String, String>,
+    evaluation_generation: BTreeMap<String, u64>,
+    evaluation_snapshots: BTreeMap<String, RulesetSnapshot>,
     projection_fault: Option<ProjectionFault>,
     action_recorder: Option<Arc<Mutex<BTreeSet<String>>>>,
 }
@@ -98,13 +98,13 @@ impl RulesetActivationDriver {
             candidate_phase: "Absent".to_owned(),
             candidate_source: None,
             candidate_loaded: None,
-            request_state: initial_request_map("Idle"),
-            request_version: initial_request_map("v1"),
-            request_generation: REQUESTS
+            evaluation_state: initial_evaluation_map("Idle"),
+            evaluation_version: initial_evaluation_map("v1"),
+            evaluation_generation: EVALUATIONS
                 .into_iter()
-                .map(|request| (request.to_owned(), 0))
+                .map(|evaluation| (evaluation.to_owned(), 0))
                 .collect(),
-            request_snapshots: BTreeMap::new(),
+            evaluation_snapshots: BTreeMap::new(),
             projection_fault: None,
             action_recorder: None,
         }
@@ -135,13 +135,13 @@ impl RulesetActivationDriver {
         "Absent".clone_into(&mut self.candidate_phase);
         self.candidate_source = None;
         self.candidate_loaded = None;
-        self.request_state = initial_request_map("Idle");
-        self.request_version = initial_request_map("v1");
-        self.request_generation = REQUESTS
+        self.evaluation_state = initial_evaluation_map("Idle");
+        self.evaluation_version = initial_evaluation_map("v1");
+        self.evaluation_generation = EVALUATIONS
             .into_iter()
-            .map(|request| (request.to_owned(), 0))
+            .map(|evaluation| (evaluation.to_owned(), 0))
             .collect();
-        self.request_snapshots.clear();
+        self.evaluation_snapshots.clear();
         Ok(())
     }
 
@@ -228,38 +228,40 @@ impl RulesetActivationDriver {
         self.record_action("Republish")
     }
 
-    /// Admits one logical request and retains its production snapshot.
-    pub fn start_request(&mut self, request: &str) -> Result {
-        self.require_request_state(request, "Idle")?;
+    /// Admits one logical evaluation and retains its production snapshot.
+    pub fn start_evaluation(&mut self, evaluation: &str) -> Result {
+        self.require_evaluation_state(evaluation, "Idle")?;
         let snapshot = self
             .slot
             .snapshot()
-            .map_err(|error| invalid_data(&format!("request snapshot failed: {error}")))?;
+            .map_err(|error| invalid_data(&format!("evaluation snapshot failed: {error}")))?;
         let version = version_of(&snapshot)?.to_owned();
-        self.request_version.insert(request.to_owned(), version);
-        self.request_generation
-            .insert(request.to_owned(), snapshot.generation());
-        self.request_snapshots.insert(request.to_owned(), snapshot);
-        self.request_state
-            .insert(request.to_owned(), "Running".to_owned());
-        self.record_action("StartRequest")
+        self.evaluation_version
+            .insert(evaluation.to_owned(), version);
+        self.evaluation_generation
+            .insert(evaluation.to_owned(), snapshot.generation());
+        self.evaluation_snapshots
+            .insert(evaluation.to_owned(), snapshot);
+        self.evaluation_state
+            .insert(evaluation.to_owned(), "Running".to_owned());
+        self.record_action("StartEvaluation")
     }
 
     /// Observes that the retained production snapshot did not rebind.
-    pub fn progress_request(&mut self, request: &str) -> Result {
-        self.require_request_state(request, "Running")?;
-        self.assert_request_snapshot(request)?;
-        self.record_action("ProgressRequest")
+    pub fn progress_evaluation(&mut self, evaluation: &str) -> Result {
+        self.require_evaluation_state(evaluation, "Running")?;
+        self.assert_evaluation_snapshot(evaluation)?;
+        self.record_action("ProgressEvaluation")
     }
 
-    /// Finishes a request only after validating its retained snapshot once more.
-    pub fn finish_request(&mut self, request: &str) -> Result {
-        self.require_request_state(request, "Running")?;
-        self.assert_request_snapshot(request)?;
-        self.request_snapshots.remove(request);
-        self.request_state
-            .insert(request.to_owned(), "Finished".to_owned());
-        self.record_action("FinishRequest")
+    /// Finishes a evaluation only after validating its retained snapshot once more.
+    pub fn finish_evaluation(&mut self, evaluation: &str) -> Result {
+        self.require_evaluation_state(evaluation, "Running")?;
+        self.assert_evaluation_snapshot(evaluation)?;
+        self.evaluation_snapshots.remove(evaluation);
+        self.evaluation_state
+            .insert(evaluation.to_owned(), "Finished".to_owned());
+        self.record_action("FinishEvaluation")
     }
 
     /// Projects the live slot and versions captured from production snapshots.
@@ -268,20 +270,20 @@ impl RulesetActivationDriver {
             .slot
             .snapshot()
             .map_err(|error| invalid_data(&format!("active snapshot failed: {error}")))?;
-        let mut request_version = self.request_version.clone();
-        for (request, snapshot) in &self.request_snapshots {
-            request_version.insert(request.clone(), version_of(snapshot)?.to_owned());
+        let mut evaluation_version = self.evaluation_version.clone();
+        for (evaluation, snapshot) in &self.evaluation_snapshots {
+            evaluation_version.insert(evaluation.clone(), version_of(snapshot)?.to_owned());
         }
         let mut projected = RulesetActivationState {
             active_version: version_of(&active)?.to_owned(),
             generation: active.generation(),
-            request_version,
-            request_generation: self.request_generation.clone(),
+            evaluation_version,
+            evaluation_generation: self.evaluation_generation.clone(),
         };
-        for (request, snapshot) in &self.request_snapshots {
+        for (evaluation, snapshot) in &self.evaluation_snapshots {
             projected
-                .request_generation
-                .insert(request.clone(), snapshot.generation());
+                .evaluation_generation
+                .insert(evaluation.clone(), snapshot.generation());
         }
         match self.projection_fault {
             None => {}
@@ -291,13 +293,13 @@ impl RulesetActivationDriver {
             Some(ProjectionFault::Generation) => {
                 projected.generation = projected.generation.saturating_add(1);
             }
-            Some(ProjectionFault::RequestVersion) => {
-                if let Some(version) = projected.request_version.get_mut("r1") {
+            Some(ProjectionFault::EvaluationVersion) => {
+                if let Some(version) = projected.evaluation_version.get_mut("r1") {
                     *version = opposite_version(version).to_owned();
                 }
             }
-            Some(ProjectionFault::RequestGeneration) => {
-                if let Some(generation) = projected.request_generation.get_mut("r1") {
+            Some(ProjectionFault::EvaluationGeneration) => {
+                if let Some(generation) = projected.evaluation_generation.get_mut("r1") {
                     *generation = generation.saturating_add(1);
                 }
             }
@@ -319,34 +321,34 @@ impl RulesetActivationDriver {
         }
     }
 
-    fn require_request_state(&self, request: &str, expected: &str) -> Result {
-        if !REQUESTS.contains(&request) {
-            return Err(invalid_data("unknown bounded request"));
+    fn require_evaluation_state(&self, evaluation: &str, expected: &str) -> Result {
+        if !EVALUATIONS.contains(&evaluation) {
+            return Err(invalid_data("unknown bounded evaluation"));
         }
-        if self.request_state.get(request).map(String::as_str) == Some(expected) {
+        if self.evaluation_state.get(evaluation).map(String::as_str) == Some(expected) {
             Ok(())
         } else {
-            Err(invalid_data("action is disabled in the request phase"))
+            Err(invalid_data("action is disabled in the evaluation phase"))
         }
     }
 
-    fn assert_request_snapshot(&self, request: &str) -> Result {
+    fn assert_evaluation_snapshot(&self, evaluation: &str) -> Result {
         let snapshot = self
-            .request_snapshots
-            .get(request)
-            .ok_or_else(|| invalid_data("running request snapshot is missing"))?;
+            .evaluation_snapshots
+            .get(evaluation)
+            .ok_or_else(|| invalid_data("running evaluation snapshot is missing"))?;
         let recorded_version = self
-            .request_version
-            .get(request)
-            .ok_or_else(|| invalid_data("running request version is missing"))?;
+            .evaluation_version
+            .get(evaluation)
+            .ok_or_else(|| invalid_data("running evaluation version is missing"))?;
         let recorded_generation = self
-            .request_generation
-            .get(request)
-            .ok_or_else(|| invalid_data("running request generation is missing"))?;
+            .evaluation_generation
+            .get(evaluation)
+            .ok_or_else(|| invalid_data("running evaluation generation is missing"))?;
         if version_of(snapshot)? != recorded_version
             || snapshot.generation() != *recorded_generation
         {
-            return Err(invalid_data("running request snapshot was rebound"));
+            return Err(invalid_data("running evaluation snapshot was rebound"));
         }
         Ok(())
     }
@@ -389,9 +391,9 @@ impl Driver for RulesetActivationDriver {
             Reject => self.reject()?,
             Activate => self.activate()?,
             Republish => self.republish()?,
-            StartRequest(request: String) => self.start_request(&request)?,
-            ProgressRequest(request: String) => self.progress_request(&request)?,
-            FinishRequest(request: String) => self.finish_request(&request)?,
+            StartEvaluation(evaluation: String) => self.start_evaluation(&evaluation)?,
+            ProgressEvaluation(evaluation: String) => self.progress_evaluation(&evaluation)?,
+            FinishEvaluation(evaluation: String) => self.finish_evaluation(&evaluation)?,
         })
     }
 }
@@ -445,10 +447,10 @@ fn fresh_slot() -> RulesetSlot {
     )
 }
 
-fn initial_request_map(value: &str) -> BTreeMap<String, String> {
-    REQUESTS
+fn initial_evaluation_map(value: &str) -> BTreeMap<String, String> {
+    EVALUATIONS
         .into_iter()
-        .map(|request| (request.to_owned(), value.to_owned()))
+        .map(|evaluation| (evaluation.to_owned(), value.to_owned()))
         .collect()
 }
 

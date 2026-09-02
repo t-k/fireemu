@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "functions/concurrent-conditional-lock",
+  "product": "functions",
+  "title": "Concurrent function requests execute one action behind a Firestore transaction lock",
+  "sdks": [
+    "firebase-admin",
+    "rest"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 2,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "seed",
+      "status": "parity",
+      "value": "seeded"
+    },
+    {
+      "id": "only-one-request-passes-the-lock",
+      "status": "parity",
+      "value": {
+        "finalLocked": false,
+        "protectedActions": 1,
+        "responses": [
+          {
+            "body": {
+              "acquired": true
+            },
+            "status": 200
+          },
+          {
+            "body": {
+              "acquired": false,
+              "attempts": 2,
+              "observations": [
+                false,
+                true
+              ]
+            },
+            "status": 409
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -360,6 +360,44 @@
       }
     },
     {
+      "id": "INV-TXN-002",
+      "statement": "Of two transactions that read the same unlocked document version, at most one stale attempt commits the conditional lock.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "TransactionConditionalLock.qnt::OneWinner",
+        "mutation": [
+          "M-FORMAL-TXN-LOCK-WINNER-001"
+        ],
+        "integration": [
+          "conformance/src/corpus/firestore.mjs",
+          "conformance/src/corpus/functions.mjs",
+          "crates/fireemu-core-firestore/tests/store.rs",
+          "verification/quint/tests/transaction_conditional_lock_connect.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-TXN-003",
+      "statement": "An aborted conditional-lock transaction retries against the committed document version before it can enter the protected action.",
+      "criticality": "critical",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "TransactionConditionalLock.qnt::RetryReadsCommittedLock",
+        "mutation": [
+          "M-FORMAL-TXN-LOCK-RETRY-001"
+        ],
+        "integration": [
+          "conformance/src/corpus/firestore.mjs",
+          "conformance/src/corpus/functions.mjs",
+          "crates/fireemu-core-firestore/tests/store.rs",
+          "verification/quint/tests/transaction_conditional_lock_connect.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-STORAGE-001",
       "statement": "A generation number is never reused for the same object.",
       "criticality": "critical",
@@ -448,7 +486,7 @@
     },
     {
       "id": "INV-RULES-003",
-      "statement": "A ruleset becomes active only after parse, compile and limit checks; each request observes one immutable version.",
+      "statement": "A ruleset becomes active only after parse, compile and limit checks; each Security Rules authorization evaluation observes one immutable version.",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "implemented",
@@ -459,8 +497,8 @@
           "M-FORMAL-RULES-ATOMIC-001"
         ],
         "integration": [
-          "crates/fireemu-adapter-http/tests/control.rs",
-          "crates/fireemu-core-rules/tests/lint.rs"
+          "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu-core-rules/tests/activation.rs"
         ]
       }
     },

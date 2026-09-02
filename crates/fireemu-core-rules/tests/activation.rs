@@ -1,4 +1,4 @@
-//! Atomic ruleset publication and request snapshot contracts.
+//! Atomic ruleset publication and authorization-evaluation snapshot contracts.
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ const V1: &str = "rules_version = '2'; service cloud.firestore { match /database
 const V2: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
 
 #[test]
-fn request_snapshot_remains_on_v1_after_v2_activation() {
+fn evaluation_snapshot_remains_on_v1_after_v2_activation() {
     let slot = RulesetSlot::new(LoadedRules::from_source(V1).unwrap());
     let admitted = slot.snapshot().unwrap();
 

@@ -1,24 +1,24 @@
-// Atomic ruleset publication and immutable request snapshots.
+// Atomic ruleset publication and immutable evaluation snapshots.
 
 module RulesetActivation {
-  const REQUESTS: Set[str]
+  const EVALUATIONS: Set[str]
 
   type Observable = {
     activeVersion: str,
     generation: int,
-    requestVersion: str -> str,
-    requestGeneration: str -> int,
+    evaluationVersion: str -> str,
+    evaluationGeneration: str -> int,
   }
-  type ActionTaken = { tag: str, value: { request: str } }
+  type ActionTaken = { tag: str, value: { evaluation: str } }
 
   var observable: Observable
   var previousObservable: Observable
   var candidatePhase: str
   var previousCandidatePhase: str
-  var requestState: str -> str
-  var previousRequestState: str -> str
+  var evaluationState: str -> str
+  var previousEvaluationState: str -> str
   var lastAction: str
-  var lastRequest: str
+  var lastEvaluation: str
   var actionTaken: ActionTaken
 
   pure val CANDIDATE_PHASES = Set(
@@ -27,36 +27,36 @@ module RulesetActivation {
   pure val REQUEST_STATES = Set("Idle", "Running", "Finished")
   pure val ACTIONS = Set(
     "Init", "Create", "Parse", "Compile", "Check", "Reject", "Activate", "Republish",
-    "StartRequest", "ProgressRequest", "FinishRequest"
+    "StartEvaluation", "ProgressEvaluation", "FinishEvaluation"
   )
 
-  action record(actionName, request, nextObservable) = all {
+  action record(actionName, evaluation, nextObservable) = all {
     previousObservable' = observable,
     previousCandidatePhase' = candidatePhase,
-    previousRequestState' = requestState,
+    previousEvaluationState' = evaluationState,
     observable' = nextObservable,
     lastAction' = actionName,
-    lastRequest' = request,
-    actionTaken' = { tag: actionName, value: { request: request } },
+    lastEvaluation' = evaluation,
+    actionTaken' = { tag: actionName, value: { evaluation: evaluation } },
   }
 
   action init = {
     val initial = {
       activeVersion: "v1",
       generation: 0,
-      requestVersion: REQUESTS.mapBy(_ => "v1"),
-      requestGeneration: REQUESTS.mapBy(_ => 0),
+      evaluationVersion: EVALUATIONS.mapBy(_ => "v1"),
+      evaluationGeneration: EVALUATIONS.mapBy(_ => 0),
     }
     all {
       observable' = initial,
       previousObservable' = initial,
       candidatePhase' = "Absent",
       previousCandidatePhase' = "Absent",
-      requestState' = REQUESTS.mapBy(_ => "Idle"),
-      previousRequestState' = REQUESTS.mapBy(_ => "Idle"),
+      evaluationState' = EVALUATIONS.mapBy(_ => "Idle"),
+      previousEvaluationState' = EVALUATIONS.mapBy(_ => "Idle"),
       lastAction' = "Init",
-      lastRequest' = "",
-      actionTaken' = { tag: "init", value: { request: "" } },
+      lastEvaluation' = "",
+      actionTaken' = { tag: "init", value: { evaluation: "" } },
     }
   }
 
@@ -64,35 +64,35 @@ module RulesetActivation {
     candidatePhase == "Absent",
     record("Create", "", observable),
     candidatePhase' = "Created",
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
   action parse = all {
     candidatePhase == "Created",
     record("Parse", "", observable),
     candidatePhase' = "Parsed",
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
   action compile = all {
     candidatePhase == "Parsed",
     record("Compile", "", observable),
     candidatePhase' = "Compiled",
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
   action check = all {
     candidatePhase == "Compiled",
     record("Check", "", observable),
     candidatePhase' = "Checked",
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
   action rejectCandidate = all {
     candidatePhase.in(Set("Created", "Parsed", "Compiled", "Checked")),
     record("Reject", "", observable),
     candidatePhase' = "Rejected",
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
   action publishCandidate = all {
@@ -100,11 +100,11 @@ module RulesetActivation {
     record("Activate", "", {
       activeVersion: "v2",
       generation: observable.generation + 1,
-      requestVersion: observable.requestVersion,
-      requestGeneration: observable.requestGeneration,
+      evaluationVersion: observable.evaluationVersion,
+      evaluationGeneration: observable.evaluationGeneration,
     }),
     candidatePhase' = "Active",
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
   action republish = all {
@@ -113,37 +113,37 @@ module RulesetActivation {
     record("Republish", "", {
       activeVersion: observable.activeVersion,
       generation: observable.generation + 1,
-      requestVersion: observable.requestVersion,
-      requestGeneration: observable.requestGeneration,
+      evaluationVersion: observable.evaluationVersion,
+      evaluationGeneration: observable.evaluationGeneration,
     }),
     candidatePhase' = candidatePhase,
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
-  action startRequest(request) = all {
-    requestState.get(request) == "Idle",
-    record("StartRequest", request, {
+  action startEvaluation(evaluation) = all {
+    evaluationState.get(evaluation) == "Idle",
+    record("StartEvaluation", evaluation, {
       activeVersion: observable.activeVersion,
       generation: observable.generation,
-      requestVersion: observable.requestVersion.set(request, observable.activeVersion),
-      requestGeneration: observable.requestGeneration.set(request, observable.generation),
+      evaluationVersion: observable.evaluationVersion.set(evaluation, observable.activeVersion),
+      evaluationGeneration: observable.evaluationGeneration.set(evaluation, observable.generation),
     }),
     candidatePhase' = candidatePhase,
-    requestState' = requestState.set(request, "Running"),
+    evaluationState' = evaluationState.set(evaluation, "Running"),
   }
 
-  action progressRequest(request) = all {
-    requestState.get(request) == "Running",
-    record("ProgressRequest", request, observable),
+  action progressEvaluation(evaluation) = all {
+    evaluationState.get(evaluation) == "Running",
+    record("ProgressEvaluation", evaluation, observable),
     candidatePhase' = candidatePhase,
-    requestState' = requestState,
+    evaluationState' = evaluationState,
   }
 
-  action finishRequest(request) = all {
-    requestState.get(request) == "Running",
-    record("FinishRequest", request, observable),
+  action finishEvaluation(evaluation) = all {
+    evaluationState.get(evaluation) == "Running",
+    record("FinishEvaluation", evaluation, observable),
     candidatePhase' = candidatePhase,
-    requestState' = requestState.set(request, "Finished"),
+    evaluationState' = evaluationState.set(evaluation, "Finished"),
   }
 
   action Create = create
@@ -153,9 +153,9 @@ module RulesetActivation {
   action Reject = rejectCandidate
   action Activate = publishCandidate
   action Republish = republish
-  action StartRequest = { nondet request = REQUESTS.oneOf() startRequest(request) }
-  action ProgressRequest = { nondet request = REQUESTS.oneOf() progressRequest(request) }
-  action FinishRequest = { nondet request = REQUESTS.oneOf() finishRequest(request) }
+  action StartEvaluation = { nondet evaluation = EVALUATIONS.oneOf() startEvaluation(evaluation) }
+  action ProgressEvaluation = { nondet evaluation = EVALUATIONS.oneOf() progressEvaluation(evaluation) }
+  action FinishEvaluation = { nondet evaluation = EVALUATIONS.oneOf() finishEvaluation(evaluation) }
 
   action step = any {
     Create,
@@ -165,30 +165,30 @@ module RulesetActivation {
     Reject,
     Activate,
     Republish,
-    StartRequest,
-    ProgressRequest,
-    FinishRequest,
+    StartEvaluation,
+    ProgressEvaluation,
+    FinishEvaluation,
   }
 
   val TypeOK = and {
-    REQUESTS.size() > 0,
+    EVALUATIONS.size() > 0,
     observable.activeVersion.in(Set("v1", "v2")),
     observable.generation >= 0 and observable.generation <= 2,
-    observable.requestVersion.keys() == REQUESTS,
-    observable.requestGeneration.keys() == REQUESTS,
-    REQUESTS.forall(request => observable.requestVersion.get(request).in(Set("v1", "v2"))),
-    REQUESTS.forall(request => observable.requestGeneration.get(request) >= 0
-      and observable.requestGeneration.get(request) <= 2),
+    observable.evaluationVersion.keys() == EVALUATIONS,
+    observable.evaluationGeneration.keys() == EVALUATIONS,
+    EVALUATIONS.forall(evaluation => observable.evaluationVersion.get(evaluation).in(Set("v1", "v2"))),
+    EVALUATIONS.forall(evaluation => observable.evaluationGeneration.get(evaluation) >= 0
+      and observable.evaluationGeneration.get(evaluation) <= 2),
     previousObservable.activeVersion.in(Set("v1", "v2")),
     previousObservable.generation >= 0 and previousObservable.generation <= 2,
     candidatePhase.in(CANDIDATE_PHASES),
     previousCandidatePhase.in(CANDIDATE_PHASES),
-    requestState.keys() == REQUESTS,
-    previousRequestState.keys() == REQUESTS,
-    REQUESTS.forall(request => requestState.get(request).in(REQUEST_STATES)),
-    REQUESTS.forall(request => previousRequestState.get(request).in(REQUEST_STATES)),
+    evaluationState.keys() == EVALUATIONS,
+    previousEvaluationState.keys() == EVALUATIONS,
+    EVALUATIONS.forall(evaluation => evaluationState.get(evaluation).in(REQUEST_STATES)),
+    EVALUATIONS.forall(evaluation => previousEvaluationState.get(evaluation).in(REQUEST_STATES)),
     lastAction.in(ACTIONS),
-    lastRequest == "" or REQUESTS.contains(lastRequest),
+    lastEvaluation == "" or EVALUATIONS.contains(lastEvaluation),
   }
 
   val ActivationRequiresAllChecks =
@@ -200,12 +200,12 @@ module RulesetActivation {
       observable.generation == previousObservable.generation,
     })
 
-  val RequestVersionIsImmutable = REQUESTS.forall(request =>
-    (previousRequestState.get(request) == "Running"
-      and requestState.get(request).in(Set("Running", "Finished"))).implies(
-        observable.requestVersion.get(request) == previousObservable.requestVersion.get(request)
-          and observable.requestGeneration.get(request)
-            == previousObservable.requestGeneration.get(request)
+  val EvaluationSnapshotIsImmutable = EVALUATIONS.forall(evaluation =>
+    (previousEvaluationState.get(evaluation) == "Running"
+      and evaluationState.get(evaluation).in(Set("Running", "Finished"))).implies(
+        observable.evaluationVersion.get(evaluation) == previousObservable.evaluationVersion.get(evaluation)
+          and observable.evaluationGeneration.get(evaluation)
+            == previousObservable.evaluationGeneration.get(evaluation)
       )
   )
 
@@ -221,17 +221,17 @@ module RulesetActivation {
   val AtomicRulesetActivation = and {
     ActivationRequiresAllChecks,
     FailedCandidateNeverActivates,
-    RequestVersionIsImmutable,
+    EvaluationSnapshotIsImmutable,
     ActiveVersionChangesAtomically,
   }
 }
 
 module RulesetActivationProof {
-  import RulesetActivation(REQUESTS = Set("r1", "r2")).*
+  import RulesetActivation(EVALUATIONS = Set("r1", "r2")).*
 }
 
 module RulesetActivationScenarios {
-  import RulesetActivation(REQUESTS = Set("r1", "r2")).*
+  import RulesetActivation(EVALUATIONS = Set("r1", "r2")).*
 
   run activate = init.then(Create).then(Parse).then(Compile).then(Check).then(Activate)
     .expect(observable.activeVersion == "v2" and observable.generation == 1)
@@ -239,19 +239,19 @@ module RulesetActivationScenarios {
   run reject = init.then(Create).then(Parse).then(Reject)
     .expect(observable.activeVersion == "v1" and observable.generation == 0)
 
-  run pinRequest = init.then(startRequest("r1")).then(Create).then(Parse).then(Compile)
-    .then(Check).then(Activate).then(progressRequest("r1")).then(finishRequest("r1"))
+  run pinEvaluation = init.then(startEvaluation("r1")).then(Create).then(Parse).then(Compile)
+    .then(Check).then(Activate).then(progressEvaluation("r1")).then(finishEvaluation("r1"))
     .expect(observable.activeVersion == "v2"
-      and observable.requestVersion.get("r1") == "v1")
+      and observable.evaluationVersion.get("r1") == "v1")
 
   run pinGeneration = init.then(Create).then(Parse).then(Compile).then(Check).then(Activate)
-    .then(startRequest("r1")).then(Republish).then(progressRequest("r1"))
-    .then(finishRequest("r1"))
+    .then(startEvaluation("r1")).then(Republish).then(progressEvaluation("r1"))
+    .then(finishEvaluation("r1"))
     .expect(observable.activeVersion == "v2" and observable.generation == 2
-      and observable.requestVersion.get("r1") == "v2"
-      and observable.requestGeneration.get("r1") == 1)
+      and observable.evaluationVersion.get("r1") == "v2"
+      and observable.evaluationGeneration.get("r1") == 1)
 }
 
 module RulesetActivationConnect {
-  import RulesetActivation(REQUESTS = Set("r1", "r2")).*
+  import RulesetActivation(EVALUATIONS = Set("r1", "r2")).*
 }

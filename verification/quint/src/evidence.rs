@@ -9,7 +9,11 @@ use sha2::{Digest, Sha256};
 
 use crate::event_delivery::GENERATED_TRACE_SEEDS;
 use crate::model::{ModelDescriptor, PropertyKind};
-use crate::process::{MutationManifest, MutationOutcome, MutationResult};
+use crate::process::{
+    validate_apalache_distribution, MutationManifest, MutationOutcome, MutationResult,
+    APALACHE_ARCHIVE_SHA256, APALACHE_ARCHIVE_URL, APALACHE_JAR_SHA256, APALACHE_LAUNCHER_SHA256,
+    APALACHE_VERSION,
+};
 
 const QUINT_VERSION: &str = "0.32.0";
 const QUINT_CONNECT_VERSION: &str = "0.1.2";
@@ -23,8 +27,11 @@ const COMMON_DIGEST_PATHS: &[&str] = &[
     "Cargo.toml",
     "verification/quint/Cargo.toml",
     "verification/quint/README.md",
+    "verification/quint/apalache.lock.json",
+    "verification/quint/bin/install-apalache",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
+    "verification/quint/bin/authority-lock",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-verification.sh",
@@ -86,6 +93,16 @@ pub struct ToolEvidence {
     pub quint: String,
     /// Pinned Quint Connect crate version.
     pub quint_connect: String,
+    /// Pinned Apalache distribution version used by Quint's translator.
+    pub apalache: String,
+    /// Official release URL installed before verification.
+    pub apalache_archive_url: String,
+    /// SHA-256 of the reviewed release archive.
+    pub apalache_archive_sha256: String,
+    /// SHA-256 of the launcher that starts the translation server.
+    pub apalache_launcher_sha256: String,
+    /// SHA-256 of the exact Apalache JAR used for translation and TLC.
+    pub apalache_jar_sha256: String,
     /// TLC version bundled by the pinned Quint translator path.
     pub tlc: String,
     /// Selected verification backend.
@@ -124,11 +141,12 @@ pub fn build_evidence(
     descriptor: &'static ModelDescriptor,
     mutation_results: &[MutationResult],
 ) -> Result<Evidence, String> {
+    validate_apalache_distribution()?;
     let manifest = read_manifest(repository_root, descriptor)?;
     let mutations = normalize_mutations(&manifest, mutation_results)?;
     let bound_inputs = expected_bound_inputs(descriptor);
     let evidence = Evidence {
-        schema_version: 2,
+        schema_version: 3,
         model: descriptor.name.to_owned(),
         spec: descriptor.spec.to_owned(),
         main: descriptor.main.to_owned(),
@@ -201,7 +219,7 @@ fn validate_semantics(
     descriptor: &'static ModelDescriptor,
     repository_root: Option<&Path>,
 ) -> Result<(), String> {
-    if evidence.schema_version != 2
+    if evidence.schema_version != 3
         || evidence.model != descriptor.name
         || evidence.spec != descriptor.spec
         || evidence.main != descriptor.main
@@ -390,6 +408,11 @@ fn expected_tools() -> ToolEvidence {
     ToolEvidence {
         quint: QUINT_VERSION.to_owned(),
         quint_connect: QUINT_CONNECT_VERSION.to_owned(),
+        apalache: APALACHE_VERSION.to_owned(),
+        apalache_archive_url: APALACHE_ARCHIVE_URL.to_owned(),
+        apalache_archive_sha256: APALACHE_ARCHIVE_SHA256.to_owned(),
+        apalache_launcher_sha256: APALACHE_LAUNCHER_SHA256.to_owned(),
+        apalache_jar_sha256: APALACHE_JAR_SHA256.to_owned(),
         tlc: TLC_VERSION.to_owned(),
         backend: BACKEND.to_owned(),
     }

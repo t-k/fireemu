@@ -857,7 +857,9 @@ fn dispatch_with_blocking_hook(
                 if let Some(user) = committed.user(&uid) {
                     committed_response.body["displayName"] = json!(user.display_name);
                     committed_response.body["photoUrl"] = json!(user.photo_url);
-                    committed_response.body["emailVerified"] = json!(user.email_verified);
+                    if handler != routes::Handler::SignUp {
+                        committed_response.body["emailVerified"] = json!(user.email_verified);
+                    }
                 }
             }
         }

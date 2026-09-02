@@ -93,6 +93,9 @@ export function normalizeError(error) {
     const trailers = [];
     for (const key of Object.keys(raw.metadata.getMap()).toSorted()) {
       const lower = key.toLowerCase();
+      // grpc-js synthesizes this transport timestamp for each response. It is not an error
+      // contract and would make every recorded fixture expire immediately.
+      if (lower === "date") continue;
       for (const value of raw.metadata.get(key)) {
         if (lower.endsWith("-bin")) {
           const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);

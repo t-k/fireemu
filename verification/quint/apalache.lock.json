@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "version": "0.56.1",
+  "archiveUrl": "https://github.com/apalache-mc/apalache/releases/download/v0.56.1/apalache.tgz",
+  "archiveSha256": "91125e5a3646b9c9d3a7d921d3323f321fac5071909f72b3960c66ff2f998ee1",
+  "launcherSha256": "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7",
+  "jarSha256": "4753c0ebb2cbb266e2c6ac19ab5ca3827d726cc80fd1fc5d7c1eeb64736cd60b",
+  "tlcVersion": "2.19 of 08 August 2024"
+}

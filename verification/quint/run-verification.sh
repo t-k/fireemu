@@ -5,6 +5,69 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 cd "$repository_root"
 
+authority_lock="$script_dir/bin/authority-lock"
+lock_fd=${FIREEMU_QUINT_AUTHORITY_LOCK_FD:-}
+if [ -z "$lock_fd" ]; then
+  if [ ! -x "$authority_lock" ]; then
+    echo "error: authority lock launcher is not executable" >&2
+    exit 2
+  fi
+  exec "$authority_lock" "$0" "$@"
+fi
+lock_path=${FIREEMU_QUINT_AUTHORITY_LOCK:-${TMPDIR:-/tmp}/fireemu-quint-apalache-8822.lock}
+python3 - "$lock_fd" "$lock_path" <<'PY'
+import fcntl
+import os
+import stat
+import sys
+
+try:
+    descriptor = int(sys.argv[1])
+    inherited = os.fstat(descriptor)
+except (ValueError, OSError) as error:
+    raise SystemExit(f"error: invalid inherited authority lock descriptor: {error}") from error
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+expected_descriptor = os.open(sys.argv[2], flags)
+try:
+    expected = os.fstat(expected_descriptor)
+finally:
+    os.close(expected_descriptor)
+if (
+    not stat.S_ISREG(inherited.st_mode)
+    or inherited.st_uid != os.getuid()
+    or (inherited.st_dev, inherited.st_ino) != (expected.st_dev, expected.st_ino)
+):
+    raise SystemExit("error: inherited authority lock descriptor does not own the expected file")
+try:
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError as error:
+    raise SystemExit("error: inherited authority lock descriptor does not hold the lock") from error
+PY
+unset FIREEMU_QUINT_AUTHORITY_LOCK_FD
+
+APALACHE_VERSION=0.56.1
+APALACHE_JAR_SHA256=4753c0ebb2cbb266e2c6ac19ab5ca3827d726cc80fd1fc5d7c1eeb64736cd60b
+quint_home=${QUINT_HOME:-${HOME:?HOME or QUINT_HOME is required}/.quint}
+QUINT_HOME=$quint_home
+export QUINT_HOME
+"$script_dir/bin/install-apalache" --verify-only
+apalache_jar="$quint_home/apalache-dist-$APALACHE_VERSION/apalache/lib/apalache.jar"
+if [ ! -f "$apalache_jar" ]; then
+  echo "error: pinned Apalache JAR is missing: $apalache_jar" >&2
+  exit 2
+fi
+printf '%s  %s\n' "$APALACHE_JAR_SHA256" "$apalache_jar" | shasum -a 256 -c -
+python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    probe.settimeout(0.2)
+    if probe.connect_ex(("127.0.0.1", 8822)) == 0:
+        raise SystemExit("error: refusing an already occupied Apalache endpoint 127.0.0.1:8822")
+PY
+
 passes=${VERIFICATION_PASSES:-1}
 case "$passes" in
   ''|*[!0-9]*|0)
@@ -125,7 +188,8 @@ while [ "$pass" -le "$passes" ]; do
     RegexLinearRepeat:regex_linear_repeat_connect \
     RulesetActivation:ruleset_activation_connect \
     SessionEpoch:session_epoch_connect \
-    StorageGeneration:storage_generation_connect
+    StorageGeneration:storage_generation_connect \
+    TransactionConditionalLock:transaction_conditional_lock_connect
   do
     model=${entry%%:*}
     test_target=${entry#*:}

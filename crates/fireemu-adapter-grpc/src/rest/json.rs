@@ -223,6 +223,58 @@ fn nested_depth(parent_depth: u32) -> Result<u32, JsonError> {
     Ok(depth)
 }
 
+fn vector_map_from_json(
+    inner: &Value,
+    parent_depth: u32,
+) -> Result<Option<pb::MapValue>, JsonError> {
+    let Some(fields) = inner.get("fields").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let Some(type_value) = fields.get("__type__").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let Some(array_value) = fields.get("value").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    if fields.len() != 2
+        || type_value.len() != 1
+        || type_value.get("stringValue").and_then(Value::as_str) != Some("__vector__")
+        || array_value.len() != 1
+    {
+        return Ok(None);
+    }
+    let Some(array) = array_value.get("arrayValue") else {
+        return Ok(None);
+    };
+    let values = array
+        .get("values")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|value| value_from_json_at(value, parent_depth))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(Some(pb::MapValue {
+        fields: HashMap::from([
+            (
+                "__type__".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::StringValue("__vector__".to_owned())),
+                },
+            ),
+            (
+                "value".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue { values })),
+                },
+            ),
+        ]),
+    }))
+}
+
 fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonError> {
     use pb::value::ValueType as V;
     let Some(obj) = v.as_object() else {
@@ -301,10 +353,14 @@ fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonErr
         }
         "arrayValue" => V::ArrayValue(array_from_json(inner, parent_depth)?),
         "mapValue" => {
-            let depth = nested_depth(parent_depth)?;
-            V::MapValue(pb::MapValue {
-                fields: fields_from_json_at(inner.get("fields"), depth)?,
-            })
+            if let Some(vector) = vector_map_from_json(inner, parent_depth)? {
+                V::MapValue(vector)
+            } else {
+                let depth = nested_depth(parent_depth)?;
+                V::MapValue(pb::MapValue {
+                    fields: fields_from_json_at(inner.get("fields"), depth)?,
+                })
+            }
         }
         other => return err(format!("unknown value key {other:?}")),
     };
@@ -1062,11 +1118,34 @@ mod tests {
         value
     }
 
+    fn nested_map_with_vector(levels: u32) -> Value {
+        let mut value = json!({
+            "mapValue": {
+                "fields": {
+                    "__type__": {"stringValue": "__vector__"},
+                    "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}
+                }
+            }
+        });
+        for _ in 0..levels {
+            value = json!({"mapValue": {"fields": {"nested": value}}});
+        }
+        value
+    }
+
     #[test]
     fn json_value_decoder_stops_at_the_firestore_depth_limit() {
         assert!(value_from_json(&nested_map(MAX_NESTING_DEPTH)).is_ok());
         let error = value_from_json(&nested_map(MAX_NESTING_DEPTH + 1))
             .expect_err("one level past the limit is rejected");
+        assert!(error.0.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+    }
+
+    #[test]
+    fn json_vector_sentinel_has_the_same_leaf_depth_as_grpc() {
+        assert!(value_from_json(&nested_map_with_vector(MAX_NESTING_DEPTH)).is_ok());
+        let error = value_from_json(&nested_map_with_vector(MAX_NESTING_DEPTH + 1))
+            .expect_err("one enclosing map past the limit is rejected");
         assert!(error.0.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
     }
 }

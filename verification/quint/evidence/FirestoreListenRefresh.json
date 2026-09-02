@@ -59,7 +59,7 @@
     "Cargo.lock": "b9d9003d89e783439407af3eb59207cc649e1e52a8668688ce7fb10dbe61dfb6",
     "Cargo.toml": "244bf68843deadddd11112ae015177de0c5cd0ff58a37beb17d0127d98af6f48",
     "crates/fireemu-adapter-grpc/src/local.rs": "ac4b2e6fac15baa24902356d6bfddaf656486de79dad43f5e5d8de8e87ae17f4",
-    "crates/fireemu-adapter-grpc/src/streams.rs": "5ea45cf34f963939b636f848b63a96e5f5ec9c723da7177e8e7008ccb1b0b812",
+    "crates/fireemu-adapter-grpc/src/streams.rs": "1f528b0ec556a5eedc4cb16a99918f5a659e16fc6e21cb247621f42fc0884589",
     "crates/fireemu-core-firestore/src/query.rs": "7e236b15aca6cafd9de78e46559a74f331cb6cf6bdc90eb2d75c1a811c7fea89",
     "crates/fireemu-core-firestore/src/store.rs": "f286a0305d8d9e1896458d0ceb4f462109329bb24a001e321f6d5903f2835f7f",
     "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
@@ -102,9 +102,7 @@
     "FullRefreshExaminesNoDeltaRows",
     "GenerationResetReplaysEveryTarget"
   ],
-  "temporalProperties": [
-
-  ],
+  "temporalProperties": [],
   "mutations": [
     {
       "id": "M-FORMAL-LISTEN-CONTIGUOUS-001",

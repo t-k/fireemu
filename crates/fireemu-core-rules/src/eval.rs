@@ -261,7 +261,10 @@ enum BindingState<'a> {
     Value(RulesValue),
     Lazy(&'a Expr),
     Evaluating,
-    Resolved(Result<RulesValue, EvalError>),
+    Resolved {
+        result: Result<RulesValue, EvalError>,
+        cause: Option<UndefinedCause>,
+    },
 }
 
 impl Binding<'_> {
@@ -793,8 +796,12 @@ impl<'a> Evaluator<'a> {
                 self.scope.bindings[index].state = BindingState::Value(value.clone());
                 Ok(value)
             }
-            BindingState::Resolved(result) => {
-                self.scope.bindings[index].state = BindingState::Resolved(result.clone());
+            BindingState::Resolved { result, cause } => {
+                self.cause = cause.clone();
+                self.scope.bindings[index].state = BindingState::Resolved {
+                    result: result.clone(),
+                    cause,
+                };
                 result
             }
             BindingState::Evaluating => {
@@ -805,7 +812,10 @@ impl<'a> Evaluator<'a> {
                 let visible_before = self.scope.bindings[index].visible_before;
                 let mut hidden = self.scope.bindings.split_off(visible_before);
                 let result = self.eval(expr);
-                hidden[index - visible_before].state = BindingState::Resolved(result.clone());
+                hidden[index - visible_before].state = BindingState::Resolved {
+                    result: result.clone(),
+                    cause: self.cause.clone(),
+                };
                 self.scope.bindings.extend(hidden);
                 result
             }

@@ -2023,6 +2023,11 @@ mod tests {
             1,
             "Node 18 requests retain their runtime semantics"
         );
+        assert_eq!(
+            select_node_installation(None, Some("18"), &legacy).unwrap(),
+            1,
+            "a legacy engine constraint does not inherit capability requirements from newer nodes"
+        );
     }
 
     #[test]

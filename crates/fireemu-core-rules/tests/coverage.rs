@@ -122,6 +122,33 @@ fn an_expression_that_raises_is_recorded_as_undefined_with_the_innermost_cause()
 }
 
 #[test]
+fn a_cached_lazy_let_error_keeps_its_original_undefined_cause() {
+    let src = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    function mayRead() {\n      let maybe = resource.data.optionalId;\n      return maybe == 'a' || false || maybe == 'b';\n    }\n    match /notes/{id} {\n      allow get: if mayRead();\n    }\n  }\n}\n";
+    let ruleset = parse_ruleset(src).unwrap();
+    let (report, coverage) = evaluate_request_traced(&ruleset, &ctx(Method::Get, "a"), None);
+    assert!(matches!(report.decision, Decision::Deny(_)));
+
+    let cause_at = src.find("resource.data.optionalId").unwrap();
+    let return_at = src.find("return maybe").unwrap();
+    let maybe_offsets = src[return_at..]
+        .match_indices("maybe")
+        .map(|(offset, _)| return_at + offset)
+        .collect::<Vec<_>>();
+    assert_eq!(maybe_offsets.len(), 2);
+    for offset in maybe_offsets {
+        let entry = coverage
+            .entries()
+            .into_iter()
+            .find(|entry| entry.span.offset == offset)
+            .expect("the lazy binding reference is recorded");
+        let Some((ExprValue::Undefined(cause), _)) = entry.values.first() else {
+            panic!("the lazy binding reference is undefined");
+        };
+        assert_eq!(cause.span.offset, cause_at);
+    }
+}
+
+#[test]
 fn a_recorded_value_never_carries_a_token() {
     // `request.auth.token` is a map, so it is recorded as a type name and not as its claims.
     let src = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} {\n      allow get: if request.auth.token.role == 'admin';\n    }\n  }\n}\n";

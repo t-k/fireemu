@@ -2533,29 +2533,34 @@ impl AuthRegistry {
         &self,
         local_id: &str,
     ) -> CompatibilityUserStoreMatch {
-        let Ok(default) = self.default.lock() else {
-            return CompatibilityUserStoreMatch::Unavailable;
-        };
-        let mut found = default
-            .user_by_id(local_id)
-            .is_some()
-            .then(|| self.default.clone());
-        drop(default);
-
+        // Keep membership and every participating store locked until the decision is complete.
+        // Store mutations use these same mutexes, so the instant the final lock is acquired is a
+        // coherent snapshot. The global order is registry membership, default store, then routed
+        // stores in lexical project order.
         let Ok(projects) = self.projects.lock() else {
             return CompatibilityUserStoreMatch::Unavailable;
         };
-        for store in projects.routed.values() {
-            let Ok(candidate) = store.lock() else {
+        let stores = core::iter::once(&self.default)
+            .chain(projects.routed.values())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut guards = Vec::with_capacity(stores.len());
+        for store in &stores {
+            let Ok(guard) = store.lock() else {
                 return CompatibilityUserStoreMatch::Unavailable;
             };
+            guards.push(guard);
+        }
+
+        let mut found = None;
+        for (index, candidate) in guards.iter().enumerate() {
             if candidate.user_by_id(local_id).is_none() {
                 continue;
             }
             if found.is_some() {
                 return CompatibilityUserStoreMatch::Ambiguous;
             }
-            found = Some(store.clone());
+            found = Some(stores[index].clone());
         }
         found.map_or(
             CompatibilityUserStoreMatch::NotFound,
@@ -2976,5 +2981,98 @@ mod snapshot_cow_tests {
         assert!(snapshot.0.users.get(&mfa).unwrap().mfa.totp_factors()[0]
             .secret
             .is_detached());
+    }
+}
+
+#[cfg(test)]
+mod compatibility_routing_tests {
+    use super::{
+        AuthRegistry, AuthStore, CompatibilityUserStoreMatch, NewUser, RoutedStoreInstall,
+    };
+    use crate::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+    use std::sync::{mpsc, Arc, Mutex, TryLockError};
+    use std::time::{Duration, Instant};
+
+    const NOW: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+    fn store(project: &str, seed: u64) -> Arc<Mutex<AuthStore>> {
+        Arc::new(Mutex::new(AuthStore::new(
+            project,
+            SplitMix64::new(seed),
+            TotpPolicy::default(),
+        )))
+    }
+
+    #[test]
+    fn unique_user_lookup_is_a_coherent_snapshot_during_cross_project_moves() {
+        let default = store("demo-app", 1);
+        let alpha = store("worker-alpha", 2);
+        let beta = store("worker-beta", 3);
+        let registry = Arc::new(AuthRegistry::new("demo-app", default));
+        assert!(matches!(
+            registry.install_routed("worker-alpha", alpha.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-beta", beta.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        beta.lock()
+            .unwrap()
+            .create_user_with_id(NewUser::email("beta@example.test"), Some("shared-uid"), NOW)
+            .unwrap();
+
+        let mut beta_guard = beta.lock().unwrap();
+        let lookup_registry = registry.clone();
+        let lookup = std::thread::spawn(move || {
+            lookup_registry.compatibility_store_for_unique_user("shared-uid")
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match registry.projects.try_lock() {
+                Err(TryLockError::WouldBlock) => break,
+                Err(TryLockError::Poisoned(_)) => panic!("project registry was poisoned"),
+                Ok(guard) => drop(guard),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "lookup did not reach the blocked routed store"
+            );
+            std::thread::yield_now();
+        }
+
+        let (created_tx, created_rx) = mpsc::sync_channel(1);
+        let creator_store = alpha.clone();
+        let creator = std::thread::spawn(move || {
+            creator_store
+                .lock()
+                .unwrap()
+                .create_user_with_id(
+                    NewUser::email("alpha@example.test"),
+                    Some("shared-uid"),
+                    NOW,
+                )
+                .unwrap();
+            created_tx.send(()).unwrap();
+        });
+        let created_before_snapshot = created_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+        if created_before_snapshot {
+            beta_guard.delete_user_by_id("shared-uid").unwrap();
+        }
+        drop(beta_guard);
+
+        let selected = lookup.join().unwrap();
+        creator.join().unwrap();
+        assert!(
+            !created_before_snapshot,
+            "a user mutation interleaved with a cross-project lookup"
+        );
+        assert!(matches!(
+            selected,
+            CompatibilityUserStoreMatch::Unique(store) if Arc::ptr_eq(&store, &beta)
+        ));
     }
 }

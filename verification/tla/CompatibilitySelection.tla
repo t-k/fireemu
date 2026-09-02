@@ -9,9 +9,9 @@ ASSUME ExplicitNode \in Nodes
 
 Projects == {DefaultProject} \union RoutedProjects
 
-VARIABLES userProjects, authDecision, automaticNode, explicitNode, phase
+VARIABLES userProjects, lockedProjects, authDecision, automaticNode, explicitNode, phase
 
-vars == <<userProjects, authDecision, automaticNode, explicitNode, phase>>
+vars == <<userProjects, lockedProjects, authDecision, automaticNode, explicitNode, phase>>
 
 NodeCapability == [
   node \in Nodes |->
@@ -48,19 +48,40 @@ AutomaticChoice ==
 
 Init ==
   /\ userProjects = {}
+  /\ lockedProjects = {}
   /\ authDecision = "pending"
   /\ automaticNode = "pending"
   /\ explicitNode = "pending"
   /\ phase = "setup"
 
 AddUser(project) ==
-  /\ phase = "setup"
+  /\ phase \in {"setup", "scanning"}
   /\ project \in Projects
+  /\ project \notin lockedProjects
   /\ userProjects' = userProjects \union {project}
-  /\ UNCHANGED <<authDecision, automaticNode, explicitNode, phase>>
+  /\ UNCHANGED <<lockedProjects, authDecision, automaticNode, explicitNode, phase>>
+
+RemoveUser(project) ==
+  /\ phase \in {"setup", "scanning"}
+  /\ project \in Projects
+  /\ project \notin lockedProjects
+  /\ userProjects' = userProjects \ {project}
+  /\ UNCHANGED <<lockedProjects, authDecision, automaticNode, explicitNode, phase>>
+
+BeginExchange ==
+  /\ phase = "setup"
+  /\ phase' = "scanning"
+  /\ UNCHANGED <<userProjects, lockedProjects, authDecision, automaticNode, explicitNode>>
+
+LockProject(project) ==
+  /\ phase = "scanning"
+  /\ project \in Projects \ lockedProjects
+  /\ lockedProjects' = lockedProjects \union {project}
+  /\ UNCHANGED <<userProjects, authDecision, automaticNode, explicitNode, phase>>
 
 Exchange ==
-  /\ phase = "setup"
+  /\ phase = "scanning"
+  /\ lockedProjects = Projects
   /\ authDecision' =
        IF Cardinality(userProjects) = 0
        THEN DefaultProject
@@ -70,7 +91,7 @@ Exchange ==
   /\ automaticNode' = AutomaticChoice
   /\ explicitNode' = ExplicitNode
   /\ phase' = "done"
-  /\ UNCHANGED userProjects
+  /\ UNCHANGED <<userProjects, lockedProjects>>
 
 Done ==
   /\ phase = "done"
@@ -78,6 +99,9 @@ Done ==
 
 Next ==
   \/ \E project \in Projects : AddUser(project)
+  \/ \E project \in Projects : RemoveUser(project)
+  \/ BeginExchange
+  \/ \E project \in Projects : LockProject(project)
   \/ Exchange
   \/ Done
 
@@ -85,10 +109,11 @@ Spec == Init /\ [][Next]_vars
 
 TypeOK ==
   /\ userProjects \subseteq Projects
+  /\ lockedProjects \subseteq Projects
   /\ authDecision \in Projects \union {"pending", "deny"}
   /\ automaticNode \in Nodes \union {"pending"}
   /\ explicitNode \in Nodes \union {"pending"}
-  /\ phase \in {"setup", "done"}
+  /\ phase \in {"setup", "scanning", "done"}
 
 UniqueUserRoutesToItsProject ==
   phase = "done" /\ Cardinality(userProjects) = 1

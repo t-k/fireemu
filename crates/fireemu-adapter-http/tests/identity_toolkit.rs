@@ -1210,6 +1210,7 @@ fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
         json!("9223372036854775808"),
         json!(-1_i64),
         json!(1.5_f64),
+        json!(u64::MAX),
         Value::Null,
     ] {
         let (status, _) = admin(
@@ -1239,6 +1240,33 @@ fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
     );
     assert_eq!(looked["users"][0]["validSince"], "1788005001");
     assert_eq!(looked["users"][0]["displayName"], "numeric-applied");
+
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": "boundary-user"}),
+        )
+        .0,
+        200
+    );
+    for boundary in [0_i64, i64::MAX] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "boundary-user", "validSince": boundary}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let (_, looked) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["boundary-user"]}),
+    );
+    assert_eq!(looked["users"][0]["validSince"], i64::MAX.to_string());
 }
 
 // ------------------------------------------------------------------------------------------

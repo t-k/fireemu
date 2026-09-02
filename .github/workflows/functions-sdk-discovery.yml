@@ -1,0 +1,29 @@
+name: functions-sdk-discovery
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  real-sdk-discovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tools/sdk-smoke/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: functions-sdk-discovery
+      - name: install the real Functions SDK fixture
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
+      - name: runner discovery preserves generation and reset-value metadata
+        run: cargo test -p fireemu --test functions_discovery second_generation_omitted_concurrency_remains_defaultable -- --ignored --exact

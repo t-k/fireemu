@@ -91,6 +91,8 @@ fn document_paths_report_exact_segment_indexes_depths_and_lengths() {
     let root = parse("users/alice").unwrap();
     assert!(root.parent_document().is_none());
     let nested = parse("users/alice/tasks/t1/steps/s1").unwrap();
+    assert!(nested.ancestor(0).is_none());
+    assert_eq!(nested.ancestor(1).unwrap().relative(), "users/alice");
     let parent = nested.parent_document().unwrap();
     assert_eq!(parent.relative(), "users/alice/tasks/t1");
     assert_eq!(parent.parent_document().unwrap().relative(), "users/alice");

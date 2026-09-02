@@ -7,6 +7,9 @@ use core::cmp::Ordering;
 use core::fmt;
 use std::collections::BTreeMap;
 
+/// Maximum number of nested map and array containers accepted by Firestore.
+pub const MAX_NESTING_DEPTH: u32 = 20;
+
 /// Firestore timestamp: seconds since the Unix epoch plus nanoseconds, restricted to the
 /// official range `0001-01-01T00:00:00Z ..= 9999-12-31T23:59:59.999999999Z`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -223,17 +226,24 @@ impl Value {
     /// Nesting depth: each map or array level adds one (`FS-LIMIT-NESTED-MAP-ARRAY-DEPTH`).
     #[must_use]
     pub fn nesting_depth(&self) -> u32 {
-        match self {
-            Self::Array(items) => 1 + items.iter().map(Value::nesting_depth).max().unwrap_or(0),
-            Self::Map(entries) => {
-                1 + entries
-                    .values()
-                    .map(Value::nesting_depth)
-                    .max()
-                    .unwrap_or(0)
+        let mut maximum = 0;
+        let mut pending = vec![(self, 0_u32)];
+        while let Some((value, parent_depth)) = pending.pop() {
+            match value {
+                Self::Array(items) => {
+                    let depth = parent_depth.saturating_add(1);
+                    maximum = maximum.max(depth);
+                    pending.extend(items.iter().map(|item| (item, depth)));
+                }
+                Self::Map(entries) => {
+                    let depth = parent_depth.saturating_add(1);
+                    maximum = maximum.max(depth);
+                    pending.extend(entries.values().map(|item| (item, depth)));
+                }
+                _ => {}
             }
-            _ => 0,
         }
+        maximum
     }
 }
 

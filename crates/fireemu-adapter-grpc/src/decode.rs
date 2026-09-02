@@ -9,7 +9,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
-use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
+use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value, MAX_NESTING_DEPTH};
 use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
@@ -106,6 +106,20 @@ fn field_path(reference: Option<&sq::FieldReference>) -> Result<FieldPath, Decod
 
 /// Decodes a protobuf value.
 pub fn decode_value(value: &pb::Value) -> Result<Value, DecodeError> {
+    decode_value_at(value, 0)
+}
+
+fn nested_depth(parent_depth: u32) -> Result<u32, DecodeError> {
+    let depth = parent_depth.saturating_add(1);
+    if depth > MAX_NESTING_DEPTH {
+        return Err(DecodeError::InvalidValue(format!(
+            "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum {MAX_NESTING_DEPTH}, got {depth}"
+        )));
+    }
+    Ok(depth)
+}
+
+fn decode_value_at(value: &pb::Value, parent_depth: u32) -> Result<Value, DecodeError> {
     use pb::value::ValueType as V;
     let Some(v) = &value.value_type else {
         return Err(DecodeError::InvalidValue("value without value_type".into()));
@@ -130,13 +144,8 @@ pub fn decode_value(value: &pb::Value) -> Result<Value, DecodeError> {
             GeoPoint::new(g.latitude, g.longitude)
                 .map_err(|_| DecodeError::InvalidValue("geo point out of range".into()))?,
         ),
-        V::ArrayValue(a) => Value::Array(
-            a.values
-                .iter()
-                .map(decode_value)
-                .collect::<Result<Vec<_>, _>>()?,
-        ),
-        V::MapValue(m) => decode_map(m)?,
+        V::ArrayValue(a) => decode_array(a, parent_depth)?,
+        V::MapValue(m) => decode_map(m, parent_depth)?,
         V::FieldReferenceValue(_)
         | V::VariableReferenceValue(_)
         | V::FunctionValue(_)
@@ -148,7 +157,18 @@ pub fn decode_value(value: &pb::Value) -> Result<Value, DecodeError> {
     })
 }
 
-fn decode_map(m: &pb::MapValue) -> Result<Value, DecodeError> {
+fn decode_array(array: &pb::ArrayValue, parent_depth: u32) -> Result<Value, DecodeError> {
+    let depth = nested_depth(parent_depth)?;
+    Ok(Value::Array(
+        array
+            .values
+            .iter()
+            .map(|value| decode_value_at(value, depth))
+            .collect::<Result<Vec<_>, _>>()?,
+    ))
+}
+
+fn decode_map(m: &pb::MapValue, parent_depth: u32) -> Result<Value, DecodeError> {
     // Vector values travel as {"__type__": "__vector__", "value": [doubles]}.
     if let (
         Some(pb::Value {
@@ -178,12 +198,13 @@ fn decode_map(m: &pb::MapValue) -> Result<Value, DecodeError> {
             return Ok(Value::Vector(dims));
         }
     }
+    let depth = nested_depth(parent_depth)?;
     let mut out = BTreeMap::new();
     for (k, v) in &m.fields {
         if k.is_empty() || k.chars().any(char::is_control) {
             return Err(DecodeError::InvalidValue(format!("invalid map key {k:?}")));
         }
-        out.insert(k.clone(), decode_value(v)?);
+        out.insert(k.clone(), decode_value_at(v, depth)?);
     }
     Ok(Value::Map(out))
 }
@@ -404,4 +425,50 @@ pub fn decode_structured_query(
         );
     }
     Ok(q)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    fn nested_map(levels: u32) -> pb::Value {
+        let mut value = pb::Value {
+            value_type: Some(pb::value::ValueType::IntegerValue(1)),
+        };
+        for _ in 0..levels {
+            value = pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: HashMap::from([("nested".to_owned(), value)]),
+                })),
+            };
+        }
+        value
+    }
+
+    #[test]
+    fn value_decoder_accepts_the_firestore_depth_limit_and_rejects_the_next_level() {
+        let accepted = decode_value(&nested_map(MAX_NESTING_DEPTH)).expect("limit is accepted");
+        assert_eq!(accepted.nesting_depth(), MAX_NESTING_DEPTH);
+
+        let error = decode_value(&nested_map(MAX_NESTING_DEPTH + 1))
+            .expect_err("one level past the limit is rejected");
+        assert!(error
+            .to_string()
+            .contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+    }
+
+    proptest! {
+        #[test]
+        fn every_successfully_decoded_value_is_within_the_firestore_depth_limit(
+            levels in 0_u32..=MAX_NESTING_DEPTH + 8,
+        ) {
+            if let Ok(value) = decode_value(&nested_map(levels)) {
+                prop_assert!(value.nesting_depth() <= MAX_NESTING_DEPTH);
+            }
+        }
+    }
 }

@@ -563,6 +563,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "proptest",
  "prost-types",
  "serde_json",
  "tokio",

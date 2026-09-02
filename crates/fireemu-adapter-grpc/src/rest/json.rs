@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use fireemu_core_firestore::value::MAX_NESTING_DEPTH;
 use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
@@ -209,6 +210,20 @@ pub fn value_to_json(v: &pb::Value) -> Value {
 
 /// JSON → protobuf value.
 pub fn value_from_json(v: &Value) -> Result<pb::Value, JsonError> {
+    value_from_json_at(v, 0)
+}
+
+fn nested_depth(parent_depth: u32) -> Result<u32, JsonError> {
+    let depth = parent_depth.saturating_add(1);
+    if depth > MAX_NESTING_DEPTH {
+        return err(format!(
+            "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum {MAX_NESTING_DEPTH}, got {depth}"
+        ));
+    }
+    Ok(depth)
+}
+
+fn value_from_json_at(v: &Value, parent_depth: u32) -> Result<pb::Value, JsonError> {
     use pb::value::ValueType as V;
     let Some(obj) = v.as_object() else {
         return err("a value must be an object with exactly one *Value key");
@@ -284,17 +299,13 @@ pub fn value_from_json(v: &Value) -> Result<pb::Value, JsonError> {
                 longitude: coordinate("longitude", 180.0)?,
             })
         }
-        "arrayValue" => V::ArrayValue(pb::ArrayValue {
-            values: inner
-                .get("values")
-                .and_then(Value::as_array)
-                .map(|items| items.iter().map(value_from_json).collect::<Result<_, _>>())
-                .transpose()?
-                .unwrap_or_default(),
-        }),
-        "mapValue" => V::MapValue(pb::MapValue {
-            fields: fields_from_json(inner.get("fields"))?,
-        }),
+        "arrayValue" => V::ArrayValue(array_from_json(inner, parent_depth)?),
+        "mapValue" => {
+            let depth = nested_depth(parent_depth)?;
+            V::MapValue(pb::MapValue {
+                fields: fields_from_json_at(inner.get("fields"), depth)?,
+            })
+        }
         other => return err(format!("unknown value key {other:?}")),
     };
     Ok(pb::Value {
@@ -302,15 +313,38 @@ pub fn value_from_json(v: &Value) -> Result<pb::Value, JsonError> {
     })
 }
 
+fn array_from_json(inner: &Value, parent_depth: u32) -> Result<pb::ArrayValue, JsonError> {
+    let depth = nested_depth(parent_depth)?;
+    let values = inner
+        .get("values")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|value| value_from_json_at(value, depth))
+                .collect::<Result<_, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(pb::ArrayValue { values })
+}
+
 /// `fields` object → protobuf map.
 pub fn fields_from_json(v: Option<&Value>) -> Result<HashMap<String, pb::Value>, JsonError> {
+    fields_from_json_at(v, 0)
+}
+
+fn fields_from_json_at(
+    v: Option<&Value>,
+    parent_depth: u32,
+) -> Result<HashMap<String, pb::Value>, JsonError> {
     let mut out = HashMap::new();
     let Some(v) = v else { return Ok(out) };
     let Some(obj) = v.as_object() else {
         return err("fields must be an object");
     };
     for (k, v) in obj {
-        out.insert(k.clone(), value_from_json(v)?);
+        out.insert(k.clone(), value_from_json_at(v, parent_depth)?);
     }
     Ok(out)
 }
@@ -1014,4 +1048,25 @@ pub fn write_response_to_json(r: &pb::WriteResponse) -> Value {
         v["commitTime"] = timestamp_to_json(t);
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nested_map(levels: u32) -> Value {
+        let mut value = json!({"integerValue": "1"});
+        for _ in 0..levels {
+            value = json!({"mapValue": {"fields": {"nested": value}}});
+        }
+        value
+    }
+
+    #[test]
+    fn json_value_decoder_stops_at_the_firestore_depth_limit() {
+        assert!(value_from_json(&nested_map(MAX_NESTING_DEPTH)).is_ok());
+        let error = value_from_json(&nested_map(MAX_NESTING_DEPTH + 1))
+            .expect_err("one level past the limit is rejected");
+        assert!(error.0.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+    }
 }

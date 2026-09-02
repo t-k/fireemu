@@ -2259,7 +2259,7 @@ impl FirestoreState {
     fn listing_candidate_path(node: &ListingTrieDocument, depth: usize) -> Option<DocumentPath> {
         node.representative
             .as_ref()
-            .map(|path| path.ancestor(depth))
+            .and_then(|path| path.ancestor(depth))
     }
 
     fn listing_missing_candidate(

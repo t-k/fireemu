@@ -35,6 +35,7 @@ fn state() -> AuthState {
         control_token: None,
         registry: None,
         allow_routed_projects: false,
+        stateless_refresh_tokens: true,
         app_check: None,
         app_check_policy: None,
         tenancy: None,

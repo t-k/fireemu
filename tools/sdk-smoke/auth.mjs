@@ -95,6 +95,45 @@ await check("password change invalidates an existing session cookie", async () =
   return { uid: verified.uid };
 });
 
+await check("Admin password change lets the Web SDK finish same-second logout", async () => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    while (Date.now() % 1000 > 150) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const email = `admin-password-${attempt}@example.com`;
+    const created = await adminAuth.createUser({
+      email,
+      emailVerified: true,
+      password: "password1",
+    });
+    const credential = await signInWithEmailAndPassword(auth, email, "password1");
+    const claims = await adminAuth.verifyIdToken(await credential.user.getIdToken());
+    const updated = await adminAuth.updateUser(created.uid, { password: "password2" });
+    const validSince = Math.floor(new Date(updated.tokensValidAfterTime).getTime() / 1000);
+    if (validSince !== claims.auth_time) {
+      await signOut(auth);
+      await adminAuth.deleteUser(created.uid);
+      continue;
+    }
+
+    let flowError;
+    try {
+      await credential.user.reload();
+      await credential.user.getIdToken(true);
+      await signOut(auth);
+    } catch (error) {
+      flowError = error;
+    }
+    const userRemained = auth.currentUser !== null;
+    if (userRemained) await signOut(auth);
+    await adminAuth.deleteUser(created.uid);
+    assert(!flowError, `same-second refresh failed: ${flowError?.code ?? flowError}`);
+    assert(!userRemained, "the Web SDK user remained signed in");
+    return { validSince, authTime: claims.auth_time };
+  }
+  throw new Error("could not obtain a same-second Admin password update");
+});
+
 await check("password reset through an oob code", async () => {
   await createUserWithEmailAndPassword(auth, "reset@example.com", "hunter22");
   await signOut(auth);

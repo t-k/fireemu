@@ -52,6 +52,7 @@ fn harness(mode: BaselineMode) -> Harness {
         control_token: Some(fixture::CONTROL_TOKEN.to_owned()),
         registry: None,
         allow_routed_projects: false,
+        stateless_refresh_tokens: true,
         app_check: Some(app_check.clone()),
         app_check_policy: fixture::policy(&app_check, "auth", mode),
         tenancy: None,

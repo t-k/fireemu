@@ -1417,31 +1417,6 @@ fn clock_millis(clock: &Arc<Mutex<VirtualClock>>) -> i64 {
     i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
 }
 
-/// The lines of `current` that are new since `previous`, tolerating the runner's front-trim of
-/// its bounded log buffer. Mirrors the UI SSE stream's `new_lines`; duplicated here so the
-/// logging pump does not depend on the UI crate.
-fn logging_new_lines<'a>(previous: &[String], current: &'a [String]) -> &'a [String] {
-    if previous.is_empty() {
-        return current;
-    }
-    if current.len() >= previous.len() && current[..previous.len()] == *previous {
-        return &current[previous.len()..];
-    }
-    for window in (1..=previous.len().min(8)).rev() {
-        let needle = &previous[previous.len() - window..];
-        if current.len() < window {
-            continue;
-        }
-        if let Some(start) = (0..=current.len() - window)
-            .rev()
-            .find(|&start| current[start..start + window] == *needle)
-        {
-            return &current[start + window..];
-        }
-    }
-    current
-}
-
 fn print_banner(
     cfg: &RuntimeConfig,
     verb: &str,
@@ -2351,22 +2326,32 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             let bus = log_bus.clone();
             let clock = clock.clone();
             tokio::spawn(async move {
-                let mut seen: Vec<String> = Vec::new();
+                let mut cursor = None;
                 let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
                 loop {
                     poll.tick().await;
-                    let current = runtime.runner().logs();
-                    for line in logging_new_lines(&seen, &current) {
+                    let slice = runtime.runner().logs_since(cursor);
+                    cursor = Some(slice.next_seq);
+                    if slice.truncated {
                         bus.publish(
                             &fireemu_adapter_logging::LogInput::plain(
-                                "info",
-                                line.clone(),
+                                "warning",
+                                "earlier function logs were truncated",
                                 clock_millis(&clock),
                             )
                             .for_emulator("functions"),
                         );
                     }
-                    seen = current;
+                    for line in slice.lines {
+                        bus.publish(
+                            &fireemu_adapter_logging::LogInput::plain(
+                                "info",
+                                line,
+                                clock_millis(&clock),
+                            )
+                            .for_emulator("functions"),
+                        );
+                    }
                 }
             })
         });

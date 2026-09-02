@@ -996,7 +996,8 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
         .any(|d| d.function == "withAuth" && d.outcome.contains("dead letter")));
     assert!(!runtime
         .runner()
-        .logs()
+        .logs_since(None)
+        .lines
         .iter()
         .any(|l| l.contains("invoked withAuth")));
     // Delayed: not idle until the clock passes the hold.

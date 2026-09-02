@@ -1,6 +1,6 @@
 //! The runner child process: spawn, handshake, invocations with real-time timeouts, logs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -75,6 +75,52 @@ pub const INHERITED_ENV: &[&str] = &[
 /// Variable prefixes inherited by a runner (Node version managers only).
 pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"];
 
+const LOG_CAPACITY: usize = 1_000;
+
+/// A cursor-based view of the runner log buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogSlice {
+    /// Retained lines newer than the requested cursor.
+    pub lines: Vec<String>,
+    /// Cursor to pass to the next call.
+    pub next_seq: u64,
+    /// Whether lines preceding this slice have been evicted.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Default)]
+struct LogBuffer {
+    lines: VecDeque<String>,
+    first_seq: u64,
+    next_seq: u64,
+}
+
+impl LogBuffer {
+    fn push(&mut self, line: String) {
+        self.lines.push_back(line);
+        self.next_seq = self.next_seq.saturating_add(1);
+        if self.lines.len() > LOG_CAPACITY {
+            self.lines.pop_front();
+            self.first_seq = self.first_seq.saturating_add(1);
+        }
+    }
+
+    fn since(&self, cursor: Option<u64>) -> LogSlice {
+        let requested = cursor.unwrap_or(self.first_seq);
+        let truncated = requested < self.first_seq || (cursor.is_none() && self.first_seq > 0);
+        let start = requested
+            .max(self.first_seq)
+            .min(self.next_seq)
+            .saturating_sub(self.first_seq);
+        let start = usize::try_from(start).unwrap_or(usize::MAX);
+        LogSlice {
+            lines: self.lines.iter().skip(start).cloned().collect(),
+            next_seq: self.next_seq,
+            truncated,
+        }
+    }
+}
+
 /// How to start (and restart) a runner.
 #[derive(Debug, Clone)]
 pub struct SpawnSpec {
@@ -94,7 +140,7 @@ pub struct Runner {
     stdin: AsyncMutex<Option<ChildStdin>>,
     hello: Hello,
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
-    logs: Arc<Mutex<Vec<String>>>,
+    logs: Arc<Mutex<LogBuffer>>,
     label: String,
     alive: Arc<AtomicBool>,
 }
@@ -283,7 +329,7 @@ impl Runner {
                 program.rsplit('/').next().unwrap_or(program)
             ),
         };
-        let logs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let logs = Arc::new(Mutex::new(LogBuffer::default()));
         {
             let label = label.clone();
             let logs = logs.clone();
@@ -293,9 +339,6 @@ impl Runner {
                     eprintln!("{label} {line}");
                     if let Ok(mut l) = logs.lock() {
                         l.push(line);
-                        if l.len() > 1000 {
-                            l.remove(0);
-                        }
                     }
                 }
             });
@@ -374,9 +417,6 @@ impl Runner {
                             eprintln!("{label} {line}");
                             if let Ok(mut l) = logs.lock() {
                                 l.push(line);
-                                if l.len() > 1000 {
-                                    l.remove(0);
-                                }
                             }
                         }
                         _ => {}
@@ -436,10 +476,17 @@ impl Runner {
         &self.hello
     }
 
-    /// Log lines seen so far (stderr and `log` frames), oldest first.
+    /// Returns retained log lines newer than `cursor` without cloning older entries.
     #[must_use]
-    pub fn logs(&self) -> Vec<String> {
-        self.logs.lock().map(|l| l.clone()).unwrap_or_default()
+    pub fn logs_since(&self, cursor: Option<u64>) -> LogSlice {
+        self.logs.lock().map_or_else(
+            |_| LogSlice {
+                lines: Vec::new(),
+                next_seq: cursor.unwrap_or_default(),
+                truncated: false,
+            },
+            |logs| logs.since(cursor),
+        )
     }
 
     /// Sends an `invoke` and waits for its result. One deadline covers the stdin lock, the
@@ -538,6 +585,47 @@ impl Runner {
             let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
         }
         eprintln!("{} stopped", self.label);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LogBuffer, LOG_CAPACITY};
+
+    #[test]
+    fn log_buffer_evicts_old_lines_and_keeps_a_monotonic_cursor() {
+        let mut logs = LogBuffer::default();
+        for index in 0..LOG_CAPACITY + 2 {
+            logs.push(format!("line-{index}"));
+        }
+
+        let snapshot = logs.since(None);
+        assert!(snapshot.truncated);
+        assert_eq!(snapshot.lines.len(), LOG_CAPACITY);
+        assert_eq!(snapshot.lines.first().map(String::as_str), Some("line-2"));
+        assert_eq!(snapshot.next_seq, (LOG_CAPACITY + 2) as u64);
+
+        let cursor = snapshot.next_seq;
+        logs.push("later".to_owned());
+        let delta = logs.since(Some(cursor));
+        assert!(!delta.truncated);
+        assert_eq!(delta.lines, ["later"]);
+        assert_eq!(delta.next_seq, cursor + 1);
+    }
+
+    #[test]
+    fn stale_log_cursor_returns_retained_lines_with_a_truncation_marker() {
+        let mut logs = LogBuffer::default();
+        assert!(!logs.since(None).truncated);
+        for index in 0..LOG_CAPACITY + 1 {
+            logs.push(format!("line-{index}"));
+        }
+
+        assert!(!logs.since(Some(1)).truncated);
+        let delta = logs.since(Some(0));
+        assert!(delta.truncated);
+        assert_eq!(delta.lines.first().map(String::as_str), Some("line-1"));
+        assert_eq!(delta.next_seq, (LOG_CAPACITY + 1) as u64);
     }
 }
 

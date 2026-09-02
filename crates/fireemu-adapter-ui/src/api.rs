@@ -365,6 +365,13 @@ fn functions(state: &UiState) -> UiResponse {
             })
         })
         .collect();
+    let mut logs = runtime.runner().logs_since(None);
+    if logs.truncated {
+        logs.lines.insert(
+            0,
+            "[fireemu] earlier function logs were truncated".to_owned(),
+        );
+    }
     UiResponse::json(
         200,
         &json!({
@@ -375,7 +382,7 @@ fn functions(state: &UiState) -> UiResponse {
             "status": runtime.status(),
             "history": runtime.history().iter().map(record_json).collect::<Vec<_>>(),
             "deadLetters": runtime.dead_letters().iter().map(record_json).collect::<Vec<_>>(),
-            "logs": runtime.runner().logs(),
+            "logs": logs.lines,
         }),
     )
 }

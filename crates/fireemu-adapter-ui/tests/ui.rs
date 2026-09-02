@@ -598,26 +598,6 @@ async fn control_front_moves_the_clock_and_manages_snapshots() {
 }
 
 #[test]
-fn new_log_lines_survive_trimming_and_runner_replacement() {
-    use fireemu_adapter_ui::sse::new_lines;
-    let lines = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-    let a = lines(&["1", "2", "3"]);
-    assert_eq!(new_lines(&[], &a), &a[..]);
-    assert_eq!(
-        new_lines(&a, &lines(&["1", "2", "3", "4"])),
-        &lines(&["4"])[..]
-    );
-    // The buffer was trimmed at the front.
-    assert_eq!(
-        new_lines(&a, &lines(&["2", "3", "4", "5"])),
-        &lines(&["4", "5"])[..]
-    );
-    // A new runner: nothing in common, everything is new.
-    assert_eq!(new_lines(&a, &lines(&["x", "y"])), &lines(&["x", "y"])[..]);
-    assert!(new_lines(&a, &a).is_empty());
-}
-
-#[test]
 fn host_and_control_character_checks() {
     use fireemu_adapter_ui::{has_control_chars, host_is_local};
     assert!(host_is_local("localhost:4000"));

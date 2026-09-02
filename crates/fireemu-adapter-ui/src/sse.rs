@@ -162,33 +162,6 @@ pub fn firestore_watch(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     stream_response(rx)
 }
 
-/// New lines of `current` given the previous snapshot `previous`: the tail after the common
-/// prefix, or, once the runner trimmed its buffer (or was replaced), the lines after the
-/// longest suffix of `previous` (up to eight lines) found in `current`; everything when
-/// nothing matches.
-#[must_use]
-pub fn new_lines<'a>(previous: &[String], current: &'a [String]) -> &'a [String] {
-    if previous.is_empty() {
-        return current;
-    }
-    if current.len() >= previous.len() && current[..previous.len()] == *previous {
-        return &current[previous.len()..];
-    }
-    for window in (1..=previous.len().min(8)).rev() {
-        let needle = &previous[previous.len() - window..];
-        if current.len() < window {
-            continue;
-        }
-        if let Some(start) = (0..=current.len() - window)
-            .rev()
-            .find(|&start| current[start..start + window] == *needle)
-        {
-            return &current[start + window..];
-        }
-    }
-    current
-}
-
 /// One invocation record on the wire, with the sequence that identifies its position in the
 /// runtime's diagnostic stream (two identical outcomes are still distinct records).
 fn invocation_json(r: &fireemu_adapter_functions::runtime::SequencedRecord) -> Value {
@@ -224,7 +197,15 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_DEPTH);
     tokio::spawn(async move {
         let _slot = slot;
-        let mut lines = runtime.runner().logs();
+        let log_snapshot = runtime.runner().logs_since(None);
+        let mut log_cursor = Some(log_snapshot.next_seq);
+        let mut lines = log_snapshot.lines;
+        if log_snapshot.truncated {
+            lines.insert(
+                0,
+                "[fireemu] earlier function logs were truncated".to_owned(),
+            );
+        }
         let snapshot = runtime.history_since(None);
         let mut cursor = snapshot.cursor;
         if tx
@@ -245,13 +226,25 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
         let mut idle_ticks: u32 = 0;
         loop {
             poll.tick().await;
-            let current = runtime.runner().logs();
-            let fresh: Vec<String> = new_lines(&lines, &current).to_vec();
-            lines = current;
+            let log_slice = runtime.runner().logs_since(log_cursor);
+            log_cursor = Some(log_slice.next_seq);
             let slice = runtime.history_since(Some(cursor));
             cursor = slice.cursor;
             let mut sent_something = false;
-            for line in fresh {
+            if log_slice.truncated {
+                sent_something = true;
+                if tx
+                    .send(event(
+                        "log",
+                        &json!({"line": "[fireemu] earlier function logs were truncated"}),
+                    ))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            for line in log_slice.lines {
                 sent_something = true;
                 if tx.send(event("log", &json!({"line": line}))).await.is_err() {
                     return;

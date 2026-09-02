@@ -13,7 +13,7 @@ use fireemu_adapter_grpc::local::CommitEvent;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
 use fireemu_core_firestore::value::Value as FsValue;
-use fireemu_core_functions::manifest::{DocumentEvent, ObjectEvent};
+use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
@@ -524,6 +524,44 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
         "functions": [{"name": "bad", "generation": 3, "trigger": {"type": "http"}}]
     }))
     .is_err());
+}
+
+#[test]
+fn manifest_json_requires_generation_for_second_generation_capacity_options() {
+    for field in [
+        json!({"concurrency": 1}),
+        json!({"platformOptions": {"cpu": "gcf_gen1"}}),
+        json!({"platformOptions": {"networkInterfaces": [{"network": "default"}]}}),
+    ] {
+        let mut function = json!({"name": "ambiguous", "trigger": {"type": "http"}});
+        function.as_object_mut().unwrap().extend(
+            field
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        let error = parse_manifest(&json!({"functions": [function]})).unwrap_err();
+        assert!(error.contains("generation"), "{error}");
+    }
+
+    let legacy = parse_manifest(&json!({"functions": [{
+        "name": "legacy",
+        "trigger": {"type": "http"},
+        "platformOptions": {"availableMemoryMb": 512, "minInstances": 1, "maxInstances": 3}
+    }]}))
+    .unwrap();
+    assert_eq!(legacy.functions[0].generation, FunctionGeneration::First);
+    assert_eq!(legacy.functions[0].effective_concurrency(), 1);
+    assert_eq!(legacy.functions[0].http_capacity(100), 3);
+
+    let second = parse_manifest(&json!({"functions": [
+        {"name": "defaultCpu", "generation": 2, "trigger": {"type": "http"}},
+        {"name": "legacyCpu", "generation": 2, "trigger": {"type": "http"}, "platformOptions": {"cpu": "gcf_gen1"}}
+    ]}))
+    .unwrap();
+    assert_eq!(second.functions[0].effective_concurrency(), 80);
+    assert_eq!(second.functions[1].effective_concurrency(), 1);
 }
 
 #[test]

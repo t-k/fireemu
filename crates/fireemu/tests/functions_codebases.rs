@@ -13,10 +13,6 @@ fn sdk_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke")
 }
 
-fn have_sdk() -> bool {
-    sdk_root().join("node_modules/firebase-functions").exists()
-}
-
 fn fixtures() -> PathBuf {
     std::fs::canonicalize(sdk_root().join("functions-project/fixtures")).unwrap()
 }
@@ -86,10 +82,8 @@ fn exec(config: &Path, extra: &[&str], command: &[&str]) -> Output {
 /// Functions scenario 4: several codebases, each on its own runner, routed by region and
 /// name behind one functions port.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn every_declared_codebase_is_loaded_on_its_own_runner_and_routed_by_region() {
-    if !have_sdk() {
-        return;
-    }
     let dir = scratch("both");
     let config = firebase_json(&dir, &[("alpha", "codebase-a"), ("beta", "codebase-b")]);
     let out = exec(
@@ -141,10 +135,8 @@ fn every_declared_codebase_is_loaded_on_its_own_runner_and_routed_by_region() {
 
 /// `--only functions:<codebase>` loads exactly one of them, as the official CLI spells it.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn only_functions_with_a_codebase_name_loads_that_one_alone() {
-    if !have_sdk() {
-        return;
-    }
     let dir = scratch("one");
     let config = firebase_json(&dir, &[("alpha", "codebase-a"), ("beta", "codebase-b")]);
     let out = exec(
@@ -172,10 +164,8 @@ fn only_functions_with_a_codebase_name_loads_that_one_alone() {
 /// A function name two codebases both export is refused, naming both: the emulator serves one
 /// URL per region and name, so whichever loaded second would silently take it.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn a_function_name_two_codebases_export_is_refused_naming_both() {
-    if !have_sdk() {
-        return;
-    }
     let dir = scratch("clash");
     let config = firebase_json(
         &dir,

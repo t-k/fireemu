@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-#[cfg(not(windows))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
@@ -1531,86 +1529,147 @@ async fn start_codebase(
         env,
         hello_timeout: Duration::from_secs(60),
     };
-    let runner = Runner::spawn_spec(&spec)
-        .await
-        .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?;
-    let manifest_json = match &cfg.functions_manifest {
-        Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| format!("functions manifest {path}: {e}"))?;
-            serde_json::from_str(&text).map_err(|e| format!("functions manifest {path}: {e}"))?
-        }
-        None => runner
-            .hello()
-            .manifest
-            .clone()
-            .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?,
-    };
-    let mut manifest_json = manifest_json;
-    if let Some(tz) = &cfg.scheduler_default_time_zone {
-        // Schedules without a zone use the configured default.
-        if let Some(functions) = manifest_json
-            .get_mut("functions")
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            for f in functions {
-                if let Some(trigger) = f.get_mut("trigger") {
-                    if trigger.get("type").and_then(serde_json::Value::as_str) == Some("schedule")
-                        && trigger
-                            .get("timeZone")
-                            .is_none_or(serde_json::Value::is_null)
-                    {
-                        trigger["timeZone"] = serde_json::Value::String(tz.clone());
+    let runner = Arc::new(
+        Runner::spawn_spec(&spec)
+            .await
+            .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
+    );
+    let configured = (|| {
+        let manifest_json = match &cfg.functions_manifest {
+            Some(path) => {
+                let text = std::fs::read_to_string(path)
+                    .map_err(|e| format!("functions manifest {path}: {e}"))?;
+                serde_json::from_str(&text)
+                    .map_err(|e| format!("functions manifest {path}: {e}"))?
+            }
+            None => runner
+                .hello()
+                .manifest
+                .clone()
+                .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?,
+        };
+        let mut manifest_json = manifest_json;
+        if let Some(tz) = &cfg.scheduler_default_time_zone {
+            // Schedules without a zone use the configured default.
+            if let Some(functions) = manifest_json
+                .get_mut("functions")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for f in functions {
+                    if let Some(trigger) = f.get_mut("trigger") {
+                        if trigger.get("type").and_then(serde_json::Value::as_str)
+                            == Some("schedule")
+                            && trigger
+                                .get("timeZone")
+                                .is_none_or(serde_json::Value::is_null)
+                        {
+                            trigger["timeZone"] = serde_json::Value::String(tz.clone());
+                        }
                     }
                 }
             }
         }
-    }
-    let manifest = parse_manifest(&manifest_json)?;
-    // Before anything is served: every export the runner could not serve is either named in a
-    // refusal or printed, one line each.
-    let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
-    for line in check_ignored(&manifest, policy).inspect_err(|_| {
-        // A refusal kills the runner it just started rather than leaving it parented to a
-        // daemon that is about to exit.
+        let manifest = parse_manifest(&manifest_json)?;
+        // Before anything is served: every export the runner could not serve is either named in a
+        // refusal or printed, one line each.
+        let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
+        for line in check_ignored(&manifest, policy)? {
+            eprintln!("note: {line}");
+        }
+        if cfg.functions_manifest.is_some() {
+            // A configured manifest replaces discovery outright. Security-sensitive trigger
+            // classifications still come from code, so the replacement must reconcile with
+            // what the runner discovered instead of being trusted blindly.
+            let discovered = runner
+                .hello()
+                .manifest
+                .clone()
+                .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
+            let discovered = parse_manifest(&discovered)?;
+            check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
+            if callable_trusted_protocol {
+                check_manifest_agrees_on_callables(&manifest, &discovered)?;
+            }
+        }
+        check_callable_app_check(
+            &manifest,
+            runner.hello().app_check.as_ref(),
+            callable_trusted_protocol,
+        )?;
+        Ok(fireemu_adapter_functions::runtime::CodebaseSpec {
+            name: label.clone(),
+            manifest,
+            runner: runner.clone(),
+            spawn: Some(spec),
+            cleanup_dir: None,
+        })
+    })();
+    if configured.is_err() {
         runner.kill_now();
-    })? {
-        eprintln!("note: {line}");
     }
-    if callable_trusted_protocol && cfg.functions_manifest.is_some() {
-        // A configured manifest replaces discovery outright, and the callable flag is what
-        // decides whether a request goes through the trust boundary at all: a file that calls
-        // a real `onCall` an `onRequest` would have the proxy forward the raw `Authorization`
-        // and App Check fields to a runner that decodes them without verifying
-        // (`INV-APPCHECK-010`). The runner still discovered the truth, so the two are
-        // reconciled instead of trusted blindly.
-        let discovered = runner
-            .hello()
-            .manifest
-            .clone()
-            .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
-        check_manifest_agrees_on_callables(&manifest, &parse_manifest(&discovered)?)?;
+    configured
+}
+
+/// Refuses a configured manifest that removes or changes any discovered Blocking Auth hook.
+///
+/// Unlike an omitted HTTP endpoint, an omitted blocking hook makes authentication continue
+/// without policy. Function name, region and event therefore form a bidirectional ordered
+/// contract owned by discovery, even when a custom manifest controls other local options.
+/// Order is significant because the runtime selects the first hook for an event.
+fn check_manifest_agrees_on_blocking_auth(
+    configured: &fireemu_core_functions::manifest::FunctionManifest,
+    discovered: &fireemu_core_functions::manifest::FunctionManifest,
+) -> Result<(), String> {
+    use fireemu_core_functions::manifest::Trigger;
+
+    let contract = |manifest: &fireemu_core_functions::manifest::FunctionManifest| {
+        manifest
+            .functions
+            .iter()
+            .filter_map(|function| match function.trigger {
+                Trigger::BlockingAuth { event } => Some((
+                    function.name.clone(),
+                    function.region.clone(),
+                    event.as_str(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let configured = contract(configured);
+    let discovered = contract(discovered);
+    if configured != discovered {
+        let mismatch = (0..configured.len().max(discovered.len()))
+            .find(|index| configured.get(*index) != discovered.get(*index))
+            .unwrap_or(0);
+        return Err(match (discovered.get(mismatch), configured.get(mismatch)) {
+            (Some((name, region, event)), None) => format!(
+                "the configured functions manifest omits discovered Blocking Auth hook {name:?} \
+                 in {region} for {event} at position {mismatch}; blocking policy cannot be \
+                 bypassed by a custom manifest"
+            ),
+            (None, Some((name, region, event))) => format!(
+                "the configured functions manifest invents Blocking Auth hook {name:?} in \
+                 {region} for {event} at position {mismatch}; it must match codebase discovery"
+            ),
+            (Some(discovered), Some(configured)) => format!(
+                "the configured functions manifest changes Blocking Auth hook order or identity \
+                 at position {mismatch}: codebase discovery has {:?} in {} for {}, configured \
+                 manifest has {:?} in {} for {}; blocking policy selection must match exactly",
+                discovered.0, discovered.1, discovered.2, configured.0, configured.1, configured.2,
+            ),
+            (None, None) => unreachable!("different contracts have a mismatching position"),
+        });
     }
-    check_callable_app_check(
-        &manifest,
-        runner.hello().app_check.as_ref(),
-        callable_trusted_protocol,
-    )?;
-    Ok(fireemu_adapter_functions::runtime::CodebaseSpec {
-        name: label.clone(),
-        manifest,
-        runner: Arc::new(runner),
-        spawn: Some(spec),
-        cleanup_dir: None,
-    })
+    Ok(())
 }
 
 /// Refuses a configured manifest that disagrees with discovery about which HTTP functions are
 /// callable.
 ///
-/// Only the callable flag is reconciled. Everything else a manifest file overrides -- regions,
-/// timeouts, schedules -- is deployment shape, but the callable flag decides which side of the
-/// trust boundary a request lands on, and the runner is the only thing that actually knows.
+/// Only the callable flag is reconciled. Other configured fields deliberately control local
+/// routing and admission, but the callable flag decides which side of the trust boundary a
+/// request lands on, and the runner is the only thing that actually knows.
 fn check_manifest_agrees_on_callables(
     configured: &fireemu_core_functions::manifest::FunctionManifest,
     discovered: &fireemu_core_functions::manifest::FunctionManifest,
@@ -1825,6 +1884,9 @@ pub fn auth_sink(
 /// Identity Platform's synchronous bridge to before-create and before-sign-in functions.
 pub struct BlockingAuthBridge(pub Arc<FunctionsRuntime>);
 
+const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
+const MAX_BLOCKING_AUTH_RESPONSE_BYTES: u64 = 64 * 1024;
+
 fn blocking_auth_user_json(
     user: &fireemu_core_auth::store::UserRecord,
     tenant: Option<&str>,
@@ -1868,15 +1930,110 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
     )
 }
 
-fn with_blocking_auth_project<T>(
+fn with_blocking_auth_project<T, E>(
     runtime_project: &str,
     request_project: &str,
-    forward: impl FnOnce() -> Result<Option<T>, String>,
-) -> Result<Option<T>, String> {
+    forward: impl FnOnce() -> Result<Option<T>, E>,
+) -> Result<Option<T>, E> {
     if runtime_project != request_project {
         return Ok(None);
     }
     forward()
+}
+
+fn blocking_auth_io_failure(
+    error: &std::io::Error,
+) -> fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) {
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout()
+    } else {
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::unhandled()
+    }
+}
+
+fn blocking_auth_remaining(
+    deadline: Instant,
+) -> Result<Duration, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout)
+}
+
+fn blocking_auth_write_request(
+    stream: &mut TcpStream,
+    mut request: &[u8],
+    deadline: Instant,
+) -> Result<(), fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+    use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
+
+    while !request.is_empty() {
+        let remaining = blocking_auth_remaining(deadline)?;
+        stream
+            .set_write_timeout(Some(remaining))
+            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        let written = stream
+            .write(request)
+            .map_err(|error| blocking_auth_io_failure(&error))?;
+        if written == 0 {
+            return Err(BlockingFunctionFailure::unhandled());
+        }
+        request = &request[written..];
+    }
+    Ok(())
+}
+
+fn blocking_auth_read_response(
+    stream: &mut TcpStream,
+    deadline: Instant,
+) -> Result<Vec<u8>, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+    use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
+
+    let mut response = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        let remaining = blocking_auth_remaining(deadline)?;
+        stream
+            .set_read_timeout(Some(remaining))
+            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|error| blocking_auth_io_failure(&error))?;
+        if Instant::now() >= deadline {
+            return Err(BlockingFunctionFailure::timeout());
+        }
+        if read == 0 {
+            return Ok(response);
+        }
+        if response.len().saturating_add(read) as u64 > MAX_BLOCKING_AUTH_RESPONSE_BYTES {
+            return Err(BlockingFunctionFailure::unhandled());
+        }
+        response.extend_from_slice(&chunk[..read]);
+    }
+}
+
+fn blocking_auth_response_failure(
+    status: u16,
+    value: &serde_json::Value,
+) -> fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure {
+    use fireemu_adapter_http::identity_toolkit::{BlockingFunctionCode, BlockingFunctionFailure};
+
+    let parsed = value
+        .get("error")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|error| {
+            let code = error
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .and_then(BlockingFunctionCode::from_canonical_name)
+                .filter(|code| code.function_status() == status)?;
+            let message = error.get("message").and_then(serde_json::Value::as_str)?;
+            BlockingFunctionFailure::from_function(code, message).ok()
+        });
+    parsed.unwrap_or_else(BlockingFunctionFailure::unhandled)
 }
 
 impl BlockingAuthBridge {
@@ -1886,7 +2043,10 @@ impl BlockingAuthBridge {
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Option<serde_json::Value>, String> {
+    ) -> Result<
+        Option<serde_json::Value>,
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    > {
         with_blocking_auth_project(self.0.project(), project, || {
             self.invoke_matching_namespace(project, tenant, event, user)
         })
@@ -1898,7 +2058,12 @@ impl BlockingAuthBridge {
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Option<serde_json::Value>, String> {
+    ) -> Result<
+        Option<serde_json::Value>,
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    > {
+        use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
+
         let Some(target) = self.0.blocking_auth_target(event) else {
             return Ok(None);
         };
@@ -1923,38 +2088,31 @@ impl BlockingAuthBridge {
             target.region,
             target.function
         );
-        let mut stream = TcpStream::connect(&target.addr)
-            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : connect failed: {e}"))?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(60)))
-            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : timeout setup failed: {e}"))?;
-        write!(
-            stream,
+        let deadline = Instant::now() + BLOCKING_AUTH_DEADLINE;
+        let address = target
+            .addr
+            .parse()
+            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        let mut stream = TcpStream::connect_timeout(&address, blocking_auth_remaining(deadline)?)
+            .map_err(|error| blocking_auth_io_failure(&error))?;
+        let request = format!(
             "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
             target.addr,
             target.secret,
             body.len(),
             body
-        )
-        .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : write failed: {e}"))?;
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : read failed: {e}"))?;
+        );
+        blocking_auth_write_request(&mut stream, request.as_bytes(), deadline)?;
+        let response = blocking_auth_read_response(&mut stream, deadline)?;
         let response = fireemu_adapter_functions::http::parse_response(&response, "POST")
-            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {e}"))?;
+            .map_err(|_| BlockingFunctionFailure::unhandled())?;
         let value: serde_json::Value = serde_json::from_slice(&response.body)
-            .map_err(|e| format!("BLOCKING_FUNCTION_ERROR_RESPONSE : invalid JSON: {e}"))?;
-        if response.status >= 300 {
-            let message = value
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("blocking function rejected the request");
-            return Err(format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {message}"));
+            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        if response.status != 200 {
+            return Err(blocking_auth_response_failure(response.status, &value));
         }
         if !value.is_object() {
-            return Err("BLOCKING_FUNCTION_ERROR_RESPONSE : response must be an object".to_owned());
+            return Err(BlockingFunctionFailure::unhandled());
         }
         Ok(Some(value))
     }
@@ -1965,7 +2123,8 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         &self,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
+    {
         self.invoke_for_namespace(self.0.project(), None, event, user)
             .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
     }
@@ -1976,7 +2135,10 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Option<serde_json::Value>, String> {
+    ) -> Result<
+        Option<serde_json::Value>,
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    > {
         self.invoke_for_namespace(project, tenant, event, user)
     }
 }
@@ -2083,17 +2245,17 @@ mod tests {
     use std::collections::BTreeMap;
     #[cfg(unix)]
     use std::process::Command;
-    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     use super::path_node_candidates;
     #[cfg(unix)]
     use super::probe_node;
     use super::{
-        check_callable_app_check, function_pubsub_resources, functions_source_signature,
-        node_engine_matches, package_node_engine, parse_node_version,
+        blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
+        blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
+        functions_source_signature, node_engine_matches, package_node_engine, parse_node_version,
         provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        NodeInstallation,
+        NodeInstallation, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
@@ -2136,7 +2298,7 @@ mod tests {
         let forwarded = std::cell::Cell::new(false);
         let value = super::with_blocking_auth_project("demo-app", "demo-worker", || {
             forwarded.set(true);
-            Ok(Some(json!({})))
+            Ok::<_, ()>(Some(json!({})))
         })
         .unwrap();
         assert!(value.is_none());
@@ -2144,11 +2306,138 @@ mod tests {
 
         let value = super::with_blocking_auth_project("demo-app", "demo-app", || {
             forwarded.set(true);
-            Ok(Some(json!({"accepted": true})))
+            Ok::<_, ()>(Some(json!({"accepted": true})))
         })
         .unwrap();
         assert_eq!(value, Some(json!({"accepted": true})));
         assert!(forwarded.get());
+    }
+
+    #[test]
+    fn blocking_auth_transport_bounds_and_failure_pairs_are_production_bounded() {
+        assert_eq!(BLOCKING_AUTH_DEADLINE, Duration::from_secs(7));
+        assert_eq!(MAX_BLOCKING_AUTH_RESPONSE_BYTES, 64 * 1024);
+        assert_eq!(
+            blocking_auth_io_failure(&std::io::Error::from(std::io::ErrorKind::TimedOut))
+                .identity_status(),
+            503
+        );
+        assert_eq!(
+            blocking_auth_io_failure(&std::io::Error::from(std::io::ErrorKind::ConnectionReset))
+                .identity_status(),
+            503
+        );
+
+        let permission = json!({
+            "error": {"status": "PERMISSION_DENIED", "message": "policy rejected"}
+        });
+        assert_eq!(
+            blocking_auth_response_failure(403, &permission).identity_status(),
+            400
+        );
+        let explicit_deadline = json!({
+            "error": {"status": "DEADLINE_EXCEEDED", "message": "explicit deadline"}
+        });
+        assert_eq!(
+            blocking_auth_response_failure(504, &explicit_deadline).identity_status(),
+            504
+        );
+
+        for (status, value) in [
+            (
+                418,
+                json!({"error": {"status": "PERMISSION_DENIED", "message": "marker"}}),
+            ),
+            (
+                403,
+                json!({"error": {"status": "permission_denied", "message": "marker"}}),
+            ),
+            (
+                403,
+                json!({"error": {"status": "PERMISSION_DENIED", "message": 1}}),
+            ),
+            (
+                403,
+                json!({"error": {"status": "PERMISSION_DENIED", "message": "line\nmarker"}}),
+            ),
+            (
+                403,
+                json!({"error": {"status": "PERMISSION_DENIED", "message": "x".repeat(4_097)}}),
+            ),
+            (
+                600,
+                json!({"error": {"status": "UNAVAILABLE", "message": "marker"}}),
+            ),
+            (503, json!({"error": []})),
+        ] {
+            assert_eq!(
+                blocking_auth_response_failure(status, &value).identity_status(),
+                503,
+                "status={status}, value={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocking_auth_response_uses_one_absolute_deadline_during_slow_drip() {
+        use std::io::Write as _;
+        use std::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}" {
+                if stream.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+        });
+        let mut stream = TcpStream::connect(address).unwrap();
+        let started = Instant::now();
+        let failure = blocking_auth_read_response(&mut stream, started + Duration::from_millis(75))
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        drop(stream);
+        writer.join().unwrap();
+
+        assert_eq!(
+            failure,
+            fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout()
+        );
+        assert!(elapsed >= Duration::from_millis(60), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(300), "{elapsed:?}");
+    }
+
+    #[test]
+    fn blocking_auth_request_writes_every_byte_before_the_deadline() {
+        use std::io::Read as _;
+        use std::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let receiver = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .unwrap();
+            let mut received = [0_u8; 18];
+            stream.read_exact(&mut received).map(|()| received)
+        });
+        let mut stream = TcpStream::connect(address).unwrap();
+
+        blocking_auth_write_request(
+            &mut stream,
+            b"blocking-auth-body",
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+
+        assert_eq!(
+            &receiver.join().unwrap().expect("request bytes must arrive"),
+            b"blocking-auth-body"
+        );
     }
 
     fn installed_node(version: &str, require_module: bool) -> NodeInstallation {
@@ -2692,6 +2981,97 @@ mod tests {
 
         super::check_manifest_agrees_on_callables(&discovered, &discovered)
             .expect("an agreeing manifest starts");
+    }
+
+    #[test]
+    fn a_configured_manifest_cannot_bypass_or_reclassify_blocking_auth() {
+        let discovered = parse_manifest(&json!({
+            "functions": [
+                {"name": "guardCreate", "region": "us-central1", "trigger": {
+                    "type": "blockingAuth", "eventType": "beforeCreate"
+                }},
+                {"name": "guardSignIn", "region": "europe-west1", "trigger": {
+                    "type": "blockingAuth", "eventType": "beforeSignIn"
+                }}
+            ]
+        }))
+        .unwrap();
+        for (configured, expected) in [
+            (
+                json!({"functions": [{"name": "guardCreate", "region": "us-central1", "trigger": {
+                    "type": "blockingAuth", "eventType": "beforeCreate"
+                }}]}),
+                "guardSignIn",
+            ),
+            (
+                json!({"functions": [
+                    {"name": "guardCreate", "region": "us-central1", "trigger": {
+                        "type": "http", "callable": false
+                    }},
+                    {"name": "guardSignIn", "region": "europe-west1", "trigger": {
+                        "type": "blockingAuth", "eventType": "beforeSignIn"
+                    }}
+                ]}),
+                "guardCreate",
+            ),
+            (
+                json!({"functions": [
+                    {"name": "guardCreate", "region": "us-central1", "trigger": {
+                        "type": "blockingAuth", "eventType": "beforeSignIn"
+                    }},
+                    {"name": "guardSignIn", "region": "europe-west1", "trigger": {
+                        "type": "blockingAuth", "eventType": "beforeCreate"
+                    }}
+                ]}),
+                "beforeCreate",
+            ),
+            (
+                json!({"functions": [
+                    {"name": "guardCreate", "region": "asia-northeast1", "trigger": {
+                        "type": "blockingAuth", "eventType": "beforeCreate"
+                    }},
+                    {"name": "guardSignIn", "region": "europe-west1", "trigger": {
+                        "type": "blockingAuth", "eventType": "beforeSignIn"
+                    }}
+                ]}),
+                "us-central1",
+            ),
+        ] {
+            let configured = parse_manifest(&configured).unwrap();
+            let error = super::check_manifest_agrees_on_blocking_auth(&configured, &discovered)
+                .expect_err("a custom manifest must preserve every discovered blocking hook");
+            assert!(error.contains(expected), "{error}");
+        }
+
+        super::check_manifest_agrees_on_blocking_auth(&discovered, &discovered)
+            .expect("an exact Blocking Auth contract starts");
+
+        let duplicate_event = parse_manifest(&json!({
+            "functions": [
+                {"name": "firstCreateGuard", "trigger": {
+                    "type": "blockingAuth", "eventType": "beforeCreate"
+                }},
+                {"name": "secondCreateGuard", "trigger": {
+                    "type": "blockingAuth", "eventType": "beforeCreate"
+                }}
+            ]
+        }))
+        .unwrap();
+        let reordered = parse_manifest(&json!({
+            "functions": [
+                {"name": "secondCreateGuard", "trigger": {
+                    "type": "blockingAuth", "eventType": "beforeCreate"
+                }},
+                {"name": "firstCreateGuard", "trigger": {
+                    "type": "blockingAuth", "eventType": "beforeCreate"
+                }}
+            ]
+        }))
+        .unwrap();
+        let error = super::check_manifest_agrees_on_blocking_auth(&reordered, &duplicate_event)
+            .expect_err("custom manifest ordering must not select a different first hook");
+        assert!(error.contains("firstCreateGuard"), "{error}");
+        assert!(error.contains("secondCreateGuard"), "{error}");
     }
 
     /// A manifest whose only ignored export is an unrecognised shape starts, with a line

@@ -14,6 +14,8 @@ pub const DEFAULT_TIMEOUT_SECONDS: u32 = 60;
 pub const DEFAULT_CONCURRENCY: u32 = 1;
 /// Default concurrency of a second-generation function with at least one CPU.
 pub const DEFAULT_GEN2_CONCURRENCY: u32 = 80;
+/// Maximum per-instance concurrency accepted by the Functions SDK.
+pub const MAX_GEN2_CONCURRENCY: u32 = 1_000;
 
 /// Managed Functions generation discovered from the SDK endpoint metadata.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -36,10 +38,10 @@ impl FunctionGeneration {
     }
 }
 
-/// Deployment-oriented 2nd-gen options discovered from the Firebase Functions SDK.
+/// Managed-platform options discovered from the Firebase Functions SDK.
 ///
-/// These values do not change local scheduling or IAM. They are retained in the manifest so
-/// capability/status output never silently loses configuration that matters at deployment.
+/// Memory, CPU and instance limits also shape local admission. The remaining deployment and
+/// IAM values are retained so capability/status output never silently loses configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformOptions {
     /// Whether deployment should preserve settings changed outside the Functions SDK.
@@ -501,11 +503,106 @@ pub struct FunctionSpec {
     pub generation: FunctionGeneration,
     /// Explicit per-instance concurrency. `None` retains SDK reset/default semantics.
     pub concurrency: Option<u32>,
-    /// Deployment-only options retained for faithful discovery and diagnostics.
+    /// Managed-platform options retained for admission, faithful discovery and diagnostics.
     pub platform_options: PlatformOptions,
 }
 
 impl FunctionSpec {
+    fn validate_capacity_options(&self) -> Result<(), ManifestError> {
+        if self.concurrency == Some(0) {
+            return Err(ManifestError::InvalidLimit {
+                function: self.name.clone(),
+                field: "concurrency",
+            });
+        }
+        if self
+            .concurrency
+            .is_some_and(|value| value > MAX_GEN2_CONCURRENCY)
+        {
+            return Err(ManifestError::InvalidOption {
+                function: self.name.clone(),
+                field: "concurrency",
+                reason: "must be at most 1000",
+            });
+        }
+        if self.generation == FunctionGeneration::First && self.concurrency.is_some() {
+            return Err(ManifestError::InvalidOption {
+                function: self.name.clone(),
+                field: "concurrency",
+                reason: "is only supported for generation 2",
+            });
+        }
+        if self.generation == FunctionGeneration::First && self.platform_options.cpu.is_some() {
+            return Err(ManifestError::InvalidOption {
+                function: self.name.clone(),
+                field: "platformOptions.cpu",
+                reason: "is only supported for generation 2",
+            });
+        }
+        if self.generation == FunctionGeneration::First
+            && !self.platform_options.network_interfaces.is_empty()
+        {
+            return Err(ManifestError::InvalidOption {
+                function: self.name.clone(),
+                field: "platformOptions.networkInterfaces",
+                reason: "is only supported for generation 2",
+            });
+        }
+        if let Some(cpu) = self.platform_options.cpu.as_deref() {
+            let cpu_at_least_one = if cpu == "gcf_gen1" {
+                self.platform_options.available_memory_mb.unwrap_or(256) >= 2_048
+            } else {
+                let parsed = cpu
+                    .parse::<f64>()
+                    .map_err(|_| ManifestError::InvalidOption {
+                        function: self.name.clone(),
+                        field: "platformOptions.cpu",
+                        reason: "must be gcf_gen1 or a positive finite number",
+                    })?;
+                if !parsed.is_finite() || parsed <= 0.0 {
+                    return Err(ManifestError::InvalidOption {
+                        function: self.name.clone(),
+                        field: "platformOptions.cpu",
+                        reason: "must be gcf_gen1 or a positive finite number",
+                    });
+                }
+                parsed >= 1.0
+            };
+            if !cpu_at_least_one && self.concurrency.is_some_and(|value| value != 1) {
+                return Err(ManifestError::InvalidOption {
+                    function: self.name.clone(),
+                    field: "concurrency",
+                    reason: "must be 1 when platformOptions.cpu is less than 1",
+                });
+            }
+        }
+        if self.platform_options.available_memory_mb == Some(0) {
+            return Err(ManifestError::InvalidLimit {
+                function: self.name.clone(),
+                field: "platformOptions.availableMemoryMb",
+            });
+        }
+        if self.platform_options.max_instances == Some(0) {
+            return Err(ManifestError::InvalidLimit {
+                function: self.name.clone(),
+                field: "platformOptions.maxInstances",
+            });
+        }
+        if let (Some(minimum), Some(maximum)) = (
+            self.platform_options.min_instances,
+            self.platform_options.max_instances,
+        ) {
+            if minimum > maximum {
+                return Err(ManifestError::InvalidOption {
+                    function: self.name.clone(),
+                    field: "platformOptions.minInstances",
+                    reason: "must not exceed platformOptions.maxInstances",
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Effective per-instance concurrency after applying the managed-platform defaults.
     #[must_use]
     pub fn effective_concurrency(&self) -> u32 {
@@ -635,6 +732,15 @@ pub enum ManifestError {
         /// Field.
         field: &'static str,
     },
+    /// A field is not valid for the selected generation or combination of options.
+    InvalidOption {
+        /// Function.
+        function: String,
+        /// Field.
+        field: &'static str,
+        /// Stable explanation.
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for ManifestError {
@@ -645,6 +751,11 @@ impl fmt::Display for ManifestError {
             Self::InvalidLimit { function, field } => {
                 write!(f, "function {function:?}: {field} must be at least 1")
             }
+            Self::InvalidOption {
+                function,
+                field,
+                reason,
+            } => write!(f, "function {function:?}: {field} {reason}"),
         }
     }
 }
@@ -693,12 +804,7 @@ impl FunctionManifest {
                     field: "timeoutSeconds",
                 });
             }
-            if f.concurrency == Some(0) {
-                return Err(ManifestError::InvalidLimit {
-                    function: f.name.clone(),
-                    field: "concurrency",
-                });
-            }
+            f.validate_capacity_options()?;
         }
         Ok(())
     }

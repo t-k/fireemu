@@ -77,6 +77,195 @@ impl AuthWallClock {
 
 /// Synchronous bridge to Identity Platform blocking functions. Implementations must perform
 /// no Auth store access; the adapter releases the store before calling it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockingFunctionCode {
+    /// The operation was cancelled.
+    Cancelled,
+    /// An unknown server failure occurred.
+    Unknown,
+    /// The caller supplied an invalid argument.
+    InvalidArgument,
+    /// The explicit function deadline was exceeded.
+    DeadlineExceeded,
+    /// The requested resource was not found.
+    NotFound,
+    /// The requested resource already exists.
+    AlreadyExists,
+    /// The operation is not permitted.
+    PermissionDenied,
+    /// Authentication is missing or invalid.
+    Unauthenticated,
+    /// A resource limit was exhausted.
+    ResourceExhausted,
+    /// A required precondition is not met.
+    FailedPrecondition,
+    /// The operation was aborted.
+    Aborted,
+    /// A value is outside its valid range.
+    OutOfRange,
+    /// The operation is not implemented.
+    Unimplemented,
+    /// An internal server failure occurred.
+    Internal,
+    /// The service is unavailable.
+    Unavailable,
+    /// Unrecoverable data loss occurred.
+    DataLoss,
+}
+
+impl BlockingFunctionCode {
+    /// Parses the canonical status emitted by the Functions SDK.
+    #[must_use]
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "CANCELLED" => Self::Cancelled,
+            "UNKNOWN" => Self::Unknown,
+            "INVALID_ARGUMENT" => Self::InvalidArgument,
+            "DEADLINE_EXCEEDED" => Self::DeadlineExceeded,
+            "NOT_FOUND" => Self::NotFound,
+            "ALREADY_EXISTS" => Self::AlreadyExists,
+            "PERMISSION_DENIED" => Self::PermissionDenied,
+            "UNAUTHENTICATED" => Self::Unauthenticated,
+            "RESOURCE_EXHAUSTED" => Self::ResourceExhausted,
+            "FAILED_PRECONDITION" => Self::FailedPrecondition,
+            "ABORTED" => Self::Aborted,
+            "OUT_OF_RANGE" => Self::OutOfRange,
+            "UNIMPLEMENTED" => Self::Unimplemented,
+            "INTERNAL" => Self::Internal,
+            "UNAVAILABLE" => Self::Unavailable,
+            "DATA_LOSS" => Self::DataLoss,
+            _ => return None,
+        })
+    }
+
+    /// HTTP status returned by the blocking function itself.
+    #[must_use]
+    pub const fn function_status(self) -> u16 {
+        match self {
+            Self::Cancelled => 499,
+            Self::Unknown | Self::Internal | Self::DataLoss => 500,
+            Self::InvalidArgument | Self::FailedPrecondition | Self::OutOfRange => 400,
+            Self::DeadlineExceeded => 504,
+            Self::NotFound => 404,
+            Self::AlreadyExists | Self::Aborted => 409,
+            Self::PermissionDenied => 403,
+            Self::Unauthenticated => 401,
+            Self::ResourceExhausted => 429,
+            Self::Unimplemented => 501,
+            Self::Unavailable => 503,
+        }
+    }
+
+    /// Canonical status spelling returned by the Functions SDK.
+    #[must_use]
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Cancelled => "CANCELLED",
+            Self::Unknown => "UNKNOWN",
+            Self::InvalidArgument => "INVALID_ARGUMENT",
+            Self::DeadlineExceeded => "DEADLINE_EXCEEDED",
+            Self::NotFound => "NOT_FOUND",
+            Self::AlreadyExists => "ALREADY_EXISTS",
+            Self::PermissionDenied => "PERMISSION_DENIED",
+            Self::Unauthenticated => "UNAUTHENTICATED",
+            Self::ResourceExhausted => "RESOURCE_EXHAUSTED",
+            Self::FailedPrecondition => "FAILED_PRECONDITION",
+            Self::Aborted => "ABORTED",
+            Self::OutOfRange => "OUT_OF_RANGE",
+            Self::Unimplemented => "UNIMPLEMENTED",
+            Self::Internal => "INTERNAL",
+            Self::Unavailable => "UNAVAILABLE",
+            Self::DataLoss => "DATA_LOSS",
+        }
+    }
+}
+
+/// Why a blocking function refused an Auth operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingFunctionFailure {
+    code: BlockingFunctionCode,
+    message: Box<str>,
+    opaque: bool,
+}
+
+impl BlockingFunctionFailure {
+    /// Maximum UTF-8 message length accepted from a function.
+    pub const MAX_MESSAGE_BYTES: usize = 4_096;
+
+    /// Builds a failure from one validated Functions SDK error response.
+    pub fn from_function(
+        code: BlockingFunctionCode,
+        message: impl Into<Box<str>>,
+    ) -> Result<Self, &'static str> {
+        let message = message.into();
+        if message.len() > Self::MAX_MESSAGE_BYTES {
+            return Err("blocking function error message is too large");
+        }
+        if message.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
+        }) {
+            return Err("blocking function error message contains a control character");
+        }
+        Ok(Self {
+            code,
+            message,
+            opaque: false,
+        })
+    }
+
+    /// A handler threw a value other than a supported `HttpsError`.
+    #[must_use]
+    pub fn unhandled() -> Self {
+        Self {
+            code: BlockingFunctionCode::Unavailable,
+            message: "An unexpected error occurred.".into(),
+            opaque: false,
+        }
+    }
+
+    /// The production seven-second Blocking Function deadline elapsed.
+    #[must_use]
+    pub fn timeout() -> Self {
+        Self {
+            code: BlockingFunctionCode::Unavailable,
+            message: "Error code: 47".into(),
+            opaque: true,
+        }
+    }
+
+    /// The client-facing Identity Toolkit HTTP status.
+    #[must_use]
+    pub const fn identity_status(&self) -> u16 {
+        let status = self.code.function_status();
+        if status < 500 {
+            400
+        } else {
+            status
+        }
+    }
+
+    fn client_message(&self) -> String {
+        if self.opaque {
+            return self.message.to_string();
+        }
+        let quoted = serde_json::to_string(&self.message).unwrap_or_else(|_| "\"\"".to_owned());
+        format!(
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: {}, Status: \"{}\", Message: {quoted}",
+            self.code.function_status(),
+            self.code.canonical_name()
+        )
+    }
+}
+
+/// Synchronous bridge invoked before an Auth create or sign-in commit.
 pub trait AuthBlockingHook: Send + Sync {
     /// Runs one before-create or before-sign-in function. An error rejects and rolls back the
     /// Auth request; the value is the validated blocking response for future field updates.
@@ -84,7 +273,7 @@ pub trait AuthBlockingHook: Send + Sync {
         &self,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Value, String>;
+    ) -> Result<Value, BlockingFunctionFailure>;
 
     /// Runs a hook for the Auth store namespace selected by request routing. Implementations
     /// that host only one project must return `Ok(None)` for every other project before
@@ -96,7 +285,7 @@ pub trait AuthBlockingHook: Send + Sync {
         _tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke(event, user).map(Some)
     }
 }
@@ -302,6 +491,20 @@ fn issue_tokens_with(
     extra: Option<&CustomClaims>,
     provider: Option<fireemu_core_auth::store::Provider>,
 ) -> Result<Value, JsonResponse> {
+    issue_tokens_replacing(store, uid, second, at, extra, provider, None)
+}
+
+/// Issues policy-adjusted tokens and retires the replayed authentication's provisional
+/// refresh session when Blocking Auth is active.
+fn issue_tokens_replacing(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    second: Option<&SecondFactorAssertion>,
+    at: LogicalInstant,
+    extra: Option<&CustomClaims>,
+    provider: Option<fireemu_core_auth::store::Provider>,
+    provisional_refresh: Option<&str>,
+) -> Result<Value, JsonResponse> {
     let mut claims = store
         .id_token_claims(uid, second, at)
         .map_err(|e| auth_error(&e))?;
@@ -316,15 +519,15 @@ fn issue_tokens_with(
                 .map_err(|e| error(400, &format!("INVALID_CUSTOM_TOKEN : {e}")))?;
         }
     }
-    let refresh = store
-        .issue_refresh_session(
-            uid,
-            at,
-            provider,
-            extra.cloned().unwrap_or_default(),
-            second.cloned(),
-        )
-        .map_err(|e| auth_error(&e))?;
+    let refresh_claims = extra.cloned().unwrap_or_default();
+    let second = second.cloned();
+    let refresh = match provisional_refresh {
+        Some(provisional) => {
+            store.replace_refresh_session(provisional, uid, at, provider, refresh_claims, second)
+        }
+        None => store.issue_refresh_session(uid, at, provider, refresh_claims, second),
+    }
+    .map_err(|e| auth_error(&e))?;
     Ok(json!({
         "idToken": encode_with(&claims, store.signer()),
         "refreshToken": refresh,
@@ -785,7 +988,9 @@ fn dispatch_with_blocking_hook(
                         user,
                     ) {
                         Ok(value) => value,
-                        Err(reason) => return error(400, &reason),
+                        Err(failure) => {
+                            return error(failure.identity_status(), &failure.client_message())
+                        }
                     }
                 };
                 if let Some(value) = value {
@@ -815,7 +1020,9 @@ fn dispatch_with_blocking_hook(
                         user,
                     ) {
                         Ok(value) => value,
-                        Err(reason) => return error(400, &reason),
+                        Err(failure) => {
+                            return error(failure.identity_status(), &failure.client_message())
+                        }
                     }
                 };
                 if let Some(value) = value {
@@ -887,6 +1094,15 @@ fn dispatch_with_blocking_hook(
             let mut issued_session = signed_in
                 .then(|| verify_session(&committed, &committed_response.body, at).ok())
                 .flatten();
+            let provisional_refresh = signed_in
+                .then(|| {
+                    committed_response
+                        .body
+                        .get("refreshToken")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .flatten();
             let persisted_claim_names: Vec<String> = committed
                 .user(&uid)
                 .map(|user| user.custom_claims.entries().keys().cloned().collect())
@@ -894,15 +1110,15 @@ fn dispatch_with_blocking_hook(
             let mut session_claims = None;
             for (event, value) in &blocking_responses {
                 match apply_blocking_response(&mut committed, &uid, *event, value) {
-                Ok(claims)
-                    if *event
-                        == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn =>
-                {
-                    session_claims = claims;
+                    Ok(claims)
+                        if *event
+                            == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn =>
+                    {
+                        session_claims = claims;
+                    }
+                    Ok(_) => {}
+                    Err(reason) => return error(400, &reason),
                 }
-                Ok(_) => {}
-                Err(reason) => return error(400, &reason),
-            }
             }
             if let Some(mut session) = issued_session.take() {
                 for name in &persisted_claim_names {
@@ -924,13 +1140,17 @@ fn dispatch_with_blocking_hook(
                     }
                 }
                 let provider = provider_from_id(&session.provider);
-                let tokens = match issue_tokens_with(
+                let Some(provisional_refresh) = provisional_refresh.as_deref() else {
+                    return error(500, "INTERNAL");
+                };
+                let tokens = match issue_tokens_replacing(
                     &mut committed,
                     &uid,
                     session.second_factor.as_ref(),
                     at,
                     Some(&session.extra_claims),
                     Some(provider),
+                    Some(provisional_refresh),
                 ) {
                     Ok(tokens) => tokens,
                     Err(refusal) => return refusal,
@@ -4753,6 +4973,121 @@ fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocking_function_codes_match_the_functions_sdk_and_identity_statuses() {
+        for (code, name, function_status) in [
+            (BlockingFunctionCode::Cancelled, "CANCELLED", 499),
+            (BlockingFunctionCode::Unknown, "UNKNOWN", 500),
+            (
+                BlockingFunctionCode::InvalidArgument,
+                "INVALID_ARGUMENT",
+                400,
+            ),
+            (
+                BlockingFunctionCode::DeadlineExceeded,
+                "DEADLINE_EXCEEDED",
+                504,
+            ),
+            (BlockingFunctionCode::NotFound, "NOT_FOUND", 404),
+            (BlockingFunctionCode::AlreadyExists, "ALREADY_EXISTS", 409),
+            (
+                BlockingFunctionCode::PermissionDenied,
+                "PERMISSION_DENIED",
+                403,
+            ),
+            (
+                BlockingFunctionCode::Unauthenticated,
+                "UNAUTHENTICATED",
+                401,
+            ),
+            (
+                BlockingFunctionCode::ResourceExhausted,
+                "RESOURCE_EXHAUSTED",
+                429,
+            ),
+            (
+                BlockingFunctionCode::FailedPrecondition,
+                "FAILED_PRECONDITION",
+                400,
+            ),
+            (BlockingFunctionCode::Aborted, "ABORTED", 409),
+            (BlockingFunctionCode::OutOfRange, "OUT_OF_RANGE", 400),
+            (BlockingFunctionCode::Unimplemented, "UNIMPLEMENTED", 501),
+            (BlockingFunctionCode::Internal, "INTERNAL", 500),
+            (BlockingFunctionCode::Unavailable, "UNAVAILABLE", 503),
+            (BlockingFunctionCode::DataLoss, "DATA_LOSS", 500),
+        ] {
+            assert_eq!(BlockingFunctionCode::from_canonical_name(name), Some(code));
+            assert_eq!(code.canonical_name(), name);
+            assert_eq!(code.function_status(), function_status);
+            let failure = BlockingFunctionFailure::from_function(code, "safe").unwrap();
+            assert_eq!(
+                failure.identity_status(),
+                if function_status < 500 {
+                    400
+                } else {
+                    function_status
+                }
+            );
+        }
+        assert_eq!(
+            BlockingFunctionCode::from_canonical_name("unavailable"),
+            None
+        );
+        assert_eq!(BlockingFunctionCode::from_canonical_name("OK"), None);
+    }
+
+    #[test]
+    fn blocking_function_failure_bounds_and_escapes_its_message() {
+        let accepted = "a".repeat(BlockingFunctionFailure::MAX_MESSAGE_BYTES);
+        BlockingFunctionFailure::from_function(BlockingFunctionCode::InvalidArgument, accepted)
+            .unwrap();
+        assert!(BlockingFunctionFailure::from_function(
+            BlockingFunctionCode::InvalidArgument,
+            "a".repeat(BlockingFunctionFailure::MAX_MESSAGE_BYTES + 1),
+        )
+        .is_err());
+        for message in [
+            "nul\0",
+            "line\nfeed",
+            "return\r",
+            "next\u{0085}line",
+            "left\u{202e}override",
+            "isolate\u{2066}text",
+        ] {
+            assert!(BlockingFunctionFailure::from_function(
+                BlockingFunctionCode::InvalidArgument,
+                message,
+            )
+            .is_err());
+        }
+        let failure = BlockingFunctionFailure::from_function(
+            BlockingFunctionCode::PermissionDenied,
+            "quoted \"slash\\ 日本語",
+        )
+        .unwrap();
+        assert_eq!(failure.identity_status(), 400);
+        assert_eq!(
+            failure.client_message(),
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: 403, Status: \"PERMISSION_DENIED\", Message: \"quoted \\\"slash\\\\ 日本語\""
+        );
+    }
+
+    #[test]
+    fn elapsed_blocking_deadline_uses_the_production_opaque_unavailable_error() {
+        let failure = BlockingFunctionFailure::timeout();
+        assert_eq!(failure.identity_status(), 503);
+        assert_eq!(failure.client_message(), "Error code: 47");
+
+        let explicit = BlockingFunctionFailure::from_function(
+            BlockingFunctionCode::DeadlineExceeded,
+            "explicit deadline",
+        )
+        .unwrap();
+        assert_eq!(explicit.identity_status(), 504);
+        assert!(explicit.client_message().contains("DEADLINE_EXCEEDED"));
+    }
 
     #[test]
     fn auth_wall_clock_advances_from_its_monotonic_anchor() {

@@ -316,7 +316,7 @@
       "protobuf CloudEvents payloads (JSON is what firebase-functions consumes)"
     ],
     "notes": [
-      "Blocking Functions use a synchronous loopback bridge with a 60-second response deadline; a connection, timeout, malformed response or handler rejection refuses the Auth operation without publishing the speculative user state",
+      "Blocking Functions use a bounded synchronous loopback bridge with the production seven-second response deadline; explicit Functions SDK error classes retain their canonical status in the Identity Toolkit error envelope, an unhandled handler or transport failure is unavailable, and an elapsed deadline returns production's opaque 503 Error code: 47 without publishing speculative user state",
       "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; Firebase Functions SDK beforeEmail / beforeSms and beforeEmailSent / beforeSmsSent hooks are production-only and are not a Local Emulator Suite parity gap",
       "the Eventarc and alerts routes live on the functions port, not on the official suite's own Eventarc port 9299; the environment variable is exported accordingly, so an SDK reaches them unchanged",
       "no fireemu-only alert-injection route exists: firebase-tools has none either, and its Emulator UI fires an alert by POSTing to /google/publishEvents like any other client",
@@ -629,6 +629,7 @@
     "implemented": [
       "firebase.json for every served product: firestore in object or array (named-database) form with rules and indexes (also the legacy index spelling), storage in object or array form with target / bucket / rules, functions in object or array (multi-codebase) form with source, codebase, runtime and ignore",
       "named Firestore databases load, enforce and hot-reload their own isolated rules and index files",
+      "every Functions codebase declared in firebase.json runs in the daemon, one runner process each; --only functions:<codebase> narrows the run to one",
       "emulators.<name>.host and .port for firestore, auth, storage, functions, hub and ui, emulators.ui.enabled, and emulators.singleProjectMode",
       "loopback-only hosts, as a published divergence from firebase-tools (which binds any host as given): emulators.<name>.host and the canonical bind key accept 127.0.0.1, localhost and ::1; 0.0.0.0, :: or a LAN address exits 1 naming the key, because the daemon serves without a credential on loopback and has no routable mode",
       ".firebaserc project aliases: --project resolves an alias, falls back to the default alias, and takes an unknown value as a project ID exactly as firebase --project does",
@@ -639,7 +640,6 @@
     ],
     "unimplemented": [
       "one Storage ruleset covers every bucket, so a per-target rules file is reported and not loaded",
-      "one Functions codebase runs per daemon: a multi-codebase project names it with --only functions:<codebase>",
       "emulators.singleProjectMode is recorded and published but enforces nothing on its own: fireemu isolates every project into its own session, which is stricter",
       "hosting, database and the other deferred products are not parsed beyond reporting them"
     ],

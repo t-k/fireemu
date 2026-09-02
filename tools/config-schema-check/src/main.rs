@@ -290,7 +290,7 @@ fn firebase_json_problems(cfg: &Value) -> Vec<String> {
         }
     }
 
-    // 2. Every codebase needs a source, and a codebase name is declared at most once.
+    // 2. Every codebase needs a source, has a bounded Firebase name, and is declared once.
     let mut codebases: BTreeSet<String> = BTreeSet::new();
     for entry in entries(cfg.get("functions")) {
         let Some(obj) = entry.as_object() else {
@@ -310,6 +310,15 @@ fn firebase_json_problems(cfg: &Value) -> Vec<String> {
             .and_then(Value::as_str)
             .unwrap_or("default")
             .to_owned();
+        if !(1..=63).contains(&codebase.len())
+            || !codebase.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte)
+            })
+        {
+            problems.push(format!(
+                "functions.codebase {codebase:?} must be 1 to 63 characters of lowercase letters, digits, underscores or dashes"
+            ));
+        }
         if !codebases.insert(codebase.clone()) {
             problems.push(format!("functions declares the codebase {codebase} twice"));
         }

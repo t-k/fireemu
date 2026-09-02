@@ -15,6 +15,7 @@ import { resolve, join, dirname } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { instrumentCallables } from "./callable-app-check.mjs";
+import { blockingFailure } from "./blocking-error.mjs";
 
 const frameWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
@@ -46,6 +47,44 @@ function esmExportTarget(value) {
     }
   }
   return undefined;
+}
+
+function firebaseFunctionsPackage(require) {
+  let root = dirname(require.resolve("firebase-functions"));
+  for (;;) {
+    const candidate = join(root, "package.json");
+    if (existsSync(candidate)) {
+      const manifest = JSON.parse(readFileSync(candidate, "utf8"));
+      if (manifest.name === "firebase-functions") return { root, manifest };
+    }
+    const parent = dirname(root);
+    if (parent === root) throw new Error("cannot locate the firebase-functions package root");
+    root = parent;
+  }
+}
+
+async function firebaseHttpsErrorConstructors(require) {
+  const constructors = [];
+  try {
+    constructors.push(require("firebase-functions/https").HttpsError);
+  } catch {
+    // The ESM export below may still be available. An empty set fails closed.
+  }
+  try {
+    const { root, manifest } = firebaseFunctionsPackage(require);
+    const esmTarget = esmExportTarget(manifest.exports?.["./https"]);
+    if (typeof esmTarget !== "string" || !esmTarget.startsWith("./")) {
+      throw new Error("firebase-functions does not export ESM https");
+    }
+    const esmHttps = await import(pathToFileURL(resolve(root, esmTarget)).href);
+    constructors.push(esmHttps.HttpsError);
+  } catch {
+    // A missing constructor never widens trust; genuine errors from that module fail closed.
+  }
+  return constructors.filter(
+    (constructor, index) =>
+      typeof constructor === "function" && constructors.indexOf(constructor) === index,
+  );
 }
 
 function send(msg) {
@@ -184,28 +223,46 @@ function firstRegion(ep) {
   return r || undefined;
 }
 
-// Options that control the managed deployment platform have no local scheduling or IAM
-// effect, but discovery must retain them so diagnostics never imply that they disappeared.
+function resolvedNonNegativeInteger(value, field) {
+  if (value == null) return undefined;
+  if (value?.[Symbol.for("firebase-functions:ResetValue:Tag")] === true) return undefined;
+  const resolved =
+    typeof value === "object" && typeof value.value === "function" ? value.value() : value;
+  if (!Number.isSafeInteger(resolved) || resolved < 0) {
+    throw new Error(`${field} did not resolve to a non-negative integer`);
+  }
+  return resolved;
+}
+
+// Preserve shared Gen1/Gen2 endpoint options. Memory and instance limits shape local
+// admission; the other deployment and IAM values remain visible for faithful diagnostics.
 function platformOptions(ep) {
   if (!ep) return undefined;
   const options = {};
+  const preserveExternalChanges =
+    ep.preserveExternalChanges ??
+    (ep.platform === "gcfv2" ? discoveredGlobalOptions.preserveExternalChanges : undefined);
+  if (preserveExternalChanges != null)
+    options.preserveExternalChanges = Boolean(preserveExternalChanges);
+  const availableMemoryMb = resolvedNonNegativeInteger(
+    ep.availableMemoryMb,
+    "availableMemoryMb",
+  );
+  if (availableMemoryMb !== undefined) options.availableMemoryMb = availableMemoryMb;
+  const minInstances = resolvedNonNegativeInteger(ep.minInstances, "minInstances");
+  if (minInstances !== undefined) options.minInstances = minInstances;
+  const maxInstances = resolvedNonNegativeInteger(ep.maxInstances, "maxInstances");
+  if (maxInstances !== undefined) options.maxInstances = maxInstances;
+  if (ep.ingressSettings != null) options.ingressSettings = ep.ingressSettings;
+  if (ep.httpsTrigger?.invoker?.length) options.invoker = ep.httpsTrigger.invoker;
+  if (ep.serviceAccountEmail != null) options.serviceAccountEmail = ep.serviceAccountEmail;
+  if (ep.vpc?.connector != null) options.vpcConnector = ep.vpc.connector;
+  if (ep.vpc?.egressSettings != null) options.vpcEgressSettings = ep.vpc.egressSettings;
+  if (ep.labels && Object.keys(ep.labels).length > 0) options.labels = ep.labels;
   if (ep.platform === "gcfv2") {
-    const preserveExternalChanges =
-      ep.preserveExternalChanges ?? discoveredGlobalOptions.preserveExternalChanges;
-    if (preserveExternalChanges != null)
-      options.preserveExternalChanges = Boolean(preserveExternalChanges);
-    if (ep.availableMemoryMb != null) options.availableMemoryMb = ep.availableMemoryMb;
-    if (ep.minInstances != null) options.minInstances = ep.minInstances;
-    if (ep.maxInstances != null) options.maxInstances = ep.maxInstances;
     if (ep.cpu != null) options.cpu = String(ep.cpu);
-    if (ep.ingressSettings != null) options.ingressSettings = ep.ingressSettings;
-    if (ep.httpsTrigger?.invoker?.length) options.invoker = ep.httpsTrigger.invoker;
-    if (ep.serviceAccountEmail != null) options.serviceAccountEmail = ep.serviceAccountEmail;
-    if (ep.vpc?.connector != null) options.vpcConnector = ep.vpc.connector;
-    if (ep.vpc?.egressSettings != null) options.vpcEgressSettings = ep.vpc.egressSettings;
     if (Array.isArray(ep.vpc?.networkInterfaces))
       options.networkInterfaces = ep.vpc.networkInterfaces;
-    if (ep.labels && Object.keys(ep.labels).length > 0) options.labels = ep.labels;
   }
   if (Array.isArray(ep.secretEnvironmentVariables)) {
     options.secrets = ep.secretEnvironmentVariables.map((secret) => secret.key).filter(Boolean);
@@ -426,7 +483,8 @@ function describe(name, fn, instrumentation) {
     const region = firstRegion(ep);
     if (region) base.region = region;
     if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
-    if (ep.concurrency != null) base.concurrency = ep.concurrency;
+    if (ep.concurrency != null)
+      base.concurrency = resolvedNonNegativeInteger(ep.concurrency, "concurrency");
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.scheduleTrigger) {
@@ -692,7 +750,7 @@ function secretMatches(presented, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function makeHttpServer(functions, manifest) {
+async function makeHttpServer(functions, manifest) {
   const require = createRequire(join(sourceDir, "package.json"));
   let express;
   let expressRequire = require;
@@ -709,6 +767,7 @@ function makeHttpServer(functions, manifest) {
       return null;
     }
   }
+  const HttpsErrors = await firebaseHttpsErrorConstructors(require);
   const app = express();
   app.use(
     express.json({
@@ -800,8 +859,10 @@ function makeHttpServer(functions, manifest) {
         .then((value) => res.status(200).json(blockingResult(value)))
         .catch((e) => {
           log("error", `${spec.name}: ${e?.stack || e}`);
-          const code = e?.code || "internal";
-          res.status(400).json({ error: { status: code, message: String(e?.message || e) } });
+          const failure = blockingFailure(e, HttpsErrors);
+          res.status(failure.status).json({
+            error: { status: failure.canonicalName, message: failure.message },
+          });
         });
       return;
     }
@@ -901,21 +962,7 @@ async function main() {
   try {
     const require = createRequire(join(sourceDir, "package.json"));
     const cjsOptions = require("firebase-functions/v2/options").getGlobalOptions();
-    let sdkRoot = dirname(require.resolve("firebase-functions"));
-    let sdkPackage;
-    for (;;) {
-      const candidate = join(sdkRoot, "package.json");
-      if (existsSync(candidate)) {
-        const parsed = JSON.parse(readFileSync(candidate, "utf8"));
-        if (parsed.name === "firebase-functions") {
-          sdkPackage = parsed;
-          break;
-        }
-      }
-      const parent = dirname(sdkRoot);
-      if (parent === sdkRoot) throw new Error("cannot locate the firebase-functions package root");
-      sdkRoot = parent;
-    }
+    const { root: sdkRoot, manifest: sdkPackage } = firebaseFunctionsPackage(require);
     const optionsExport = sdkPackage.exports?.["./v2/options"];
     const esmTarget = esmExportTarget(optionsExport);
     if (typeof esmTarget !== "string" || !esmTarget.startsWith("./")) {

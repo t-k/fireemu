@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "auth/blocking-function-error-status",
+  "product": "auth",
+  "title": "Production Identity Platform Blocking Function failure classes",
+  "sdks": ["identity-toolkit-rest"],
+  "variant": "production-oracle",
+  "oracle": "production Identity Platform",
+  "summary": {
+    "parity": 3,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "explicit-permission-denial",
+      "status": "parity",
+      "value": {
+        "status": 400,
+        "messageContains": ["BLOCKING_FUNCTION_ERROR_RESPONSE", "PERMISSION_DENIED", "Registration rejected"],
+        "committed": false
+      }
+    },
+    {
+      "id": "unhandled-function-error",
+      "status": "parity",
+      "value": {
+        "status": 503,
+        "messageContains": ["BLOCKING_FUNCTION_ERROR_RESPONSE"],
+        "messageExcludes": ["Injected production oracle failure"],
+        "committed": false
+      }
+    },
+    {
+      "id": "seven-second-timeout",
+      "status": "parity",
+      "value": {
+        "status": 503,
+        "message": "Error code: 47",
+        "committed": false
+      }
+    }
+  ]
+}

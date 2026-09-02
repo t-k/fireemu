@@ -14,7 +14,7 @@
 use core::fmt;
 
 use fireemu_core_types::ids::Epoch;
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::event::LogicalEvent;
 use crate::retry::RetryPolicy;
@@ -219,9 +219,12 @@ impl EventRecord {
         now: LogicalInstant,
     ) -> Result<FailureOutcome, EventTransitionError> {
         self.guard("fail", matches!(self.state, EventState::Running))?;
-        let elapsed = now
-            .checked_duration_since(self.event.logical_time)
-            .unwrap_or_else(|| fireemu_core_types::time::LogicalDuration::from_nanos(i128::MAX));
+        let elapsed = if now < self.event.logical_time {
+            LogicalDuration::ZERO
+        } else {
+            now.checked_duration_since(self.event.logical_time)
+                .unwrap_or_else(|| LogicalDuration::from_nanos(i128::MAX))
+        };
         if policy.allows_retry_after_elapsed(self.attempt, elapsed) {
             let retry_at = now
                 .checked_add(policy.backoff_for_attempt(self.attempt))

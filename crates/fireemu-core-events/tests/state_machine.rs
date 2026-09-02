@@ -131,6 +131,76 @@ fn scheduler_backoff_becomes_linear_and_obeys_the_retry_window() {
 }
 
 #[test]
+fn clock_rewind_saturates_elapsed_time_and_keeps_retryable_work_alive() {
+    let policy = RetryPolicy::try_with_limits(
+        3,
+        LogicalDuration::from_seconds(10),
+        LogicalDuration::from_seconds(10),
+        0,
+        Some(LogicalDuration::from_seconds(60)),
+    )
+    .unwrap();
+    let mut r = EventRecord::new(event(Epoch::initial()));
+    r.lease().unwrap();
+    r.start().unwrap();
+
+    assert_eq!(
+        r.fail(&policy, LogicalInstant::from_unix_seconds(-3_600))
+            .unwrap(),
+        FailureOutcome::RetryScheduled {
+            retry_at: LogicalInstant::from_unix_seconds(-3_590),
+        }
+    );
+}
+
+#[test]
+fn clock_rewind_does_not_create_extra_retry_window() {
+    let policy = RetryPolicy::try_with_limits(
+        3,
+        LogicalDuration::from_seconds(10),
+        LogicalDuration::from_seconds(10),
+        0,
+        Some(LogicalDuration::from_seconds(5)),
+    )
+    .unwrap();
+    let mut r = EventRecord::new(event(Epoch::initial()));
+    r.lease().unwrap();
+    r.start().unwrap();
+
+    assert_eq!(
+        r.fail(&policy, LogicalInstant::from_unix_seconds(-3_600))
+            .unwrap(),
+        FailureOutcome::DeadLettered
+    );
+}
+
+#[test]
+fn extreme_clock_rewind_saturates_instead_of_dead_lettering() {
+    let policy = RetryPolicy::try_with_limits(
+        3,
+        LogicalDuration::from_seconds(1),
+        LogicalDuration::from_seconds(1),
+        0,
+        Some(LogicalDuration::from_seconds(60)),
+    )
+    .unwrap();
+    let mut future_event = event(Epoch::initial());
+    future_event.logical_time = LogicalInstant::MAX;
+    let mut r = EventRecord::new(future_event);
+    r.lease().unwrap();
+    r.start().unwrap();
+
+    assert_eq!(
+        r.fail(&policy, LogicalInstant::MIN).unwrap(),
+        FailureOutcome::RetryScheduled {
+            retry_at: LogicalInstant::MIN
+                .checked_add(LogicalDuration::from_seconds(1))
+                .unwrap(),
+        }
+    );
+}
+
+#[test]
 fn terminal_states_never_regress() {
     for terminal in [
         |r: &mut EventRecord| {

@@ -47,8 +47,10 @@ pub struct Outbox {
     records: BTreeMap<EventId, EventRecord>,
     /// Pending records in canonical dispatch order: logical time, then event ID.
     pending: BTreeSet<(LogicalInstant, EventId)>,
-    /// Retry-waiting records with the instant their timer elapses.
-    retrying: BTreeMap<EventId, LogicalInstant>,
+    /// Retry-waiting records ordered by the instant their timer elapses.
+    retrying: BTreeSet<(LogicalInstant, EventId)>,
+    /// Reverse lookup used to remove a record from `retrying` after its state changes.
+    retry_at_by_id: BTreeMap<EventId, LogicalInstant>,
     /// Records that are not terminal, whatever their state.
     active: BTreeSet<EventId>,
     /// Terminal records in the order they became terminal: the eviction order.
@@ -76,7 +78,8 @@ impl Outbox {
         Self {
             records: BTreeMap::new(),
             pending: BTreeSet::new(),
-            retrying: BTreeMap::new(),
+            retrying: BTreeSet::new(),
+            retry_at_by_id: BTreeMap::new(),
             active: BTreeSet::new(),
             terminal: VecDeque::new(),
             terminal_retention: retention.max(1),
@@ -159,7 +162,9 @@ impl Outbox {
         let key = (record.event().logical_time, id);
         let state = record.state().clone();
         self.pending.remove(&key);
-        self.retrying.remove(&id);
+        if let Some(retry_at) = self.retry_at_by_id.remove(&id) {
+            self.retrying.remove(&(retry_at, id));
+        }
         match state {
             EventState::Pending => {
                 self.pending.insert(key);
@@ -169,7 +174,8 @@ impl Outbox {
                 self.active.insert(id);
             }
             EventState::RetryWaiting { retry_at } => {
-                self.retrying.insert(id, retry_at);
+                self.retrying.insert((retry_at, id));
+                self.retry_at_by_id.insert(id, retry_at);
                 self.active.insert(id);
             }
             EventState::Succeeded
@@ -206,14 +212,18 @@ impl Outbox {
     /// Retry-waiting events whose timer has elapsed at `now`, in canonical order.
     #[must_use]
     pub fn retries_due(&self, now: LogicalInstant) -> Vec<EventId> {
-        let mut due: Vec<(LogicalInstant, EventId)> = self
-            .retrying
-            .iter()
-            .filter(|(_, retry_at)| **retry_at <= now)
-            .map(|(id, retry_at)| (*retry_at, *id))
-            .collect();
-        due.sort_unstable();
-        due.into_iter().map(|(_, id)| id).collect()
+        self.retrying
+            .range(..=(now, EventId::new(u128::MAX)))
+            .map(|(_, id)| *id)
+            .collect()
+    }
+
+    /// Number of retry-index entries visited by a due sweep at `now`.
+    #[must_use]
+    pub fn retry_sweep_visits(&self, now: LogicalInstant) -> usize {
+        self.retrying
+            .range(..=(now, EventId::new(u128::MAX)))
+            .count()
     }
 
     /// Marks every non-terminal record from an epoch older than `current_epoch` as

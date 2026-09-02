@@ -258,3 +258,36 @@ fn eviction_leaves_dispatch_order_and_retry_eligibility_unchanged() {
         .retries_due(LogicalInstant::from_unix_seconds(200))
         .is_empty());
 }
+
+#[test]
+fn retry_sweep_visits_only_the_due_prefix() {
+    use fireemu_core_events::retry::RetryPolicy;
+    use fireemu_core_types::time::LogicalDuration;
+
+    let policy = RetryPolicy::try_new(
+        3,
+        LogicalDuration::from_seconds(10),
+        LogicalDuration::from_seconds(10),
+    )
+    .unwrap();
+    let mut outbox = Outbox::new();
+    for id in 1..=1_000u128 {
+        outbox.enqueue(event(id, 0)).unwrap();
+        outbox
+            .update(EventId::new(id), |record| {
+                record.lease().unwrap();
+                record.start().unwrap();
+                record
+                    .fail(
+                        &policy,
+                        LogicalInstant::from_unix_seconds(i64::try_from(id).unwrap()),
+                    )
+                    .unwrap();
+            })
+            .unwrap();
+    }
+
+    let now = LogicalInstant::from_unix_seconds(11);
+    assert_eq!(outbox.retries_due(now), vec![EventId::new(1)]);
+    assert_eq!(outbox.retry_sweep_visits(now), 1);
+}

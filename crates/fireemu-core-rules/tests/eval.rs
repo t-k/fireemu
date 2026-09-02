@@ -80,6 +80,18 @@ fn ctx(method: Method, path: &str, auth: Option<AuthContext>) -> RequestContext 
     }
 }
 
+fn balanced_and(leaves: usize) -> String {
+    if leaves == 1 {
+        return "true".to_owned();
+    }
+    let left = leaves / 2;
+    format!(
+        "({} && {})",
+        balanced_and(left),
+        balanced_and(leaves - left)
+    )
+}
+
 fn doc(entries: &[(&str, RulesValue)]) -> RulesValue {
     let mut m = BTreeMap::new();
     m.insert(
@@ -284,10 +296,9 @@ fn expression_budget_and_call_depth_are_enforced_from_the_catalog() {
         "{r:?}"
     );
 
-    // 1,001 evaluated expressions: `true && true && ...` chained beyond the budget.
-    let expr = std::iter::repeat_n("true", 1_100)
-        .collect::<Vec<_>>()
-        .join(" && ");
+    // A shallow balanced tree with more than 1,001 evaluated expressions exceeds the
+    // request budget without relying on an unsafe left-nested parser tree.
+    let expr = balanced_and(1_024);
     let src = format!("service cloud.firestore {{\n  match /databases/{{db}}/documents {{\n    match /a/{{x}} {{ allow read: if {expr}; }}\n  }}\n}}");
     let ruleset = parse_ruleset(&src).unwrap();
     let r = evaluate_request(
@@ -305,7 +316,7 @@ fn expression_budget_and_call_depth_are_enforced_from_the_catalog() {
         "{r:?}"
     );
     assert!(r.expressions_evaluated > 1_000);
-    // Short-circuit: `false && <1,100 terms>` costs only a few expressions.
+    // Short-circuit: `false && <1,024 leaves>` costs only a few expressions.
     let src = format!("service cloud.firestore {{\n  match /databases/{{db}}/documents {{\n    match /a/{{x}} {{ allow read: if false && ({expr}); }}\n  }}\n}}");
     let ruleset = parse_ruleset(&src).unwrap();
     let r = evaluate_request(

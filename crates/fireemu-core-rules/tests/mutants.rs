@@ -4,10 +4,13 @@
 
 use std::collections::BTreeMap;
 
+use fireemu_core_rules::coverage::{report, Coverage};
 use fireemu_core_rules::eval::{
     evaluate_request, Decision, DenyReason, Method, RequestContext, RulesService,
 };
-use fireemu_core_rules::parse::{parse_ruleset, MAX_EXPR_DEPTH, MAX_PARSE_BYTES};
+use fireemu_core_rules::parse::{
+    parse_ruleset, MAX_EXPR_DEPTH, MAX_EXPR_TREE_DEPTH, MAX_PARSE_BYTES,
+};
 use fireemu_core_rules::runtime::LoadedRules;
 use fireemu_core_rules::value::RulesValue;
 
@@ -384,17 +387,56 @@ fn nesting_budgets_refuse_deep_sources_without_overflowing() {
     assert!(parse_ruleset(&rules("read", &negations(MAX_EXPR_DEPTH as usize + 1))).is_err());
     assert!(parse_ruleset(&rules("read", &negations(5000))).is_err());
     assert!(allowed(&negations(4)));
-    // Left-nested operator chains are bounded by the evaluator, not the parser: a long
-    // chain is denied (a soft error), never a crash; a realistic one evaluates.
+    // Left-nested operator chains are bounded while parsing, before recursive consumers see
+    // the tree. A realistic chain still evaluates.
     let chained = |n: usize| vec!["1"; n].join(" + ") + &format!(" == {n}");
     assert!(allowed(&chained(40)));
-    assert!(parse_ruleset(&rules("read", &chained(5000))).is_ok());
-    assert!(!allowed(&chained(5000)));
+    assert!(parse_ruleset(&rules("read", &chained(5000))).is_err());
     let conjunction = |n: usize| vec!["true"; n].join(" && ");
     assert!(allowed(&conjunction(500)), "&& / || chains are flattened");
     // Source size budget.
     let padding = "/".repeat(2) + &" ".repeat(MAX_PARSE_BYTES);
     assert!(parse_ruleset(&format!("{padding}\n{}", rules("read", "true"))).is_err());
+}
+
+#[test]
+fn binary_chain_budget_is_safe_on_a_reload_worker_stack() {
+    std::thread::Builder::new()
+        .name("rules-reload-stack-regression".to_owned())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let conjunction = |terms: usize| vec!["true"; terms].join(" && ");
+            let accepted = rules("read", &conjunction(MAX_EXPR_TREE_DEPTH as usize));
+            let loaded = LoadedRules::from_source(&accepted).expect("boundary chain loads");
+            assert!(matches!(
+                evaluate_request(
+                    loaded.ruleset.as_ref().expect("loaded ruleset"),
+                    &ctx(Method::Get, &[]),
+                )
+                .decision,
+                Decision::Allow
+            ));
+            let snapshot = loaded.clone();
+            let coverage = Coverage::default();
+            let tree = report(
+                snapshot.ruleset.as_ref().expect("snapshot ruleset"),
+                &coverage,
+            );
+            drop(tree);
+            drop(snapshot);
+            drop(loaded);
+
+            let over_budget = rules("read", &conjunction(MAX_EXPR_TREE_DEPTH as usize + 1));
+            let error = LoadedRules::from_source(&over_budget)
+                .expect_err("chain above the boundary must be rejected");
+            assert!(error.message.contains("expression tree depth"), "{error}");
+
+            let hostile = rules("read", &conjunction(30_000));
+            assert!(LoadedRules::from_source(&hostile).is_err());
+        })
+        .expect("spawn reload-sized stack")
+        .join()
+        .expect("reload-sized stack does not overflow");
 }
 
 #[test]

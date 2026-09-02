@@ -2591,6 +2591,14 @@ mod config_reload_tests {
         tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
         assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_ONE));
 
+        let hostile_condition = vec!["true"; 30_000].join(" && ");
+        let hostile = format!(
+            "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents {{ match /{{document=**}} {{ allow read: if {hostile_condition}; }} }} }}"
+        );
+        std::fs::write(&path, hostile).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_ONE));
+
         std::fs::write(&path, RULES_TWO).unwrap();
         for _ in 0..30 {
             if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {

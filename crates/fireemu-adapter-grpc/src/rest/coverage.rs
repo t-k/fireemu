@@ -229,3 +229,37 @@ fn push_escaped(out: &mut String, text: &str) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use fireemu_core_rules::coverage::Coverage;
+    use fireemu_core_rules::parse::MAX_EXPR_TREE_DEPTH;
+    use fireemu_core_rules::runtime::LoadedRules;
+
+    use super::coverage_json;
+
+    #[test]
+    fn coverage_json_handles_the_maximum_expression_depth_on_a_worker_stack() {
+        std::thread::Builder::new()
+            .name("rules-coverage-stack-regression".to_owned())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let condition = vec!["true"; MAX_EXPR_TREE_DEPTH as usize].join(" && ");
+                let source = format!(
+                    "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents {{ match /{{document=**}} {{ allow read: if {condition}; }} }} }}"
+                );
+                let loaded = LoadedRules::from_source(&source).expect("boundary ruleset loads");
+                let json = coverage_json(&loaded, &Coverage::default());
+                assert_eq!(
+                    json["report"].as_array().map(Vec::len),
+                    Some(1),
+                    "coverage contains the boundary expression"
+                );
+                drop(json);
+                drop(loaded);
+            })
+            .expect("spawn worker-sized stack")
+            .join()
+            .expect("coverage generation does not overflow");
+    }
+}

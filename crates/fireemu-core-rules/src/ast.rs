@@ -271,6 +271,48 @@ impl Expr {
     }
 }
 
+impl Drop for Expr {
+    fn drop(&mut self) {
+        let mut pending = Vec::new();
+        let root = core::mem::replace(self.kind.as_mut(), ExprKind::Literal(Literal::Null));
+        move_children(root, &mut pending);
+
+        while let Some(mut expr) = pending.pop() {
+            let kind = core::mem::replace(expr.kind.as_mut(), ExprKind::Literal(Literal::Null));
+            move_children(kind, &mut pending);
+        }
+    }
+}
+
+fn move_children(kind: ExprKind, pending: &mut Vec<Expr>) {
+    match kind {
+        ExprKind::Literal(_) | ExprKind::Ident(_) => {}
+        ExprKind::Member { object, .. } => pending.push(object),
+        ExprKind::Index { object, index } => pending.extend([object, index]),
+        ExprKind::Slice { object, start, end } => pending.extend([object, start, end]),
+        ExprKind::Call { callee, args } => {
+            pending.push(callee);
+            pending.extend(args);
+        }
+        ExprKind::Unary { expr, .. } | ExprKind::Is { expr, .. } => pending.push(expr),
+        ExprKind::Binary { left, right, .. } => pending.extend([left, right]),
+        ExprKind::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => pending.extend([cond, then, otherwise]),
+        ExprKind::List(items) => pending.extend(items),
+        ExprKind::Map(entries) => pending.extend(entries.into_iter().map(|(_, expr)| expr)),
+        ExprKind::Path(segments) => pending.extend(segments.into_iter().filter_map(|segment| {
+            if let PathSegment::Binding(expr) = segment {
+                Some(expr)
+            } else {
+                None
+            }
+        })),
+    }
+}
+
 /// Expression kinds.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {

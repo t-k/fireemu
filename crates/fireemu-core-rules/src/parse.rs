@@ -20,6 +20,10 @@ pub const MAX_PARSE_BYTES: usize = 4 * 1024 * 1024;
 /// debug build (a hostile ruleset must be refused, never overflow the stack); real rulesets
 /// nest a handful of levels.
 pub const MAX_EXPR_DEPTH: u32 = 32;
+/// Maximum structural depth of a completed expression tree. Binary parsing is iterative, so
+/// a long operator chain does not consume parser recursion while it is being built; this
+/// separate bound protects cloning, coverage reporting, and every other tree consumer.
+pub const MAX_EXPR_TREE_DEPTH: u32 = 500;
 /// Maximum `match` nesting depth accepted by the parser (the limit itself is 10; the parser
 /// allows more so that the linter can report the exact excess).
 pub const MAX_MATCH_NESTING: u32 = 64;
@@ -108,8 +112,59 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
         expr_depth: 0,
     };
     let ruleset = p.ruleset()?;
+    check_expression_tree_depth(&ruleset)?;
     check_literal_patterns(&ruleset)?;
     Ok(ruleset)
+}
+
+fn check_expression_tree_depth(ruleset: &Ruleset) -> Result<(), ParseError> {
+    let mut roots: Vec<&Expr> = Vec::new();
+    let mut items: Vec<&Item> = ruleset
+        .services
+        .iter()
+        .flat_map(|service| &service.items)
+        .collect();
+    while let Some(item) = items.pop() {
+        match item {
+            Item::Match(block) => {
+                items.extend(&block.items);
+                roots.extend(
+                    block
+                        .allows
+                        .iter()
+                        .filter_map(|allow| allow.condition.as_ref()),
+                );
+                roots.extend(block.path.iter().filter_map(|segment| match segment {
+                    PathSegment::Binding(expr) => Some(expr),
+                    _ => None,
+                }));
+            }
+            Item::Function(function) => {
+                roots.extend(function.lets.iter().map(|binding| &binding.value));
+                roots.push(&function.body);
+            }
+        }
+    }
+
+    let mut pending: Vec<(&Expr, u32)> = roots.into_iter().map(|expr| (expr, 1)).collect();
+    while let Some((expr, depth)) = pending.pop() {
+        if depth > MAX_EXPR_TREE_DEPTH {
+            return Err(ParseError {
+                message: format!(
+                    "expression tree depth exceeds the parser budget of {MAX_EXPR_TREE_DEPTH}"
+                ),
+                line: expr.span.line,
+                column: expr.span.column,
+                offset: expr.span.offset,
+            });
+        }
+        pending.extend(
+            expr.children()
+                .into_iter()
+                .map(|child| (child, depth.saturating_add(1))),
+        );
+    }
+    Ok(())
 }
 
 /// The official compiler compiles every literal `matches()` / `replace()` pattern while it
@@ -711,6 +766,7 @@ impl<'a> Parser<'a> {
             return self.unary();
         }
         let mut left = self.binary(level + 1)?;
+        let mut chain_depth = 1u32;
         loop {
             let save = self.pos;
             let tok = self.next()?;
@@ -756,6 +812,12 @@ impl<'a> Parser<'a> {
                 self.pos = save;
                 return Ok(left);
             };
+            chain_depth = chain_depth.saturating_add(1);
+            if chain_depth > MAX_EXPR_TREE_DEPTH {
+                return Err(self.error(format!(
+                    "expression tree depth exceeds the parser budget of {MAX_EXPR_TREE_DEPTH}"
+                )));
+            }
             let right = self.binary(level + 1)?;
             let span = left.span;
             let end = right.end;

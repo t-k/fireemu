@@ -776,7 +776,7 @@
         "useEmulator"
       ],
       "state": "claimed",
-      "decision": "Active supported surface. Parity is claimed for the Identity Toolkit subset the official emulator serves, including multi-factor enrolment and sign-in.",
+      "decision": "Active supported surface. Parity is claimed for the Identity Toolkit subset the official emulator serves, including multi-factor enrolment and sign-in and synchronous beforeCreate and beforeSignIn Blocking Functions.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_auth",
         "https://firebase.google.com/docs/emulator-suite"
@@ -786,7 +786,6 @@
       ],
       "notes": [],
       "gaps": [
-        "blocking identity functions (beforeUserCreated / beforeUserSignedIn)",
         "multi-tenancy (tenant-scoped projects and the tenant admin forms); the official emulator has no Game Center sign-in route and Firebase Auth has no passkey provider, so neither is a gap. SAML / OIDC sign-in (accounts:signInWithIdp) and the identity-provider widget pages (/emulator/auth/handler and /emulator/auth/iframe) are served; the official emulator stores no SAML / OIDC provider configuration, so there is none to round-trip.",
         "signIn.allowDuplicateEmails is recorded and exported but does not yet admit duplicate accounts"
       ],
@@ -844,6 +843,30 @@
           "productionOnly": [
             "real identity provider round trips and provider-side account state"
           ],
+          "preview": []
+        },
+        {
+          "id": "AUTH-CLAIM-BLOCKING-FUNCTIONS",
+          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously for every token-issuing Auth route the official emulator connects to them; a rejection or malformed response rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
+          "capabilities": [
+            {
+              "id": "FN-EVT-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "crates/fireemu/tests/functions_discovery.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; SDK email and SMS send hooks are production-only and are outside Local Emulator Suite parity"
+          ],
+          "fireemuOnly": [],
+          "productionOnly": [],
           "preview": []
         },
         {
@@ -1054,7 +1077,7 @@
         "useEmulator"
       ],
       "state": "claimed",
-      "decision": "Active supported surface. Parity is claimed for HTTPS and callable functions, event triggers including Eventarc custom events and Firebase alerts, Cloud Tasks queue functions, scheduled functions, discovery over one or several codebases and the environment a runtime is started with, all running a real firebase-functions codebase in the bundled Node runner.",
+      "decision": "Active supported surface. Parity is claimed for HTTPS and callable functions, event triggers including Identity Platform Blocking Functions, Eventarc custom events and Firebase alerts, Cloud Tasks queue functions, scheduled functions, discovery over one or several codebases and the environment a runtime is started with, all running a real firebase-functions codebase in the bundled Node runner.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_functions",
         "https://firebase.google.com/docs/emulator-suite"
@@ -1064,7 +1087,6 @@
       ],
       "notes": [],
       "gaps": [
-        "blocking identity functions",
         "Remote Config triggers",
         "Python and Dart codebases",
         "hot reload of a codebase's source",
@@ -1106,6 +1128,30 @@
               "precision": "conservative"
             }
           ],
+          "productionOnly": [],
+          "preview": []
+        },
+        {
+          "id": "FN-CLAIM-BLOCKING-AUTH",
+          "statement": "v2 beforeUserCreated / beforeUserSignedIn and v1 auth.user().beforeCreate / beforeSignIn exports are discovered as served synchronous triggers and invoked by Auth through the guarded runner endpoint.",
+          "capabilities": [
+            {
+              "id": "FN-EVT-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "crates/fireemu/tests/functions_discovery.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; SDK email and SMS send hooks are production-only and are outside Local Emulator Suite parity"
+          ],
+          "fireemuOnly": [],
           "productionOnly": [],
           "preview": []
         },

@@ -25,7 +25,9 @@ use tokio_stream::StreamExt;
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
-async fn start() -> (
+async fn start_with_write_time(
+    wall_clock: bool,
+) -> (
     FirestoreClient<tonic::transport::Channel>,
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
@@ -44,7 +46,11 @@ async fn start() -> (
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    let backend = Arc::new(if wall_clock {
+        LocalBackend::new(gateway.clone(), clock.clone(), 7).with_wall_clock_write_time()
+    } else {
+        LocalBackend::new(gateway.clone(), clock.clone(), 7)
+    });
     let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -59,6 +65,14 @@ async fn start() -> (
         .await
         .unwrap();
     (FirestoreClient::new(channel), clock, handle)
+}
+
+async fn start() -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    tokio::task::JoinHandle<()>,
+) {
+    start_with_write_time(false).await
 }
 
 async fn start_with_edition(
@@ -126,6 +140,39 @@ fn update_write(name: &str, fields: &[(&str, pb::Value)]) -> pb::Write {
         ..Default::default()
     }
 }
+fn server_timestamp_write(name: &str) -> pb::Write {
+    let mut write = update_write(name, &[]);
+    write.update_transforms = ["createdAt", "updatedAt"]
+        .into_iter()
+        .map(|field_path| pb::document_transform::FieldTransform {
+            field_path: field_path.to_owned(),
+            transform_type: Some(
+                pb::document_transform::field_transform::TransformType::SetToServerValue(
+                    pb::document_transform::field_transform::ServerValue::RequestTime as i32,
+                ),
+            ),
+        })
+        .collect();
+    write
+}
+fn timestamp_field_nanos(document: &pb::Document, field: &str) -> i128 {
+    let Some(pb::value::ValueType::TimestampValue(timestamp)) = document
+        .fields
+        .get(field)
+        .and_then(|value| value.value_type.as_ref())
+    else {
+        panic!("missing timestamp field {field}");
+    };
+    i128::from(timestamp.seconds) * 1_000_000_000 + i128::from(timestamp.nanos)
+}
+fn wall_clock_nanos() -> i128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        .try_into()
+        .unwrap()
+}
 fn query(collection: &str, filter: Option<sq::Filter>) -> pb::RunQueryRequest {
     pb::RunQueryRequest {
         parent: DOCS.to_owned(),
@@ -165,6 +212,137 @@ async fn collect_docs(
         }
     }
     out
+}
+
+#[tokio::test]
+async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
+    let (mut client, _, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: [
+                "roots/target",
+                "roots/target/children/a",
+                "roots/target/children/a/grandchildren/b",
+                "roots/sibling/children/c",
+            ]
+            .into_iter()
+            .map(|name| update_write(name, &[("value", i(1))]))
+            .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let descendants = collect_docs(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: format!("{DOCS}/roots/target"),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    select: Some(sq::Projection {
+                        fields: vec![sq::FieldReference {
+                            field_path: "__name__".to_owned(),
+                        }],
+                    }),
+                    from: vec![sq::CollectionSelector {
+                        collection_id: String::new(),
+                        all_descendants: true,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        descendants
+            .iter()
+            .map(|document| document.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            format!("{DOCS}/roots/target/children/a"),
+            format!("{DOCS}/roots/target/children/a/grandchildren/b"),
+        ]
+    );
+    assert!(descendants
+        .iter()
+        .all(|document| document.fields.is_empty()));
+
+    let err = client
+        .run_query(pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: String::new(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn unpinned_server_timestamps_follow_each_write_wall_time() {
+    let (mut client, _, handle) = start_with_write_time(true).await;
+    let before_first = wall_clock_nanos();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![server_timestamp_write("timestamps/first")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let after_first = wall_clock_nanos();
+    let first = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/timestamps/first"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let first_nanos = timestamp_field_nanos(&first, "createdAt");
+    assert_eq!(first_nanos, timestamp_field_nanos(&first, "updatedAt"));
+    assert!(
+        first_nanos >= before_first - 1_000_000,
+        "{first_nanos} < {before_first}"
+    );
+    assert!(first_nanos <= after_first, "{first_nanos} > {after_first}");
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let before_second = wall_clock_nanos();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![server_timestamp_write("timestamps/second")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let after_second = wall_clock_nanos();
+    let second = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/timestamps/second"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let second_nanos = timestamp_field_nanos(&second, "createdAt");
+    assert!(second_nanos >= before_second - 1_000_000);
+    assert!(second_nanos <= after_second);
+    assert!(second_nanos / 1_000_000 > first_nanos / 1_000_000);
+    handle.abort();
 }
 
 #[tokio::test]
@@ -329,7 +507,7 @@ async fn create_update_with_mask_transforms_and_preconditions() {
 }
 
 #[tokio::test]
-async fn a_locked_read_refuses_the_out_of_band_writer_and_batch_get_reports_missing() {
+async fn a_concurrent_write_aborts_the_stale_transaction_and_batch_get_reports_missing() {
     let (mut client, _clock, handle) = start().await;
     client
         .commit(pb::CommitRequest {
@@ -370,29 +548,39 @@ async fn a_locked_read_refuses_the_out_of_band_writer_and_batch_get_reports_miss
         }
     }
     assert_eq!((found, missing), (1, 1));
-    // Pessimistic concurrency: the read locked acct/a, so an out-of-band writer that touches
-    // it is made to wait and then refused with ABORTED "Transaction lock timeout." -- the
-    // transaction keeps the lock and nothing is written behind its back.
-    let lock_timeout = client
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(90))])],
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(lock_timeout.code(), tonic::Code::Aborted);
-    assert_eq!(lock_timeout.message(), "Transaction lock timeout.");
-    // The transaction commits on the value it read.
-    client
+        .unwrap();
+    let conflict = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("acct/a", &[("balance", i(80))])],
-            transaction: txn,
+            transaction: txn.clone(),
             ..Default::default()
         })
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(conflict.code(), tonic::Code::Aborted);
+    let retry = || pb::BeginTransactionRequest {
+        database: DB.to_owned(),
+        options: Some(pb::TransactionOptions {
+            mode: Some(pb::transaction_options::Mode::ReadWrite(
+                pb::transaction_options::ReadWrite {
+                    retry_transaction: txn.clone(),
+                    ..Default::default()
+                },
+            )),
+        }),
+        ..Default::default()
+    };
+    assert!(client.begin_transaction(retry()).await.is_ok());
+    let replay = client.begin_transaction(retry()).await.unwrap_err();
+    assert_eq!(replay.code(), tonic::Code::InvalidArgument);
     let got = client
         .get_document(pb::GetDocumentRequest {
             name: format!("{DOCS}/acct/a"),
@@ -401,7 +589,7 @@ async fn a_locked_read_refuses_the_out_of_band_writer_and_batch_get_reports_miss
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(got.fields.get("balance"), Some(&i(80)));
+    assert_eq!(got.fields.get("balance"), Some(&i(90)));
 
     let txn2 = client
         .begin_transaction(pb::BeginTransactionRequest {
@@ -420,6 +608,111 @@ async fn a_locked_read_refuses_the_out_of_band_writer_and_batch_get_reports_miss
         })
         .await
         .unwrap();
+    handle.abort();
+}
+
+#[tokio::test]
+async fn concurrent_transaction_retries_preserve_every_increment_and_item() {
+    const CLIENTS: usize = 20;
+    let (mut client, _, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("counters/shared", &[("value", i(0))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let first_reads = Arc::new(tokio::sync::Barrier::new(CLIENTS));
+    let tasks: Vec<_> = (0..CLIENTS)
+        .map(|client_id| {
+            let mut client = client.clone();
+            let first_reads = first_reads.clone();
+            tokio::spawn(async move {
+                let mut retry_transaction = Vec::new();
+                for attempt in 0..CLIENTS {
+                    let transaction = client
+                        .begin_transaction(pb::BeginTransactionRequest {
+                            database: DB.to_owned(),
+                            options: Some(pb::TransactionOptions {
+                                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                                    pb::transaction_options::ReadWrite {
+                                        retry_transaction,
+                                        ..Default::default()
+                                    },
+                                )),
+                            }),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap()
+                        .into_inner()
+                        .transaction;
+                    let counter = client
+                        .get_document(pb::GetDocumentRequest {
+                            name: format!("{DOCS}/counters/shared"),
+                            consistency_selector: Some(
+                                pb::get_document_request::ConsistencySelector::Transaction(
+                                    transaction.clone(),
+                                ),
+                            ),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap()
+                        .into_inner();
+                    let Some(pb::value::ValueType::IntegerValue(value)) = counter
+                        .fields
+                        .get("value")
+                        .and_then(|value| value.value_type.as_ref())
+                    else {
+                        panic!("counter is not an integer");
+                    };
+                    if attempt == 0 {
+                        first_reads.wait().await;
+                    }
+                    let result = client
+                        .commit(pb::CommitRequest {
+                            database: DB.to_owned(),
+                            writes: vec![
+                                update_write(&format!("items/client-{client_id}"), &[("ok", i(1))]),
+                                update_write("counters/shared", &[("value", i(value + 1))]),
+                            ],
+                            transaction: transaction.clone(),
+                            ..Default::default()
+                        })
+                        .await;
+                    match result {
+                        Ok(_) => return,
+                        Err(status) if status.code() == tonic::Code::Aborted => {
+                            retry_transaction = transaction;
+                            tokio::task::yield_now().await;
+                        }
+                        Err(status) => panic!("unexpected transaction failure: {status}"),
+                    }
+                }
+                panic!("transaction did not make progress after {CLIENTS} attempts");
+            })
+        })
+        .collect();
+    for task in tasks {
+        task.await.unwrap();
+    }
+
+    let counter = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/counters/shared"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let expected_clients = i64::try_from(CLIENTS).expect("client count fits in i64");
+    assert_eq!(counter.fields.get("value"), Some(&i(expected_clients)));
+    assert_eq!(
+        collect_docs(&mut client, query("items", None)).await.len(),
+        CLIENTS
+    );
     handle.abort();
 }
 
@@ -714,19 +1007,14 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     assert!(second.transaction.is_empty());
     assert!(stream.next().await.is_none());
 
-    // Pessimistic concurrency: the transaction's query locked the `snap` collection, so a
-    // concurrent insert into it (a phantom row) is refused with "Transaction lock timeout."
-    // rather than allowed to invalidate the transaction.
-    let lock_timeout = client
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/2", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(lock_timeout.code(), tonic::Code::Aborted);
-    assert_eq!(lock_timeout.message(), "Transaction lock timeout.");
+        .unwrap();
     let mut stream = client
         .run_aggregation_query(pb::RunAggregationQueryRequest {
             parent: DOCS.to_owned(),
@@ -745,9 +1033,7 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
         .into_inner();
     let result = stream.next().await.unwrap().unwrap().result.unwrap();
     assert_eq!(result.aggregate_fields.get("n"), Some(&i(1)));
-    // The transaction commits: writing into the collection it locked never contends with
-    // itself.
-    client
+    let conflict = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("snap/3", &[("v", i(3))])],
@@ -755,7 +1041,15 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
             ..Default::default()
         })
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(conflict.code(), tonic::Code::Aborted);
+    assert!(client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/snap/3"),
+            ..Default::default()
+        })
+        .await
+        .is_err());
 
     // An empty BatchGet with new_transaction still returns the token.
     let mut stream = client
@@ -979,21 +1273,15 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
         .unwrap()
         .into_inner();
     assert_eq!(listed.documents.len(), 1);
-    // The list locked the `scan` collection, so an out-of-band insert into it (a phantom) is
-    // refused with "Transaction lock timeout." rather than allowed behind the transaction.
-    let lock_timeout = client
+    client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/b", &[("v", i(2))])],
             ..Default::default()
         })
         .await
-        .unwrap_err();
-    assert_eq!(lock_timeout.code(), tonic::Code::Aborted);
-    assert_eq!(lock_timeout.message(), "Transaction lock timeout.");
-    // The transaction commits a write into the collection it scanned; its own lock never
-    // blocks it.
-    client
+        .unwrap();
+    let conflict = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
             writes: vec![update_write("scan/a", &[("v", i(3))])],
@@ -1001,7 +1289,17 @@ async fn list_documents_inside_a_transaction_records_the_scan() {
             ..Default::default()
         })
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(conflict.code(), tonic::Code::Aborted);
+    let current = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/scan/a"),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(current.fields.get("v"), Some(&i(1)));
     handle.abort();
 }
 

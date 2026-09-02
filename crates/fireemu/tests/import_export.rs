@@ -927,6 +927,21 @@ fn export_on_exit_without_a_directory_uses_the_import_one() {
     let after = std::fs::read_to_string(export.join("auth_export/accounts.json")).unwrap();
     assert_ne!(before, after, "the directory was rewritten in place");
     assert!(after.contains("user-password"), "{after}");
+    let accounts: serde_json::Value = serde_json::from_str(&after).unwrap();
+    let user = accounts["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["localId"] == "user-password")
+        .unwrap();
+    let phone = user["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|provider| provider["providerId"] == "phone")
+        .unwrap();
+    assert_eq!(phone["rawId"], "+15555550100");
+    assert_eq!(phone["phoneNumber"], "+15555550100");
 }
 
 // --------------------------------------------------------------------------------------

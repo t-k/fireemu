@@ -3,7 +3,7 @@
 use core::fmt;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use fireemu_core_limits::catalogs::FIREBASE_AUTH_2026_08_30;
 use fireemu_core_limits::evaluate::{
@@ -2204,7 +2204,7 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        user.tokens_valid_after = Self::whole_second(now);
+        user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
         Ok(())
     }
 
@@ -2337,6 +2337,43 @@ impl AuthSnapshot {
 type SharedAuthStore = Arc<Mutex<AuthStore>>;
 type TenantKey = (String, String);
 
+/// Maximum compatibility-routed Auth project namespaces retained by one daemon.
+pub const MAX_ROUTED_AUTH_PROJECTS: usize = 1_024;
+
+#[derive(Debug, Default)]
+struct ProjectStores {
+    registered: BTreeMap<String, SharedAuthStore>,
+    routed: BTreeMap<String, SharedAuthStore>,
+}
+
+/// Result of atomically installing a compatibility-routed project store.
+#[derive(Debug, Clone)]
+pub enum RoutedStoreInstall {
+    /// This request installed the supplied store.
+    Installed(SharedAuthStore),
+    /// Another request already installed the authoritative routed store.
+    Existing(SharedAuthStore),
+    /// An explicitly registered session owns the project.
+    RegisteredConflict,
+    /// The fixed routed-project capacity has been reached.
+    Capacity,
+    /// The candidate aliases another namespace or carries different namespace metadata.
+    InvalidStore,
+}
+
+/// Result of resolving a project-less compatibility request from an existing user ID.
+#[derive(Debug, Clone)]
+pub enum CompatibilityUserStoreMatch {
+    /// No default or compatibility-routed namespace contains the user.
+    NotFound,
+    /// Exactly one namespace contains the user.
+    Unique(SharedAuthStore),
+    /// More than one namespace contains the user, so selecting one would cross a boundary.
+    Ambiguous,
+    /// A poisoned store or registry lock prevented a complete decision.
+    Unavailable,
+}
+
 /// The Auth stores of every project a daemon serves: the configured (default) project plus
 /// the projects created as sessions through the control API. Tokens name their project in
 /// `aud`, so a verifier picks the store by audience.
@@ -2344,10 +2381,10 @@ type TenantKey = (String, String);
 pub struct AuthRegistry {
     default_project: String,
     default: SharedAuthStore,
-    others: Mutex<BTreeMap<String, SharedAuthStore>>,
+    projects: Mutex<ProjectStores>,
     tenants: Mutex<BTreeMap<TenantKey, SharedAuthStore>>,
     tenant_metadata: Mutex<BTreeMap<TenantKey, TenantMetadata>>,
-    operation_gates: Mutex<BTreeMap<TenantKey, Arc<Mutex<()>>>>,
+    operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     next_tenant_id: AtomicU64,
 }
 
@@ -2389,7 +2426,7 @@ impl AuthRegistry {
         Self {
             default_project: default_project.to_owned(),
             default,
-            others: Mutex::new(BTreeMap::new()),
+            projects: Mutex::new(ProjectStores::default()),
             tenants: Mutex::new(BTreeMap::new()),
             tenant_metadata: Mutex::new(BTreeMap::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
@@ -2415,7 +2452,146 @@ impl AuthRegistry {
         if project == self.default_project {
             return Some(self.default.clone());
         }
-        self.others.lock().ok()?.get(project).cloned()
+        self.projects.lock().ok()?.registered.get(project).cloned()
+    }
+
+    /// An existing compatibility-routed store. Explicitly registered projects are not
+    /// returned through this method.
+    #[must_use]
+    pub fn routed_store_for(&self, project: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        self.projects.lock().ok()?.routed.get(project).cloned()
+    }
+
+    /// Builds an isolated compatibility store without registering it. A rejected request can
+    /// use and drop this candidate without growing the registry.
+    pub fn routed_candidate(&self, project: &str) -> Option<AuthStore> {
+        if !valid_routed_project(project) || project == self.default_project {
+            return None;
+        }
+        let (policy, config, signer) = {
+            let default = self.default.lock().ok()?;
+            (*default.policy(), default.config(), default.signer_arc())
+        };
+        let seed = project
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
+            });
+        let mut store = AuthStore::new(project, SplitMix64::new(seed), policy);
+        store.set_config(config);
+        if let Some(signer) = signer {
+            store.set_signer(signer);
+        }
+        Some(store)
+    }
+
+    /// Atomically installs a compatibility store without ever replacing a registered or
+    /// already-routed namespace.
+    pub fn install_routed(&self, project: &str, store: SharedAuthStore) -> RoutedStoreInstall {
+        let Ok(mut projects) = self.projects.lock() else {
+            return RoutedStoreInstall::RegisteredConflict;
+        };
+        if projects.registered.contains_key(project) {
+            return RoutedStoreInstall::RegisteredConflict;
+        }
+        if let Some(existing) = projects.routed.get(project) {
+            return RoutedStoreInstall::Existing(existing.clone());
+        }
+        if Arc::ptr_eq(&store, &self.default)
+            || projects
+                .registered
+                .values()
+                .chain(projects.routed.values())
+                .any(|existing| Arc::ptr_eq(existing, &store))
+        {
+            return RoutedStoreInstall::InvalidStore;
+        }
+        let Ok(candidate) = store.lock() else {
+            return RoutedStoreInstall::InvalidStore;
+        };
+        if candidate.project_id() != project || candidate.tenant_id().is_some() {
+            return RoutedStoreInstall::InvalidStore;
+        }
+        drop(candidate);
+        if projects.routed.len() >= MAX_ROUTED_AUTH_PROJECTS {
+            return RoutedStoreInstall::Capacity;
+        }
+        projects.routed.insert(project.to_owned(), store.clone());
+        RoutedStoreInstall::Installed(store)
+    }
+
+    /// Clears every compatibility namespace owned by the default session.
+    pub fn clear_routed(&self) {
+        let removed = self.projects.lock().map_or_else(
+            |_| Vec::new(),
+            |mut projects| {
+                let removed = projects.routed.keys().cloned().collect::<Vec<_>>();
+                projects.routed.clear();
+                removed
+            },
+        );
+        if let Ok(mut gates) = self.operation_gates.lock() {
+            gates
+                .retain(|(project, _), gate| !removed.contains(project) && gate.strong_count() > 0);
+        }
+    }
+
+    /// Number of retained compatibility namespaces.
+    #[must_use]
+    pub fn routed_count(&self) -> usize {
+        self.projects
+            .lock()
+            .map_or(0, |projects| projects.routed.len())
+    }
+
+    /// Finds a user in the default and compatibility-routed namespaces only when the match is
+    /// unique. Registered sessions and tenants require their explicit routing credentials.
+    #[must_use]
+    pub fn compatibility_store_for_unique_user(
+        &self,
+        local_id: &str,
+    ) -> CompatibilityUserStoreMatch {
+        // Keep membership and every participating store locked until the decision is complete.
+        // Store mutations use these same mutexes, so the instant the final lock is acquired is a
+        // coherent snapshot. The global order is registry membership, default store, then routed
+        // stores in lexical project order.
+        let Ok(projects) = self.projects.lock() else {
+            return CompatibilityUserStoreMatch::Unavailable;
+        };
+        let stores = core::iter::once(&self.default)
+            .chain(projects.routed.values())
+            .cloned()
+            .collect::<Vec<_>>();
+        for (index, store) in stores.iter().enumerate() {
+            if stores[..index]
+                .iter()
+                .any(|previous| Arc::ptr_eq(previous, store))
+            {
+                return CompatibilityUserStoreMatch::Unavailable;
+            }
+        }
+        let mut guards = Vec::with_capacity(stores.len());
+        for store in &stores {
+            let Ok(guard) = store.lock() else {
+                return CompatibilityUserStoreMatch::Unavailable;
+            };
+            guards.push(guard);
+        }
+
+        let mut found = None;
+        for (index, candidate) in guards.iter().enumerate() {
+            if candidate.user_by_id(local_id).is_none() {
+                continue;
+            }
+            if found.is_some() {
+                return CompatibilityUserStoreMatch::Ambiguous;
+            }
+            found = Some(stores[index].clone());
+        }
+        found.map_or(
+            CompatibilityUserStoreMatch::NotFound,
+            CompatibilityUserStoreMatch::Unique,
+        )
     }
 
     /// Registers a project's store; `false` when the project already has one.
@@ -2423,23 +2599,25 @@ impl AuthRegistry {
         if project == self.default_project {
             return false;
         }
-        let Ok(mut others) = self.others.lock() else {
+        let Ok(mut projects) = self.projects.lock() else {
             return false;
         };
-        if others.contains_key(project) {
+        if projects.registered.contains_key(project) || projects.routed.contains_key(project) {
             return false;
         }
-        others.insert(project.to_owned(), Arc::new(Mutex::new(store)));
+        projects
+            .registered
+            .insert(project.to_owned(), Arc::new(Mutex::new(store)));
         true
     }
 
     /// Removes a registered project; `false` when it was not registered.
     pub fn remove(&self, project: &str) -> bool {
         let removed = self
-            .others
+            .projects
             .lock()
             .ok()
-            .is_some_and(|mut o| o.remove(project).is_some());
+            .is_some_and(|mut projects| projects.registered.remove(project).is_some());
         if removed {
             if let Ok(mut tenants) = self.tenants.lock() {
                 tenants.retain(|(candidate, _), _| candidate != project);
@@ -2471,10 +2649,13 @@ impl AuthRegistry {
         self.operation_gates.lock().map_or_else(
             |_| Arc::new(Mutex::new(())),
             |mut gates| {
-                gates
-                    .entry(key)
-                    .or_insert_with(|| Arc::new(Mutex::new(())))
-                    .clone()
+                gates.retain(|_, gate| gate.strong_count() > 0);
+                if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
+                    return gate;
+                }
+                let gate = Arc::new(Mutex::new(()));
+                gates.insert(key, Arc::downgrade(&gate));
+                gate
             },
         )
     }
@@ -2669,15 +2850,24 @@ impl AuthRegistry {
         if self.default.lock().is_ok_and(|s| pred(&s)) {
             return Some(self.default.clone());
         }
-        let others = self.others.lock().ok()?;
-        if let Some(found) = others
+        let projects = self.projects.lock().ok()?;
+        if let Some(found) = projects
+            .registered
             .values()
             .find(|s| s.lock().is_ok_and(|s| pred(&s)))
             .cloned()
         {
             return Some(found);
         }
-        drop(others);
+        if let Some(found) = projects
+            .routed
+            .values()
+            .find(|s| s.lock().is_ok_and(|s| pred(&s)))
+            .cloned()
+        {
+            return Some(found);
+        }
+        drop(projects);
         self.tenants
             .lock()
             .ok()?
@@ -2690,11 +2880,15 @@ impl AuthRegistry {
     #[must_use]
     pub fn projects(&self) -> Vec<String> {
         let mut out = vec![self.default_project.clone()];
-        if let Ok(others) = self.others.lock() {
-            out.extend(others.keys().cloned());
+        if let Ok(projects) = self.projects.lock() {
+            out.extend(projects.registered.keys().cloned());
         }
         out
     }
+}
+
+fn valid_routed_project(project: &str) -> bool {
+    fireemu_core_types::ids::ProjectId::try_new(project.to_owned()).is_ok()
 }
 
 #[cfg(test)]
@@ -2813,5 +3007,146 @@ mod snapshot_cow_tests {
         assert!(snapshot.0.users.get(&mfa).unwrap().mfa.totp_factors()[0]
             .secret
             .is_detached());
+    }
+}
+
+#[cfg(test)]
+mod compatibility_routing_tests {
+    use super::{
+        AuthRegistry, AuthStore, CompatibilityUserStoreMatch, NewUser, RoutedStoreInstall,
+    };
+    use crate::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+    use std::sync::{mpsc, Arc, Mutex, TryLockError};
+    use std::time::{Duration, Instant};
+
+    const NOW: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+    fn store(project: &str, seed: u64) -> Arc<Mutex<AuthStore>> {
+        Arc::new(Mutex::new(AuthStore::new(
+            project,
+            SplitMix64::new(seed),
+            TotpPolicy::default(),
+        )))
+    }
+
+    #[test]
+    fn unique_user_lookup_is_a_coherent_snapshot_during_cross_project_moves() {
+        let default = store("demo-app", 1);
+        let alpha = store("worker-alpha", 2);
+        let beta = store("worker-beta", 3);
+        let registry = Arc::new(AuthRegistry::new("demo-app", default));
+        assert!(matches!(
+            registry.install_routed("worker-alpha", alpha.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-beta", beta.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        beta.lock()
+            .unwrap()
+            .create_user_with_id(NewUser::email("beta@example.test"), Some("shared-uid"), NOW)
+            .unwrap();
+
+        let mut beta_guard = beta.lock().unwrap();
+        let lookup_registry = registry.clone();
+        let lookup = std::thread::spawn(move || {
+            lookup_registry.compatibility_store_for_unique_user("shared-uid")
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match registry.projects.try_lock() {
+                Err(TryLockError::WouldBlock) => break,
+                Err(TryLockError::Poisoned(_)) => panic!("project registry was poisoned"),
+                Ok(guard) => drop(guard),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "lookup did not reach the blocked routed store"
+            );
+            std::thread::yield_now();
+        }
+        loop {
+            match alpha.try_lock() {
+                Err(TryLockError::WouldBlock) => break,
+                Err(TryLockError::Poisoned(_)) => panic!("alpha store was poisoned"),
+                Ok(guard) => drop(guard),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "lookup did not retain the earlier routed-store lock"
+            );
+            std::thread::yield_now();
+        }
+
+        let (created_tx, created_rx) = mpsc::sync_channel(1);
+        let creator_store = alpha.clone();
+        let creator = std::thread::spawn(move || {
+            creator_store
+                .lock()
+                .unwrap()
+                .create_user_with_id(
+                    NewUser::email("alpha@example.test"),
+                    Some("shared-uid"),
+                    NOW,
+                )
+                .unwrap();
+            created_tx.send(()).unwrap();
+        });
+        let created_before_snapshot = created_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+        if created_before_snapshot {
+            beta_guard.delete_user_by_id("shared-uid").unwrap();
+        }
+        drop(beta_guard);
+
+        let selected = lookup.join().unwrap();
+        creator.join().unwrap();
+        assert!(
+            !created_before_snapshot,
+            "a user mutation interleaved with a cross-project lookup"
+        );
+        assert!(matches!(
+            selected,
+            CompatibilityUserStoreMatch::Unique(store) if Arc::ptr_eq(&store, &beta)
+        ));
+    }
+
+    #[test]
+    fn routed_store_installation_rejects_mutex_aliases_before_lookup() {
+        let default = store("demo-app", 1);
+        let registry = Arc::new(AuthRegistry::new("demo-app", default.clone()));
+        assert!(matches!(
+            registry.install_routed("worker-default-alias", default),
+            RoutedStoreInstall::InvalidStore
+        ));
+
+        let shared = store("worker-alpha", 2);
+        assert!(matches!(
+            registry.install_routed("worker-alpha", shared.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-beta", shared),
+            RoutedStoreInstall::InvalidStore
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-gamma", store("different-project", 3)),
+            RoutedStoreInstall::InvalidStore
+        ));
+
+        let lookup_registry = registry.clone();
+        let (result_tx, result_rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            result_tx
+                .send(lookup_registry.compatibility_store_for_unique_user("missing"))
+                .unwrap();
+        });
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            CompatibilityUserStoreMatch::NotFound
+        ));
     }
 }

@@ -179,7 +179,7 @@ pub struct EvaluationReport {
     pub absent_resource_used: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum EvalError {
     /// Condition is false because of a type / missing member error. The message is kept for
     /// the `rules explain` output (Milestone H); it does not influence the decision.
@@ -248,7 +248,33 @@ impl Budget {
 
 struct Scope<'a> {
     functions: Vec<&'a FunctionDecl>,
-    bindings: Vec<(String, RulesValue)>,
+    bindings: Vec<Binding<'a>>,
+}
+
+struct Binding<'a> {
+    name: String,
+    visible_before: usize,
+    state: BindingState<'a>,
+}
+
+enum BindingState<'a> {
+    Value(RulesValue),
+    Lazy(&'a Expr),
+    Evaluating,
+    Resolved {
+        result: Result<RulesValue, EvalError>,
+        cause: Option<UndefinedCause>,
+    },
+}
+
+impl Binding<'_> {
+    fn value(name: String, value: RulesValue) -> Self {
+        Self {
+            name,
+            visible_before: 0,
+            state: BindingState::Value(value),
+        }
+    }
 }
 
 /// Reads other documents for `get()` / `exists()`. `segments` is the rules path after the
@@ -551,7 +577,11 @@ fn walk_match<'a>(
                 ev.scope.functions.push(f);
             }
         }
-        ev.scope.bindings.extend(captures);
+        ev.scope.bindings.extend(
+            captures
+                .into_iter()
+                .map(|(name, value)| Binding::value(name, value)),
+        );
         let mut result: Result<bool, EvalError> = Ok(false);
         if rest.is_empty() {
             *matched_any = true;
@@ -727,11 +757,16 @@ fn undetermined(v: &RulesValue) -> bool {
 }
 
 impl<'a> Evaluator<'a> {
-    fn lookup(&self, name: &str) -> Option<RulesValue> {
-        if let Some((_, v)) = self.scope.bindings.iter().rev().find(|(n, _)| n == name) {
-            return Some(v.clone());
+    fn lookup(&mut self, name: &str) -> Result<Option<RulesValue>, EvalError> {
+        if let Some(index) = self
+            .scope
+            .bindings
+            .iter()
+            .rposition(|binding| binding.name == name)
+        {
+            return self.resolve_binding(index).map(Some);
         }
-        match name {
+        Ok(match name {
             "request" => Some(self.request.clone()),
             "resource" => {
                 if self.resource_absent {
@@ -740,6 +775,50 @@ impl<'a> Evaluator<'a> {
                 Some(self.resource.clone())
             }
             _ => None,
+        })
+    }
+
+    fn has_binding(&self, name: &str) -> bool {
+        self.scope
+            .bindings
+            .iter()
+            .rev()
+            .any(|binding| binding.name == name)
+    }
+
+    fn resolve_binding(&mut self, index: usize) -> Result<RulesValue, EvalError> {
+        let state = core::mem::replace(
+            &mut self.scope.bindings[index].state,
+            BindingState::Evaluating,
+        );
+        match state {
+            BindingState::Value(value) => {
+                self.scope.bindings[index].state = BindingState::Value(value.clone());
+                Ok(value)
+            }
+            BindingState::Resolved { result, cause } => {
+                self.cause.clone_from(&cause);
+                self.scope.bindings[index].state = BindingState::Resolved {
+                    result: result.clone(),
+                    cause,
+                };
+                result
+            }
+            BindingState::Evaluating => {
+                self.scope.bindings[index].state = BindingState::Evaluating;
+                Err(soft("cyclic let binding"))
+            }
+            BindingState::Lazy(expr) => {
+                let visible_before = self.scope.bindings[index].visible_before;
+                let mut hidden = self.scope.bindings.split_off(visible_before);
+                let result = self.eval(expr);
+                hidden[index - visible_before].state = BindingState::Resolved {
+                    result: result.clone(),
+                    cause: self.cause.clone(),
+                };
+                self.scope.bindings.extend(hidden);
+                result
+            }
         }
     }
 
@@ -1020,7 +1099,7 @@ impl<'a> Evaluator<'a> {
                 Literal::Str(s) => RulesValue::String(s.clone()),
             }),
             ExprKind::Ident(name) => self
-                .lookup(name)
+                .lookup(name)?
                 .ok_or_else(|| soft(format!("unknown identifier {name}"))),
             ExprKind::Member { object, name } => {
                 let obj = self.eval(object)?;
@@ -1421,7 +1500,7 @@ impl<'a> Evaluator<'a> {
             }
             ExprKind::Member { object, name } => {
                 if let ExprKind::Ident(ns) = object.kind() {
-                    if NAMESPACES.contains(&ns.as_str()) && self.lookup(ns.as_str()).is_none() {
+                    if NAMESPACES.contains(&ns.as_str()) && !self.has_binding(ns.as_str()) {
                         let values = args
                             .iter()
                             .map(|a| self.eval(a))
@@ -1455,15 +1534,19 @@ impl<'a> Evaluator<'a> {
         self.budget.enter_call()?;
         let bindings_before = self.scope.bindings.len();
         for (p, v) in f.params.iter().zip(values) {
-            self.scope.bindings.push((p.clone(), v));
+            self.scope.bindings.push(Binding::value(p.clone(), v));
         }
-        let result = (|| {
+        let result = {
             for l in &f.lets {
-                let v = self.eval(&l.value)?;
-                self.scope.bindings.push((l.name.clone(), v));
+                let visible_before = self.scope.bindings.len();
+                self.scope.bindings.push(Binding {
+                    name: l.name.clone(),
+                    visible_before,
+                    state: BindingState::Lazy(&l.value),
+                });
             }
             self.eval(&f.body)
-        })();
+        };
         self.scope.bindings.truncate(bindings_before);
         self.budget.leave_call();
         result

@@ -401,6 +401,12 @@ pub(crate) const ROUTES: &[Route] = &[
     ),
     end_user(
         "POST",
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken",
+        "accounts:signInWithCustomToken",
+        Handler::SignInWithCustomToken,
+    ),
+    end_user(
+        "POST",
         concat_v1!("accounts:lookup"),
         "accounts:lookup",
         Handler::Lookup,
@@ -785,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn end_user_labels_are_the_published_operation_names() {
+    fn end_user_labels_are_the_published_canonical_operation_names() {
         for route in ROUTES.iter().filter(|r| r.class == RouteClass::EndUser) {
             let Pattern::Exact(path) = route.pattern else {
                 panic!("end-user routes are exact paths: {route:?}");
@@ -794,6 +800,9 @@ mod tests {
             assert!(
                 route.operation == tail
                     || route.operation == "securetoken:token"
+                    || (path
+                        == "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken"
+                        && route.operation == "accounts:signInWithCustomToken")
                     || path.contains("/v2/accounts/"),
                 "label {} does not name {path}",
                 route.operation

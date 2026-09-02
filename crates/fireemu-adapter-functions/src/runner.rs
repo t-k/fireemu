@@ -8,8 +8,13 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+#[cfg(not(windows))]
+use tokio::process::Child;
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex as AsyncMutex};
+
+#[cfg(windows)]
+use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommandWrap};
 
 use crate::protocol::{read_frame, write_frame};
 
@@ -85,13 +90,39 @@ pub struct SpawnSpec {
 
 /// A running runner.
 pub struct Runner {
-    child: AsyncMutex<Option<Child>>,
+    child: AsyncMutex<Option<RunnerChild>>,
     stdin: AsyncMutex<Option<ChildStdin>>,
     hello: Hello,
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
     logs: Arc<Mutex<Vec<String>>>,
     label: String,
     alive: Arc<AtomicBool>,
+}
+
+#[cfg(not(windows))]
+type RunnerChild = Child;
+
+#[cfg(windows)]
+type RunnerChild = Box<dyn TokioChildWrapper>;
+
+#[cfg(not(windows))]
+async fn wait_child(child: &mut RunnerChild) -> std::io::Result<std::process::ExitStatus> {
+    child.wait().await
+}
+
+#[cfg(windows)]
+async fn wait_child(child: &mut RunnerChild) -> std::io::Result<std::process::ExitStatus> {
+    Box::into_pin(child.wait()).await
+}
+
+#[cfg(not(windows))]
+async fn kill_child(child: &mut RunnerChild) -> std::io::Result<()> {
+    child.kill().await
+}
+
+#[cfg(windows)]
+async fn kill_child(child: &mut RunnerChild) -> std::io::Result<()> {
+    Box::into_pin(child.kill()).await
 }
 
 /// The environment of a runner child: the inherited allowlist, then `extra` (emulator
@@ -153,11 +184,12 @@ impl Runner {
         if let Ok(mut slot) = self.child.try_lock() {
             if let Some(mut child) = slot.take() {
                 let _ = child.start_kill();
+                #[cfg(unix)]
                 kill_process_group(child.id());
                 // Reaped in the background: a killed runner must not linger as a zombie.
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
-                        let _ = child.wait().await;
+                        let _ = wait_child(&mut child).await;
                     });
                 }
             }
@@ -183,30 +215,58 @@ impl Runner {
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // Its own process group, so a reset or shutdown takes the handlers' own
-            // subprocesses down with it.
-            .process_group(0)
-            .kill_on_drop(true);
+            .stderr(Stdio::piped());
+        // Its own process group, so a reset or shutdown takes the handlers' own
+        // subprocesses down with it.
+        #[cfg(unix)]
+        cmd.process_group(0);
+        cmd.kill_on_drop(true);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
         for (k, v) in child_env(env) {
             cmd.env(k, v);
         }
+        #[cfg(not(windows))]
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?;
+        #[cfg(windows)]
+        let mut child = {
+            let mut wrapped = TokioCommandWrap::from(cmd);
+            wrapped.wrap(JobObject).wrap(KillOnDrop);
+            wrapped
+                .spawn()
+                .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?
+        };
+        #[cfg(not(windows))]
         let stdin = child
             .stdin
             .take()
             .ok_or_else(|| "functions runner: no stdin".to_owned())?;
+        #[cfg(windows)]
+        let stdin = child
+            .stdin()
+            .take()
+            .ok_or_else(|| "functions runner: no stdin".to_owned())?;
+        #[cfg(not(windows))]
         let stdout = child
             .stdout
             .take()
             .ok_or_else(|| "functions runner: no stdout".to_owned())?;
+        #[cfg(windows)]
+        let stdout = child
+            .stdout()
+            .take()
+            .ok_or_else(|| "functions runner: no stdout".to_owned())?;
+        #[cfg(not(windows))]
         let stderr = child
             .stderr
+            .take()
+            .ok_or_else(|| "functions runner: no stderr".to_owned())?;
+        #[cfg(windows)]
+        let stderr = child
+            .stderr()
             .take()
             .ok_or_else(|| "functions runner: no stderr".to_owned())?;
         // The codebase, when the command names one, so a multi-codebase project can tell
@@ -338,13 +398,15 @@ impl Runner {
         let hello = match tokio::time::timeout(hello_timeout, hello_rx).await {
             Ok(Ok(h)) => h,
             Ok(Err(_)) => {
+                #[cfg(unix)]
                 kill_process_group(child.id());
-                let _ = child.kill().await;
+                let _ = kill_child(&mut child).await;
                 return Err("functions runner exited before its hello".to_owned());
             }
             Err(_) => {
+                #[cfg(unix)]
                 kill_process_group(child.id());
-                let _ = child.kill().await;
+                let _ = kill_child(&mut child).await;
                 return Err(format!(
                     "functions runner sent no hello within {}s",
                     hello_timeout.as_secs()
@@ -467,11 +529,13 @@ impl Runner {
             .ok()
             .and_then(|mut slot| slot.take());
         if let Some(mut child) = child {
+            #[cfg(unix)]
             let pid = child.id();
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
-            let _ = child.kill().await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
+            let _ = kill_child(&mut child).await;
+            #[cfg(unix)]
             kill_process_group(pid);
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
         }
         eprintln!("{} stopped", self.label);
     }
@@ -480,6 +544,7 @@ impl Runner {
 /// Kills the process group the runner leads (`process_group(0)`: its id is the runner's
 /// pid), taking the subprocesses of handlers with it. Best effort, through `kill(1)` (the
 /// core forbids unsafe code, so no direct `killpg`).
+#[cfg(unix)]
 fn kill_process_group(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;

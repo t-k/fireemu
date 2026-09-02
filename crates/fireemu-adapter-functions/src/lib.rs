@@ -12,6 +12,7 @@ pub mod eventarc;
 pub mod events;
 pub mod http;
 pub mod manifest_json;
+pub mod node_selection;
 pub mod protocol;
 pub mod runner;
 pub mod runtime;

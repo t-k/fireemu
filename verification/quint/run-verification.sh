@@ -29,11 +29,29 @@ if [ ! -x "$group_launcher" ]; then
   exit 2
 fi
 
+checker_output="$script_dir/_apalache-out"
+if [ -e "$checker_output" ] || [ -L "$checker_output" ]; then
+  echo "error: refusing to replace pre-existing checker output: $checker_output" >&2
+  exit 2
+fi
+
+cleanup_checker_output() {
+  if [ ! -e "$checker_output" ] && [ ! -L "$checker_output" ]; then
+    return
+  fi
+  if [ -L "$checker_output" ] || [ ! -d "$checker_output" ]; then
+    echo "error: checker output is not an owned directory: $checker_output" >&2
+    return 1
+  fi
+  rm -rf -- "$checker_output"
+}
+
 owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-authority.XXXXXX")
 active_pid=
 launching=0
 pending_signal=
 cleanup() {
+  cleanup_checker_output || true
   rm -rf -- "$owned_temp"
 }
 
@@ -89,6 +107,7 @@ run_gate() {
   set -e
   active_pid=
   active_pgid=
+  cleanup_checker_output || return 1
   return "$status"
 }
 
@@ -100,8 +119,10 @@ while [ "$pass" -le "$passes" ]; do
     AtomicExportPublication:atomic_export_publication_connect \
     AuthTotp:auth_totp_connect \
     AwaitIdle:await_idle_connect \
+    CompatibilitySelection:compatibility_selection_connect \
     EventDelivery:event_delivery_connect \
     RegexAuthorization:regex_authorization_connect \
+    RegexLinearRepeat:regex_linear_repeat_connect \
     RulesetActivation:ruleset_activation_connect \
     SessionEpoch:session_epoch_connect \
     StorageGeneration:storage_generation_connect

@@ -216,7 +216,7 @@ pub fn pubsub_event(
         "datacontenttype": "application/json",
         "data": {
             "message": msg,
-            "subscription": format!("projects/{project}/subscriptions/fireemu-{topic}"),
+            "subscription": format!("projects/{project}/subscriptions/emulator-sub-{topic}"),
         },
     })
 }

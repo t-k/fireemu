@@ -484,6 +484,60 @@
       }
     },
     {
+      "id": "INV-RULES-005",
+      "statement": "A repeated capture-free alternative whose branches each consume one character advances at constant match depth independent of subject length.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "RegexLinearRepeat.qnt::AtomicProgressDoesNotIncreaseDepth",
+        "property": "prop_rules_regex_linear_control_filter_matches_the_character_predicate",
+        "mutation": [
+          "M-FORMAL-RULES-REGEX-LINEAR-001"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/regex.rs",
+          "crates/fireemu-core-rules/tests/eval.rs",
+          "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "verification/property/tests/rules.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-RULES-006",
+      "statement": "Every attempted branch of an iterated capture-free one-character alternative is charged to the regular expression step budget, including failed branches before the selected branch.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "RegexLinearRepeat.qnt::EveryAtomicBranchProbeIsCharged",
+        "mutation": [
+          "M-FORMAL-RULES-REGEX-LINEAR-006"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/regex.rs"
+        ]
+      }
+    },
+    {
+      "id": "INV-RULES-007",
+      "statement": "An iterated capture-free one-character alternative never matches a character rejected by every branch.",
+      "criticality": "critical",
+      "owner": "core-rules",
+      "status": "implemented",
+      "artifacts": {
+        "quint": "RegexLinearRepeat.qnt::ForbiddenCharacterNeverMatches",
+        "property": "prop_rules_regex_linear_control_filter_matches_the_character_predicate",
+        "mutation": [
+          "M-FORMAL-RULES-REGEX-LINEAR-002"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/regex.rs",
+          "verification/property/tests/rules.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-TEXT-001",
       "statement": "A READY Text Index represents every document version its visibility policy and watermark require.",
       "criticality": "critical",
@@ -666,7 +720,7 @@
           "crates/fireemu-core-auth/tests/totp.rs"
         ]
       },
-      "note": "The Kani harness is pending: the acceptance window is decided from HMAC-SHA1 codes and from a 128-bit division in time_step, which bounded model checking does not finish in usable time. The window and replay boundary are covered by AuthTotp.tla, prop_same_step_same_code and the RFC 6238 vectors in crates/fireemu-core-auth/tests/totp.rs."
+      "note": "The Kani harness is pending: the acceptance window is decided from HMAC-SHA1 codes and from a 128-bit division in time_step, which bounded model checking does not finish in usable time. The window and replay boundary are covered by AuthTotp.qnt, prop_same_step_same_code and the RFC 6238 vectors in crates/fireemu-core-auth/tests/totp.rs."
     },
     {
       "id": "INV-AUTH-002",
@@ -1350,13 +1404,14 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "implemented",
-      "note": "Measured, not asserted: conformance/src/rules-probe installs bounded Rules programs into the official Firestore emulator and into fireemu through the same route and compares the verdict of each. 680 claims, 260 of them generated from a seed and shrunk on mismatch; three rows are documented divergences where the official compiler rejects statically what fireemu raises at evaluation.",
+      "note": "Measured, not asserted: conformance/src/rules-probe installs bounded Rules programs into the official Firestore emulator and into fireemu through the same route and compares the verdict of each. 680 claims, 260 of them generated from a seed and shrunk on mismatch; three rows are documented divergences where the official compiler rejects statically what fireemu raises at evaluation. A property test independently checks repeated one-character control-filter alternatives against the corresponding character predicate across generated subjects.",
       "artifacts": {
         "integration": [
           "crates/fireemu-core-rules/tests/eval.rs",
           "crates/fireemu-core-rules/tests/namespaces.rs",
           "crates/fireemu-core-rules/tests/regex.rs",
-          "crates/fireemu-core-rules/tests/mutants.rs"
+          "crates/fireemu-core-rules/tests/mutants.rs",
+          "verification/property/tests/rules.rs"
         ],
         "conformance": "conformance/rules-matrix.json",
         "property": "prop_rules_slice_is_in_range_exactly_where_the_official_runtime_says"
@@ -1414,7 +1469,7 @@
       "criticality": "critical",
       "owner": "core-rules",
       "status": "partial",
-      "note": "The library's documented flows run with no explicit host anywhere. tools/sdk-smoke/rules-unit-testing.mjs covers the established discovery and state-management flow, while tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs supplies both rule strings and proves decisions on Firestore and Storage. Its coverage-report helpers are served by the :ruleCoverage endpoints; the library's own assertion helpers over that report are not exercised yet.",
+      "note": "The library's documented flows run with no explicit host anywhere. tools/sdk-smoke/rules-unit-testing.mjs covers the established discovery and state-management flow, while tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs supplies both rule strings and proves decisions on Firestore and Storage, including a generic isolated worker project whose Storage bucket is routed by project name without a session registration. Its coverage-report helpers are served by the :ruleCoverage endpoints; the library's own assertion helpers over that report are not exercised yet.",
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rest.rs",

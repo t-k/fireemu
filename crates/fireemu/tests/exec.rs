@@ -575,11 +575,16 @@ fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
 
 #[test]
 fn the_control_plane_leaves_the_auth_port_free_when_auth_is_not_selected() {
-    let ports = [free_port(), free_port(), free_port()];
+    // Keep the configured Auth address reserved throughout startup. Selected services use
+    // genuine port-zero allocation, so neither a peer test nor the control listener can win
+    // a probe-then-bind race for one of their addresses.
+    let reserved_auth = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let auth_port = reserved_auth.local_addr().unwrap().port();
+    let ports = [0, auth_port, 0];
     let env = run_selection("control-plane", ports, &["--only", "firestore"]);
     let control = env["FIREEMU_CONTROL_URL"].clone();
     assert!(
-        !control.contains(&format!(":{}/", ports[1])),
+        !control.contains(&format!(":{auth_port}/")),
         "the control API took the Auth port although auth was not selected: {control}"
     );
     assert!(!env.contains_key("FIREBASE_AUTH_EMULATOR_HOST"));

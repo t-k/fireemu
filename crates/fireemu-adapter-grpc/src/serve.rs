@@ -225,6 +225,14 @@ fn preflight(req: &Request<Incoming>) -> Response<OutBody> {
         .unwrap_or_else(|_| Response::new(full(Bytes::new())))
 }
 
+fn readiness(origin: Option<&str>) -> Response<OutBody> {
+    cors_headers(Response::builder().status(200), origin)
+        .header("content-type", "application/json; charset=utf-8")
+        .header("cache-control", "no-store")
+        .body(full(Bytes::from_static(b"{\"emulator\":\"firestore\"}")))
+        .unwrap_or_else(|_| Response::new(full(Bytes::new())))
+}
+
 fn is_grpc(req: &Request<Incoming>) -> bool {
     header(req, "content-type").is_some_and(|ct| ct.starts_with("application/grpc"))
 }
@@ -298,6 +306,12 @@ where
                     }
                     if req.method() == hyper::Method::OPTIONS {
                         return Ok(preflight(&req));
+                    }
+                    if req.method() == hyper::Method::GET
+                        && req.uri().path() == "/"
+                        && req.uri().query().is_none()
+                    {
+                        return Ok(readiness(header(&req, "origin")));
                     }
                     if let Some(kind) = channel_kind(req.uri().path()) {
                         return Ok(channel_call(hub, kind, req).await);

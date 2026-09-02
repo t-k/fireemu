@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "model": "RegexLinearRepeat",
+  "mutations": [
+    {
+      "id": "M-FORMAL-RULES-REGEX-LINEAR-001",
+      "property": "AtomicProgressDoesNotIncreaseDepth",
+      "operator": "increment-depth-on-atomic-consume",
+      "from": "position' = position + 1,\n      steps' = steps + 1,\n      depth' = depth,",
+      "to": "position' = position + 1,\n      steps' = steps + 1,\n      depth' = depth + 1,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-LINEAR-002",
+      "property": "ForbiddenCharacterNeverMatches",
+      "operator": "accept-a-forbidden-character",
+      "from": "acceptedPrefix' = false,\n    outcome' = NotMatched,",
+      "to": "acceptedPrefix' = false,\n    outcome' = Matched,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-LINEAR-003",
+      "property": "WorkIsCharged",
+      "operator": "omit-atomic-consume-charge",
+      "from": "position' = position + 1,\n      steps' = steps + 1,\n      depth' = depth,",
+      "to": "position' = position + 1,\n      steps' = steps,\n      depth' = depth,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-LINEAR-004",
+      "property": "NonAtomicFallsBack",
+      "operator": "fallback-from-atomic-classification",
+      "from": "action fallback = all {\n    classification == NonAtomic",
+      "to": "action fallback = all {\n    classification == Atomic"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-LINEAR-005",
+      "property": "BudgetExhaustionNeverMatches",
+      "operator": "turn-exhaustion-into-match",
+      "from": "outcome' = Exhausted, exhaustSourceOutcome' = outcome,",
+      "to": "outcome' = Matched, exhaustSourceOutcome' = outcome,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-LINEAR-006",
+      "property": "EveryAtomicBranchProbeIsCharged",
+      "operator": "omit-failed-alternative-probe-charge",
+      "from": "steps' = steps + 1,\n    depth' = depth,\n    classification' = classification,\n    currentAccepted' = currentAccepted,\n    matchingProbe' = matchingProbe,\n    probe' = probe + 1,\n    probesForCharacter' = probesForCharacter + 1,\n    attemptedProbes' = attemptedProbes + 1,\n    chargedProbes' = chargedProbes + 1,",
+      "to": "steps' = steps,\n    depth' = depth,\n    classification' = classification,\n    currentAccepted' = currentAccepted,\n    matchingProbe' = matchingProbe,\n    probe' = probe + 1,\n    probesForCharacter' = probesForCharacter + 1,\n    attemptedProbes' = attemptedProbes + 1,\n    chargedProbes' = chargedProbes,"
+    }
+  ]
+}

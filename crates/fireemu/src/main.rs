@@ -782,23 +782,19 @@ fn resolve_export_on_exit(
 /// Node's own `--inspect=<port>` flag placed before it. A configured `functions.runner`
 /// that is not Node cannot be given one, and saying so is better than starting without it.
 fn apply_inspect_functions(cfg: &mut RuntimeConfig, port: u16) -> Result<(), CliError> {
-    let mut command = match cfg.functions_runner.clone() {
-        Some(command) => command,
-        None => functions::default_runner().map_err(CliError::refused)?,
-    };
-    let program = std::path::Path::new(&command[0])
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_owned();
-    if program != "node" {
-        return Err(CliError::refused(format!(
-            "--inspect-functions: the configured functions.runner starts {:?}, not node, so it takes no --inspect flag; remove functions.runner or drop --inspect-functions",
-            command[0]
-        )));
+    if let Some(command) = &cfg.functions_runner {
+        let program = std::path::Path::new(&command[0])
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if program != "node" {
+            return Err(CliError::refused(format!(
+                "--inspect-functions: the configured functions.runner starts {:?}, not node, so it takes no --inspect flag; remove functions.runner or drop --inspect-functions",
+                command[0]
+            )));
+        }
     }
-    command.insert(1, format!("--inspect={port}"));
-    cfg.functions_runner = Some(command);
+    cfg.functions_inspect_port = Some(port);
     Ok(())
 }
 
@@ -974,6 +970,7 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::proce
         cmd.env_remove(name);
     }
     cmd.envs(env.iter().cloned());
+    #[cfg(unix)]
     if own_process_group() {
         cmd.process_group(0);
     }
@@ -1313,6 +1310,13 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 .map_err(|e| format!("bind {addr}: {e}"))
         }
     };
+    // An explicit Hub address wins over every port-zero listener. The default remains late
+    // and best effort: a selected product configured on 4400 must win and disable discovery.
+    let prebound_hub = if cfg.hub_addr_explicit {
+        hub::bind(&cfg.hub_addr, true).await?
+    } else {
+        None
+    };
     let firestore = if only.firestore {
         Some(bind(&cfg.firestore_addr).await?)
     } else {
@@ -1341,7 +1345,11 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
-    let hub = hub::bind(&cfg.hub_addr, cfg.hub_addr_explicit).await?;
+    let hub = if cfg.hub_addr_explicit {
+        prebound_hub
+    } else {
+        hub::bind(&cfg.hub_addr, false).await?
+    };
     // The Logging emulator is not a `--only` service (the official suite configures it through
     // `emulators.logging`), so it is bound on every run unless it was turned off. Best effort
     // like the Hub and UI: a busy default port only disables it, a busy explicit one is an error.
@@ -1435,7 +1443,12 @@ fn logging_new_lines<'a>(previous: &[String], current: &'a [String]) -> &'a [Str
     current
 }
 
-fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: &BoundAddrs) {
+fn print_banner(
+    cfg: &RuntimeConfig,
+    verb: &str,
+    addrs: &BoundAddrs,
+    functions_runtime: Option<&fireemu_adapter_functions::runtime::FunctionsRuntime>,
+) {
     println!("fireemu {verb}");
     match addrs.firestore {
         Some(a) => println!("  firestore (gRPC + REST): {a}   FIRESTORE_EMULATOR_HOST={a}"),
@@ -1452,11 +1465,27 @@ fn print_banner(cfg: &RuntimeConfig, verb: &str, addrs: &BoundAddrs) {
         None => println!("  storage:          not selected by --only (nothing is bound)"),
     }
     match addrs.functions {
-        Some(addr) => println!(
-            "  functions (HTTP): {addr}   http://{addr}/{}/us-central1/{{function}}   (source: {})",
-            cfg.auth_project,
-            cfg.functions_source.as_deref().unwrap_or("")
-        ),
+        Some(addr) => {
+            println!(
+                "  functions (HTTP): {addr}   (source: {})",
+                cfg.functions_source.as_deref().unwrap_or("")
+            );
+            if let Some(runtime) = functions_runtime {
+                for function in &runtime.manifest().functions {
+                    if matches!(
+                        function.trigger,
+                        fireemu_core_functions::manifest::Trigger::Http { .. }
+                    ) {
+                        println!(
+                            "  function URL: http://{addr}/{}/{}/{}",
+                            runtime.project(),
+                            function.region,
+                            function.name
+                        );
+                    }
+                }
+            }
+        }
         None => {
             println!("  functions:        not configured (functions.source or --functions <dir>)");
         }
@@ -1677,6 +1706,8 @@ fn control_state(
     registry: &Arc<fireemu_core_auth::store::AuthRegistry>,
     tenancy: fireemu_core_session::tenancy::SharedTenancy,
     app_check: Option<fireemu_core_app_check::AppCheckGate>,
+    pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
+    pubsub_resources: &[functions::FunctionPubSubResource],
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases, buckets, users, fault
@@ -1714,6 +1745,16 @@ fn control_state(
         let runtime = runtime.clone();
         reset_hooks.push(Arc::new(move || runtime.reset()) as Arc<dyn Fn() + Send + Sync>);
     }
+    let pubsub = pubsub.clone();
+    let pubsub_resources = pubsub_resources.to_vec();
+    let pubsub_project = cfg.auth_project.clone();
+    reset_hooks.push(Arc::new(move || {
+        if let Ok(mut state) = pubsub.lock() {
+            state.clear_project(&pubsub_project);
+            functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
+                .expect("validated Functions Pub/Sub resources reprovision after reset");
+        }
+    }));
     fireemu_adapter_http::control::ControlState {
         clock: clock.clone(),
         require_demo_prefix: cfg.require_demo_prefix,
@@ -1792,7 +1833,12 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 None => IndexSet::default(),
             },
         };
-        let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed));
+        let backend = Arc::new(if cfg.clock_start_pinned {
+            LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+        } else {
+            LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
+                .with_wall_clock_write_time()
+        });
         for (database, files) in &cfg.firestore_databases {
             if database != "(default)" {
                 if let Some(path) = &files.indexes {
@@ -1981,6 +2027,23 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
             cfg.seed ^ 0x5053_5542,
         )));
+        let pubsub_resources = if pubsub_listener.is_some() {
+            if let Some(runtime) = &functions_runtime {
+                let resources = functions::function_pubsub_resources(
+                    runtime.project(),
+                    runtime.manifest(),
+                )?;
+                let mut state = pubsub_state
+                    .lock()
+                    .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
+                functions::provision_function_pubsub_resources(&mut state, &resources)?;
+                resources
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
         let pubsub_bridge: Option<Arc<dyn fireemu_adapter_pubsub::TopicDelivery>> =
             functions_runtime.as_ref().map(|r| {
                 Arc::new(functions::PubSubBridge::new(r.clone()))
@@ -2019,6 +2082,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             operation_gate: Arc::new(Mutex::new(())),
             control_token: Some(control_token.clone()),
             registry: Some(registry.clone()),
+            allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Firebase,
             tenancy: Some(tenancy.clone()),
             app_check: app_check.clone(),
             app_check_policy: auth_policy,
@@ -2098,6 +2162,8 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             &registry,
             tenancy.clone(),
             app_check_gate.clone(),
+            &pubsub_state,
+            &pubsub_resources,
         ));
         // The Emulator Hub's locator file lives as long as this scope: dropping it removes
         // the file, so a clean exit on either signal path leaves no stale discovery behind.
@@ -2143,7 +2209,12 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             locator
         });
         if !quiet {
-            print_banner(&cfg, if exec.is_some() { "exec" } else { "up" }, &addrs);
+            print_banner(
+                &cfg,
+                if exec.is_some() { "exec" } else { "up" },
+                &addrs,
+                functions_runtime.as_deref(),
+            );
             if let Some(state) = &app_check {
                 println!(
                     "  app check:        {} app(s)   FIREEMU_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",
@@ -2434,6 +2505,35 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn a_selected_product_wins_a_port_shared_with_the_default_hub() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap().to_string();
+        drop(probe);
+
+        let cfg = RuntimeConfig {
+            firestore_addr: addr.clone(),
+            hub_addr: addr,
+            hub_addr_explicit: false,
+            logging_enabled: false,
+            ..RuntimeConfig::default()
+        };
+        let only = Selection {
+            firestore: true,
+            auth: false,
+            storage: false,
+            functions: false,
+            pubsub: false,
+            appcheck: false,
+            explicit: true,
+            functions_codebase: None,
+        };
+
+        let listeners = bind_listeners(&cfg, &only).await.unwrap();
+        assert!(listeners.firestore.is_some());
+        assert!(listeners.hub.is_none());
     }
 
     #[tokio::test]

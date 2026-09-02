@@ -141,7 +141,7 @@ impl Gateway {
         }
         let decision = decide(&canonical, &self.indexes, &self.ctx);
         match &decision {
-            IndexDecision::UseIndex { .. } => {}
+            IndexDecision::UseIndex { .. } | IndexDecision::KindlessScan => {}
             IndexDecision::AssumedIndex { requirement } => {
                 warnings.push("FS_EMULATOR_INDEX_ASSUMED".to_owned());
                 note_assumed_index(&requirement.indexes_json_fragment());

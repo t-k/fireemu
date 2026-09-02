@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 2,
+  "model": "CompatibilitySelection",
+  "spec": "specs/CompatibilitySelection.qnt",
+  "main": "CompatibilitySelectionProof",
+  "config": "configs/CompatibilitySelection.json",
+  "mutationManifest": "mutations/CompatibilitySelection.json",
+  "tools": {
+    "quint": "0.32.0",
+    "quintConnect": "0.1.2",
+    "tlc": "2.19 of 08 August 2024",
+    "backend": "tlc"
+  },
+  "bounds": {
+    "Nodes": "{node22old,node20new,node22new}",
+    "Projects": "{default,worker-a,worker-b}",
+    "Stores": "{store-default,store-a,store-b}"
+  },
+  "boundInputs": [
+    ".github/workflows/ci.yml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/fireemu-adapter-functions/src/node_selection.rs",
+    "crates/fireemu-adapter-http/src/identity_toolkit.rs",
+    "crates/fireemu-adapter-http/tests/auth_flows.rs",
+    "crates/fireemu-core-auth/src/store.rs",
+    "crates/fireemu-core-auth/tests/store.rs",
+    "crates/fireemu/src/functions.rs",
+    "verification/quint/Cargo.toml",
+    "verification/quint/README.md",
+    "verification/quint/bin/process-group",
+    "verification/quint/bin/quint",
+    "verification/quint/configs/CompatibilitySelection.json",
+    "verification/quint/mutations/CompatibilitySelection.json",
+    "verification/quint/package.json",
+    "verification/quint/pnpm-lock.yaml",
+    "verification/quint/run-verification.sh",
+    "verification/quint/specs/CompatibilitySelection.qnt",
+    "verification/quint/src/compatibility_selection.rs",
+    "verification/quint/src/evidence.rs",
+    "verification/quint/src/lib.rs",
+    "verification/quint/src/main.rs",
+    "verification/quint/src/model.rs",
+    "verification/quint/src/process.rs",
+    "verification/quint/tests/cli_contract.rs",
+    "verification/quint/tests/compatibility_selection_connect.rs",
+    "verification/quint/tests/evidence_contract.rs",
+    "verification/quint/tests/model_registry.rs"
+  ],
+  "digests": {
+    ".github/workflows/ci.yml": "82b4c17148312e39fa9f1d669753dc1d98f1c0b4a3b660f29619fa62d4663f79",
+    "Cargo.lock": "15e11f752c34b411232a7706a8a58ec40ddb4664cda72fc59476fed24f30a265",
+    "Cargo.toml": "58e5be6aa303158de17183219fd293d24c7d261543ef33db2f9bc324cfde8245",
+    "crates/fireemu-adapter-functions/src/node_selection.rs": "b0d3581e3c8887e6d39fdb76f3dd56a1be420e37905c58e87e0f46791aac5a21",
+    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "3f7f0a86b825ce383fbf1c29da27c51c676a4af34173aca8dfcc176b530c2176",
+    "crates/fireemu-adapter-http/tests/auth_flows.rs": "f4e50cbc0d10a72825287341114f1dc5aaa4433e7c783a44d073461f0f378750",
+    "crates/fireemu-core-auth/src/store.rs": "4f4fd88ac7901dade08cd81ca3653d2d1188624d48b48a6809a3660b6486f4e5",
+    "crates/fireemu-core-auth/tests/store.rs": "794d87362121c02253fa64fa028b437282191145459be0c479ae1b8898191496",
+    "crates/fireemu/src/functions.rs": "b2f6bb7c7755cee92508afb9a97e9ac2faaa5616560eeb4357e4ba434358c930",
+    "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
+    "verification/quint/README.md": "7f8fc7b8d9eaf3ed9685c2677cf705698dab42f98b8364d1a96056b52797a6c0",
+    "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
+    "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
+    "verification/quint/configs/CompatibilitySelection.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
+    "verification/quint/mutations/CompatibilitySelection.json": "486f1b383350045a0d9cf2657d51f040448ab1489d2661e2113bf93029291d50",
+    "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
+    "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
+    "verification/quint/run-verification.sh": "01d5630fab5f49b06593eb877e25fb08349189f2eca3cc21e46b3c388352a3a0",
+    "verification/quint/specs/CompatibilitySelection.qnt": "49df8322d61e73786eb23a28bbcc84872a9bd4b0ebb19a7a4e6f8c1dabb1680f",
+    "verification/quint/src/compatibility_selection.rs": "c0af039dc03633be58e9c5b437d0d6586a5a848459cb39cdbe9790ab03c5b0be",
+    "verification/quint/src/evidence.rs": "304370d78c5b256ddf4a268751c236f7fa2edb39df96fbcc9aeaf938fde54539",
+    "verification/quint/src/lib.rs": "6ceae9b33f37138b550e4c27706954ef3a1e0866f87584d317022f2655775f34",
+    "verification/quint/src/main.rs": "254e5a5c63ebe730ae23151d8eb509ed48ded061e1fda25680bf0eb298823763",
+    "verification/quint/src/model.rs": "34f287260a4db914268b14cf39ac5275113c8dcae192554e5e331d546a2c8096",
+    "verification/quint/src/process.rs": "45f9e494439cf85beab0b9a5904375d5c62f412f625a01eac8f933211a41208d",
+    "verification/quint/tests/cli_contract.rs": "8066d2964124d9c1bf0e73ac593c73c3004bcb497ef601e9706c1de86c684ee2",
+    "verification/quint/tests/compatibility_selection_connect.rs": "4ab90f3ed4f7637d6ea9643aa292f8c8ba59b10bd57297d842a266c78e873fe3",
+    "verification/quint/tests/evidence_contract.rs": "47ff4fe9d3856c5fc2aea5e96f469c4639ea56ca075a34fc440912b69dd4950b",
+    "verification/quint/tests/model_registry.rs": "134800b95a8abe788f230780543669a9e720830fe76f053a659393e59fa60d04"
+  },
+  "invariants": [
+    "TypeOK",
+    "NoStoreAliases",
+    "UniqueUserRoutesToItsProject",
+    "UnknownUserUsesDefault",
+    "AmbiguousUserIsDenied",
+    "AutomaticSelectionIsCapable",
+    "RequestedNodeBreaksCapabilityTies",
+    "ExplicitSelectionIsStable"
+  ],
+  "temporalProperties": [],
+  "mutations": [
+    {
+      "id": "M-FORMAL-COMPAT-STORE-ALIAS-001",
+      "property": "NoStoreAliases",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-COMPAT-AUTH-UNIQUE-001",
+      "property": "UniqueUserRoutesToItsProject",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-COMPAT-AUTH-DEFAULT-001",
+      "property": "UnknownUserUsesDefault",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-COMPAT-AUTH-AMBIGUOUS-001",
+      "property": "AmbiguousUserIsDenied",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-COMPAT-NODE-CAPABILITY-001",
+      "property": "AutomaticSelectionIsCapable",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-COMPAT-NODE-REQUEST-001",
+      "property": "RequestedNodeBreaksCapabilityTies",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-COMPAT-NODE-EXPLICIT-001",
+      "property": "ExplicitSelectionIsStable",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    }
+  ],
+  "scenarios": [
+    "default",
+    "unique",
+    "ambiguous",
+    "concurrentMove",
+    "alias",
+    "capability",
+    "runtime",
+    "engine",
+    "explicit"
+  ],
+  "actions": [
+    "Evaluate"
+  ],
+  "projectionFields": [
+    "authDecision",
+    "automaticNode",
+    "explicitNode",
+    "storeAliases"
+  ],
+  "simulation": {
+    "seeds": [
+      "0x1",
+      "0x2",
+      "0x3",
+      "0x4"
+    ],
+    "tracesPerSeed": 100,
+    "maxSteps": 20
+  }
+}

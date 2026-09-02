@@ -154,6 +154,9 @@ pub struct LocalBackend {
     /// Reloadable index catalog used for every new query plan.
     indexes: RwLock<BTreeMap<String, fireemu_core_firestore::index::IndexSet>>,
     clock: Arc<Mutex<VirtualClock>>,
+    /// Unpinned compatibility runs sample wall time for each Firestore write while every
+    /// other product and explicitly pinned run continues to use the virtual clock.
+    wall_clock_write_time: bool,
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
     databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
@@ -408,6 +411,7 @@ impl LocalBackend {
             gateway,
             indexes,
             clock,
+            wall_clock_write_time: false,
             databases: Mutex::new(BTreeMap::new()),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
@@ -418,6 +422,14 @@ impl LocalBackend {
             change_sink: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// Uses host wall time for Firestore commit timestamps. This is selected only when the
+    /// daemon clock was not explicitly pinned.
+    #[must_use]
+    pub const fn with_wall_clock_write_time(mut self) -> Self {
+        self.wall_clock_write_time = true;
+        self
     }
 
     /// The session's admission barrier (share it with every other mutable surface).
@@ -699,8 +711,8 @@ impl LocalBackend {
             ))
             .unwrap_or(fireemu_core_types::time::LogicalInstant::MAX);
         loop {
-            let now = self.now();
-            match self.with_db(parent, |db| attempt(db, now))? {
+            let write_time = self.write_time();
+            match self.with_db(parent, |db| attempt(db, write_time))? {
                 Attempt::Done(value) => return Ok(value),
                 Attempt::Contended(release) => {
                     // Advance to whichever comes first: the lock's release, or our patience.
@@ -840,7 +852,7 @@ impl LocalBackend {
         &self,
         parent: &Parent,
     ) -> Result<(CommitVersion, fireemu_core_types::time::LogicalInstant), Status> {
-        let now = self.now();
+        let now = self.write_time();
         self.with_db(parent, |db| Ok((db.current_version(), db.read_time(now))))
     }
 
@@ -851,7 +863,7 @@ impl LocalBackend {
         parent: &Parent,
         f: impl FnOnce(&FirestoreState, CommitVersion, fireemu_core_types::time::LogicalInstant) -> T,
     ) -> Result<T, Status> {
-        let now = self.now();
+        let now = self.write_time();
         self.with_db(parent, |db| {
             Ok(f(db, db.current_version(), db.read_time(now)))
         })
@@ -952,8 +964,10 @@ impl LocalBackend {
             o.field.is_document_name()
                 && o.direction == fireemu_core_firestore::query::Direction::Ascending
         });
-        if !query.scope.all_descendants
-            || query.filter.is_some()
+        if !matches!(
+            query.scope,
+            fireemu_core_firestore::query::QueryScope::CollectionGroup { .. }
+        ) || query.filter.is_some()
             || !name_ascending_only
             || query.limit.is_some()
             || query.offset != 0
@@ -983,7 +997,11 @@ impl LocalBackend {
             let text = format!(
                 "{}|{}|{}|{:?}|{}|{}",
                 req.parent,
-                query.scope.collection_id.as_str(),
+                query
+                    .scope
+                    .collection_id()
+                    .expect("collection-group checked above")
+                    .as_str(),
                 partition_count,
                 read_time.map(fireemu_core_types::time::LogicalInstant::as_nanos),
                 self.epoch(),
@@ -1069,6 +1087,21 @@ impl LocalBackend {
             .lock()
             .map(|c| c.now())
             .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH)
+    }
+
+    /// Timestamp supplied to one Firestore write attempt.
+    fn write_time(&self) -> fireemu_core_types::time::LogicalInstant {
+        if !self.wall_clock_write_time {
+            return self.now();
+        }
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i128::try_from(duration.as_nanos()).ok())
+            .map_or(
+                fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+                fireemu_core_types::time::LogicalInstant::from_nanos,
+            )
     }
 
     /// Reads a database without taking a session admission: for callers that already
@@ -1219,12 +1252,20 @@ impl LocalBackend {
     /// read-write mode is given (Firestore's default for `new_transaction`), at the
     /// `read_time` snapshot when one is requested.
     fn new_transaction(
+        parent: &Parent,
         db: &mut FirestoreState,
         opts: &pb::TransactionOptions,
         now: fireemu_core_types::time::LogicalInstant,
     ) -> Result<TransactionId, Status> {
         match &opts.mode {
-            Some(pb::transaction_options::Mode::ReadWrite(_)) => db.begin_transaction(false, now),
+            Some(pb::transaction_options::Mode::ReadWrite(read_write)) => {
+                if read_write.retry_transaction.is_empty() {
+                    db.begin_transaction(false, now)
+                } else {
+                    let previous = Self::required_txn(parent, &read_write.retry_transaction)?;
+                    db.retry_transaction(&previous, now)
+                }
+            }
             Some(pb::transaction_options::Mode::ReadOnly(ro)) => match &ro.consistency_selector {
                 Some(pb::transaction_options::read_only::ConsistencySelector::ReadTime(ts)) => {
                     let at = Self::read_time_selector(ts, now)?;
@@ -1247,7 +1288,7 @@ impl LocalBackend {
         let path = decode_document_name(&req.name).map_err(status)?;
         let parent = parse_parent(&req.name).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
-        let now = self.now();
+        let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::get_document_request::ConsistencySelector::Transaction(t)) => {
                 (Some(Self::required_txn(&parent, t)?), None)
@@ -1314,7 +1355,7 @@ impl LocalBackend {
     ) -> Result<BatchGetOutcome, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
-        let now = self.now();
+        let now = self.write_time();
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         let paths = req
             .documents
@@ -1338,7 +1379,7 @@ impl LocalBackend {
                 Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
                     opts,
                 )) => {
-                    let id = Self::new_transaction(db, opts, now)?;
+                    let id = Self::new_transaction(&parent, db, opts, now)?;
                     let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
@@ -1423,7 +1464,7 @@ impl LocalBackend {
         parent: &Parent,
         write: &Write,
     ) -> Result<Option<Document>, Status> {
-        let now = self.now();
+        let now = self.write_time();
         self.with_db(parent, |db| {
             db.preview_write(write, now)
                 .map_err(|e| status_from_error(&e))
@@ -1615,7 +1656,7 @@ impl LocalBackend {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.beginTransaction")?;
         // BeginTransaction without options is read-write (unlike `new_transaction`).
-        let now = self.now();
+        let now = self.write_time();
         self.with_db(&parent, |db| {
             let id = match req.options.as_ref().and_then(|o| o.mode.as_ref()) {
                 Some(pb::transaction_options::Mode::ReadOnly(ro)) => {
@@ -1628,6 +1669,12 @@ impl LocalBackend {
                         }
                         None => db.begin_transaction(true, now),
                     }
+                }
+                Some(pb::transaction_options::Mode::ReadWrite(read_write))
+                    if !read_write.retry_transaction.is_empty() =>
+                {
+                    let previous = Self::required_txn(&parent, &read_write.retry_transaction)?;
+                    db.retry_transaction(&previous, now)
                 }
                 _ => db.begin_transaction(false, now),
             }
@@ -1689,7 +1736,7 @@ impl LocalBackend {
             ));
         };
         let accepted = self.accepted_query(&parent, sq)?;
-        let now = self.now();
+        let now = self.write_time();
         let read_at = match &req.consistency_selector {
             Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
                 Some(Self::read_time_selector(ts, now)?)
@@ -1705,7 +1752,7 @@ impl LocalBackend {
                     (Some(t), Vec::new())
                 }
                 Some(pb::run_query_request::ConsistencySelector::NewTransaction(opts)) => {
-                    let id = Self::new_transaction(db, opts, now)?;
+                    let id = Self::new_transaction(&parent, db, opts, now)?;
                     let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
@@ -1788,7 +1835,7 @@ impl LocalBackend {
         };
         let accepted = self.accepted_query(&parent, sq)?;
         let (aliases, aggregations) = decode_aggregations(saq)?;
-        let now = self.now();
+        let now = self.write_time();
         let read_at = match &req.consistency_selector {
             Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(ts)) => {
                 Some(Self::read_time_selector(ts, now)?)
@@ -1806,7 +1853,7 @@ impl LocalBackend {
                 Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
                     opts,
                 )) => {
-                    let id = Self::new_transaction(db, opts, now)?;
+                    let id = Self::new_transaction(&parent, db, opts, now)?;
                     let bytes = Self::token(&parent, &id);
                     (Some(id), bytes)
                 }
@@ -1878,7 +1925,7 @@ impl LocalBackend {
     ) -> Result<pb::ListDocumentsResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
-        let now = self.now();
+        let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => {
                 (None, Some(Self::read_time_selector(ts, now)?))
@@ -2073,7 +2120,6 @@ impl LocalBackend {
     ) -> Result<pb::BatchWriteResponse, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
-        let now = self.now();
         let decoded: Vec<Result<Write, Status>> = req
             .writes
             .iter()
@@ -2099,6 +2145,7 @@ impl LocalBackend {
             let mut write_results = Vec::with_capacity(req.writes.len());
             let mut statuses = Vec::with_capacity(req.writes.len());
             for decoded in decoded {
+                let now = self.write_time();
                 let outcome = decoded.and_then(|write| {
                     guard(db, std::slice::from_ref(&write), now)?;
                     db.commit(std::slice::from_ref(&write), None, now)

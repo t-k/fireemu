@@ -49,6 +49,7 @@ fn harness(mode: BaselineMode) -> Harness {
         operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(fixture::CONTROL_TOKEN.to_owned()),
         registry: None,
+        allow_routed_projects: false,
         app_check: Some(app_check.clone()),
         app_check_policy: fixture::policy(&app_check, "auth", mode),
         tenancy: None,

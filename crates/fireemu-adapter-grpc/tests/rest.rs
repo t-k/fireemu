@@ -255,26 +255,30 @@ fn commit_query_aggregation_and_transactions_over_rest() {
     assert_eq!(status, 200, "{got}");
     assert!(got[0]["found"].is_object());
     assert!(got[1]["missing"].as_str().unwrap().ends_with("/n/none"));
-    // Pessimistic concurrency: the batchGet locked n/1, so an out-of-band write to it is
-    // refused with ABORTED "Transaction lock timeout." -- nothing changes behind the
-    // transaction.
-    let (status, blocked) = call(
+    // Optimistic concurrency: an out-of-band write is not blocked by a reader.
+    let (status, concurrent) = call(
         &s,
         "POST",
         &format!("{DOCS}:commit"),
         json!({"writes": [{"update": {"name": format!("projects/demo-app/databases/(default)/documents/n/1"), "fields": {"v": {"integerValue": "99"}}}}]}),
     );
-    assert_eq!(status, 409, "{blocked}");
-    assert_eq!(blocked["error"]["status"], "ABORTED");
-    assert_eq!(blocked["error"]["message"], "Transaction lock timeout.");
-    // The transaction commits: it writes n/2, which nobody else has locked.
-    let (status, ok) = call(
+    assert_eq!(status, 200, "{concurrent}");
+    // The stale transaction aborts before its unrelated staged delete is published.
+    let (status, aborted) = call(
         &s,
         "POST",
         &format!("{DOCS}:commit"),
         json!({"transaction": txn, "writes": [{"delete": format!("projects/demo-app/databases/(default)/documents/n/2")}]}),
     );
-    assert_eq!(status, 200, "{ok}");
+    assert_eq!(status, 409, "{aborted}");
+    assert_eq!(aborted["error"]["status"], "ABORTED");
+    assert_eq!(
+        aborted["error"]["message"],
+        "Transaction was aborted due to a concurrent modification."
+    );
+    let (status, preserved) = call(&s, "GET", &format!("{DOCS}/n/2"), json!({}));
+    assert_eq!(status, 200, "{preserved}");
+    assert_eq!(preserved["fields"]["v"]["integerValue"], "2");
 
     let (status, ids) = call(&s, "POST", &format!("{DOCS}:listCollectionIds"), json!({}));
     assert_eq!(status, 200);

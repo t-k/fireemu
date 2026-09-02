@@ -275,6 +275,9 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     let b = s
         .create_user(NewUser::email("b@example.com"), t0())
         .unwrap();
+    let c = s
+        .create_user(NewUser::email("c@example.com"), t0())
+        .unwrap();
     let ta = s.issue_refresh_token(&a, t(1)).unwrap();
     let tb = s.issue_refresh_token(&b, t(1)).unwrap();
     assert_ne!(ta, tb);
@@ -299,6 +302,10 @@ fn refresh_tokens_and_id_tokens_respect_revocation_and_disablement() {
     );
     assert_eq!(s.redeem_refresh_token(&tb2), Ok(b.clone()));
     assert_eq!(s.revoke_tokens(&ghost, t(3)), Err(AuthError::UserNotFound));
+    s.revoke_tokens(&c, t(8)).unwrap();
+    s.revoke_tokens(&c, t(4)).unwrap();
+    assert!(!s.token_is_valid(&c, t(7), t(3600), t(10)));
+    assert!(s.token_is_valid(&c, t(8), t(3600), t(10)));
     assert_eq!(
         s.issue_refresh_token(&ghost, t(3)),
         Err(AuthError::UserNotFound)

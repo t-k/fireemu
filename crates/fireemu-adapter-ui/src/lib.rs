@@ -92,6 +92,8 @@ pub struct RuntimeInfo {
 
 /// Shared state of the UI surface.
 pub struct UiState {
+    /// Connection budget shared by this runtime's event streams.
+    pub stream_limiter: Arc<sse::StreamLimiter>,
     /// The control token browser pages must present.
     pub control_token: String,
     /// Runtime description.

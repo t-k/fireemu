@@ -637,6 +637,83 @@ service cloud.firestore {
 }
 
 #[test]
+fn function_let_bindings_are_lazy_across_short_circuit_branches() {
+    let rules = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function mayRead() {
+      let primary = resource.data.primaryId;
+      let optional = resource.data.optionalId;
+      let members = resource.data.members;
+      return primary == request.auth.uid ||
+             optional == request.auth.uid ||
+             request.auth.uid in members;
+    }
+    match /records/{id} {
+      allow read: if mayRead();
+    }
+  }
+}
+";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let members = |uids: &[&str]| {
+        RulesValue::Map(
+            uids.iter()
+                .map(|uid| ((*uid).to_owned(), RulesValue::Bool(true)))
+                .collect(),
+        )
+    };
+    let decide = |primary: &str, member_uids: &[&str]| {
+        let mut request = ctx(
+            Method::Get,
+            "/databases/(default)/documents/records/one",
+            Some(auth("alice", false, None)),
+        );
+        request.resource = Some(resource(vec![
+            ("primaryId", RulesValue::String(primary.to_owned())),
+            ("members", members(member_uids)),
+        ]));
+        evaluate_request(&ruleset, &request).decision
+    };
+
+    assert!(matches!(decide("alice", &[]), Decision::Allow));
+    assert!(matches!(decide("other", &["alice"]), Decision::Allow));
+    assert!(matches!(
+        decide("other", &["someone-else"]),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+}
+
+#[test]
+fn an_unused_lazy_let_does_not_trigger_unsupported_document_access() {
+    let rules = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function alwaysTrue() {
+      let unused = get(/databases/$(database)/documents/other/missing);
+      return true;
+    }
+    match /records/{id} {
+      allow read: if alwaysTrue();
+    }
+  }
+}
+";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let request = ctx(
+        Method::Get,
+        "/databases/(default)/documents/records/one",
+        None,
+    );
+    assert!(matches!(
+        evaluate_request(&ruleset, &request).decision,
+        Decision::Allow
+    ));
+}
+
+#[test]
 fn string_matches_and_replace_use_the_regex_engine() {
     let rules = "rules_version = '2';
 service firebase.storage {
@@ -684,6 +761,35 @@ service firebase.storage {
     assert!(matches!(
         evaluate_request(&ruleset, &ctx("forbidden.png", "image/png")).decision,
         Decision::Deny(_)
+    ));
+}
+
+#[test]
+fn linear_regex_repeats_decide_normally_in_rules() {
+    let rules = "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /messages/{id} {
+      allow create: if request.resource.data.content.matches('^(?:[\\t\\n\\r]|[^\\\\p{Cc}])*$');
+    }
+  }
+}";
+    let ruleset = parse_ruleset(rules).unwrap();
+    let decide = |content: String| {
+        let mut request = ctx(
+            Method::Create,
+            "/databases/(default)/documents/messages/m1",
+            None,
+        );
+        request.request_resource = Some(doc(&[("content", RulesValue::String(content))]));
+        evaluate_request(&ruleset, &request).decision
+    };
+
+    assert!(matches!(decide("a".repeat(3_000)), Decision::Allow));
+    assert!(matches!(decide("a\tb\nc\r".to_owned()), Decision::Allow));
+    assert!(matches!(
+        decide("ok\u{0007}no".to_owned()),
+        Decision::Deny(DenyReason::NoMatchingAllow)
     ));
 }
 

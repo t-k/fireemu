@@ -1,10 +1,15 @@
 //! Functions runtime wiring: runner process, event subscriptions, control hooks.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+#[cfg(not(windows))]
+use std::time::Instant;
 
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
@@ -15,6 +20,129 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
 
 use crate::config::RuntimeConfig;
+
+/// One Pub/Sub topic and emulator subscription required by a loaded function manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionPubSubResource {
+    /// The canonical topic name.
+    pub topic: fireemu_core_pubsub::TopicName,
+    /// The canonical emulator subscription name.
+    pub subscription: fireemu_core_pubsub::SubscriptionName,
+}
+
+/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions.
+pub fn function_pubsub_resources(
+    project: &str,
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+) -> Result<Vec<FunctionPubSubResource>, String> {
+    use fireemu_core_functions::manifest::Trigger;
+
+    let mut topics: BTreeSet<(String, String)> = BTreeSet::new();
+    for function in &manifest.functions {
+        match &function.trigger {
+            Trigger::PubSub { topic } => {
+                topics.insert((topic.clone(), format!("function {:?}", function.name)));
+            }
+            Trigger::Schedule { .. } => {
+                topics.insert((
+                    format!("firebase-schedule-{}", function.name),
+                    format!("scheduled function {:?}", function.name),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // The same topic may be declared by more than one function. Resource names, not the
+    // diagnostics attached to them, define uniqueness.
+    let mut seen = BTreeSet::new();
+    let mut resources = Vec::new();
+    for (topic_id, owner) in topics {
+        if !seen.insert(topic_id.clone()) {
+            continue;
+        }
+        let topic = fireemu_core_pubsub::TopicName::new(project, &topic_id).map_err(|error| {
+            format!("{owner} requires invalid Pub/Sub topic {topic_id:?}: {error}")
+        })?;
+        let subscription_id = format!("emulator-sub-{topic_id}");
+        let subscription = fireemu_core_pubsub::SubscriptionName::new(project, &subscription_id)
+            .map_err(|error| {
+                format!(
+                    "{owner} requires invalid Pub/Sub subscription {subscription_id:?}: {error}"
+                )
+            })?;
+        resources.push(FunctionPubSubResource {
+            topic,
+            subscription,
+        });
+    }
+    Ok(resources)
+}
+
+/// Creates missing manifest-owned Pub/Sub resources without changing existing compatible ones.
+pub fn provision_function_pubsub_resources(
+    state: &mut fireemu_core_pubsub::PubSubState,
+    resources: &[FunctionPubSubResource],
+) -> Result<(), String> {
+    use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
+    use fireemu_core_pubsub::{Filter, PushConfig, SubscriptionConfig};
+
+    // Check every existing subscription before creating anything. A stale subscription with
+    // the expected name but another topic is configuration drift, not an idempotent match.
+    for resource in resources {
+        if let Ok(existing) = state.subscription_config(&resource.subscription) {
+            if existing.topic != resource.topic {
+                return Err(format!(
+                    "Functions requires subscription {} to target {}, but it already targets {}",
+                    resource.subscription.to_full(),
+                    resource.topic.to_full(),
+                    existing.topic.to_full()
+                ));
+            }
+        }
+    }
+
+    for resource in resources {
+        if !state.topic_exists(&resource.topic) {
+            state
+                .create_topic(resource.topic.clone(), BTreeMap::new())
+                .map_err(|error| {
+                    format!(
+                        "could not provision topic {}: {error}",
+                        resource.topic.to_full()
+                    )
+                })?;
+        }
+        if state.subscription_config(&resource.subscription).is_err() {
+            state
+                .create_subscription(SubscriptionConfig {
+                    name: resource.subscription.clone(),
+                    topic: resource.topic.clone(),
+                    ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: None,
+                    push_config: PushConfig::default(),
+                })
+                .map_err(|error| {
+                    format!(
+                        "could not provision subscription {}: {error}",
+                        resource.subscription.to_full()
+                    )
+                })?;
+        }
+        state
+            .mark_function_subscription(&resource.subscription)
+            .map_err(|error| {
+                format!(
+                    "could not provision subscription {}: {error}",
+                    resource.subscription.to_full()
+                )
+            })?;
+    }
+    Ok(())
+}
 
 fn ignored_reload_path(relative: &Path, configured: &[String]) -> bool {
     let text = relative.to_string_lossy().replace('\\', "/");
@@ -595,10 +723,567 @@ pub fn locate_runner() -> Result<RunnerScript, String> {
     ))
 }
 
-/// The bundled Node runner as a command (overridable wholesale with `functions.runner`).
-pub fn default_runner() -> Result<Vec<String>, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(not(windows), test))]
+struct NodeInstallation {
+    program: PathBuf,
+    version: String,
+    major: u32,
+    minor: u32,
+    patch: u32,
+    require_module: bool,
+}
+
+#[cfg(any(not(windows), test))]
+fn parse_node_version(text: &str) -> Option<(String, u32, u32, u32)> {
+    let version = text.trim().strip_prefix('v').unwrap_or(text.trim());
+    let core = version.split_once('-').map_or(version, |(core, _)| core);
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((version.to_owned(), major, minor, patch))
+}
+
+#[cfg(any(not(windows), test))]
+fn requirement_parts(text: &str) -> Option<Vec<Option<u32>>> {
+    let text = text.trim().trim_start_matches('v');
+    if text.is_empty() {
+        return None;
+    }
+    text.split('.')
+        .map(|part| match part {
+            "x" | "X" | "*" => Some(None),
+            _ => part.parse().ok().map(Some),
+        })
+        .collect()
+}
+
+#[cfg(any(not(windows), test))]
+fn version_floor(parts: &[Option<u32>]) -> Option<(u32, u32, u32)> {
+    Some((
+        parts.first().copied().flatten()?,
+        parts.get(1).copied().flatten().unwrap_or(0),
+        parts.get(2).copied().flatten().unwrap_or(0),
+    ))
+}
+
+#[cfg(any(not(windows), test))]
+fn node_engine_token_matches(token: &str, actual: (u32, u32, u32)) -> Option<bool> {
+    for operator in [">=", "<=", ">", "<"] {
+        if let Some(version) = token.strip_prefix(operator) {
+            let parts = requirement_parts(version)?;
+            if parts.first().is_some_and(Option::is_none) {
+                return Some(matches!(operator, ">=" | "<="));
+            }
+            let expected = version_floor(&parts)?;
+            let partial_at = parts
+                .iter()
+                .position(Option::is_none)
+                .or((parts.len() < 3).then_some(parts.len()));
+            let next_partial = match partial_at {
+                Some(1) => Some((expected.0.checked_add(1)?, 0, 0)),
+                Some(2) => Some((expected.0, expected.1.checked_add(1)?, 0)),
+                _ => None,
+            };
+            return Some(match operator {
+                ">=" => actual >= expected,
+                "<=" => next_partial.map_or(actual <= expected, |upper| actual < upper),
+                ">" => next_partial.map_or(actual > expected, |upper| actual >= upper),
+                "<" => actual < expected,
+                _ => unreachable!(),
+            });
+        }
+    }
+
+    if let Some(version) = token.strip_prefix('^') {
+        let lower = version_floor(&requirement_parts(version)?)?;
+        let upper = if lower.0 > 0 {
+            (lower.0.checked_add(1)?, 0, 0)
+        } else if lower.1 > 0 {
+            (0, lower.1.checked_add(1)?, 0)
+        } else {
+            (0, 0, lower.2.checked_add(1)?)
+        };
+        return Some(actual >= lower && actual < upper);
+    }
+    if let Some(version) = token.strip_prefix('~') {
+        let parts = requirement_parts(version)?;
+        let lower = version_floor(&parts)?;
+        let upper = if parts.len() >= 2 && parts[1].is_some() {
+            (lower.0, lower.1.checked_add(1)?, 0)
+        } else {
+            (lower.0.checked_add(1)?, 0, 0)
+        };
+        return Some(actual >= lower && actual < upper);
+    }
+
+    let token = token.strip_prefix('=').unwrap_or(token);
+    let parts = requirement_parts(token)?;
+    if parts.first().is_some_and(Option::is_none) {
+        return Some(true);
+    }
+    let lower = version_floor(&parts)?;
+    if parts.len() == 1 || parts.get(1).is_some_and(Option::is_none) {
+        return Some(actual >= lower && actual < (lower.0.checked_add(1)?, 0, 0));
+    }
+    if parts.len() == 2 || parts.get(2).is_some_and(Option::is_none) {
+        return Some(actual >= lower && actual < (lower.0, lower.1.checked_add(1)?, 0));
+    }
+    Some(actual == lower)
+}
+
+#[cfg(any(not(windows), test))]
+fn node_engine_matches(expression: &str, actual: (u32, u32, u32)) -> Result<bool, String> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return Err("package.json engines.node is empty".to_owned());
+    }
+    for alternative in expression.split("||") {
+        let normalized = alternative.replace(',', " ");
+        let tokens: Vec<&str> = normalized.split_whitespace().collect();
+        if tokens.is_empty() {
+            return Err(format!(
+                "package.json engines.node {expression:?} is not a supported semver expression"
+            ));
+        }
+        if let [lower, "-", upper] = tokens.as_slice() {
+            let lower_parts = requirement_parts(lower).ok_or_else(|| {
+                format!("package.json engines.node {expression:?} is not supported")
+            })?;
+            let lower = if lower_parts.first().is_some_and(Option::is_none) {
+                None
+            } else {
+                Some(version_floor(&lower_parts).ok_or_else(|| {
+                    format!("package.json engines.node {expression:?} is not supported")
+                })?)
+            };
+            let upper_parts = requirement_parts(upper).ok_or_else(|| {
+                format!("package.json engines.node {expression:?} is not supported")
+            })?;
+            let below_upper = if upper_parts.first().is_some_and(Option::is_none) {
+                true
+            } else {
+                let upper = version_floor(&upper_parts).ok_or_else(|| {
+                    format!("package.json engines.node {expression:?} is not supported")
+                })?;
+                let partial_at = upper_parts
+                    .iter()
+                    .position(Option::is_none)
+                    .or((upper_parts.len() < 3).then_some(upper_parts.len()));
+                if partial_at == Some(1) {
+                    actual
+                        < (
+                            upper.0.checked_add(1).ok_or_else(|| {
+                                format!("package.json engines.node {expression:?} overflows")
+                            })?,
+                            0,
+                            0,
+                        )
+                } else if partial_at == Some(2) {
+                    actual
+                        < (
+                            upper.0,
+                            upper.1.checked_add(1).ok_or_else(|| {
+                                format!("package.json engines.node {expression:?} overflows")
+                            })?,
+                            0,
+                        )
+                } else {
+                    actual <= upper
+                }
+            };
+            if lower.is_none_or(|lower| actual >= lower) && below_upper {
+                return Ok(true);
+            }
+            continue;
+        }
+        let mut matches = true;
+        for token in tokens {
+            let Some(token_matches) = node_engine_token_matches(token, actual) else {
+                return Err(format!(
+                    "package.json engines.node {expression:?} is not a supported semver expression"
+                ));
+            };
+            matches &= token_matches;
+        }
+        if matches {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(any(not(windows), test))]
+fn package_node_engine(source: &Path) -> Result<Option<String>, String> {
+    let path = source.join("package.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let package: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
+    match package.pointer("/engines/node") {
+        None => Ok(None),
+        Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(format!("{}: engines.node must be a string", path.display())),
+    }
+}
+
+fn push_node_candidate(out: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !node_candidate_is_executable(&candidate) {
+        return;
+    }
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+    if !out.contains(&canonical) {
+        out.push(canonical);
+    }
+}
+
+fn node_candidate_is_executable(candidate: &Path) -> bool {
+    if !candidate.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(candidate)
+            .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn path_node_candidates(path: &std::ffi::OsStr) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for directory in std::env::split_paths(path)
+        .filter(|directory| directory.is_absolute())
+        .take(64)
+    {
+        #[cfg(not(windows))]
+        let candidate = directory.join("node");
+        #[cfg(windows)]
+        let candidate = directory.join("node.exe");
+        if node_candidate_is_executable(&candidate) {
+            push_node_candidate(&mut candidates, candidate);
+            break;
+        }
+    }
+    candidates
+}
+
+fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
+    if let Some(program) = std::env::var_os("FIREEMU_NODE") {
+        let program = PathBuf::from(program);
+        if !program.is_absolute() || !node_candidate_is_executable(&program) {
+            return Err(format!(
+                "FIREEMU_NODE names {}, which is not an executable file",
+                program.display()
+            ));
+        }
+        let mut candidates = Vec::new();
+        push_node_candidate(&mut candidates, program);
+        return Ok((candidates, true));
+    }
+
+    let mut candidates = std::env::var_os("PATH")
+        .map(|path| path_node_candidates(&path))
+        .unwrap_or_default();
+    if let Some(home) = std::env::var_os("VOLTA_HOME") {
+        let root = PathBuf::from(home).join("tools/image/node");
+        if root.is_absolute() {
+            if let Ok(entries) = std::fs::read_dir(root) {
+                let mut entries: Vec<_> = entries.filter_map(Result::ok).take(64).collect();
+                entries.sort_by_key(std::fs::DirEntry::file_name);
+                for entry in entries {
+                    #[cfg(not(windows))]
+                    push_node_candidate(&mut candidates, entry.path().join("bin/node"));
+                    #[cfg(windows)]
+                    push_node_candidate(&mut candidates, entry.path().join("node.exe"));
+                }
+            }
+        }
+    }
+    candidates.truncate(16);
+    Ok((candidates, false))
+}
+
+#[cfg(not(windows))]
+fn run_node_probe(program: &Path, arguments: &[&str], label: &str) -> Result<Vec<u8>, String> {
+    const MAX_OUTPUT_BYTES: usize = 256;
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start Node {label}: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("Node {label} stdout unavailable"))?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.take(257).read_to_end(&mut bytes);
+        let _ = sender.send(bytes);
+    });
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("could not wait for Node {label}: {error}"))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            #[cfg(unix)]
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("Node {label} timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let output = receiver.recv_timeout(remaining).map_err(|_| {
+        #[cfg(unix)]
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        format!("Node {label} timed out")
+    })?;
+    if !status.success() {
+        return Err(format!("Node {label} exited with {status}"));
+    }
+    if output.len() > MAX_OUTPUT_BYTES {
+        return Err(format!("Node {label} output exceeded 256 bytes"));
+    }
+    Ok(output)
+}
+
+#[cfg(not(windows))]
+fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
+    let output = run_node_probe(program, &["--version"], "--version")?;
+    let text = String::from_utf8_lossy(&output);
+    let (version, major, minor, patch) = parse_node_version(&text)
+        .ok_or_else(|| "Node --version returned an unrecognised version".to_owned())?;
+    let feature = run_node_probe(
+        program,
+        &["-p", "String(process.features?.require_module === true)"],
+        "loader feature probe",
+    )?;
+    let require_module = match String::from_utf8_lossy(&feature).trim() {
+        "true" => true,
+        "false" => false,
+        _ => return Err("Node loader feature probe returned an unrecognised value".to_owned()),
+    };
+    Ok(NodeInstallation {
+        program: program.to_path_buf(),
+        version,
+        major,
+        minor,
+        patch,
+        require_module,
+    })
+}
+
+#[cfg(any(not(windows), test))]
+fn request_prefers_require_module(
+    runtime_major: Option<u32>,
+    engines: Option<&str>,
+    installations: &[NodeInstallation],
+) -> Result<bool, String> {
+    if let Some(runtime_major) = runtime_major {
+        return Ok(runtime_major >= 20);
+    }
+    let Some(engines) = engines else {
+        return Ok(false);
+    };
+    for installation in installations {
+        if installation.major >= 20
+            && node_engine_matches(
+                engines,
+                (installation.major, installation.minor, installation.patch),
+            )?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(any(not(windows), test))]
+fn select_node_installation(
+    runtime_major: Option<u32>,
+    engines: Option<&str>,
+    installations: &[NodeInstallation],
+) -> Result<usize, String> {
+    if installations.is_empty() {
+        return Err("no usable Node executable was found on PATH or in VOLTA_HOME".to_owned());
+    }
+    let engine_matches = installations
+        .iter()
+        .map(|installation| {
+            engines.map_or(Ok(true), |expression| {
+                node_engine_matches(
+                    expression,
+                    (installation.major, installation.minor, installation.patch),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let prefer_require_module =
+        request_prefers_require_module(runtime_major, engines, installations)?;
+    let candidates = installations
+        .iter()
+        .enumerate()
+        .map(
+            |(index, installation)| fireemu_adapter_functions::node_selection::NodeCandidate {
+                require_module: installation.require_module,
+                runtime_matches: runtime_major.is_none_or(|major| installation.major == major),
+                engine_matches: engine_matches[index],
+            },
+        )
+        .collect::<Vec<_>>();
+    fireemu_adapter_functions::node_selection::select_node_candidate(
+        false,
+        prefer_require_module,
+        &candidates,
+    )
+    .ok_or_else(|| "no usable Node executable was found on PATH or in VOLTA_HOME".to_owned())
+}
+
+#[cfg(windows)]
+fn default_runner_for_codebase(
+    _codebase: &crate::config::FunctionsCodebase,
+) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
-    Ok(vec!["node".to_owned(), script.path.display().to_string()])
+    let (candidates, _) = node_candidates()?;
+    let program = candidates.first().ok_or_else(|| {
+        "no Node executable was found in an absolute PATH directory; set FIREEMU_NODE to an absolute executable or configure functions.runner explicitly".to_owned()
+    })?;
+    Ok(vec![
+        program.display().to_string(),
+        script.path.display().to_string(),
+    ])
+}
+
+#[cfg(not(windows))]
+fn default_runner_for_codebase(
+    codebase: &crate::config::FunctionsCodebase,
+) -> Result<Vec<String>, String> {
+    let script = locate_runner()?;
+    let engines = package_node_engine(Path::new(&codebase.source))?;
+    if let Some(expression) = engines.as_deref() {
+        let _ = node_engine_matches(expression, (0, 0, 0))?;
+    }
+    let (candidates, explicit_node) = node_candidates()?;
+    let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
+        runtime
+            .strip_prefix("nodejs")
+            .and_then(|major| major.parse::<u32>().ok())
+    });
+    let mut installations = Vec::new();
+    let mut probe_errors = Vec::new();
+    for candidate in candidates {
+        match probe_node(&candidate) {
+            Ok(installation) => {
+                installations.push(installation);
+                if explicit_node {
+                    break;
+                }
+            }
+            Err(error) => probe_errors.push(error),
+        }
+    }
+    if installations.is_empty() {
+        let detail = if probe_errors.is_empty() {
+            "no Node executable was found".to_owned()
+        } else {
+            probe_errors.join("; ")
+        };
+        return Err(format!(
+            "the Functions codebase {:?}: {detail}; install Node, set FIREEMU_NODE, or configure functions.runner explicitly",
+            codebase.codebase
+        ));
+    }
+    let selected = if explicit_node {
+        0
+    } else {
+        select_node_installation(runtime_major, engines.as_deref(), &installations)?
+    };
+    let installation = &installations[selected];
+    let prefer_require_module =
+        request_prefers_require_module(runtime_major, engines.as_deref(), &installations)?;
+    if let Some(engines) = &engines {
+        let matches_engine = node_engine_matches(
+            engines,
+            (installation.major, installation.minor, installation.patch),
+        )?;
+        if matches_engine {
+            eprintln!(
+                "note: functions[{}]: selected Node v{} for package.json engines.node {:?}{}",
+                codebase.codebase,
+                installation.version,
+                engines,
+                runtime_major
+                    .filter(|major| *major != installation.major)
+                    .map_or_else(String::new, |major| format!(
+                        " (firebase runtime nodejs{major} is deployment metadata)"
+                    ))
+            );
+        } else {
+            eprintln!(
+                "note: functions[{}]: selected Node v{} as a loader-capable local fallback; package.json engines.node {:?}{} does not include it",
+                codebase.codebase,
+                installation.version,
+                engines,
+                runtime_major.map_or_else(String::new, |major| format!(
+                    " and firebase runtime nodejs{major}"
+                ))
+            );
+        }
+    } else if let Some(major) = runtime_major {
+        if major != installation.major {
+            eprintln!(
+                "note: functions[{}]: firebase runtime nodejs{major} differs from local Node v{}; the local emulator uses the first usable Node on PATH",
+                codebase.codebase, installation.version
+            );
+        }
+    }
+    if !installation.require_module && prefer_require_module {
+        eprintln!(
+            "note: functions[{}]: Node v{} cannot synchronously require ES modules from CommonJS; install Node 20.19+, Node 22.12+, or a newer release if module loading fails",
+            codebase.codebase, installation.version
+        );
+    }
+    Ok(vec![
+        installation.program.display().to_string(),
+        script.path.display().to_string(),
+    ])
 }
 
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
@@ -714,8 +1399,12 @@ async fn start_codebase(
     }
     let mut command = match cfg.functions_runner.clone() {
         Some(command) => command,
-        None => default_runner()?,
+        None => default_runner_for_codebase(codebase)
+            .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
     };
+    if let Some(port) = cfg.functions_inspect_port {
+        command.insert(1, format!("--inspect={port}"));
+    }
     command.push("--source".to_owned());
     command.push(source.clone());
     command.push("--codebase".to_owned());
@@ -1290,9 +1979,223 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_callable_app_check, functions_source_signature, snapshot_functions_source};
+    use std::collections::BTreeMap;
+    #[cfg(unix)]
+    use std::process::Command;
+    #[cfg(unix)]
+    use std::time::{Duration, Instant};
+
+    use super::path_node_candidates;
+    #[cfg(unix)]
+    use super::probe_node;
+    use super::{
+        check_callable_app_check, function_pubsub_resources, functions_source_signature,
+        node_engine_matches, package_node_engine, parse_node_version,
+        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
+        NodeInstallation,
+    };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
+    use fireemu_core_pubsub::{
+        Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
+    };
     use serde_json::json;
+
+    fn installed_node(version: &str, require_module: bool) -> NodeInstallation {
+        let (_, major, minor, patch) = parse_node_version(version).unwrap();
+        NodeInstallation {
+            program: std::path::PathBuf::from(format!("/opt/node-{major}/bin/node")),
+            version: version.trim_start_matches('v').to_owned(),
+            major,
+            minor,
+            patch,
+            require_module,
+        }
+    }
+
+    #[test]
+    fn loader_capability_precedes_runtime_and_engine_preferences() {
+        let installations = vec![
+            installed_node("v22.11.0", false),
+            installed_node("v20.19.5", true),
+            installed_node("v22.12.0", true),
+        ];
+        assert_eq!(
+            select_node_installation(Some(22), Some("22"), &installations).unwrap(),
+            2
+        );
+        assert_eq!(
+            select_node_installation(None, Some("20"), &installations).unwrap(),
+            1
+        );
+        assert_eq!(
+            select_node_installation(None, Some(">=20.0.0 <21.0.0"), &installations).unwrap(),
+            1
+        );
+        assert_eq!(
+            select_node_installation(Some(22), Some("22"), &installations[..2]).unwrap(),
+            1,
+            "a capable local fallback wins over an incapable requested major"
+        );
+
+        let legacy = vec![
+            installed_node("v20.19.5", true),
+            installed_node("v18.20.0", false),
+        ];
+        assert_eq!(
+            select_node_installation(Some(18), Some("18"), &legacy).unwrap(),
+            1,
+            "Node 18 requests retain their runtime semantics"
+        );
+        assert_eq!(
+            select_node_installation(None, Some("18"), &legacy).unwrap(),
+            1,
+            "a legacy engine constraint does not inherit capability requirements from newer nodes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn automatic_path_discovery_trusts_only_the_first_node_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-node-path-discovery-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let non_executable = root.join("non-executable/node");
+        let first = root.join("first/node");
+        let second = root.join("second/node");
+        for program in [&non_executable, &first, &second] {
+            std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+            std::fs::write(program, "#!/bin/sh\nexit 0\n").unwrap();
+        }
+        std::fs::set_permissions(&non_executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        for program in [&first, &second] {
+            std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = std::env::join_paths([
+            root.join("missing"),
+            non_executable.parent().unwrap().to_owned(),
+            first.parent().unwrap().to_owned(),
+            second.parent().unwrap().to_owned(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            path_node_candidates(&path),
+            vec![std::fs::canonicalize(&first).unwrap()]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn node_engine_parser_checks_ranges_and_alternatives() {
+        for expression in [
+            "*",
+            "x",
+            "20",
+            "20.x",
+            "^20.0.0",
+            "~20",
+            ">=20 <21",
+            "18 || 20",
+            "20.0.0 - 22.11.0",
+        ] {
+            assert!(
+                node_engine_matches(expression, (20, 19, 5)).unwrap(),
+                "{expression}"
+            );
+        }
+        assert!(node_engine_matches(">=18", (22, 11, 0)).unwrap());
+        assert!(!node_engine_matches("20.20.x", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("20.19.5", (20, 19, 5)).unwrap());
+        assert!(!node_engine_matches("20.19.5", (20, 19, 6)).unwrap());
+        assert!(node_engine_matches("^0.2.3", (0, 2, 9)).unwrap());
+        assert!(node_engine_matches("~20.19.0", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("<=20", (20, 19, 5)).unwrap());
+        assert!(!node_engine_matches(">20", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("20 - 22", (22, 11, 0)).unwrap());
+        assert!(node_engine_matches("<=20.x", (20, 19, 5)).unwrap());
+        assert!(!node_engine_matches(">20.x", (20, 19, 5)).unwrap());
+        assert!(node_engine_matches("20 - 22.x", (22, 11, 0)).unwrap());
+        assert!(node_engine_matches("20 - x", (99, 0, 0)).unwrap());
+        assert!(node_engine_matches("x - 22", (1, 0, 0)).unwrap());
+        assert!(node_engine_matches("", (20, 19, 5)).is_err());
+        assert!(node_engine_matches("not-semver", (20, 19, 5)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_times_out_when_a_descendant_keeps_stdout_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-probe-timeout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        let pid_file = root.join("descendant.pid");
+        let script = format!(
+            "#!/bin/sh\n(/bin/sleep 30) &\necho $! > '{}'\necho v22.11.0\n",
+            pid_file.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = Instant::now();
+        let error = probe_node(&program).unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .status()
+            .unwrap()
+            .success());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_node_discovery_uses_only_absolute_path_candidates() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-windows-node-discovery-{}",
+            std::process::id()
+        ));
+        let current = root.join("current");
+        let bin = root.join("bin");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        let current_node = current.join("node.exe");
+        let path_node = bin.join("node.exe");
+        std::fs::write(&current_node, b"current directory executable").unwrap();
+        std::fs::write(&path_node, b"PATH executable").unwrap();
+        let path = std::env::join_paths([&bin]).unwrap();
+
+        let candidates = path_node_candidates(&path);
+
+        assert_eq!(candidates, vec![std::fs::canonicalize(path_node).unwrap()]);
+        assert!(!candidates.contains(&std::fs::canonicalize(current_node).unwrap()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_node_engine_is_read_without_treating_it_as_an_executable() {
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-engine-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"engines":{"node":"20"},"scripts":{"node":"/tmp/not-an-executable"}}"#,
+        )
+        .unwrap();
+        assert_eq!(package_node_engine(&root).unwrap().as_deref(), Some("20"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reload_signature_tracks_build_and_env_files_but_ignores_configured_paths() {
@@ -1410,6 +2313,80 @@ mod tests {
             "debugMode": true,
             "authHeaders": auth_headers,
         })
+    }
+
+    #[test]
+    fn pubsub_resources_cover_shared_topics_and_schedules_once() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "workerOne", "trigger": {"type": "pubsub", "topic": "shared-jobs"}},
+            {"name": "workerTwo", "trigger": {"type": "pubsub", "topic": "shared-jobs"}, "region": "europe-west1"},
+            {"name": "dailyReport", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}},
+            {"name": "health", "trigger": {"type": "http"}}
+        ]})).unwrap();
+
+        let resources = function_pubsub_resources("demo-app", &manifest).unwrap();
+        let actual: Vec<(String, String)> = resources
+            .iter()
+            .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "projects/demo-app/topics/firebase-schedule-dailyReport".to_owned(),
+                    "projects/demo-app/subscriptions/emulator-sub-firebase-schedule-dailyReport"
+                        .to_owned(),
+                ),
+                (
+                    "projects/demo-app/topics/shared-jobs".to_owned(),
+                    "projects/demo-app/subscriptions/emulator-sub-shared-jobs".to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn provisioning_function_pubsub_resources_is_idempotent_and_checks_existing_links() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "worker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}}
+        ]}))
+        .unwrap();
+        let resources = function_pubsub_resources("demo-app", &manifest).unwrap();
+        let mut state = PubSubState::new(7);
+
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        assert_eq!(state.list_topics("demo-app").len(), 1);
+        assert_eq!(state.list_subscriptions("demo-app").len(), 1);
+
+        let mut conflicting = PubSubState::new(8);
+        let expected_topic = TopicName::new("demo-app", "shared-jobs").unwrap();
+        let other_topic = TopicName::new("demo-app", "other-jobs").unwrap();
+        conflicting
+            .create_topic(expected_topic, BTreeMap::new())
+            .unwrap();
+        conflicting
+            .create_topic(other_topic.clone(), BTreeMap::new())
+            .unwrap();
+        conflicting
+            .create_subscription(SubscriptionConfig {
+                name: SubscriptionName::new("demo-app", "emulator-sub-shared-jobs").unwrap(),
+                topic: other_topic,
+                ack_deadline_seconds:
+                    fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS,
+                enable_message_ordering: false,
+                filter: Filter::always(),
+                dead_letter_policy: None,
+                retry_policy: None,
+                push_config: PushConfig::default(),
+            })
+            .unwrap();
+
+        let error = provision_function_pubsub_resources(&mut conflicting, &resources).unwrap_err();
+        assert!(error.contains("emulator-sub-shared-jobs"), "{error}");
+        assert!(error.contains("other-jobs"), "{error}");
+        assert_eq!(conflicting.list_topics("demo-app").len(), 2);
+        assert_eq!(conflicting.list_subscriptions("demo-app").len(), 1);
     }
 
     /// Functions scenario 6: `consumeAppCheckToken: true` fails discovery outright, whether or

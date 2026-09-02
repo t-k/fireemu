@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "model": "CompatibilitySelection",
+  "mutations": [
+    {
+      "id": "M-FORMAL-COMPAT-STORE-ALIAS-001",
+      "property": "NoStoreAliases",
+      "operator": "alias-routed-store-to-default",
+      "from": "\"worker-b\" -> \"none\"",
+      "to": "\"worker-b\" -> \"store-default\""
+    },
+    {
+      "id": "M-FORMAL-COMPAT-AUTH-UNIQUE-001",
+      "property": "UniqueUserRoutesToItsProject",
+      "operator": "deny-unique-user",
+      "from": "else if (userProjects.size() == 1) {\n        if (\"default\".in(userProjects)) \"default\"\n        else if (\"worker-a\".in(userProjects)) \"worker-a\" else \"worker-b\"\n      } else \"deny\"",
+      "to": "else if (userProjects.size() == 1) \"deny\"\n      else \"deny\""
+    },
+    {
+      "id": "M-FORMAL-COMPAT-AUTH-DEFAULT-001",
+      "property": "UnknownUserUsesDefault",
+      "operator": "deny-unknown-user",
+      "from": "authDecision' = if (userProjects.size() == 0) \"default\"",
+      "to": "authDecision' = if (userProjects.size() == 0) \"deny\""
+    },
+    {
+      "id": "M-FORMAL-COMPAT-AUTH-AMBIGUOUS-001",
+      "property": "AmbiguousUserIsDenied",
+      "operator": "route-ambiguous-user-to-default",
+      "from": "} else \"deny\",\n    automaticNode'",
+      "to": "} else \"default\",\n    automaticNode'"
+    },
+    {
+      "id": "M-FORMAL-COMPAT-NODE-CAPABILITY-001",
+      "property": "AutomaticSelectionIsCapable",
+      "operator": "select-incapable-node",
+      "from": "automaticNode' = \"node22new\"",
+      "to": "automaticNode' = \"node22old\""
+    },
+    {
+      "id": "M-FORMAL-COMPAT-NODE-REQUEST-001",
+      "property": "RequestedNodeBreaksCapabilityTies",
+      "operator": "ignore-request-preference",
+      "from": "automaticNode' = \"node22new\"",
+      "to": "automaticNode' = \"node20new\""
+    },
+    {
+      "id": "M-FORMAL-COMPAT-NODE-EXPLICIT-001",
+      "property": "ExplicitSelectionIsStable",
+      "operator": "replace-explicit-node",
+      "from": "explicitNode' = \"node22old\"",
+      "to": "explicitNode' = \"node22new\""
+    }
+  ]
+}

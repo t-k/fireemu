@@ -82,6 +82,21 @@ impl fmt::Display for RegexRuntimeError {
 
 impl std::error::Error for RegexRuntimeError {}
 
+/// Production observations used to verify bounded matcher behavior without duplicating it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegexMatchDiagnostics {
+    /// The same result returned by [`Regex::is_full_match`].
+    pub result: Result<bool, RegexRuntimeError>,
+    /// Total matcher steps charged before the result.
+    pub charged_steps: u64,
+    /// Greatest simultaneously active logical matcher depth.
+    pub maximum_depth: u64,
+    /// One-character alternative branches inspected by the deterministic matcher.
+    pub attempted_branch_probes: u64,
+    /// Attempted alternative probes that consumed a matcher step.
+    pub charged_branch_probes: u64,
+}
+
 /// Maximum backtracking steps per match attempt.
 const STEP_BUDGET: u64 = 200_000;
 
@@ -628,18 +643,40 @@ impl Regex {
 
     /// Whether the whole of `text` matches (Rules `matches()` semantics).
     pub fn is_full_match(&self, text: &str) -> Result<bool, RegexRuntimeError> {
+        self.full_match_diagnostics(text).result
+    }
+
+    /// Runs a full match and returns its production budget observations.
+    ///
+    /// This is intended for conformance verification and diagnostics. The result is exactly
+    /// the one returned by [`Self::is_full_match`].
+    #[must_use]
+    pub fn full_match_diagnostics(&self, text: &str) -> RegexMatchDiagnostics {
         let chars: Vec<char> = text.chars().collect();
         let steps = Cell::new(0);
         let depth = Cell::new(0);
+        let peak_depth = Cell::new(0);
+        let attempted_branch_probes = Cell::new(0);
+        let charged_branch_probes = Cell::new(0);
         let caps = RefCell::new(vec![None; self.groups + 1]);
         let ctx = MatchContext {
             chars: &chars,
             steps: &steps,
             depth: &depth,
+            peak_depth: &peak_depth,
+            attempted_branch_probes: &attempted_branch_probes,
+            charged_branch_probes: &charged_branch_probes,
             caps: &caps,
             flags: self.flags,
         };
-        match_node(&self.node, &ctx, 0, &mut |end| Ok(end == chars.len()))
+        let result = match_node(&self.node, &ctx, 0, &mut |end| Ok(end == chars.len()));
+        RegexMatchDiagnostics {
+            result,
+            charged_steps: steps.get(),
+            maximum_depth: peak_depth.get(),
+            attempted_branch_probes: attempted_branch_probes.get(),
+            charged_branch_probes: charged_branch_probes.get(),
+        }
     }
 
     /// Replaces every non-overlapping match, expanding `$0` / `$1` ... and `$$` in
@@ -650,12 +687,18 @@ impl Regex {
         let mut i = 0;
         let steps = Cell::new(0);
         let depth = Cell::new(0);
+        let peak_depth = Cell::new(0);
+        let attempted_branch_probes = Cell::new(0);
+        let charged_branch_probes = Cell::new(0);
         while i <= chars.len() {
             let caps = RefCell::new(vec![None; self.groups + 1]);
             let ctx = MatchContext {
                 chars: &chars,
                 steps: &steps,
                 depth: &depth,
+                peak_depth: &peak_depth,
+                attempted_branch_probes: &attempted_branch_probes,
+                charged_branch_probes: &charged_branch_probes,
                 caps: &caps,
                 flags: self.flags,
             };
@@ -813,6 +856,9 @@ struct MatchContext<'a> {
     chars: &'a [char],
     steps: &'a Cell<u64>,
     depth: &'a Cell<u64>,
+    peak_depth: &'a Cell<u64>,
+    attempted_branch_probes: &'a Cell<u64>,
+    charged_branch_probes: &'a Cell<u64>,
     caps: &'a RefCell<Captures>,
     flags: Flags,
 }
@@ -829,6 +875,7 @@ impl Drop for MatchDepthGuard<'_> {
 
 fn enter_match<'a>(ctx: &MatchContext<'a>) -> Result<MatchDepthGuard<'a>, RegexRuntimeError> {
     let current = ctx.depth.get().saturating_add(1);
+    ctx.peak_depth.set(ctx.peak_depth.get().max(current));
     if current > DEPTH_BUDGET {
         return Err(RegexRuntimeError::DepthBudgetExceeded {
             current,
@@ -909,38 +956,35 @@ fn atomic_end(node: &Node, ctx: &MatchContext<'_>, pos: usize) -> Option<usize> 
     }
 }
 
-fn literal_alternative(node: &Node) -> Option<char> {
+fn single_character_leaf(node: &Node) -> Option<&Node> {
     match node {
-        Node::Char(character) => Some(*character),
-        Node::Seq(items) if items.len() == 1 => literal_alternative(&items[0]),
-        Node::Group(None, inner) => literal_alternative(inner),
-        _ => None,
+        Node::Char(_) | Node::Any | Node::Class { .. } => Some(node),
+        Node::Seq(items) if items.len() == 1 => single_character_leaf(&items[0]),
+        Node::Group(None, inner) => single_character_leaf(inner),
+        Node::Seq(_)
+        | Node::Group(Some(_), _)
+        | Node::Start
+        | Node::End
+        | Node::Alt(_)
+        | Node::Repeat { .. } => None,
     }
 }
 
-fn disjoint_literal_alternatives(branches: &[Node], flags: Flags) -> bool {
-    let Some(literals) = branches
-        .iter()
-        .map(literal_alternative)
-        .collect::<Option<Vec<_>>>()
-    else {
-        return false;
-    };
-    literals.iter().enumerate().all(|(index, left)| {
-        literals[index + 1..]
+fn has_single_character_branches(branches: &[Node]) -> bool {
+    !branches.is_empty()
+        && branches
             .iter()
-            .all(|right| !chars_equal(*left, *right, flags))
-    })
+            .all(|branch| single_character_leaf(branch).is_some())
 }
 
-fn is_deterministic(node: &Node, flags: Flags) -> bool {
+fn is_deterministic(node: &Node, _flags: Flags) -> bool {
     let mut pending = vec![node];
     while let Some(node) = pending.pop() {
         match node {
             Node::Char(_) | Node::Any | Node::Class { .. } | Node::Start | Node::End => {}
             Node::Group(_, inner) => pending.push(inner),
             Node::Seq(items) => pending.extend(items),
-            Node::Alt(branches) if disjoint_literal_alternatives(branches, flags) => {
+            Node::Alt(branches) if has_single_character_branches(branches) => {
                 pending.extend(branches);
             }
             Node::Alt(_) | Node::Repeat { .. } => return false,
@@ -993,13 +1037,24 @@ fn deterministic_end(
                         pending.extend(items.iter().rev().map(DeterministicTask::Match));
                     }
                     Node::Alt(branches) => {
-                        let selected = branches.iter().find(|branch| {
-                            literal_alternative(branch).is_some_and(|expected| {
-                                ctx.chars
-                                    .get(end)
-                                    .is_some_and(|actual| chars_equal(*actual, expected, ctx.flags))
-                            })
-                        });
+                        let mut selected = None;
+                        for branch in branches {
+                            ctx.attempted_branch_probes
+                                .set(ctx.attempted_branch_probes.get().saturating_add(1));
+                            let previous_steps = ctx.steps.get();
+                            let charge = charge_step(ctx);
+                            if ctx.steps.get() > previous_steps {
+                                ctx.charged_branch_probes
+                                    .set(ctx.charged_branch_probes.get().saturating_add(1));
+                            }
+                            charge?;
+                            let leaf = single_character_leaf(branch)
+                                .expect("deterministic alternatives have one-character branches");
+                            if atomic_end(leaf, ctx, end).is_some() {
+                                selected = Some(branch);
+                                break;
+                            }
+                        }
                         let Some(selected) = selected else {
                             *ctx.caps.borrow_mut() = original_captures;
                             return Ok(None);

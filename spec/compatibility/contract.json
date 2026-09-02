@@ -573,7 +573,7 @@
         },
         {
           "id": "FS-CLAIM-RULES",
-          "statement": "Security Rules are evaluated natively on every Firestore surface -- reads against the returned snapshot, writes inside the commit, queries proven from their constraints -- and the language they are written in is measured against the pinned official runtime rather than assumed.",
+          "statement": "Security Rules are evaluated natively on every Firestore surface -- reads against the returned snapshot, writes inside the commit, queries proven from their constraints -- and on Firebase Storage requests, while the shared language is measured against the pinned official runtime rather than assumed.",
           "capabilities": [
             {
               "id": "RULES-1",
@@ -596,6 +596,7 @@
             "tests": [
               "prop_rules_boolean_operators_absorb_a_raised_operand",
               "prop_rules_call_graph_limits_are_compile_errors",
+              "prop_rules_regex_linear_control_filter_matches_the_character_predicate",
               "prop_rules_set_operations_are_set_theoretic",
               "prop_rules_slice_is_in_range_exactly_where_the_official_runtime_says",
               "the_firebase_profile_admits_the_mock_tokens_the_official_emulator_admits",
@@ -604,17 +605,24 @@
               "rest_binds_unknown_mock_tokens_to_the_requested_project",
               "the_profile_decides_whether_rest_admits_a_mock_token",
               "the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify",
-              "webchannel_binds_unknown_mock_tokens_to_the_requested_project"
+              "webchannel_binds_unknown_mock_tokens_to_the_requested_project",
+              "storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets",
+              "worker_project_resumable_uploads_reverify_the_same_mock_audience",
+              "character_class_alternative_repeats_do_not_spend_subject_length_as_match_depth",
+              "linear_regex_repeats_allow_valid_long_writes_without_depth_exhaustion"
             ],
             "integration": [
               "conformance/rules-matrix.json",
               "conformance/rules-programs.json",
               "crates/fireemu-adapter-grpc/tests/rest.rs",
               "crates/fireemu-adapter-grpc/tests/rules.rs",
+              "crates/fireemu-adapter-http/tests/storage.rs",
               "crates/fireemu-core-rules/tests/eval.rs",
               "crates/fireemu-core-rules/tests/lint.rs",
               "crates/fireemu-core-rules/tests/namespaces.rs",
-              "crates/fireemu-core-rules/tests/regex.rs"
+              "crates/fireemu-core-rules/tests/regex.rs",
+              "tools/sdk-smoke/rules-unit-testing-explicit-rules.mjs",
+              "verification/property/tests/rules.rs"
             ],
             "conformance": [
               {

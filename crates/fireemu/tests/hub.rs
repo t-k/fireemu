@@ -8,15 +8,38 @@
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// A port nothing is listening on, released before it is handed back.
+const STARTUP_TRANSCRIPT_LIMIT: usize = 32 * 1024;
+
+fn append_startup_output(transcript: &Mutex<String>, text: &str) {
+    let mut transcript = transcript.lock().unwrap();
+    let remaining = STARTUP_TRANSCRIPT_LIMIT.saturating_sub(transcript.len());
+    let mut end = text.len().min(remaining);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    transcript.push_str(&text[..end]);
+}
+
+fn drain_startup_pipe<R: std::io::BufRead>(reader: R, transcript: &Mutex<String>) {
+    for line in reader.lines() {
+        match line {
+            Ok(line) => append_startup_output(transcript, &format!("{line}\n")),
+            Err(error) => {
+                append_startup_output(transcript, &format!("<read error: {error}>\n"));
+                return;
+            }
+        }
+    }
+}
+
+/// A port nothing is listening on at the time of the probe.
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port
+    listener.local_addr().unwrap().port()
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -68,6 +91,19 @@ fn request_with_headers(
     (status, head.to_owned(), body.to_owned())
 }
 
+fn complete_http_response(raw: &str) -> bool {
+    let Some((head, body)) = raw.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let content_length = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())
+            .flatten()
+    });
+    content_length.is_some_and(|length| body.len() >= length)
+}
+
 fn json(port: u16, method: &str, path: &str) -> serde_json::Value {
     let (status, body) = request(port, method, path, "127.0.0.1");
     assert_eq!(status, 200, "{method} {path} -> {body}");
@@ -78,10 +114,60 @@ fn json(port: u16, method: &str, path: &str) -> serde_json::Value {
 struct Daemon {
     child: Child,
     project: String,
+    hub_port: u16,
+}
+
+struct StartupFailure {
+    reason: String,
+    pid: u32,
+    status: Option<ExitStatus>,
+    stdout: String,
+    stderr: String,
+}
+
+impl StartupFailure {
+    fn is_address_in_use(&self) -> bool {
+        self.stderr.contains("Address already in use")
+    }
+
+    fn report(&self) -> String {
+        let Self {
+            reason,
+            pid,
+            status,
+            stdout,
+            stderr,
+        } = self;
+        format!(
+            "the daemon became ready: {reason}; pid={pid}; status={status:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        )
+    }
 }
 
 impl Daemon {
-    fn start(project: &str, hub_port: u16, extra: &[&str]) -> Self {
+    fn start(project: &str, extra: &[&str]) -> Self {
+        const MAX_BIND_ATTEMPTS: usize = 8;
+
+        let mut last_collision = None;
+        for attempt in 0..MAX_BIND_ATTEMPTS {
+            let hub_port = free_port();
+            match Self::start_once(project, hub_port, extra) {
+                Ok(daemon) => return daemon,
+                Err(failure) if failure.is_address_in_use() && attempt + 1 < MAX_BIND_ATTEMPTS => {
+                    last_collision = Some(failure);
+                }
+                Err(failure) => panic!("{}", failure.report()),
+            }
+        }
+        panic!(
+            "{}",
+            last_collision
+                .expect("a failed bind attempt was recorded")
+                .report()
+        );
+    }
+
+    fn start_once(project: &str, hub_port: u16, extra: &[&str]) -> Result<Self, StartupFailure> {
         let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args([
                 "up",
@@ -110,29 +196,75 @@ impl Daemon {
         // The pipe keeps being drained on its own thread afterwards: a closed stdout would
         // give the daemon a broken pipe on its next line and kill it mid-scenario.
         let stdout = child.stdout.take().unwrap();
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
-        std::thread::spawn(move || {
+        let stderr = child.stderr.take().unwrap();
+        let stdout_transcript = Arc::new(Mutex::new(String::new()));
+        let stderr_transcript = Arc::new(Mutex::new(String::new()));
+        let stdout_capture = Arc::clone(&stdout_transcript);
+        let stderr_capture = Arc::clone(&stderr_transcript);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        let stdout_thread = std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut ready = Some(ready_tx);
             loop {
                 let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    return;
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        if let Some(tx) = ready.take() {
+                            let _ = tx.send(Err("stdout reached EOF before readiness".to_owned()));
+                        }
+                        return;
+                    }
+                    Ok(_) => append_startup_output(&stdout_capture, &line),
+                    Err(error) => {
+                        if let Some(tx) = ready.take() {
+                            let _ = tx.send(Err(format!("could not read stdout: {error}")));
+                        }
+                        return;
+                    }
                 }
                 if line.contains("control API:") {
                     if let Some(tx) = ready.take() {
-                        let _ = tx.send(());
+                        let _ = tx.send(Ok(()));
                     }
                 }
             }
         });
-        ready_rx
+        let stderr_thread =
+            std::thread::spawn(move || drain_startup_pipe(BufReader::new(stderr), &stderr_capture));
+        let readiness = ready_rx
             .recv_timeout(Duration::from_secs(60))
-            .expect("the daemon became ready");
-        Self {
+            .unwrap_or_else(|error| Err(format!("readiness channel failed: {error}")));
+        if let Err(reason) = readiness {
+            let pid = child.id();
+            let status = match child.try_wait() {
+                Ok(Some(status)) => Some(status),
+                Ok(None) => {
+                    let _ = child.kill();
+                    child.wait().ok()
+                }
+                Err(_) => None,
+            };
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            let stdout = stdout_transcript.lock().unwrap().clone();
+            let stderr = stderr_transcript.lock().unwrap().clone();
+            return Err(StartupFailure {
+                reason,
+                pid,
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        Ok(Self {
             child,
             project: project.to_owned(),
-        }
+            hub_port,
+        })
+    }
+
+    fn hub_port(&self) -> u16 {
+        self.hub_port
     }
 
     fn locator(&self) -> PathBuf {
@@ -162,8 +294,8 @@ impl Drop for Daemon {
 
 #[test]
 fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
-    let port = free_port();
-    let daemon = Daemon::start("demo-hub-shape", port, &[]);
+    let daemon = Daemon::start("demo-hub-shape", &[]);
+    let port = daemon.hub_port();
     let emulators = json(port, "GET", "/emulators");
 
     // Every selected service is present, keyed by its official name.
@@ -245,8 +377,8 @@ fn the_hub_publishes_every_running_emulator_in_the_official_shape() {
 
 #[test]
 fn the_locator_file_is_written_at_start_and_removed_at_exit() {
-    let port = free_port();
-    let daemon = Daemon::start("demo-hub-locator", port, &[]);
+    let daemon = Daemon::start("demo-hub-locator", &[]);
+    let port = daemon.hub_port();
     let path = daemon.locator();
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("{} should exist: {e}", path.display()));
@@ -291,8 +423,7 @@ fn the_hub_discovery_file_never_follows_a_symlink() {
     std::fs::write(&target, "do not replace").unwrap();
     let _ = std::fs::remove_file(&path);
     symlink(&target, &path).unwrap();
-    let port = free_port();
-    let daemon = Daemon::start(&project, port, &[]);
+    let daemon = Daemon::start(&project, &[]);
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "do not replace");
     assert!(std::fs::symlink_metadata(&path)
         .unwrap()
@@ -343,10 +474,10 @@ fn a_daemon_that_could_not_bind_the_hub_serves_the_suite_anyway() {
 
 #[test]
 fn the_hub_switches_background_triggers_and_says_so() {
-    let port = free_port();
     // No functions codebase is loaded, so the switch has nothing to act on and says that
     // rather than reporting a state it did not reach.
-    let daemon = Daemon::start("demo-hub-triggers", port, &[]);
+    let daemon = Daemon::start("demo-hub-triggers", &[]);
+    let port = daemon.hub_port();
     let token = daemon.control_token();
     let (status, _, body) = request_with_headers(
         port,
@@ -364,7 +495,6 @@ fn the_hub_switches_background_triggers_and_says_so() {
     daemon.stop();
 
     // With a codebase loaded, both routes answer the official `{"enabled": ...}` body.
-    let port = free_port();
     let functions = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tools/sdk-smoke/functions-project");
     // The codebase resolves firebase-functions through tools/sdk-smoke/node_modules; without
@@ -377,7 +507,6 @@ fn the_hub_switches_background_triggers_and_says_so() {
     }
     let daemon = Daemon::start(
         "demo-hub-triggers-fn",
-        port,
         &[
             "--functions",
             functions.to_str().unwrap(),
@@ -385,6 +514,7 @@ fn the_hub_switches_background_triggers_and_says_so() {
             "0",
         ],
     );
+    let port = daemon.hub_port();
     let token = daemon.control_token();
     let mutation = |path: &str| {
         let (status, _, body) = request_with_headers(
@@ -453,8 +583,8 @@ fn assert_hub_preflight_admitted(port: u16, path: &str, local_origin: &str) {
 
 #[test]
 fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
-    let port = free_port();
-    let daemon = Daemon::start("demo-hub-mutation-security", port, &[]);
+    let daemon = Daemon::start("demo-hub-mutation-security", &[]);
+    let port = daemon.hub_port();
     let token = daemon.control_token();
     let path = "/functions/disableBackgroundTriggers";
 
@@ -540,30 +670,37 @@ fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
 fn exec_exports_the_hub_address_to_its_command() {
     let dir = scratch("env");
     let out = dir.join("env.txt");
-    let port = free_port();
-    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
-        .args([
-            "exec",
-            "--firestore-port",
-            "0",
-            "--http-port",
-            "0",
-            "--storage-port",
-            "0",
-            "--logging-port",
-            "0",
-            "--ui-port",
-            "0",
-            "--project",
-            "demo-hub-env",
-            "--hub-port",
-        ])
-        .arg(port.to_string())
-        .args(["--", "sh", "-c"])
-        .arg(format!("env > {}", out.display()))
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let (port, output) = (0..8)
+        .find_map(|attempt| {
+            let port = free_port();
+            let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+                .args([
+                    "exec",
+                    "--firestore-port",
+                    "0",
+                    "--http-port",
+                    "0",
+                    "--storage-port",
+                    "0",
+                    "--logging-port",
+                    "0",
+                    "--ui-port",
+                    "0",
+                    "--project",
+                    "demo-hub-env",
+                    "--hub-port",
+                ])
+                .arg(port.to_string())
+                .args(["--", "sh", "-c"])
+                .arg(format!("env > {}", out.display()))
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let collision =
+                String::from_utf8_lossy(&output.stderr).contains("Address already in use");
+            (output.status.success() || !collision || attempt == 7).then_some((port, output))
+        })
+        .expect("one bounded Hub bind attempt completes");
     assert!(
         output.status.success(),
         "{}",
@@ -634,10 +771,11 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     use std::io::{Read as _, Write as _};
     use std::net::TcpStream;
     use std::time::Duration;
+
     let dir = std::env::temp_dir().join(format!("fireemu-hub-export-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let port = free_port();
-    let daemon = Daemon::start("demo-hub-export", port, &[]);
+    let daemon = Daemon::start("demo-hub-export", &[]);
+    let port = daemon.hub_port();
     let token = daemon.control_token();
     let send = |origin: Option<&str>, authorization: Option<&str>| -> u16 {
         let body = format!(
@@ -661,12 +799,22 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
         )
         .unwrap();
         let mut raw = String::new();
-        stream.read_to_string(&mut raw).unwrap();
-        raw.lines()
+        let read = stream.read_to_string(&mut raw);
+        let status = raw
+            .lines()
             .next()
             .and_then(|l| l.split_whitespace().nth(1))
             .and_then(|c| c.parse().ok())
-            .unwrap_or(0)
+            .unwrap_or(0);
+        if let Err(error) = read {
+            assert!(
+                error.kind() == std::io::ErrorKind::ConnectionReset
+                    && status != 0
+                    && complete_http_response(&raw),
+                "the Hub response failed before it was complete: {error}; {raw}"
+            );
+        }
+        status
     };
     // A page (any Origin, loopback included) is refused and writes nothing.
     let bearer = format!("Bearer {token}");

@@ -435,8 +435,10 @@ fn authority_script_declares_all_models_and_ordered_gates() {
         "AtomicExportPublication",
         "AuthTotp",
         "AwaitIdle",
+        "CompatibilitySelection",
         "EventDelivery",
         "RegexAuthorization",
+        "RegexLinearRepeat",
         "RulesetActivation",
         "SessionEpoch",
         "StorageGeneration",
@@ -460,6 +462,7 @@ fn authority_script_declares_all_models_and_ordered_gates() {
     assert!(script.contains("VERIFICATION_PASSES:-1"));
     assert!(script.contains("mktemp -d"));
     assert!(script.contains("trap cleanup"));
+    assert!(script.contains("cleanup_checker_output"));
     let launch_contract = [
         "launching=1",
         "\"$group_launcher\" \"$@\" &",
@@ -477,10 +480,12 @@ fn authority_script_declares_all_models_and_ordered_gates() {
 }
 
 #[test]
-fn readme_declares_the_nine_model_authority_and_generated_conformance() {
+fn readme_declares_the_eleven_model_authority_and_generated_conformance() {
     let readme = fs::read_to_string(readme_path()).expect("authority README must exist");
     assert!(readme.contains("repository's formal verification authority"));
     assert!(readme.contains("`AwaitIdle`"));
+    assert!(readme.contains("`CompatibilitySelection`"));
+    assert!(readme.contains("`RegexLinearRepeat`"));
     assert!(readme.contains("`StorageGeneration`"));
     assert!(readme.contains("Generated conformance campaigns"));
 }

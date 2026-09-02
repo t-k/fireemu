@@ -112,6 +112,7 @@ fn auth_state(app_check: Option<Arc<AppCheckState>>) -> Arc<AuthState> {
         operation_gate: Arc::new(Mutex::new(())),
         control_token: Some(CONTROL_TOKEN.to_owned()),
         registry: None,
+        allow_routed_projects: false,
         app_check_policy: None,
         tenancy: None,
         app_check,

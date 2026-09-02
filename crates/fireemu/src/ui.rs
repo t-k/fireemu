@@ -108,6 +108,7 @@ pub fn state(parts: Parts<'_>) -> Arc<UiState> {
         .collect(),
     });
     Arc::new(UiState {
+        stream_limiter: Arc::new(fireemu_adapter_ui::sse::StreamLimiter::default()),
         control_token: parts.control_token,
         info: RuntimeInfo {
             version: env!("CARGO_PKG_VERSION").to_owned(),

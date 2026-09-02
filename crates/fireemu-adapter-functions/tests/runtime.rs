@@ -677,10 +677,10 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     assert_eq!(e["data"]["message"]["data"], "aGVsbG8=");
     assert_eq!(e["data"]["message"]["attributes"]["k"], "v");
     assert_eq!(e["data"]["message"]["orderingKey"], "o");
-    assert!(e["data"]["subscription"]
-        .as_str()
-        .unwrap()
-        .starts_with("projects/demo-app/subscriptions/"));
+    assert_eq!(
+        e["data"]["subscription"],
+        "projects/demo-app/subscriptions/emulator-sub-jobs"
+    );
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let uid = store
         .create_user(NewUser::email("u@example.com"), START)

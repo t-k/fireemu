@@ -1064,6 +1064,26 @@ pub struct MappedStream<S, F> {
     f: F,
 }
 
+impl<S, F, U> tokio_stream::Stream for MappedStream<S, F>
+where
+    S: tokio_stream::Stream<Item = Result<Value, Status>> + Unpin,
+    F: FnMut(Result<Value, Status>) -> U + Unpin,
+{
+    type Item = U;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        match std::pin::Pin::new(&mut this.inner).poll_next(cx) {
+            std::task::Poll::Ready(Some(item)) => std::task::Poll::Ready(Some((this.f)(item))),
+            std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1161,25 +1181,5 @@ mod tests {
         assert!(rx.try_recv().is_err());
         assert!(session.finish_backchannel(replacement_generation));
         assert!(!session.backchannel_attached());
-    }
-}
-
-impl<S, F, U> tokio_stream::Stream for MappedStream<S, F>
-where
-    S: tokio_stream::Stream<Item = Result<Value, Status>> + Unpin,
-    F: FnMut(Result<Value, Status>) -> U + Unpin,
-{
-    type Item = U;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let this = &mut *self;
-        match std::pin::Pin::new(&mut this.inner).poll_next(cx) {
-            std::task::Poll::Ready(Some(item)) => std::task::Poll::Ready(Some((this.f)(item))),
-            std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
     }
 }

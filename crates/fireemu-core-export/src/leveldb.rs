@@ -85,6 +85,7 @@ fn mask(crc: u32) -> u32 {
 }
 
 pub use fireemu_core_types::hash::crc32c;
+use fireemu_core_types::hash::Crc32c;
 
 /// Appends `records` to a `LevelDB` log file body.
 #[must_use]
@@ -124,10 +125,10 @@ fn write_record(out: &mut Vec<u8>, payload: &[u8]) {
 }
 
 fn emit(out: &mut Vec<u8>, kind: RecordType, payload: &[u8]) {
-    let mut checked = Vec::with_capacity(payload.len() + 1);
-    checked.push(kind as u8);
-    checked.extend_from_slice(payload);
-    let crc = mask(crc32c(&checked));
+    let mut checked = Crc32c::new();
+    checked.update(&[kind as u8]);
+    checked.update(payload);
+    let crc = mask(checked.finalize());
     out.extend_from_slice(&crc.to_le_bytes());
     let len = u16::try_from(payload.len()).unwrap_or(u16::MAX);
     out.extend_from_slice(&len.to_le_bytes());
@@ -165,10 +166,10 @@ pub fn read_log(bytes: &[u8]) -> Result<Vec<Vec<u8>>, LogError> {
         let payload = bytes
             .get(pos + HEADER_SIZE..pos + HEADER_SIZE + len)
             .ok_or(LogError::Truncated { offset: pos })?;
-        let mut checked = Vec::with_capacity(len + 1);
-        checked.push(kind);
-        checked.extend_from_slice(payload);
-        if mask(crc32c(&checked)) != stored {
+        let mut checked = Crc32c::new();
+        checked.update(&[kind]);
+        checked.update(payload);
+        if mask(checked.finalize()) != stored {
             return Err(LogError::Checksum { offset: pos });
         }
         match kind {

@@ -1697,10 +1697,9 @@ fn snapshot_route(
             if let Some(refusal) = over_budget(&snapshots, session, name) {
                 return refusal;
             }
-            // The byte budget is checked once the parts are sized: a new name whose parts
-            // would take the session past the budget is refused and nothing is retained, so
-            // the captured parts are dropped and the session is unchanged (`SNAP-MEM-01`).
-            // Replacing a retained name is always admitted, so it is never refused here.
+            // The byte budget is checked once the parts are sized. A replacement subtracts
+            // the old part estimate first; any capture that would exceed the budget is
+            // refused before the store changes (`SNAP-MEM-01`).
             let new_bytes = parts_bytes(&state.snapshot_hooks, &parts);
             if let Some(refusal) =
                 over_byte_budget(&state.snapshot_hooks, &snapshots, session, name, new_bytes)
@@ -1821,10 +1820,9 @@ fn session_snapshot_bytes(
         .fold(0u64, u64::saturating_add)
 }
 
-/// The refusal for a capture of a *new* name whose parts (`new_bytes`) would take the
-/// session's estimated retained snapshot bytes past [`MAX_SNAPSHOT_BYTES_PER_SESSION`], if it
-/// would. Replacing a name the session already holds is always admitted -- exactly as for the
-/// name cap -- so it is never refused here.
+/// The refusal for a capture whose parts (`new_bytes`) would take the session's estimated
+/// retained snapshot bytes past [`MAX_SNAPSHOT_BYTES_PER_SESSION`], if it would. A replacement
+/// first releases the estimate of the snapshot currently held under that name.
 fn over_byte_budget(
     hooks: &[Arc<dyn SnapshotHook>],
     snapshots: &SnapshotStore,
@@ -1832,20 +1830,20 @@ fn over_byte_budget(
     name: &str,
     new_bytes: u64,
 ) -> Option<JsonResponse> {
-    let is_replacement = snapshots
+    let replaced_bytes = snapshots
         .get(session)
-        .is_some_and(|held| held.contains_key(name));
-    if is_replacement {
-        return None;
-    }
-    let projected = session_snapshot_bytes(hooks, snapshots, session).saturating_add(new_bytes);
+        .and_then(|held| held.get(name))
+        .map_or(0, |snapshot| parts_bytes(hooks, &snapshot.parts));
+    let projected = session_snapshot_bytes(hooks, snapshots, session)
+        .saturating_sub(replaced_bytes)
+        .saturating_add(new_bytes);
     if projected <= MAX_SNAPSHOT_BYTES_PER_SESSION {
         return None;
     }
     Some(error(
         429,
         &format!(
-            "RESOURCE_EXHAUSTED : session {session:?} would retain about {projected} bytes across its snapshots (the per-session byte budget is {MAX_SNAPSHOT_BYTES_PER_SESSION} bytes); delete one or capture over a name it already holds"
+            "RESOURCE_EXHAUSTED : session {session:?} would retain about {projected} bytes across its snapshots (the per-session byte budget is {MAX_SNAPSHOT_BYTES_PER_SESSION} bytes); delete or reduce a retained snapshot"
         ),
     ))
 }

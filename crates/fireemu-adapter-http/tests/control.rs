@@ -288,10 +288,9 @@ impl SnapshotHook for Weighed {
 
 /// `SNAP-MEM-01`: the per-session byte budget refuses a new name whose parts would exceed it
 /// and changes nothing, while a capture that fits reports its bytes; replacing a retained name
-/// is always admitted even over budget, and the reported bytes drop when a snapshot is
-/// deleted.
+/// accounts for the bytes it releases, and the reported bytes drop when a snapshot is deleted.
 #[test]
-fn the_snapshot_byte_budget_gates_new_names_admits_replacements_and_tracks_deletions() {
+fn the_snapshot_byte_budget_accounts_for_replacements_and_tracks_deletions() {
     use fireemu_adapter_http::control::MAX_SNAPSHOT_BYTES_PER_SESSION as LIMIT;
 
     let weighed = Arc::new(Weighed(Mutex::new(0)));
@@ -334,17 +333,19 @@ fn the_snapshot_byte_budget_gates_new_names_admits_replacements_and_tracks_delet
         "the session is unchanged"
     );
 
-    // Replacing a name the session already holds is admitted even over the budget.
+    // Replacing a name cannot bypass the byte budget and leaves the old snapshot intact.
     let r = capture(&s, "small");
-    assert_eq!(
-        r.status, 200,
-        "a replacement is always admitted: {}",
-        r.body
-    );
+    assert_eq!(r.status, 429, "{}", r.body);
+    let listing = handle(&s, "GET", "/v1/sessions/default/snapshots", &json!({}));
+    assert_eq!(listing.body["retainedBytes"], 1_000);
+
+    // The old snapshot's allocation is subtracted before a fitting replacement is checked.
+    *weighed.0.lock().unwrap() = LIMIT;
+    let r = capture(&s, "small");
+    assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.body["replaced"], true);
-    assert_eq!(r.body["bytes"], LIMIT + 1);
-    // Now the session is over budget through that one replaced snapshot; a fresh name is
-    // still refused.
+    assert_eq!(r.body["bytes"], LIMIT);
+    // The replacement fills the budget, so a fresh name is refused.
     *weighed.0.lock().unwrap() = 1;
     assert_eq!(capture(&s, "another").status, 429);
 

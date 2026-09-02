@@ -5,7 +5,7 @@
 // quickly and the rows compare request handling rather than trigger scheduling.
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { getApps, initializeApp } = require("firebase-admin/app");
-const { FieldValue, getFirestore } = require("firebase-admin/firestore");
+const { FieldValue, Timestamp, getFirestore } = require("firebase-admin/firestore");
 const { bearerToken, tokenMatches } = require("./conditional-lock-auth");
 
 const adminApp = getApps()[0] ?? initializeApp();
@@ -127,6 +127,14 @@ exports.confConditionalLock = onRequest(async (req, res) => {
       await reachLatch("arrive", barrierPort, barrierToken);
     }
     if (locked) {
+      const startedAt = lock.data().startedAt;
+      if (!(startedAt instanceof Timestamp)) {
+        throw new Error("conditional lock start time is not a Firestore Timestamp");
+      }
+      const updatedAt = lock.data().updatedAt;
+      if (!(updatedAt instanceof Timestamp) || updatedAt.toMillis() !== startedAt.toMillis()) {
+        throw new Error("conditional lock timestamps do not share one commit time");
+      }
       return {
         authorized: true,
         acquired: false,
@@ -135,7 +143,12 @@ exports.confConditionalLock = onRequest(async (req, res) => {
         protectedPhaseMillis,
       };
     }
-    tx.update(lockRef, { locked: true, owner: participant });
+    tx.update(lockRef, {
+      locked: true,
+      owner: participant,
+      startedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     return {
       authorized: true,
       acquired: true,

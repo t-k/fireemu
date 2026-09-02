@@ -631,8 +631,8 @@ fn a_query_phantom_aborts_the_transaction_without_partial_writes() {
 fn transactions_expire_on_idle_and_total_time() {
     // Expiry is inclusive at the deadline (`now >= deadline`): a transaction is alive strictly
     // inside its 60 s idle window and 270 s total budget, and gone once a deadline is reached.
-    // This is the boundary the lock check uses too, so a holder's lock is released at exactly
-    // the instant its own commit would be refused.
+    // This is the transaction-validity boundary, so the attempt becomes retryably ABORTED at
+    // exactly the instant its own commit would be refused.
     let mut s = FirestoreState::new();
     let txn = s.begin_transaction(false, t(0)).unwrap();
     assert!(s.touch_transaction(&txn, t(59)).is_ok());

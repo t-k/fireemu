@@ -726,7 +726,7 @@ impl FirestoreState {
     /// activity. A transaction that has run out its budget is finished and reported as
     /// `ABORTED` with the message the official emulator gives a transaction that is no longer
     /// valid -- the code the SDKs retry on, which is what lets a client whose out-of-band
-    /// write was waiting on this transaction's lock finally make progress once it expires.
+    /// write can start a fresh transaction snapshot after the expired attempt is rejected.
     pub fn touch_transaction(
         &mut self,
         id: &TransactionId,

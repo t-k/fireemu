@@ -30,6 +30,8 @@ pub const MAX_DOWNLOAD_TOKEN_LEN: usize = 128;
 pub const UPLOAD_SESSION_TTL_SECONDS: i64 = 7 * 24 * 3600;
 /// Maximum upload sessions still receiving bytes (abandoned sessions expire).
 pub const MAX_UPLOAD_SESSIONS: usize = 256;
+/// Maximum bytes retained across unfinished resumable uploads in one store.
+pub const MAX_RETAINED_UPLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 /// Finished (committed or aborted) sessions kept for status queries; older ones are evicted.
 pub const MAX_FINISHED_UPLOAD_SESSIONS: usize = 256;
 /// Default listing page size.
@@ -381,6 +383,8 @@ pub enum StorageError {
     UploadSizeMismatch,
     /// Too many open upload sessions.
     TooManyUploads,
+    /// Unfinished uploads already retain the configured aggregate byte budget.
+    UploadCapacityExceeded,
     /// The received bytes do not match the checksum the client declared.
     ChecksumMismatch(String),
     /// An imported live object used a reserved generation identity.
@@ -406,6 +410,7 @@ impl fmt::Display for StorageError {
             Self::UploadFinalized => f.write_str("upload already finalized"),
             Self::UploadSizeMismatch => f.write_str("upload size differs from the declared total"),
             Self::TooManyUploads => f.write_str("too many open upload sessions"),
+            Self::UploadCapacityExceeded => f.write_str("resumable upload byte budget exhausted"),
             Self::ChecksumMismatch(m) => write!(f, "checksum mismatch: {m}"),
             Self::InvalidImportedIdentity(m) => write!(f, "invalid imported identity: {m}"),
             Self::IdentityExhausted => f.write_str("storage identity space exhausted"),
@@ -576,6 +581,8 @@ pub struct StorageState {
     /// Object data, shared by reference with every snapshot that captured the same blob.
     blobs: BTreeMap<BlobId, Arc<Vec<u8>>>,
     uploads: BTreeMap<UploadId, UploadSession>,
+    retained_upload_bytes: u64,
+    retained_upload_limit: u64,
     next_blob: u64,
     next_generation: u64,
     next_upload: u64,
@@ -607,6 +614,16 @@ fn metadata_budget_size(custom: &BTreeMap<String, String>, download_tokens: &[St
     size
 }
 
+fn upload_size_error(end: u64, total: Option<u64>) -> Option<StorageError> {
+    if total.is_some_and(|total| end > total) {
+        Some(StorageError::UploadSizeMismatch)
+    } else if end > MAX_OBJECT_BYTES {
+        Some(StorageError::TooLarge)
+    } else {
+        None
+    }
+}
+
 /// The custom-metadata key download tokens ride in on, as the official emulator stores them.
 const TOKENS_METADATA_KEY: &str = "firebaseStorageDownloadTokens";
 
@@ -618,6 +635,8 @@ impl StorageState {
             objects: BTreeMap::new(),
             blobs: BTreeMap::new(),
             uploads: BTreeMap::new(),
+            retained_upload_bytes: 0,
+            retained_upload_limit: MAX_RETAINED_UPLOAD_BYTES,
             next_blob: 0,
             next_generation: 0,
             next_upload: 0,
@@ -626,11 +645,35 @@ impl StorageState {
         }
     }
 
+    fn upload_bytes(uploads: &BTreeMap<UploadId, UploadSession>) -> u64 {
+        uploads
+            .values()
+            .map(|upload| upload.received.len() as u64)
+            .sum()
+    }
+
+    fn refresh_retained_upload_bytes(&mut self) {
+        self.retained_upload_bytes = Self::upload_bytes(&self.uploads);
+    }
+
+    fn can_retain_upload_bytes(retained: u64, additional: u64, limit: u64) -> bool {
+        retained
+            .checked_add(additional)
+            .is_some_and(|total| total <= limit)
+    }
+
+    /// Bytes retained across unfinished resumable uploads.
+    #[must_use]
+    pub fn retained_upload_bytes(&self) -> u64 {
+        self.retained_upload_bytes
+    }
+
     /// Drops every object, blob and upload (session reset).
     pub fn clear(&mut self) {
         self.objects.clear();
         self.blobs.clear();
         self.uploads.clear();
+        self.retained_upload_bytes = 0;
         self.events.clear();
     }
 
@@ -649,6 +692,7 @@ impl StorageState {
             }
         }
         self.uploads.retain(|_, u| u.bucket != *bucket);
+        self.refresh_retained_upload_bytes();
         gone.len()
     }
 
@@ -667,6 +711,7 @@ impl StorageState {
             }
         }
         self.uploads.retain(|_, u| !owned(u.bucket.as_str()));
+        self.refresh_retained_upload_bytes();
         gone.len()
     }
 
@@ -691,10 +736,13 @@ impl StorageState {
             .filter(|(_, u)| owned(u.bucket.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let retained_upload_bytes = Self::upload_bytes(&uploads);
         Self {
             objects,
             blobs,
             uploads,
+            retained_upload_bytes,
+            retained_upload_limit: self.retained_upload_limit,
             next_blob: self.next_blob,
             next_generation: self.next_generation,
             next_upload: self.next_upload,
@@ -721,6 +769,7 @@ impl StorageState {
                 self.uploads.insert(k.clone(), v.clone());
             }
         }
+        self.refresh_retained_upload_bytes();
         self.next_blob = self.next_blob.max(captured.next_blob);
         self.next_generation = self.next_generation.max(captured.next_generation);
         self.next_upload = self.next_upload.max(captured.next_upload);
@@ -1376,6 +1425,7 @@ impl StorageState {
                 }
             });
         }
+        self.refresh_retained_upload_bytes();
     }
 
     fn upload_mut(
@@ -1385,6 +1435,7 @@ impl StorageState {
     ) -> Result<&mut UploadSession, StorageError> {
         if self.uploads.get(id).is_some_and(|u| Self::expired(u, now)) {
             self.uploads.remove(id);
+            self.refresh_retained_upload_bytes();
         }
         self.uploads.get_mut(id).ok_or(StorageError::UploadNotFound)
     }
@@ -1428,14 +1479,18 @@ impl StorageState {
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<(), StorageError> {
-        let u = self.upload_mut(id, now)?;
-        if u.state == UploadState::Receiving {
-            // Keep the count for a later status query; drop the bytes, exactly as a cancel
-            // and a size / checksum abort do (S-2).
-            u.state = UploadState::Denied(u.received.len() as u64);
-            u.received = Vec::new();
-        }
-        Ok(())
+        let result = (|| {
+            let u = self.upload_mut(id, now)?;
+            if u.state == UploadState::Receiving {
+                // Keep the count for a later status query; drop the bytes, exactly as a cancel
+                // and a size / checksum abort do (S-2).
+                u.state = UploadState::Denied(u.received.len() as u64);
+                u.received = Vec::new();
+            }
+            Ok(())
+        })();
+        self.refresh_retained_upload_bytes();
+        result
     }
 
     /// Declares (or confirms) the total size of an upload; a different total than the one
@@ -1468,38 +1523,43 @@ impl StorageState {
         chunk: &[u8],
         now: LogicalInstant,
     ) -> Result<u64, StorageError> {
-        let u = self.upload_mut(id, now)?;
-        match u.state {
-            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
-                return Err(StorageError::UploadFinalized)
+        let retained = self.retained_upload_bytes;
+        let limit = self.retained_upload_limit;
+        let result = (|| {
+            let u = self.upload_mut(id, now)?;
+            match u.state {
+                UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
+                    return Err(StorageError::UploadFinalized)
+                }
+                UploadState::Receiving => {}
             }
-            UploadState::Receiving => {}
-        }
-        let received = u.received.len() as u64;
-        let end = offset
-            .checked_add(chunk.len() as u64)
-            .ok_or(StorageError::TooLarge)?;
-        if end <= received {
-            // Retried chunk: already received, nothing to append.
-        } else if offset > received {
-            return Err(StorageError::UploadOffset { expected: received });
-        } else {
-            let skip = usize::try_from(received - offset).unwrap_or(0);
-            if end > MAX_OBJECT_BYTES || u.total.is_some_and(|t| end > t) {
-                u.state = UploadState::Aborted;
-                u.received = Vec::new();
-                return Err(if u.total.is_some_and(|t| end > t) {
-                    StorageError::UploadSizeMismatch
-                } else {
-                    StorageError::TooLarge
-                });
+            let received = u.received.len() as u64;
+            let end = offset
+                .checked_add(chunk.len() as u64)
+                .ok_or(StorageError::TooLarge)?;
+            if end <= received {
+                // Retried chunk: already received, nothing to append.
+            } else if offset > received {
+                return Err(StorageError::UploadOffset { expected: received });
+            } else {
+                let skip = usize::try_from(received - offset).unwrap_or(0);
+                if let Some(error) = upload_size_error(end, u.total) {
+                    u.state = UploadState::Aborted;
+                    u.received = Vec::new();
+                    return Err(error);
+                }
+                let appended = &chunk[skip..];
+                if !Self::can_retain_upload_bytes(retained, appended.len() as u64, limit) {
+                    return Err(StorageError::UploadCapacityExceeded);
+                }
+                u.md5.update(appended);
+                u.crc32c.update(appended);
+                u.received.extend_from_slice(appended);
             }
-            let appended = &chunk[skip..];
-            u.md5.update(appended);
-            u.crc32c.update(appended);
-            u.received.extend_from_slice(appended);
-        }
-        Ok(u.received.len() as u64)
+            Ok(u.received.len() as u64)
+        })();
+        self.refresh_retained_upload_bytes();
+        result
     }
 
     /// [`Self::append_upload`] with an owned chunk: a session that has not received
@@ -1510,34 +1570,41 @@ impl StorageState {
         &mut self,
         id: &UploadId,
         offset: u64,
-        chunk: Vec<u8>,
+        mut chunk: Vec<u8>,
         now: LogicalInstant,
     ) -> Result<u64, StorageError> {
-        let u = self.upload_mut(id, now)?;
-        match u.state {
-            UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
-                return Err(StorageError::UploadFinalized)
+        let retained = self.retained_upload_bytes;
+        let limit = self.retained_upload_limit;
+        let attempt = (|| {
+            let u = self.upload_mut(id, now)?;
+            match u.state {
+                UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
+                    return Err(StorageError::UploadFinalized)
+                }
+                UploadState::Receiving => {}
             }
-            UploadState::Receiving => {}
-        }
-        if offset == 0 && u.received.is_empty() && !chunk.is_empty() {
+            if offset != 0 || !u.received.is_empty() || chunk.is_empty() {
+                return Ok(None);
+            }
             let end = chunk.len() as u64;
-            if end > MAX_OBJECT_BYTES || u.total.is_some_and(|t| end > t) {
-                let too_large = u.total.is_some_and(|t| end > t);
+            if let Some(error) = upload_size_error(end, u.total) {
                 u.state = UploadState::Aborted;
                 u.received = Vec::new();
-                return Err(if too_large {
-                    StorageError::UploadSizeMismatch
-                } else {
-                    StorageError::TooLarge
-                });
+                return Err(error);
+            }
+            if !Self::can_retain_upload_bytes(retained, end, limit) {
+                return Err(StorageError::UploadCapacityExceeded);
             }
             u.md5.update(&chunk);
             u.crc32c.update(&chunk);
-            u.received = chunk;
-            return Ok(u.received.len() as u64);
+            u.received = std::mem::take(&mut chunk);
+            Ok(Some(u.received.len() as u64))
+        })();
+        self.refresh_retained_upload_bytes();
+        match attempt? {
+            Some(received) => Ok(received),
+            None => self.append_upload(id, offset, &chunk, now),
         }
-        self.append_upload(id, offset, &chunk, now)
     }
 
     /// What an upload would commit right now (for authorization before finalization).
@@ -1598,6 +1665,16 @@ impl StorageState {
 
     /// Commits the received bytes as a new generation.
     pub fn finalize_upload(
+        &mut self,
+        id: &UploadId,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let result = self.finalize_upload_inner(id, now);
+        self.refresh_retained_upload_bytes();
+        result
+    }
+
+    fn finalize_upload_inner(
         &mut self,
         id: &UploadId,
         now: LogicalInstant,
@@ -1696,16 +1773,20 @@ impl StorageState {
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<(), StorageError> {
-        let u = self.upload_mut(id, now)?;
-        match u.state {
-            UploadState::Committed(_) | UploadState::Denied(_) => {
-                return Err(StorageError::UploadFinalized)
+        let result = (|| {
+            let u = self.upload_mut(id, now)?;
+            match u.state {
+                UploadState::Committed(_) | UploadState::Denied(_) => {
+                    return Err(StorageError::UploadFinalized)
+                }
+                UploadState::Receiving | UploadState::Aborted => {}
             }
-            UploadState::Receiving | UploadState::Aborted => {}
-        }
-        u.state = UploadState::Aborted;
-        u.received = Vec::new();
-        Ok(())
+            u.state = UploadState::Aborted;
+            u.received = Vec::new();
+            Ok(())
+        })();
+        self.refresh_retained_upload_bytes();
+        result
     }
 
     /// Applies the Firebase dialect's post-commit `contentDisposition: "inline"` default to
@@ -1801,5 +1882,63 @@ impl MetadataPatch {
             }
         }
         next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_upload_byte_budget_is_exact_and_released_on_cancel() {
+        let mut state = StorageState::new(1);
+        state.retained_upload_limit = 3;
+        let bucket = BucketName::try_new("demo.appspot.com").unwrap();
+        let name = ObjectName::try_new("large.bin").unwrap();
+        let now = LogicalInstant::UNIX_EPOCH;
+        let upload = state
+            .begin_upload(
+                &bucket,
+                &name,
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                now,
+            )
+            .unwrap();
+
+        assert_eq!(
+            state.append_upload_owned(&upload, 0, vec![1; 3], now),
+            Ok(3)
+        );
+        assert_eq!(state.retained_upload_bytes(), 3);
+        assert_eq!(
+            state.append_upload(&upload, 3, &[2], now),
+            Err(StorageError::UploadCapacityExceeded)
+        );
+        assert_eq!(state.retained_upload_bytes(), 3);
+        state.cancel_upload(&upload, now).unwrap();
+        assert_eq!(state.retained_upload_bytes(), 0);
+
+        assert!(StorageState::can_retain_upload_bytes(
+            u64::MAX - 1,
+            1,
+            u64::MAX
+        ));
+        assert!(!StorageState::can_retain_upload_bytes(
+            u64::MAX,
+            1,
+            u64::MAX
+        ));
+        assert_eq!(upload_size_error(MAX_OBJECT_BYTES, None), None);
+        assert_eq!(
+            upload_size_error(MAX_OBJECT_BYTES + 1, None),
+            Some(StorageError::TooLarge)
+        );
+        assert_eq!(upload_size_error(3, Some(3)), None);
+        assert_eq!(
+            upload_size_error(4, Some(3)),
+            Some(StorageError::UploadSizeMismatch)
+        );
     }
 }

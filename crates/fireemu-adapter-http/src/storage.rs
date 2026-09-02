@@ -534,6 +534,11 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
             "too many open upload sessions".to_owned(),
             "rateLimitExceeded",
         ),
+        StorageError::UploadCapacityExceeded => (
+            429,
+            "resumable upload byte budget exhausted".to_owned(),
+            "rateLimitExceeded",
+        ),
         StorageError::ChecksumMismatch(m) => (400, format!("checksum mismatch: {m}"), "invalid"),
         StorageError::InvalidImportedIdentity(m) => {
             (400, format!("invalid imported identity: {m}"), "invalid")

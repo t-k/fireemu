@@ -350,7 +350,8 @@ fn folded_object_names_are_not_valid_page_tokens() {
     .unwrap();
 
     let page = s.list(&b, "", Some("/"), Some("z/folded"), Some(1));
-    assert_eq!(page.items, [item.clone()]);
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0], item);
     assert_eq!(page.prefixes, ["z/"]);
 
     let first = s.shared_bytes(&item);

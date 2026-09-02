@@ -913,6 +913,105 @@ fn missing_parent_suffix_is_bounded_and_validates_its_cursor() {
 }
 
 #[test]
+fn incremental_query_matches_full_query_on_the_changed_subset() {
+    let mut db = FirestoreState::new();
+    let fields = |number, include_rank| {
+        let mut fields = BTreeMap::from([("n".to_owned(), Value::Integer(number))]);
+        if include_rank {
+            fields.insert("rank".to_owned(), Value::Integer(10 - number));
+        }
+        fields
+    };
+    db.commit(
+        &[
+            set("target/a", fields(1, true)),
+            set("target/b", fields(2, true)),
+            set("target/c", fields(3, true)),
+            set("target/missing-rank", fields(4, false)),
+            set("other/a", fields(5, true)),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let changed_paths = [
+        path("target/a"),
+        path("target/c"),
+        path("target/missing-rank"),
+        path("other/a"),
+    ];
+    let changed = changed_paths
+        .iter()
+        .filter_map(|path| db.get(path))
+        .collect::<Vec<_>>();
+    let mut query = Query::new(QueryScope::collection(None, collection("target")));
+    query.filter = Some(FilterExpr::Field {
+        field: fp("n"),
+        op: FieldOp::GreaterThan,
+        value: Value::Integer(1),
+    });
+    query.order_by = vec![OrderClause {
+        field: fp("rank"),
+        direction: Direction::Ascending,
+    }];
+    query.projection = Some(vec![fp("n")]);
+
+    let incremental = db
+        .run_incremental_query(&query, changed.iter().copied())
+        .unwrap()
+        .expect("unbounded cursorless query is incremental");
+    let changed_set = changed_paths
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = db
+        .run_query(&query, None)
+        .unwrap()
+        .into_iter()
+        .filter(|document| changed_set.contains(&document.path))
+        .collect::<Vec<_>>();
+    assert_eq!(incremental, expected);
+    assert_eq!(
+        incremental[0].fields,
+        BTreeMap::from([("n".to_owned(), Value::Integer(3))])
+    );
+}
+
+#[test]
+fn incremental_query_refuses_shapes_with_nonlocal_page_boundaries() {
+    let mut db = FirestoreState::new();
+    db.commit(
+        &[set("target/a", BTreeMap::new())],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let document = db.get(&path("target/a")).unwrap();
+    let base = Query::new(QueryScope::collection(None, collection("target")));
+
+    let mut shapes = Vec::new();
+    let mut limited = base.clone();
+    limited.limit = Some(1);
+    shapes.push(limited);
+    let mut offset = base.clone();
+    offset.offset = 1;
+    shapes.push(offset);
+    let cursor = Cursor {
+        values: vec![Value::Reference(path("target/a").resource_name())],
+        before: false,
+    };
+    let mut started = base.clone();
+    started.start_at = Some(cursor.clone());
+    shapes.push(started);
+    let mut ended = base;
+    ended.end_at = Some(cursor);
+    shapes.push(ended);
+
+    for query in shapes {
+        assert_eq!(db.run_incremental_query(&query, [document]).unwrap(), None);
+    }
+}
+
+#[test]
 fn latest_name_pages_skip_retained_tombstones() {
     let mut state = FirestoreState::new();
     let now = LogicalInstant::from_unix_seconds(1_788_000_000);

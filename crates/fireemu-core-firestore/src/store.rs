@@ -2564,6 +2564,40 @@ impl FirestoreState {
         Ok((out, stats))
     }
 
+    /// Applies a query to only the supplied current documents when membership is local to
+    /// each row. Limits, offsets, and cursors depend on rows outside the changed subset and
+    /// therefore return `None` so callers can fall back to a full query.
+    pub fn run_incremental_query<'a, I>(
+        &self,
+        query: &Query,
+        changed_documents: I,
+    ) -> Result<Option<Vec<Document>>, FirestoreError>
+    where
+        I: IntoIterator<Item = &'a Document>,
+    {
+        if query.limit.is_some()
+            || query.offset != 0
+            || query.start_at.is_some()
+            || query.end_at.is_some()
+        {
+            return Ok(None);
+        }
+        let mut documents = Vec::new();
+        select_from(
+            query,
+            changed_documents,
+            false,
+            Consumption::Ordered,
+            |document| documents.push(document.clone()),
+        )?;
+        if let Some(projection) = &query.projection {
+            for document in &mut documents {
+                document.fields = project(&document.fields, projection);
+            }
+        }
+        Ok(Some(documents))
+    }
+
     /// Feeds every document the query selects to `sink`, borrowed from the store, in query
     /// order when `consumption` asks for it.
     ///
@@ -2578,106 +2612,16 @@ impl FirestoreState {
         query: &Query,
         version: Option<CommitVersion>,
         consumption: Consumption,
-        mut sink: F,
+        sink: F,
     ) -> Result<QueryStats, FirestoreError> {
         let scope = &query.scope;
-        let order = query.effective_order_by();
-        let offset = usize::try_from(query.offset).unwrap_or(usize::MAX);
-        // `offset + limit` rows are enough to answer a query with a finite limit: everything
-        // beyond them is dropped by the truncation anyway.
-        let bound = query
-            .limit
-            .map(|l| usize::try_from(u64::from(query.offset) + u64::from(l)).unwrap_or(usize::MAX));
-        let streaming = consumption == Consumption::Unordered && bound.is_none() && offset == 0;
-        let path_ordered = order.len() == 1
-            && order[0].field.is_document_name()
-            && order[0].direction == Direction::Ascending;
-        let mut stats = QueryStats::default();
-        if bound == Some(0) {
-            return Ok(stats);
-        }
-        let mut heap: BinaryHeap<Candidate<'a, '_>> = BinaryHeap::new();
-        let mut rows: Vec<Candidate<'a, '_>> = Vec::new();
-        for path in self.scope_paths(scope, version) {
-            let Some(doc) = (match version {
+        let documents = self
+            .scope_paths(scope, version)
+            .filter_map(|path| match version {
                 Some(version) => self.get_at(path, version),
                 None => self.get(path),
-            }) else {
-                continue;
-            };
-            stats.scanned += 1;
-            if !document_in_scope(doc, scope) {
-                continue;
-            }
-            if let Some(f) = &query.filter {
-                if !eval_filter(f, doc)? {
-                    continue;
-                }
-            }
-            let Some(key) = order_key(doc, &order) else {
-                continue;
-            };
-            // Cursors are a predicate on the order key alone, so they are applied before the
-            // selection instead of after a full sort.
-            if !cursor_admits(&key, query.start_at.as_ref(), query.end_at.as_ref(), &order) {
-                continue;
-            }
-            stats.matched += 1;
-            if streaming {
-                sink(doc);
-                continue;
-            }
-            let candidate = Candidate {
-                key,
-                doc,
-                order: &order,
-            };
-            if path_ordered {
-                if let Some(bound) = bound {
-                    rows.push(candidate);
-                    stats.peak_candidates = stats.peak_candidates.max(rows.len() as u64);
-                    if rows.len() >= bound {
-                        break;
-                    }
-                    continue;
-                }
-            }
-            match bound {
-                Some(0) => {}
-                Some(k) if heap.len() >= k => {
-                    // The heap holds the `k` smallest rows seen so far; its root is the
-                    // largest of them.
-                    if heap.peek().is_some_and(|worst| candidate < *worst) {
-                        heap.pop();
-                        heap.push(candidate);
-                    }
-                }
-                Some(_) => heap.push(candidate),
-                None => rows.push(candidate),
-            }
-            stats.peak_candidates = stats.peak_candidates.max((heap.len() + rows.len()) as u64);
-        }
-        if streaming {
-            return Ok(stats);
-        }
-        let mut selected: Vec<Candidate<'a, '_>> = if path_ordered && bound.is_some() {
-            rows
-        } else if bound.is_some() {
-            heap.into_sorted_vec()
-        } else {
-            rows.sort_by(|a, b| compare_keys(&a.key, &b.key, &order));
-            rows
-        };
-        if offset > 0 {
-            selected.drain(..offset.min(selected.len()));
-        }
-        if let Some(limit) = query.limit {
-            selected.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
-        }
-        for candidate in selected {
-            sink(candidate.doc);
-        }
-        Ok(stats)
+            });
+        select_from(query, documents, true, consumption, sink)
     }
 
     /// Runs aggregations over the query results.
@@ -2888,6 +2832,106 @@ fn apply_write(
             ))
         }
     }
+}
+
+fn select_from<'a, I, F>(
+    query: &Query,
+    documents: I,
+    source_is_path_ordered: bool,
+    consumption: Consumption,
+    mut sink: F,
+) -> Result<QueryStats, FirestoreError>
+where
+    I: IntoIterator<Item = &'a Document>,
+    F: FnMut(&'a Document),
+{
+    let scope = &query.scope;
+    let order = query.effective_order_by();
+    let offset = usize::try_from(query.offset).unwrap_or(usize::MAX);
+    let bound = query.limit.map(|limit| {
+        usize::try_from(u64::from(query.offset) + u64::from(limit)).unwrap_or(usize::MAX)
+    });
+    let streaming = consumption == Consumption::Unordered && bound.is_none() && offset == 0;
+    let path_ordered = source_is_path_ordered
+        && order.len() == 1
+        && order[0].field.is_document_name()
+        && order[0].direction == Direction::Ascending;
+    let mut stats = QueryStats::default();
+    if bound == Some(0) {
+        return Ok(stats);
+    }
+    let mut heap: BinaryHeap<Candidate<'a, '_>> = BinaryHeap::new();
+    let mut rows: Vec<Candidate<'a, '_>> = Vec::new();
+    for document in documents {
+        stats.scanned += 1;
+        if !document_in_scope(document, scope) {
+            continue;
+        }
+        if let Some(filter) = &query.filter {
+            if !eval_filter(filter, document)? {
+                continue;
+            }
+        }
+        let Some(key) = order_key(document, &order) else {
+            continue;
+        };
+        if !cursor_admits(&key, query.start_at.as_ref(), query.end_at.as_ref(), &order) {
+            continue;
+        }
+        stats.matched += 1;
+        if streaming {
+            sink(document);
+            continue;
+        }
+        let candidate = Candidate {
+            key,
+            doc: document,
+            order: &order,
+        };
+        if path_ordered {
+            if let Some(bound) = bound {
+                rows.push(candidate);
+                stats.peak_candidates = stats.peak_candidates.max(rows.len() as u64);
+                if rows.len() >= bound {
+                    break;
+                }
+                continue;
+            }
+        }
+        match bound {
+            Some(0) => {}
+            Some(maximum) if heap.len() >= maximum => {
+                if heap.peek().is_some_and(|worst| candidate < *worst) {
+                    heap.pop();
+                    heap.push(candidate);
+                }
+            }
+            Some(_) => heap.push(candidate),
+            None => rows.push(candidate),
+        }
+        stats.peak_candidates = stats.peak_candidates.max((heap.len() + rows.len()) as u64);
+    }
+    if streaming {
+        return Ok(stats);
+    }
+    let mut selected = if path_ordered && bound.is_some() {
+        rows
+    } else if bound.is_some() {
+        heap.into_sorted_vec()
+    } else {
+        rows.sort_by(|left, right| compare_keys(&left.key, &right.key, &order));
+        rows
+    };
+    if offset > 0 {
+        selected.drain(..offset.min(selected.len()));
+    }
+    if let Some(limit) = query.limit {
+        selected.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    for candidate in selected {
+        sink(candidate.doc);
+    }
+    Ok(stats)
 }
 
 fn validate_document(doc: &Document) -> Result<(), FirestoreError> {

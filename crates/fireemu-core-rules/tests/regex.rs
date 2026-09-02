@@ -334,6 +334,23 @@ fn replace_expands_the_capture_group_references_the_official_runtime_expands() {
 }
 
 #[test]
+fn replacement_group_reference_overflow_is_an_absent_group() {
+    let regex = Regex::new("(a)").unwrap();
+    assert_eq!(
+        regex
+            .replace_all("a", "before$999999999999999999999999999999after")
+            .unwrap(),
+        "beforeafter"
+    );
+    assert_eq!(
+        regex
+            .replace_all("a", "$$999999999999999999999999999999")
+            .unwrap(),
+        "$999999999999999999999999999999"
+    );
+}
+
+#[test]
 fn inline_flags_and_named_classes_behave_as_the_official_runtime_records_them() {
     let full = |p: &str, s: &str| Regex::new(p).unwrap().is_full_match(s).unwrap();
     assert!(full("(?i)abc", "ABC"));

@@ -835,7 +835,11 @@ fn expand(
             Some(d) if d.is_ascii_digit() => {
                 let mut n = 0usize;
                 while let Some(d) = it.peek().copied().filter(char::is_ascii_digit) {
-                    n = n * 10 + (d as usize - '0' as usize);
+                    let digit = d as usize - '0' as usize;
+                    n = n
+                        .checked_mul(10)
+                        .and_then(|value| value.checked_add(digit))
+                        .unwrap_or(usize::MAX);
                     it.next();
                 }
                 if n == 0 {

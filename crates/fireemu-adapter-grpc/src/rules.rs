@@ -803,7 +803,7 @@ impl RulesEnforcer {
             };
             let next = match &write.op {
                 WriteOp::Delete { .. } => None,
-                _ => FirestoreState::preview_from(current, write, at)
+                _ => FirestoreState::preview_from(current.as_ref(), write, at)
                     .map_err(|e| crate::encode::status_from_error(&e))?,
             };
             after.insert(path.clone(), next);
@@ -835,7 +835,7 @@ impl RulesEnforcer {
                     } else {
                         Method::Create
                     },
-                    FirestoreState::preview_from(current.clone(), write, at)
+                    FirestoreState::preview_from(current.as_ref(), write, at)
                         .map_err(|e| crate::encode::status_from_error(&e))?,
                 ),
             };

@@ -234,6 +234,12 @@ pub struct CommitResult {
     pub changes: Arc<[DocumentChange]>,
 }
 
+struct StagedDocument {
+    before: Option<Document>,
+    current: Option<Document>,
+    changed: bool,
+}
+
 /// Aggregation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Aggregation {
@@ -675,26 +681,41 @@ fn observed_document_bytes(path: &DocumentPath, document: Option<&Document>) -> 
 }
 
 fn query_observation(documents: &[Document]) -> QueryObservation {
-    let mut digest = Sha256::new();
-    digest.update(
-        u64::try_from(documents.len())
-            .unwrap_or(u64::MAX)
-            .to_be_bytes(),
-    );
+    let mut observer = QueryObserver::default();
     for document in documents {
+        observer.push(document);
+    }
+    observer.finish()
+}
+
+#[derive(Default)]
+struct QueryObserver {
+    rows: u64,
+    digest: Sha256,
+}
+
+impl QueryObserver {
+    fn push(&mut self, document: &Document) {
+        self.rows = self.rows.saturating_add(1);
         for segment in document.path.resource_name_segments() {
-            digest.update(
+            self.digest.update(
                 u64::try_from(segment.len())
                     .unwrap_or(u64::MAX)
                     .to_be_bytes(),
             );
-            digest.update(segment.as_bytes());
+            self.digest.update(segment.as_bytes());
         }
-        digest.update(document.version.value().to_be_bytes());
+        self.digest.update(document.version.value().to_be_bytes());
     }
-    QueryObservation {
-        rows: u64::try_from(documents.len()).unwrap_or(u64::MAX),
-        digest: digest.finalize().into(),
+
+    fn finish(mut self) -> QueryObservation {
+        let mut framed = Sha256::new();
+        framed.update(self.rows.to_be_bytes());
+        framed.update(self.digest.finalize_reset());
+        QueryObservation {
+            rows: self.rows,
+            digest: framed.finalize().into(),
+        }
     }
 }
 
@@ -1928,14 +1949,7 @@ impl FirestoreState {
         // The transform budget is production's alone: the official emulator applies any
         // number of transforms (measured by `conformance/src/firestore-probe`), so only the
         // production scope refuses the commit.
-        if self.limit_scope == LimitScope::Production {
-            let mut transforms_per_document: BTreeMap<&DocumentPath, u64> = BTreeMap::new();
-            for write in writes {
-                let n = transforms_per_document.entry(write.op.path()).or_default();
-                *n += write.transforms.len() as u64;
-                check_limit(limits::FIELD_TRANSFORMS_PER_DOCUMENT, *n)?;
-            }
-        }
+        self.check_transform_budget(writes)?;
 
         // Commit times are microsecond-aligned (Firestore update-time precision) and advance
         // by one microsecond when the clock did not move between commits.
@@ -1944,49 +1958,56 @@ impl FirestoreState {
         // Stage every write against a working copy; fail before touching state. A write
         // whose result equals the current document is a no-op: it keeps the existing version
         // and update time (Firestore semantics) and never creates a spurious conflict.
-        let mut staged: BTreeMap<DocumentPath, (Option<Document>, bool)> = BTreeMap::new();
+        let mut staged: BTreeMap<DocumentPath, StagedDocument> = BTreeMap::new();
         let mut results = Vec::with_capacity(writes.len());
         let next_version = CommitVersion(self.version.0 + 1);
         for write in writes {
             let path = write.op.path().clone();
-            let current: Option<Document> = match staged.get(&path) {
-                Some((s, _)) => s.clone(),
-                None => self.get(&path).cloned(),
-            };
-            check_precondition(write.precondition.as_ref(), current.as_ref(), &path)?;
-            let (next, mut result) =
-                apply_write(write, current.clone(), commit_time, next_version)?;
+            if !staged.contains_key(&path) {
+                let before = self.get(&path).cloned();
+                staged.insert(
+                    path.clone(),
+                    StagedDocument {
+                        current: before.clone(),
+                        before,
+                        changed: false,
+                    },
+                );
+            }
+            let stage = staged.get_mut(&path).unwrap_or_else(|| unreachable!());
+            let current = stage.current.as_ref();
+            check_precondition(write.precondition.as_ref(), current, &path)?;
+            let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(doc) = &next {
                 validate_document(doc)?;
             }
             if matches!(write.op, WriteOp::Verify { .. }) {
                 // A verify changes nothing and reports the document's current update time,
                 // the time of the state it verified.
-                result.update_time = current.as_ref().map(|c| c.update_time);
+                result.update_time = current.map(|c| c.update_time);
             }
-            let unchanged = match (&current, &next) {
+            let unchanged = match (current, &next) {
                 (Some(c), Some(n)) => c.fields == n.fields,
                 (None, None) => true,
                 _ => false,
             };
             if unchanged {
                 // A no-op Set keeps the existing update time.
-                if let (Some(c), false) = (&current, matches!(write.op, WriteOp::Verify { .. })) {
+                if let (Some(c), false) = (current, matches!(write.op, WriteOp::Verify { .. })) {
                     result.update_time = Some(c.update_time);
                 }
-                let previously_changed = staged.get(&path).is_some_and(|(_, c)| *c);
-                staged.insert(path, (current, previously_changed));
             } else {
-                staged.insert(path, (next, true));
+                stage.current = next;
+                stage.changed = true;
             }
             results.push(result);
         }
 
         // Publish.
-        let changed: Vec<(DocumentPath, Option<Document>)> = staged
+        let changed: Vec<(DocumentPath, Option<Document>, Option<Document>)> = staged
             .into_iter()
-            .filter(|(_, (_, changed))| *changed)
-            .map(|(p, (d, _))| (p, d))
+            .filter(|(_, staged)| staged.changed)
+            .map(|(path, staged)| (path, staged.before, staged.current))
             .collect();
         // Every accepted commit consumes a commit time, changed documents or not.
         self.last_commit_time = Some(commit_time);
@@ -1996,8 +2017,7 @@ impl FirestoreState {
         } else {
             self.version = next_version;
             self.commit_times.push_back((next_version, commit_time));
-            for (path, doc) in changed {
-                let before = self.get(&path).cloned();
+            for (path, before, doc) in changed {
                 let became_live = before.is_none() && doc.is_some();
                 let became_missing = before.is_some() && doc.is_none();
                 // A second version, or a tombstone, is something a later compaction can drop.
@@ -2038,6 +2058,19 @@ impl FirestoreState {
             version,
             changes: Arc::from(document_changes),
         })
+    }
+
+    fn check_transform_budget(&self, writes: &[Write]) -> Result<(), FirestoreError> {
+        if self.limit_scope != LimitScope::Production {
+            return Ok(());
+        }
+        let mut transforms_per_document: BTreeMap<&DocumentPath, u64> = BTreeMap::new();
+        for write in writes {
+            let count = transforms_per_document.entry(write.op.path()).or_default();
+            *count += write.transforms.len() as u64;
+            check_limit(limits::FIELD_TRANSFORMS_PER_DOCUMENT, *count)?;
+        }
+        Ok(())
     }
 
     fn record_capacity_pressure(&mut self, path: &DocumentPath) {
@@ -2081,8 +2114,11 @@ impl FirestoreState {
             }
         }
         for (query, observed) in &transaction.queries {
-            let current = self.run_query(query, None)?;
-            if query_observation(&current) != *observed {
+            let mut current = QueryObserver::default();
+            self.select(query, None, Consumption::Ordered, |document| {
+                current.push(document);
+            })?;
+            if current.finish() != *observed {
                 return Ok(true);
             }
         }
@@ -2107,7 +2143,7 @@ impl FirestoreState {
     /// Rules when several writes of one commit target the same document). Preconditions are
     /// not checked here.
     pub fn preview_from(
-        current: Option<Document>,
+        current: Option<&Document>,
         write: &Write,
         now: LogicalInstant,
     ) -> Result<Option<Document>, FirestoreError> {
@@ -2123,7 +2159,12 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<Option<Document>, FirestoreError> {
         let current = self.get(write.op.path()).cloned();
-        let (next, _) = apply_write(write, current, now, CommitVersion(self.version.0 + 1))?;
+        let (next, _) = apply_write(
+            write,
+            current.as_ref(),
+            now,
+            CommitVersion(self.version.0 + 1),
+        )?;
         Ok(next)
     }
 
@@ -2757,7 +2798,7 @@ fn check_precondition(
 
 fn apply_write(
     write: &Write,
-    current: Option<Document>,
+    current: Option<&Document>,
     now: LogicalInstant,
     version: CommitVersion,
 ) -> Result<(Option<Document>, WriteResult), FirestoreError> {
@@ -2770,7 +2811,7 @@ fn apply_write(
             }
             // Precondition already checked by the caller; nothing changes.
             Ok((
-                current,
+                current.cloned(),
                 WriteResult {
                     update_time: None,
                     transform_results: vec![],
@@ -2801,7 +2842,7 @@ fn apply_write(
             let mut next_fields = match (update_mask, current) {
                 (None, _) => fields.clone(),
                 (Some(mask), current) => {
-                    let mut base = current.map(|d| d.fields).unwrap_or_default();
+                    let mut base = current.map(|d| d.fields.clone()).unwrap_or_default();
                     for p in mask {
                         match get_field(fields, p) {
                             Some(v) => set_field(&mut base, p, v.clone()),

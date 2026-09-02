@@ -62,7 +62,7 @@
     "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",
     "conformance/src/corpus/firestore.mjs": "11d359a57a3c716989845399663a30c2d1c61d3add71fdc3748d6ac53777ea76",
     "conformance/src/corpus/functions.mjs": "b36a9cd6c3df901e573f87cd822f40ce1ca47bafa1b3b385ac1efc7fb93204d6",
-    "crates/fireemu-core-firestore/src/store.rs": "9059d5cbba1db385345b75d4631ff41d762e569558448f9a3856c69e5cd651df",
+    "crates/fireemu-core-firestore/src/store.rs": "84dbd3ed4940076a5c29652b87f2877866256a544cc7c71b14c95c981df3903f",
     "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
     "verification/quint/README.md": "beb8675e2520a3d60dcc1f5045310f0ea869258b91131f6daa223310482dede1",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",

@@ -53,7 +53,7 @@
     ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
     "Cargo.lock": "15e11f752c34b411232a7706a8a58ec40ddb4664cda72fc59476fed24f30a265",
     "Cargo.toml": "58e5be6aa303158de17183219fd293d24c7d261543ef33db2f9bc324cfde8245",
-    "crates/fireemu-core-firestore/src/store.rs": "9059d5cbba1db385345b75d4631ff41d762e569558448f9a3856c69e5cd651df",
+    "crates/fireemu-core-firestore/src/store.rs": "84dbd3ed4940076a5c29652b87f2877866256a544cc7c71b14c95c981df3903f",
     "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
     "verification/quint/README.md": "beb8675e2520a3d60dcc1f5045310f0ea869258b91131f6daa223310482dede1",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",

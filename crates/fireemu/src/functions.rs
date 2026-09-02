@@ -731,6 +731,7 @@ struct NodeInstallation {
     major: u32,
     minor: u32,
     patch: u32,
+    require_module: bool,
 }
 
 #[cfg(any(not(windows), test))]
@@ -991,12 +992,12 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
 }
 
 #[cfg(not(windows))]
-fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
-    const MAX_VERSION_BYTES: usize = 256;
+fn run_node_probe(program: &Path, arguments: &[&str], label: &str) -> Result<Vec<u8>, String> {
+    const MAX_OUTPUT_BYTES: usize = 256;
     const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
     let mut command = Command::new(program);
     command
-        .arg("--version")
+        .args(arguments)
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1008,11 +1009,11 @@ fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
     }
     let mut child = command
         .spawn()
-        .map_err(|error| format!("could not start Node: {error}"))?;
+        .map_err(|error| format!("could not start Node {label}: {error}"))?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "Node stdout unavailable".to_owned())?;
+        .ok_or_else(|| format!("Node {label} stdout unavailable"))?;
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -1023,7 +1024,7 @@ fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
     let status = loop {
         if let Some(status) = child
             .try_wait()
-            .map_err(|error| format!("could not wait for Node: {error}"))?
+            .map_err(|error| format!("could not wait for Node {label}: {error}"))?
         {
             break status;
         }
@@ -1038,7 +1039,7 @@ fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
                 .status();
             let _ = child.kill();
             let _ = child.wait();
-            return Err("Node --version timed out".to_owned());
+            return Err(format!("Node {label} timed out"));
         }
         std::thread::sleep(Duration::from_millis(10));
     };
@@ -1052,53 +1053,103 @@ fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        "Node --version timed out".to_owned()
+        format!("Node {label} timed out")
     })?;
     if !status.success() {
-        return Err(format!("Node --version exited with {status}"));
+        return Err(format!("Node {label} exited with {status}"));
     }
-    if output.len() > MAX_VERSION_BYTES {
-        return Err("Node --version output exceeded 256 bytes".to_owned());
+    if output.len() > MAX_OUTPUT_BYTES {
+        return Err(format!("Node {label} output exceeded 256 bytes"));
     }
+    Ok(output)
+}
+
+#[cfg(not(windows))]
+fn probe_node(program: &Path) -> Result<NodeInstallation, String> {
+    let output = run_node_probe(program, &["--version"], "--version")?;
     let text = String::from_utf8_lossy(&output);
     let (version, major, minor, patch) = parse_node_version(&text)
         .ok_or_else(|| "Node --version returned an unrecognised version".to_owned())?;
+    let feature = run_node_probe(
+        program,
+        &["-p", "String(process.features?.require_module === true)"],
+        "loader feature probe",
+    )?;
+    let require_module = match String::from_utf8_lossy(&feature).trim() {
+        "true" => true,
+        "false" => false,
+        _ => return Err("Node loader feature probe returned an unrecognised value".to_owned()),
+    };
     Ok(NodeInstallation {
         program: program.to_path_buf(),
         version,
         major,
         minor,
         patch,
+        require_module,
     })
 }
 
 #[cfg(any(not(windows), test))]
+fn request_prefers_require_module(
+    runtime_major: Option<u32>,
+    engines: Option<&str>,
+    installations: &[NodeInstallation],
+) -> Result<bool, String> {
+    if let Some(runtime_major) = runtime_major {
+        return Ok(runtime_major >= 20);
+    }
+    let Some(engines) = engines else {
+        return Ok(false);
+    };
+    for installation in installations {
+        if installation.major >= 20
+            && node_engine_matches(
+                engines,
+                (installation.major, installation.minor, installation.patch),
+            )?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(any(not(windows), test))]
 fn select_node_installation(
+    runtime_major: Option<u32>,
     engines: Option<&str>,
     installations: &[NodeInstallation],
 ) -> Result<usize, String> {
     if installations.is_empty() {
         return Err("no usable Node executable was found on PATH or in VOLTA_HOME".to_owned());
     }
-    let Some(engines) = engines else {
-        return Ok(0);
-    };
-    for (index, installation) in installations.iter().enumerate() {
-        if node_engine_matches(
-            engines,
-            (installation.major, installation.minor, installation.patch),
-        )? {
-            return Ok(index);
-        }
-    }
-    let found = installations
+    let engine_matches = installations
         .iter()
-        .map(|installation| format!("v{}", installation.version))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(format!(
-        "package.json engines.node {engines:?} accepts none of the discovered Node versions ({found}); install a compatible Node, set FIREEMU_NODE to it, or configure functions.runner explicitly"
-    ))
+        .map(|installation| {
+            engines.map_or(Ok(true), |expression| {
+                node_engine_matches(
+                    expression,
+                    (installation.major, installation.minor, installation.patch),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let prefer_require_module =
+        request_prefers_require_module(runtime_major, engines, installations)?;
+    installations
+        .iter()
+        .enumerate()
+        .min_by_key(|(index, installation)| {
+            (
+                prefer_require_module && !installation.require_module,
+                runtime_major.is_some_and(|major| installation.major != major),
+                !engine_matches[*index],
+                *index,
+            )
+        })
+        .map(|(index, _)| index)
+        .ok_or_else(|| "no usable Node executable was found on PATH or in VOLTA_HOME".to_owned())
 }
 
 #[cfg(windows)]
@@ -1126,21 +1177,18 @@ fn default_runner_for_codebase(
         let _ = node_engine_matches(expression, (0, 0, 0))?;
     }
     let (candidates, explicit_node) = node_candidates()?;
+    let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
+        runtime
+            .strip_prefix("nodejs")
+            .and_then(|major| major.parse::<u32>().ok())
+    });
     let mut installations = Vec::new();
     let mut probe_errors = Vec::new();
     for candidate in candidates {
         match probe_node(&candidate) {
             Ok(installation) => {
-                let selected = explicit_node
-                    || engines.as_deref().is_none_or(|expression| {
-                        node_engine_matches(
-                            expression,
-                            (installation.major, installation.minor, installation.patch),
-                        )
-                        .unwrap_or(false)
-                    });
                 installations.push(installation);
-                if selected {
+                if explicit_node {
                     break;
                 }
             }
@@ -1161,26 +1209,39 @@ fn default_runner_for_codebase(
     let selected = if explicit_node {
         0
     } else {
-        select_node_installation(engines.as_deref(), &installations)?
+        select_node_installation(runtime_major, engines.as_deref(), &installations)?
     };
     let installation = &installations[selected];
-    let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
-        runtime
-            .strip_prefix("nodejs")
-            .and_then(|major| major.parse::<u32>().ok())
-    });
+    let prefer_require_module =
+        request_prefers_require_module(runtime_major, engines.as_deref(), &installations)?;
     if let Some(engines) = &engines {
-        eprintln!(
-            "note: functions[{}]: selected Node v{} for package.json engines.node {:?}{}",
-            codebase.codebase,
-            installation.version,
+        let matches_engine = node_engine_matches(
             engines,
-            runtime_major
-                .filter(|major| *major != installation.major)
-                .map_or_else(String::new, |major| format!(
-                    " (firebase runtime nodejs{major} is deployment metadata)"
+            (installation.major, installation.minor, installation.patch),
+        )?;
+        if matches_engine {
+            eprintln!(
+                "note: functions[{}]: selected Node v{} for package.json engines.node {:?}{}",
+                codebase.codebase,
+                installation.version,
+                engines,
+                runtime_major
+                    .filter(|major| *major != installation.major)
+                    .map_or_else(String::new, |major| format!(
+                        " (firebase runtime nodejs{major} is deployment metadata)"
+                    ))
+            );
+        } else {
+            eprintln!(
+                "note: functions[{}]: selected Node v{} as a loader-capable local fallback; package.json engines.node {:?}{} does not include it",
+                codebase.codebase,
+                installation.version,
+                engines,
+                runtime_major.map_or_else(String::new, |major| format!(
+                    " and firebase runtime nodejs{major}"
                 ))
-        );
+            );
+        }
     } else if let Some(major) = runtime_major {
         if major != installation.major {
             eprintln!(
@@ -1188,6 +1249,12 @@ fn default_runner_for_codebase(
                 codebase.codebase, installation.version
             );
         }
+    }
+    if !installation.require_module && prefer_require_module {
+        eprintln!(
+            "note: functions[{}]: Node v{} cannot synchronously require ES modules from CommonJS; install Node 20.19+, Node 22.12+, or a newer release if module loading fails",
+            codebase.codebase, installation.version
+        );
     }
     Ok(vec![
         installation.program.display().to_string(),
@@ -1910,7 +1977,7 @@ mod tests {
     };
     use serde_json::json;
 
-    fn installed_node(version: &str) -> NodeInstallation {
+    fn installed_node(version: &str, require_module: bool) -> NodeInstallation {
         let (_, major, minor, patch) = parse_node_version(version).unwrap();
         NodeInstallation {
             program: std::path::PathBuf::from(format!("/opt/node-{major}/bin/node")),
@@ -1918,25 +1985,44 @@ mod tests {
             major,
             minor,
             patch,
+            require_module,
         }
     }
 
     #[test]
-    fn package_engine_selects_a_compatible_installed_node_before_loading_user_code() {
-        let installations = vec![installed_node("v22.11.0"), installed_node("v20.19.5")];
+    fn loader_capability_precedes_runtime_and_engine_preferences() {
+        let installations = vec![
+            installed_node("v22.11.0", false),
+            installed_node("v20.19.5", true),
+            installed_node("v22.12.0", true),
+        ];
         assert_eq!(
-            select_node_installation(Some("20"), &installations).unwrap(),
+            select_node_installation(Some(22), Some("22"), &installations).unwrap(),
+            2
+        );
+        assert_eq!(
+            select_node_installation(None, Some("20"), &installations).unwrap(),
             1
         );
         assert_eq!(
-            select_node_installation(Some(">=20.0.0 <21.0.0"), &installations).unwrap(),
+            select_node_installation(None, Some(">=20.0.0 <21.0.0"), &installations).unwrap(),
             1
+        );
+        assert_eq!(
+            select_node_installation(Some(22), Some("22"), &installations[..2]).unwrap(),
+            1,
+            "a capable local fallback wins over an incapable requested major"
         );
 
-        let error = select_node_installation(Some("18"), &installations).unwrap_err();
-        assert!(error.contains("engines.node \"18\""), "{error}");
-        assert!(error.contains("v22.11.0, v20.19.5"), "{error}");
-        assert!(error.contains("FIREEMU_NODE"), "{error}");
+        let legacy = vec![
+            installed_node("v20.19.5", true),
+            installed_node("v18.20.0", false),
+        ];
+        assert_eq!(
+            select_node_installation(Some(18), Some("18"), &legacy).unwrap(),
+            1,
+            "Node 18 requests retain their runtime semantics"
+        );
     }
 
     #[test]

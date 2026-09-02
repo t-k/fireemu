@@ -515,15 +515,11 @@ impl FunctionSpec {
         if self.generation == FunctionGeneration::First {
             return DEFAULT_CONCURRENCY;
         }
-        let cpu_at_least_one = self
-            .platform_options
-            .cpu
-            .as_deref()
-            .and_then(|cpu| cpu.parse::<f64>().ok())
-            .map_or_else(
-                || self.platform_options.available_memory_mb.unwrap_or(256) >= 2_048,
-                |cpu| cpu >= 1.0,
-            );
+        let cpu_at_least_one = match self.platform_options.cpu.as_deref() {
+            None => true,
+            Some("gcf_gen1") => false,
+            Some(cpu) => cpu.parse::<f64>().is_ok_and(|cpu| cpu >= 1.0),
+        };
         if cpu_at_least_one {
             DEFAULT_GEN2_CONCURRENCY
         } else {

@@ -163,15 +163,23 @@ fn second_generation_concurrency_resolves_per_instance_defaults_and_virtual_capa
     );
     spec.generation = FunctionGeneration::Second;
     spec.concurrency = None;
-    spec.platform_options.available_memory_mb = Some(2_048);
-    assert_eq!(spec.effective_concurrency(), 80);
-    assert_eq!(spec.http_capacity(8), 8);
+    for memory_mb in [256, 512, 1_024, 2_048] {
+        spec.platform_options.available_memory_mb = Some(memory_mb);
+        assert_eq!(
+            spec.effective_concurrency(),
+            80,
+            "second-generation functions default to one CPU at {memory_mb} MiB"
+        );
+        assert_eq!(spec.http_capacity(8), 8);
+    }
 
-    spec.platform_options.available_memory_mb = Some(512);
+    spec.generation = FunctionGeneration::First;
     assert_eq!(spec.effective_concurrency(), 1);
-    assert_eq!(spec.http_capacity(8), 8);
+    spec.generation = FunctionGeneration::Second;
 
     spec.platform_options.available_memory_mb = Some(4_096);
+    spec.platform_options.cpu = Some("gcf_gen1".to_owned());
+    assert_eq!(spec.effective_concurrency(), 1);
     spec.platform_options.cpu = Some("0.5".to_owned());
     assert_eq!(spec.effective_concurrency(), 1);
     spec.platform_options.cpu = Some("1".to_owned());

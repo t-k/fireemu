@@ -974,6 +974,40 @@ fn declared_checksums_end_the_session_on_mismatch() {
 }
 
 #[test]
+fn resumable_checksums_hash_each_accepted_byte_once() {
+    use fireemu_core_storage::store::UploadOptions;
+
+    let mut store = StorageState::new(1);
+    let bucket = bucket();
+    let expected = b"abcdefgh";
+    let id = store
+        .begin_upload_with(
+            &bucket,
+            &name("incremental"),
+            NewMetadata::default(),
+            Precondition::default(),
+            UploadOptions {
+                expected_md5: Some(md5(expected)),
+                expected_crc32c: Some(crc32c(expected)),
+                ..UploadOptions::default()
+            },
+            t(0),
+        )
+        .unwrap();
+
+    store.append_upload(&id, 0, b"abcde", t(0)).unwrap();
+    // Only the unseen suffix is accepted and hashed when a retry overlaps prior bytes.
+    store.append_upload(&id, 3, b"defgh", t(0)).unwrap();
+    // A fully repeated chunk must not perturb either digest.
+    store.append_upload(&id, 0, expected, t(0)).unwrap();
+
+    let metadata = store.finalize_upload(&id, t(0)).unwrap();
+    assert_eq!(metadata.md5, md5(expected));
+    assert_eq!(metadata.crc32c, crc32c(expected));
+    assert_eq!(store.bytes(&metadata), expected);
+}
+
+#[test]
 fn an_owned_chunk_is_adopted_by_an_empty_session_and_follows_every_append_rule() {
     let mut s = StorageState::new(4);
     let (b, n) = (bucket(), name("owned.bin"));

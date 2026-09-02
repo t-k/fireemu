@@ -9,7 +9,7 @@ use std::sync::Arc;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::hash::{base64, crc32c, md5};
+use crate::hash::{base64, crc32c, md5, Crc32c, Md5};
 use crate::name::{BucketName, ObjectName};
 
 /// Largest object accepted (memory-backed test runtime).
@@ -147,6 +147,90 @@ pub struct ObjectMetadata {
     pub download_tokens: Vec<String>,
     /// Blob.
     pub blob: BlobId,
+}
+
+/// MD5 and CRC32C computed together for one immutable byte sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectDigests {
+    md5: [u8; 16],
+    crc32c: u32,
+}
+
+/// Owned object bytes bound to the digests computed from those exact bytes.
+///
+/// Protocol adapters prepare an upload before exposing its metadata to Security Rules, then
+/// consume the same value at commit. The private fields prevent bytes and digests from being
+/// accidentally paired across requests.
+#[derive(PartialEq, Eq)]
+pub struct PreparedObject {
+    bytes: Vec<u8>,
+    digests: ObjectDigests,
+}
+
+impl fmt::Debug for PreparedObject {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedObject")
+            .field("len", &self.bytes.len())
+            .field("digests", &self.digests)
+            .finish()
+    }
+}
+
+impl PreparedObject {
+    /// Computes the digests and binds them to `bytes`.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        let digests = ObjectDigests::new(&bytes);
+        Self { bytes, digests }
+    }
+
+    /// Byte length.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Whether the object has no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Digests bound to the bytes.
+    #[must_use]
+    pub const fn digests(&self) -> ObjectDigests {
+        self.digests
+    }
+}
+
+impl ObjectDigests {
+    /// Computes both Storage object digests.
+    #[must_use]
+    pub fn new(bytes: &[u8]) -> Self {
+        Self {
+            md5: md5(bytes),
+            crc32c: crc32c(bytes),
+        }
+    }
+
+    /// MD5 digest.
+    #[must_use]
+    pub const fn md5(self) -> [u8; 16] {
+        self.md5
+    }
+
+    /// CRC32C digest.
+    #[must_use]
+    pub const fn crc32c(self) -> u32 {
+        self.crc32c
+    }
+
+    /// Both digests in the order used by Storage Rules metadata.
+    #[must_use]
+    pub const fn values(self) -> ([u8; 16], u32) {
+        (self.md5, self.crc32c)
+    }
 }
 
 impl ObjectMetadata {
@@ -422,6 +506,8 @@ struct UploadSession {
     admission: Option<UploadAdmission>,
     expected_md5: Option<[u8; 16]>,
     expected_crc32c: Option<u32>,
+    md5: Md5,
+    crc32c: Crc32c,
     received: Vec<u8>,
     state: UploadState,
     started_at: LogicalInstant,
@@ -453,6 +539,8 @@ pub struct PendingUpload<'a> {
     pub metadata: &'a NewMetadata,
     /// Bytes received so far.
     pub bytes: &'a [u8],
+    /// Digests of the accepted bytes, finalized from the incremental upload state in O(1).
+    pub digests: ObjectDigests,
     /// Declared total, if any.
     pub total: Option<u64>,
     /// Credentials the session was started with.
@@ -747,6 +835,26 @@ impl StorageState {
         if bytes.len() as u64 > MAX_OBJECT_BYTES {
             return Err(StorageError::TooLarge);
         }
+        self.put_prepared(bucket, name, PreparedObject::new(bytes), metadata, pre, now)
+    }
+
+    /// Writes a new generation from bytes already bound to their digests.
+    ///
+    /// Protocol adapters use this after the same digests have been exposed to Security Rules.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_prepared(
+        &mut self,
+        bucket: &BucketName,
+        name: &ObjectName,
+        prepared: PreparedObject,
+        metadata: NewMetadata,
+        pre: Precondition,
+        now: LogicalInstant,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let PreparedObject { bytes, digests } = prepared;
+        if bytes.len() as u64 > MAX_OBJECT_BYTES {
+            return Err(StorageError::TooLarge);
+        }
         // Download tokens ride in as the `firebaseStorageDownloadTokens` custom metadata
         // key and are lifted out of it, exactly as the official emulator's
         // `setDownloadTokensFromCustomMetadata` does. A new generation carries only the
@@ -782,8 +890,8 @@ impl StorageState {
             cache_control: metadata.cache_control,
             custom,
             custom_defined,
-            md5: md5(&bytes),
-            crc32c: crc32c(&bytes),
+            md5: digests.md5,
+            crc32c: digests.crc32c,
             time_created: now,
             updated: now,
             download_tokens,
@@ -1203,6 +1311,8 @@ impl StorageState {
                 admission: options.admission,
                 expected_md5: options.expected_md5,
                 expected_crc32c: options.expected_crc32c,
+                md5: Md5::new(),
+                crc32c: Crc32c::new(),
                 received: Vec::new(),
                 state: UploadState::Receiving,
                 started_at: now,
@@ -1372,7 +1482,10 @@ impl StorageState {
                     StorageError::TooLarge
                 });
             }
-            u.received.extend_from_slice(&chunk[skip..]);
+            let appended = &chunk[skip..];
+            u.md5.update(appended);
+            u.crc32c.update(appended);
+            u.received.extend_from_slice(appended);
         }
         Ok(u.received.len() as u64)
     }
@@ -1407,6 +1520,8 @@ impl StorageState {
                     StorageError::TooLarge
                 });
             }
+            u.md5.update(&chunk);
+            u.crc32c.update(&chunk);
             u.received = chunk;
             return Ok(u.received.len() as u64);
         }
@@ -1429,6 +1544,10 @@ impl StorageState {
                 name: &u.name,
                 metadata: &u.metadata,
                 bytes: &u.received,
+                digests: ObjectDigests {
+                    md5: u.md5.clone().finalize(),
+                    crc32c: u.crc32c.finalize(),
+                },
                 total: u.total,
                 authorization: u.authorization.as_deref(),
                 admission: u.admission.as_ref(),
@@ -1471,7 +1590,7 @@ impl StorageState {
         id: &UploadId,
         now: LogicalInstant,
     ) -> Result<ObjectMetadata, StorageError> {
-        let (bucket, name, metadata, precondition, bytes) = {
+        let (bucket, name, metadata, precondition, prepared) = {
             let u = self.upload_mut(id, now)?;
             match u.state {
                 UploadState::Committed(_) | UploadState::Aborted | UploadState::Denied(_) => {
@@ -1485,16 +1604,18 @@ impl StorageState {
                 return Err(StorageError::UploadSizeMismatch);
             }
             // A checksum failure is terminal: the client has to start a new session.
+            let received_md5 = u.md5.clone().finalize();
+            let received_crc32c = u.crc32c.finalize();
             let mismatch = match (u.expected_md5, u.expected_crc32c) {
-                (Some(expected), _) if md5(&u.received) != expected => Some(format!(
+                (Some(expected), _) if received_md5 != expected => Some(format!(
                     "md5 {} declared, {} received",
                     base64(&expected),
-                    base64(&md5(&u.received))
+                    base64(&received_md5)
                 )),
-                (_, Some(expected)) if crc32c(&u.received) != expected => Some(format!(
+                (_, Some(expected)) if received_crc32c != expected => Some(format!(
                     "crc32c {} declared, {} received",
                     base64(&expected.to_be_bytes()),
-                    base64(&crc32c(&u.received).to_be_bytes())
+                    base64(&received_crc32c.to_be_bytes())
                 )),
                 _ => None,
             };
@@ -1508,10 +1629,16 @@ impl StorageState {
                 u.name.clone(),
                 u.metadata.clone(),
                 u.precondition,
-                std::mem::take(&mut u.received),
+                PreparedObject {
+                    bytes: std::mem::take(&mut u.received),
+                    digests: ObjectDigests {
+                        md5: received_md5,
+                        crc32c: received_crc32c,
+                    },
+                },
             )
         };
-        let meta = match self.put(&bucket, &name, bytes, metadata, precondition, now) {
+        let meta = match self.put_prepared(&bucket, &name, prepared, metadata, precondition, now) {
             Ok(m) => m,
             Err(e) => {
                 if let Some(u) = self.uploads.get_mut(id) {

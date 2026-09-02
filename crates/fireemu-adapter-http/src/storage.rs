@@ -37,12 +37,11 @@ use fireemu_core_rules::eval::{
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RulesValue};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_storage::hash::{crc32c, md5};
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
-    CustomMetadataPatch, MetadataPatch, NewMetadata, ObjectMetadata, Precondition, StorageError,
-    StorageEvent, StorageState as ObjectStore, UploadAdmission, UploadId, UploadOptions,
-    UploadPhase,
+    CustomMetadataPatch, MetadataPatch, NewMetadata, ObjectMetadata, Precondition, PreparedObject,
+    StorageError, StorageEvent, StorageState as ObjectStore, UploadAdmission, UploadId,
+    UploadOptions, UploadPhase,
 };
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::ProjectId;
@@ -1556,10 +1555,12 @@ fn select_generation(
 fn verify_hashes(
     req: &StorageRequest,
     meta_json: Option<&Value>,
-    bytes: &[u8],
-) -> Result<([u8; 16], u32), (u16, String)> {
-    let digest = md5(bytes);
-    let crc = crc32c(bytes);
+    bytes: Vec<u8>,
+) -> Result<PreparedObject, (u16, String)> {
+    let prepared = PreparedObject::new(bytes);
+    let digests = prepared.digests();
+    let digest = digests.md5();
+    let crc = digests.crc32c();
     let (expected_md5, expected_crc) = declared_hashes(req, meta_json)?;
     if let Some(e) = expected_md5 {
         if e != digest {
@@ -1585,7 +1586,7 @@ fn verify_hashes(
             ));
         }
     }
-    Ok((digest, crc))
+    Ok(prepared)
 }
 
 /// Checksums the client declared for the whole object: `X-Goog-Hash`, `Content-MD5` and the
@@ -2457,9 +2458,9 @@ fn fb_object_post(
         let mut meta =
             new_metadata_from_json(&meta_json, None).map_err(|e| fb_json_error(400, &e))?;
         inject_download_token(state, &mut meta)?;
-        let hashes =
-            verify_hashes(&req, Some(&meta_json), &data).map_err(|(s, m)| fb_json_error(s, &m))?;
-        return fb_commit(state, principal, &b, &n, data, meta, hashes, now);
+        let prepared =
+            verify_hashes(&req, Some(&meta_json), data).map_err(|(s, m)| fb_json_error(s, &m))?;
+        return fb_commit(state, principal, &b, &n, prepared, meta, now);
     }
     // Media upload: the body is the object; the request content type is the object's.
     let content_type = req
@@ -2467,13 +2468,13 @@ fn fb_object_post(
         .filter(|c| !c.is_empty())
         .map(str::to_owned);
     let body = std::mem::take(&mut req.body);
-    let hashes = verify_hashes(&req, None, &body).map_err(|(s, m)| fb_json_error(s, &m))?;
+    let prepared = verify_hashes(&req, None, body).map_err(|(s, m)| fb_json_error(s, &m))?;
     let mut meta = NewMetadata {
         content_type,
         ..NewMetadata::default()
     };
     inject_download_token(state, &mut meta)?;
-    fb_commit(state, principal, &b, &n, body, meta, hashes, now)
+    fb_commit(state, principal, &b, &n, prepared, meta, now)
 }
 
 /// The Firebase dialect always defines custom metadata on an upload, injecting a fresh
@@ -2500,9 +2501,8 @@ fn fb_commit(
     principal: &Principal,
     b: &BucketName,
     n: &ObjectName,
-    data: Vec<u8>,
+    prepared: PreparedObject,
     meta: NewMetadata,
-    hashes: ([u8; 16], u32),
     now: LogicalInstant,
 ) -> Outcome {
     let mut store = state.store()?;
@@ -2513,6 +2513,7 @@ fn fb_commit(
         Method::Create
     };
     let next_generation = store.next_generation_preview().map_err(fb_core_err)?;
+    let hashes = prepared.digests();
     state
         .authorize(
             principal,
@@ -2520,11 +2521,19 @@ fn fb_commit(
             b,
             n.as_str(),
             existing.as_ref().map(storage_rules_value),
-            incoming_rules_value(b, n, &meta, data.len() as u64, hashes, next_generation, now),
+            incoming_rules_value(
+                b,
+                n,
+                &meta,
+                prepared.len() as u64,
+                hashes.values(),
+                next_generation,
+                now,
+            ),
         )
         .map_err(|denial| denial.with_header("x-goog-upload-status", "final"))?;
     store
-        .put(b, n, data, meta, Precondition::default(), now)
+        .put_prepared(b, n, prepared, meta, Precondition::default(), now)
         .map_err(fb_core_err)?;
     let m = store
         .default_content_disposition_inline(b, n)
@@ -2663,7 +2672,7 @@ fn finalize_resumable(
             pending.name.clone(),
             pending.metadata.clone(),
             pending.bytes.len() as u64,
-            (md5(pending.bytes), crc32c(pending.bytes)),
+            pending.digests.values(),
             pending.authorization.map(str::to_owned),
         )
     };
@@ -3104,12 +3113,11 @@ fn gcs_upload(
             let meta = new_metadata_from_json(&meta_json, declared_ct)
                 .map_err(|e| gcs_json_error(400, &e, "invalid"))?;
             let pre = precondition(params)?;
-            let hashes = verify_hashes(&req, Some(&meta_json), &data)
+            let prepared = verify_hashes(&req, Some(&meta_json), data)
                 .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
-            let _ = hashes;
             let mut store = state.store()?;
             let m = store
-                .put(&b, &n, data, meta, pre, now)
+                .put_prepared(&b, &n, prepared, meta, pre, now)
                 .map_err(gcs_core_err)?;
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }
@@ -3125,14 +3133,15 @@ fn gcs_upload(
                 .map(str::to_owned);
             let pre = precondition(params)?;
             let body = std::mem::take(&mut req.body);
-            verify_hashes(&req, None, &body).map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
+            let prepared = verify_hashes(&req, None, body)
+                .map_err(|(s, m)| gcs_json_error(s, &m, "invalid"))?;
             let meta = NewMetadata {
                 content_type,
                 ..NewMetadata::default()
             };
             let mut store = state.store()?;
             let m = store
-                .put(&b, &n, body, meta, pre, now)
+                .put_prepared(&b, &n, prepared, meta, pre, now)
                 .map_err(gcs_core_err)?;
             Ok(StorageResponse::json(200, &gcs_json(&m, host)))
         }

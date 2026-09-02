@@ -244,6 +244,141 @@ fn firebase_protocol_upload_download_list_update_delete() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn upload_digests_seen_by_rules_match_the_committed_bytes_on_every_firebase_path() {
+    let expected = |bytes: &[u8]| {
+        (
+            fireemu_core_storage::hash::base64(&fireemu_core_storage::hash::md5(bytes)),
+            fireemu_core_storage::hash::crc32c(bytes).to_string(),
+        )
+    };
+    let abc = expected(b"abc");
+    let overlap = expected(b"abcdefgh");
+    let rules = format!(
+        "rules_version = '2';
+service firebase.storage {{
+  match /b/{{bucket}}/o/{{name}} {{
+    allow create: if
+      (request.resource.md5Hash == '{}' && request.resource.crc32c == '{}') ||
+      (request.resource.md5Hash == '{}' && request.resource.crc32c == '{}');
+  }}
+}}",
+        abc.0, abc.1, overlap.0, overlap.1
+    );
+    let state = state(Some(&rules));
+
+    let media = handle(
+        &state,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=media.bin&uploadType=media"),
+            &[("content-type", "application/octet-stream")],
+            b"abc",
+        ),
+    );
+    assert_eq!(
+        media.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&media.body)
+    );
+    assert_eq!(json_body(&media)["md5Hash"], abc.0);
+    assert_eq!(json_body(&media)["crc32c"], abc.1);
+
+    let (content_type, body) = multipart(&json!({}), "application/octet-stream", b"abc");
+    let multipart_response = handle(
+        &state,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=multipart.bin&uploadType=multipart"),
+            &[
+                ("content-type", &content_type),
+                ("x-goog-upload-protocol", "multipart"),
+            ],
+            &body,
+        ),
+    );
+    assert_eq!(
+        multipart_response.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&multipart_response.body)
+    );
+    assert_eq!(json_body(&multipart_response)["md5Hash"], abc.0);
+    assert_eq!(json_body(&multipart_response)["crc32c"], abc.1);
+
+    let start = handle(
+        &state,
+        req(
+            "POST",
+            &format!("/v0/b/{BUCKET}/o?name=resumable.bin"),
+            &[
+                ("x-goog-upload-protocol", "resumable"),
+                ("x-goog-upload-command", "start"),
+            ],
+            b"{}",
+        ),
+    );
+    let session = header(&start, "x-goog-upload-url")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap();
+    assert_eq!(
+        handle(
+            &state,
+            req(
+                "POST",
+                session,
+                &[
+                    ("x-goog-upload-command", "upload"),
+                    ("x-goog-upload-offset", "0"),
+                ],
+                b"abcde",
+            ),
+        )
+        .status,
+        200
+    );
+    let finalized = handle(
+        &state,
+        req(
+            "POST",
+            session,
+            &[
+                ("x-goog-upload-command", "upload, finalize"),
+                ("x-goog-upload-offset", "3"),
+            ],
+            b"defgh",
+        ),
+    );
+    assert_eq!(
+        finalized.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&finalized.body)
+    );
+    assert_eq!(json_body(&finalized)["md5Hash"], overlap.0);
+    assert_eq!(json_body(&finalized)["crc32c"], overlap.1);
+
+    for (name, bytes) in [
+        ("media.bin", &b"abc"[..]),
+        ("multipart.bin", &b"abc"[..]),
+        ("resumable.bin", &b"abcdefgh"[..]),
+    ] {
+        let response = handle(
+            &state,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/{name}?alt=media"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        assert_eq!((response.status, response.body.as_slice()), (200, bytes));
+    }
+}
+
+#[test]
 fn firebase_resumable_upload_protocol() {
     let s = state(None);
     let r = handle(

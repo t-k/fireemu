@@ -84,24 +84,7 @@ fn mask(crc: u32) -> u32 {
     crc.rotate_right(15).wrapping_add(MASK_DELTA)
 }
 
-/// The CRC-32C (Castagnoli) of `bytes`, computed bit by bit so that the crate stays
-/// dependency-free; the inputs are record payloads of at most 32 KiB.
-#[must_use]
-pub fn crc32c(bytes: &[u8]) -> u32 {
-    const POLY: u32 = 0x82f6_3b78;
-    let mut crc = u32::MAX;
-    for &byte in bytes {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            crc = if crc & 1 == 1 {
-                (crc >> 1) ^ POLY
-            } else {
-                crc >> 1
-            };
-        }
-    }
-    !crc
-}
+pub use fireemu_core_types::hash::crc32c;
 
 /// Appends `records` to a `LevelDB` log file body.
 #[must_use]

@@ -517,7 +517,7 @@ impl FunctionSpec {
         }
         let cpu_at_least_one = match self.platform_options.cpu.as_deref() {
             None => true,
-            Some("gcf_gen1") => false,
+            Some("gcf_gen1") => self.platform_options.available_memory_mb.unwrap_or(256) >= 2_048,
             Some(cpu) => cpu.parse::<f64>().is_ok_and(|cpu| cpu >= 1.0),
         };
         if cpu_at_least_one {

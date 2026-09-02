@@ -177,9 +177,12 @@ fn second_generation_concurrency_resolves_per_instance_defaults_and_virtual_capa
     assert_eq!(spec.effective_concurrency(), 1);
     spec.generation = FunctionGeneration::Second;
 
-    spec.platform_options.available_memory_mb = Some(4_096);
     spec.platform_options.cpu = Some("gcf_gen1".to_owned());
-    assert_eq!(spec.effective_concurrency(), 1);
+    for (memory_mb, expected) in [(1_024, 1), (2_048, 80), (4_096, 80)] {
+        spec.platform_options.available_memory_mb = Some(memory_mb);
+        assert_eq!(spec.effective_concurrency(), expected);
+    }
+    spec.platform_options.available_memory_mb = Some(4_096);
     spec.platform_options.cpu = Some("0.5".to_owned());
     assert_eq!(spec.effective_concurrency(), 1);
     spec.platform_options.cpu = Some("1".to_owned());

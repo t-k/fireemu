@@ -27,8 +27,10 @@ struct ClearingClaimsHook;
 
 struct MalformedBeforeSignInHook;
 
+type BlockingNamespaceCall = (String, Option<String>, BlockingAuthEvent);
+
 struct NamespaceRecordingHook {
-    calls: Arc<Mutex<Vec<(String, Option<String>, BlockingAuthEvent)>>>,
+    calls: Arc<Mutex<Vec<BlockingNamespaceCall>>>,
 }
 
 impl AuthBlockingHook for NamespaceRecordingHook {

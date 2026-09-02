@@ -948,9 +948,13 @@ fn path_node_candidates(path: &std::ffi::OsStr) -> Vec<PathBuf> {
         .take(64)
     {
         #[cfg(not(windows))]
-        push_node_candidate(&mut candidates, directory.join("node"));
+        let candidate = directory.join("node");
         #[cfg(windows)]
-        push_node_candidate(&mut candidates, directory.join("node.exe"));
+        let candidate = directory.join("node.exe");
+        if candidate.is_file() {
+            push_node_candidate(&mut candidates, candidate);
+            break;
+        }
     }
     candidates
 }
@@ -1961,7 +1965,6 @@ mod tests {
     #[cfg(unix)]
     use std::time::{Duration, Instant};
 
-    #[cfg(windows)]
     use super::path_node_candidates;
     #[cfg(unix)]
     use super::probe_node;
@@ -2028,6 +2031,37 @@ mod tests {
             1,
             "a legacy engine constraint does not inherit capability requirements from newer nodes"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn automatic_path_discovery_trusts_only_the_first_node_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-node-path-discovery-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let first = root.join("first/node");
+        let second = root.join("second/node");
+        for program in [&first, &second] {
+            std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+            std::fs::write(program, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = std::env::join_paths([
+            root.join("missing"),
+            first.parent().unwrap().to_owned(),
+            second.parent().unwrap().to_owned(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            path_node_candidates(&path),
+            vec![std::fs::canonicalize(&first).unwrap()]
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

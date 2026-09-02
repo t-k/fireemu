@@ -175,6 +175,9 @@ fn a_compatible_absolute_path_candidate_is_selected() {
     else {
         return;
     };
+    let Some(volta_home) = compatible_node.ancestors().nth(6) else {
+        return;
+    };
     let root =
         std::env::temp_dir().join(format!("fireemu-runtime-fallback-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -221,9 +224,9 @@ fn a_compatible_absolute_path_candidate_is_selected() {
         .args(["--", "node", "--version"])
         .env(
             "PATH",
-            std::env::join_paths([node.parent().unwrap(), compatible_node.parent().unwrap()])
-                .unwrap(),
+            std::env::join_paths([node.parent().unwrap()]).unwrap(),
         )
+        .env("VOLTA_HOME", volta_home)
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -275,11 +278,11 @@ fn a_loader_capable_node_is_selected_before_user_code_is_loaded() {
     .unwrap();
 
     let node_22 = root.join("node-22/bin/node");
-    let node_20 = root.join("node-20/bin/node");
+    let volta_home = root.join("volta");
+    let node_20 = volta_home.join("tools/image/node/20.19.5/bin/node");
     write_node_wrapper(&node_22, &actual_node, "v22.11.0", true);
     write_node_wrapper(&node_20, &actual_node, "v20.19.5", false);
-    let path =
-        std::env::join_paths([node_22.parent().unwrap(), node_20.parent().unwrap()]).unwrap();
+    let path = std::env::join_paths([node_22.parent().unwrap()]).unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args([
@@ -305,6 +308,7 @@ fn a_loader_capable_node_is_selected_before_user_code_is_loaded() {
         .arg(&source)
         .args(["--", "node", "--version"])
         .env("PATH", path)
+        .env("VOLTA_HOME", volta_home)
         .stdin(Stdio::null())
         .output()
         .unwrap();

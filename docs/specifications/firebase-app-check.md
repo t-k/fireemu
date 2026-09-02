@@ -478,7 +478,7 @@ These mappings are `boundary-conformance` until the conformance scenarios record
 | `AC-OBS-001` | metrics distinguish valid, missing, invalid, bypass, admitted, and denied without exposing secrets | control/UI API tests | debt |
 | `AC-CONF-001` | Selected production and official-emulator fixtures record header handling, failures, bypasses, and callable context | opt-in conformance suite | suggested pending approval |
 | `AC-TRACE-001` | Critical invariants map to integration, mutation, and applicable formal or concurrency artifacts | traceability validator | debt |
-| `AC-REPLAY-001` | limited-use tokens are consumed atomically and callable `alreadyConsumed` is correct | TLA+, Loom, integration, and mutation tests | out of initial scope |
+| `AC-REPLAY-001` | limited-use tokens are consumed atomically and callable `alreadyConsumed` is correct | Quint, Loom, integration, and mutation tests | out of initial scope |
 
 High-risk obligations require at least two independent checks or an explicit documented exception. In particular, project binding, no side effects after denial, runner trust, redaction, and future replay consumption require both a focused test and a cross-layer or model-based check.
 
@@ -567,7 +567,7 @@ The first implementation should follow test-driven vertical slices:
 9. opt-in production conformance fixtures;
 10. replay protection as a separate capability.
 
-Property-based tests are appropriate for compact-JWT parsing, base64url input, time boundaries, project/app identifiers, and header normalization. A small TLA+ model is appropriate when runtime policy reconfiguration or limited-use token consumption is implemented. The model should check `NoAdmissionAfterFailedVerification`, `OnePolicySnapshot`, and `AtMostOneConsumption`; `tla-mutant` should be used for the model mutation pass in accordance with the repository policy. These tools are planned verification, not evidence already produced by this specification.
+Property-based tests are appropriate for compact-JWT parsing, base64url input, time boundaries, project/app identifiers, and header normalization. A small Quint model with a Quint Connect driver is appropriate when runtime policy reconfiguration or limited-use token consumption is implemented. The model should check `NoAdmissionAfterFailedVerification`, `OnePolicySnapshot`, and `AtMostOneConsumption`, with semantic source mutations recorded by the Quint evidence pipeline. These tools are planned verification, not evidence already produced by this specification.
 
 Suggested semantic mutants include:
 

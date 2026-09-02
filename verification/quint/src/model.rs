@@ -276,7 +276,7 @@ const MODELS: &[ModelDescriptor] = &[
                 value: "{false,true}",
             },
         ],
-        scenarios: &["leaf", "reservation", "fence", "ignoreTextIndex"],
+        scenarios: &["leaf", "reservation", "fence", "ignoredTextIndexReturns"],
         projection_fields: &["fence", "inFlight", "reservations", "returned"],
         driver: "verification/quint/src/await_idle.rs",
         connect_test: "verification/quint/tests/await_idle_connect.rs",

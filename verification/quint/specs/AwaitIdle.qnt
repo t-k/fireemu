@@ -3,7 +3,7 @@
 module AwaitIdle {
   const ITEMS: Set[str]
   const MAX_DEPTH: int
-  const IGNORE_TEXT_INDEX: bool
+  const IGNORE_TEXT_INDEX_VALUES: Set[bool]
 
   type Observable = {
     fence: str,
@@ -19,6 +19,7 @@ module AwaitIdle {
   var used: Set[str]
   var previousUsed: Set[str]
   var fenced: Set[str]
+  var ignoreTextIndex: bool
   var lastAction: str
   var lastItem: str
   var actionTaken: ActionTaken
@@ -31,7 +32,7 @@ module AwaitIdle {
 
   def blocking(state) = state.reservations.intersect(fenced).union(
     activeItems(state).filter(work => fenced.contains(work)
-      and (state.inFlight.get(work) != "textIndexBuild" or not(IGNORE_TEXT_INDEX)))
+      and (state.inFlight.get(work) != "textIndexBuild" or not(ignoreTextIndex)))
   )
 
   action record(name, work, child, kind, nextObservable) = all {
@@ -39,11 +40,13 @@ module AwaitIdle {
     observable' = nextObservable,
     lastAction' = name,
     previousUsed' = used,
+    ignoreTextIndex' = ignoreTextIndex,
     lastItem' = if (child == "") work else child,
     actionTaken' = { tag: name, value: { item: work, child: child, kind: kind } },
   }
 
   action init = {
+    nondet selectedTextIndexPolicy = IGNORE_TEXT_INDEX_VALUES.oneOf()
     val initial = {
       fence: "none",
       inFlight: ITEMS.mapBy(_ => ""),
@@ -57,6 +60,7 @@ module AwaitIdle {
       used' = Set(),
       previousUsed' = Set(),
       fenced' = Set(),
+      ignoreTextIndex' = selectedTextIndexPolicy,
       lastAction' = "Init",
       lastItem' = "",
       actionTaken' = { tag: "init", value: { item: "", child: "", kind: "" } },
@@ -156,6 +160,8 @@ module AwaitIdle {
   val TypeOK = and {
     ITEMS.size() > 0,
     MAX_DEPTH >= 0,
+    IGNORE_TEXT_INDEX_VALUES != Set(),
+    IGNORE_TEXT_INDEX_VALUES.contains(ignoreTextIndex),
     observable.fence.in(FENCES),
     observable.inFlight.keys() == ITEMS,
     ITEMS.forall(work => observable.inFlight.get(work) == "" or observable.inFlight.get(work).in(KINDS)),
@@ -180,28 +186,36 @@ module AwaitIdle {
     (previousObservable.fence == "returned").implies(observable.fence == "returned"),
   }
 
-  temporal FencedWorkStaysTerminal = always(observable.returned.implies(blocking(observable) == Set()))
+  temporal FencedWorkStaysTerminal = always(and {
+    not(ignoreTextIndex),
+    observable.returned,
+  }.implies(blocking(observable) == Set()))
   temporal Fairness = and {
-    ITEMS.forall(work => completeAny(work).weakFair((observable, previousObservable, depth, used, previousUsed, fenced, lastAction, lastItem))),
-    ITEMS.forall(parent => ITEMS.forall(child => enqueueAnyChild(parent, child).weakFair((observable, previousObservable, depth, used, previousUsed, fenced, lastAction, lastItem)))),
-    ReturnIdle.weakFair((observable, previousObservable, depth, used, previousUsed, fenced, lastAction, lastItem)),
+    ITEMS.forall(work => completeAny(work).weakFair((observable, previousObservable, depth, used, previousUsed, fenced, ignoreTextIndex, lastAction, lastItem))),
+    ITEMS.forall(parent => ITEMS.forall(child => enqueueAnyChild(parent, child).weakFair((observable, previousObservable, depth, used, previousUsed, fenced, ignoreTextIndex, lastAction, lastItem)))),
+    ReturnIdle.weakFair((observable, previousObservable, depth, used, previousUsed, fenced, ignoreTextIndex, lastAction, lastItem)),
   }
   temporal AwaitIdleEventuallyReturns = Fairness.implies(always((observable.fence == "waiting").implies(eventually(observable.returned))))
 }
 
 module AwaitIdleProof {
-  import AwaitIdle(ITEMS = Set("i1", "i2", "i3"), MAX_DEPTH = 1, IGNORE_TEXT_INDEX = false).*
+  import AwaitIdle(ITEMS = Set("i1", "i2", "i3"), MAX_DEPTH = 1, IGNORE_TEXT_INDEX_VALUES = Set(false, true)).*
 }
 
 module AwaitIdleScenarios {
-  import AwaitIdle(ITEMS = Set("i1", "i2", "i3"), MAX_DEPTH = 1, IGNORE_TEXT_INDEX = false).*
+  import AwaitIdle(ITEMS = Set("i1", "i2", "i3"), MAX_DEPTH = 1, IGNORE_TEXT_INDEX_VALUES = Set(false)).*
 
   run leaf = init.then(beginExternal("i1", "commit")).then(RequestFence).then(completeLeaf("i1")).then(ReturnIdle).expect(observable.returned)
   run reservation = init.then(beginExternal("i1", "invocation")).then(RequestFence).then(completeWithReservation("i1")).then(enqueueChild("i1", "i2", "event")).then(completeLeaf("i2")).then(ReturnIdle).expect(observable.returned)
   run fence = init.then(RequestFence).then(ReturnIdle).expect(observable.fence == "returned")
-  run ignoreTextIndex = init.then(beginExternal("i1", "textIndexBuild")).then(RequestFence).then(completeLeaf("i1")).then(ReturnIdle).expect(observable.returned)
+}
+
+module AwaitIdleIgnoreTextIndexScenarios {
+  import AwaitIdle(ITEMS = Set("i1", "i2", "i3"), MAX_DEPTH = 1, IGNORE_TEXT_INDEX_VALUES = Set(true)).*
+
+  run ignoredTextIndexReturns = init.then(beginExternal("i1", "textIndexBuild")).then(RequestFence).then(ReturnIdle).expect(observable.returned and observable.inFlight.get("i1") == "textIndexBuild")
 }
 
 module AwaitIdleConnect {
-  import AwaitIdle(ITEMS = Set("i1", "i2", "i3"), MAX_DEPTH = 1, IGNORE_TEXT_INDEX = false).*
+  import AwaitIdle(ITEMS = Set("i1", "i2", "i3"), MAX_DEPTH = 1, IGNORE_TEXT_INDEX_VALUES = Set(false)).*
 }

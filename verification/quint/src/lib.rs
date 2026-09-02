@@ -1,4 +1,4 @@
-//! Quint model checking and Quint Connect conformance support for the private pilot.
+//! Quint model checking and Quint Connect conformance support for the private authority.
 
 pub mod atomic_commit_outbox;
 #[cfg(unix)]

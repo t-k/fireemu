@@ -4,7 +4,7 @@
 //!
 //! - `verification/mutants/catalog.json` has unique IDs (single source of truth, spec 27.5);
 //! - `verification/loom/scenarios.json` has unique names (spec 23.3);
-//! - every requirement references only defined mutant IDs, Loom scenarios, TLA+/Quint models and
+//! - every requirement references only defined mutant IDs, Loom scenarios, Quint models and
 //!   integration test files;
 //! - every critical mutant is referenced by at least one critical requirement;
 //! - every critical requirement with status `implemented` has a dynamic test, a formal or
@@ -12,7 +12,7 @@
 //! - every artifact of a requirement with status `implemented` or `partial` resolves to a real
 //!   repository artifact: a `#[kani::proof]` function under `verification/kani`, a test function
 //!   under a `tests/` directory, a `fuzz/fuzz_targets/<name>.rs` file, an existing conformance
-//!   path, a Loom function under `verification/loom/src`, a property in the named TLA+ or Quint
+//!   path, a Loom function under `verification/loom/src`, a property in the named Quint
 //!   model, or an existing integration test file.
 //!
 //! An artifact that is planned but not written yet is written as `pending:<name>` (see
@@ -26,7 +26,6 @@ use std::path::{Path, PathBuf};
 use fireemu_verification_quint::evidence::validate_evidence_file as validate_quint_evidence_file;
 use fireemu_verification_quint::model::{model as quint_model, ModelDescriptor};
 use serde::Deserialize;
-use tla_verification::{sha256_file, verify_evidence_with_jar_digest, TLA2TOOLS_1_8_0_SHA256};
 
 /// Prefix that marks an artifact as declared but not written yet.
 pub const PENDING_PREFIX: &str = "pending:";
@@ -86,8 +85,6 @@ struct Requirement {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct Artifacts {
-    #[serde(default)]
-    tla: Option<String>,
     #[serde(default)]
     quint: Option<String>,
     #[serde(default)]
@@ -169,7 +166,7 @@ fn is_snake_case(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
-fn is_tla_identifier(value: &str) -> bool {
+fn is_formal_identifier(value: &str) -> bool {
     let mut characters = value.chars();
     characters
         .next()
@@ -177,30 +174,9 @@ fn is_tla_identifier(value: &str) -> bool {
         && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
-fn safe_tla_reference(reference: &str) -> Option<(&str, &str)> {
-    let (module, property) = reference.split_once("::")?;
-    if property.contains("::") || !is_tla_identifier(property) {
-        return None;
-    }
-    let path = Path::new(module);
-    let file_name = path.file_name()?.to_str()?;
-    if file_name != module
-        || !path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("tla"))
-        || !path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .is_some_and(is_tla_identifier)
-    {
-        return None;
-    }
-    Some((module, property))
-}
-
 fn safe_quint_reference(reference: &str) -> Option<(&str, &str)> {
     let (module, property) = reference.split_once("::")?;
-    if property.contains("::") || !is_tla_identifier(property) {
+    if property.contains("::") || !is_formal_identifier(property) {
         return None;
     }
     let path = Path::new(module);
@@ -210,98 +186,11 @@ fn safe_quint_reference(reference: &str) -> Option<(&str, &str)> {
         || !path
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .is_some_and(is_tla_identifier)
+            .is_some_and(is_formal_identifier)
     {
         return None;
     }
     Some((module, property))
-}
-
-fn strip_tla_comments(text: &str) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut characters = text.chars().peekable();
-    let mut block_depth = 0_u32;
-    let mut line_comment = false;
-    while let Some(character) = characters.next() {
-        let next = characters.peek().copied();
-        if line_comment {
-            if character == '\n' {
-                line_comment = false;
-                output.push(character);
-            }
-        } else if block_depth > 0 {
-            if character == '(' && next == Some('*') {
-                block_depth += 1;
-                characters.next();
-            } else if character == '*' && next == Some(')') {
-                block_depth -= 1;
-                characters.next();
-            } else if character == '\n' {
-                output.push(character);
-            }
-        } else if character == '\\' && next == Some('*') {
-            line_comment = true;
-            characters.next();
-        } else if character == '(' && next == Some('*') {
-            block_depth = 1;
-            characters.next();
-        } else {
-            output.push(character);
-        }
-    }
-    output
-}
-
-fn tla_defines_property(source: &str, property: &str) -> bool {
-    strip_tla_comments(source).lines().any(|line| {
-        line.trim_start()
-            .strip_prefix(property)
-            .is_some_and(|rest| rest.trim_start().starts_with("=="))
-    })
-}
-
-fn cfg_registered_properties(config: &str) -> BTreeSet<String> {
-    let mut properties = BTreeSet::new();
-    let mut collecting = false;
-    for line in strip_tla_comments(config).lines() {
-        for token in line.split_whitespace() {
-            if is_cfg_directive(token) {
-                collecting = matches!(
-                    token,
-                    "INVARIANT" | "INVARIANTS" | "PROPERTY" | "PROPERTIES"
-                );
-            } else if collecting && is_tla_identifier(token) {
-                properties.insert(token.to_owned());
-            }
-        }
-    }
-    properties
-}
-
-fn is_cfg_directive(token: &str) -> bool {
-    matches!(
-        token,
-        "CONSTANT"
-            | "CONSTANTS"
-            | "CONSTRAINT"
-            | "CONSTRAINTS"
-            | "ACTION_CONSTRAINT"
-            | "ACTION_CONSTRAINTS"
-            | "INIT"
-            | "NEXT"
-            | "VIEW"
-            | "SYMMETRY"
-            | "TYPE"
-            | "TYPE_CONSTRAINT"
-            | "CHECK_DEADLOCK"
-            | "ALIAS"
-            | "POSTCONDITION"
-            | "PERIODIC"
-            | "INVARIANT"
-            | "INVARIANTS"
-            | "PROPERTY"
-            | "PROPERTIES"
-    )
 }
 
 /// Everything the checker can resolve an artifact name against.
@@ -467,7 +356,6 @@ fn read_dir_sources(dir: &Path) -> String {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 struct Evidence {
-    tla: bool,
     quint: bool,
     loom: bool,
     kani: bool,
@@ -575,7 +463,6 @@ pub fn check(root: &Path) -> Report {
         let a = &r.artifacts;
         let mut have = Evidence::default();
         let mut unresolved_mutants = Vec::new();
-        let mut resolved_tla = None;
         let mut resolved_quint: Option<(&'static ModelDescriptor, &str)> = None;
 
         for m in &a.mutation {
@@ -606,57 +493,6 @@ pub fn check(root: &Path) -> Report {
                         have.loom = true;
                     }
                 }
-            }
-        }
-
-        if let Some(tla) = &a.tla {
-            match artifact_ref(tla) {
-                ArtifactRef::Empty => {
-                    problems.push(format!("requirement {id}: empty tla artifact"));
-                }
-                ArtifactRef::Pending(name) => report.pending.push(format!("{id}: tla {name}")),
-                ArtifactRef::Named(name) => match safe_tla_reference(name) {
-                    Some((module, property)) => {
-                        if resolve {
-                            let path = root.join("verification/tla").join(module);
-                            match fs::read_to_string(&path) {
-                                Ok(text) if tla_defines_property(&text, property) => {
-                                    let config_name = Path::new(module).with_extension("cfg");
-                                    let config_path =
-                                        root.join("verification/tla").join(&config_name);
-                                    match fs::read_to_string(&config_path) {
-                                        Ok(config)
-                                            if cfg_registered_properties(&config)
-                                                .contains(property) =>
-                                        {
-                                            have.tla = true;
-                                            resolved_tla = Some((module, property));
-                                        }
-                                        Ok(_) => problems.push(format!(
-                                            "requirement {id}: TLA+ config {} does not register {property}",
-                                            config_name.display()
-                                        )),
-                                        Err(_) => problems.push(format!(
-                                            "requirement {id}: TLA+ config {} is missing",
-                                            config_name.display()
-                                        )),
-                                    }
-                                }
-                                Ok(_) => problems.push(format!(
-                                    "requirement {id}: TLA+ module {module} does not define {property}"
-                                )),
-                                Err(_) => problems.push(format!(
-                                    "requirement {id}: TLA+ module {module} is missing"
-                                )),
-                            }
-                        } else {
-                            have.tla = true;
-                        }
-                    }
-                    _ => problems.push(format!(
-                        "requirement {id}: tla artifact must be Module.tla::Property"
-                    )),
-                },
             }
         }
 
@@ -717,53 +553,6 @@ pub fn check(root: &Path) -> Report {
 
         let mut formal_mutant_ids = BTreeSet::new();
         if resolve {
-            if let Some((module, property)) = resolved_tla {
-                let model = Path::new(module)
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .expect("safe TLA reference has a UTF-8 stem");
-                let tla_root = root.join("verification/tla");
-                let manifest = tla_root.join("mutations").join(format!("{model}.json"));
-                let evidence = tla_root.join("evidence").join(format!("{model}.json"));
-                let jar = root.join(".tools/tla2tools-1.8.0.jar");
-                let jar_digest = if jar.is_file() {
-                    sha256_file(&jar)
-                        .map_err(|error| error.to_string())
-                        .unwrap_or_else(|_| TLA2TOOLS_1_8_0_SHA256.to_owned())
-                } else {
-                    TLA2TOOLS_1_8_0_SHA256.to_owned()
-                };
-                match verify_evidence_with_jar_digest(
-                    &tla_root.join(module),
-                    &tla_root.join(format!("{model}.cfg")),
-                    &manifest,
-                    &evidence,
-                    &jar_digest,
-                ) {
-                    Ok(verified) => {
-                        let mut matching_property_mutation = false;
-                        for result in verified.results {
-                            formal_mutant_ids.insert(result.id.clone());
-                            if a.mutation.contains(&result.id)
-                                && result.property == property
-                                && result.outcome.is_killed()
-                            {
-                                matching_property_mutation = true;
-                                have.mutation = true;
-                            }
-                        }
-                        if !matching_property_mutation {
-                            problems.push(format!(
-                                "requirement {id}: no referenced killed TLA mutation for property {property}"
-                            ));
-                        }
-                    }
-                    Err(error) => problems.push(format!(
-                        "requirement {id}: TLA+ mutation evidence for {model} is invalid: {error}"
-                    )),
-                }
-            }
-
             if let Some((descriptor, property)) = resolved_quint {
                 let quint_root = root.join("verification/quint");
                 let evidence_path = quint_root
@@ -915,8 +704,7 @@ pub fn check(root: &Path) -> Report {
 
         if r.criticality == "critical" && r.status == "implemented" {
             let dynamic = have.integration || have.property;
-            let formal =
-                have.tla || have.quint || have.kani || have.loom || have.property || have.fuzz;
+            let formal = have.quint || have.kani || have.loom || have.property || have.fuzz;
             let mutation = have.mutation || have.conformance;
             if !dynamic {
                 problems.push(format!(

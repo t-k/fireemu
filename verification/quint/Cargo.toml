@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "private Quint model checking and Quint Connect conformance pilot"
+description = "private Quint model checking and Quint Connect conformance authority"
 
 [dependencies]
 anyhow = "1.0"

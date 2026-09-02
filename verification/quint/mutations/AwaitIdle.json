@@ -13,7 +13,7 @@
       "id": "M-FORMAL-IDLE-LIVENESS-001",
       "property": "AwaitIdleEventuallyReturns",
       "operator": "remove-return-idle-fairness",
-      "from": "ReturnIdle.weakFair((observable, previousObservable, depth, used, previousUsed, fenced, lastAction, lastItem)),",
+      "from": "ReturnIdle.weakFair((observable, previousObservable, depth, used, previousUsed, fenced, ignoreTextIndex, lastAction, lastItem)),",
       "to": "true,"
     },
     {

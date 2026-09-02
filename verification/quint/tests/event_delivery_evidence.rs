@@ -1,4 +1,4 @@
-//! Strict mutation and evidence contracts for the `EventDelivery` Quint pilot.
+//! Strict mutation and evidence contracts for the `EventDelivery` Quint authority.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ const BOUND_INPUTS: [&str; 31] = [
     "verification/quint/README.md",
     "verification/quint/bin/quint",
     "verification/quint/bin/process-group",
-    "verification/quint/run-pilot.sh",
+    "verification/quint/run-verification.sh",
     "verification/quint/specs/EventDelivery.qnt",
     "verification/quint/configs/EventDelivery.json",
     "verification/quint/mutations/EventDelivery.json",

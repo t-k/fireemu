@@ -5,5 +5,5 @@
 ## Decision
 
 State transitions are synchronous functions on the core. Async I/O tasks never mutate state
-directly; they call a synchronous command boundary. This keeps Loom and TLA+ models small and
+directly; they call a synchronous command boundary. This keeps Loom and Quint models small and
 lets the same core run under Kani and in-process fuzzers.

@@ -191,7 +191,7 @@ impl EventDeliveryDriver {
             .iter()
             .any(|name| !matches!(name.as_str(), "e1" | "e2"))
         {
-            return Err(invalid_data("the pilot supports only e1 and e2"));
+            return Err(invalid_data("the authority supports only e1 and e2"));
         }
         Ok(Self {
             records: BTreeMap::new(),

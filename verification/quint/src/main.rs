@@ -1,4 +1,4 @@
-//! Command-line entry point for the private Quint verification pilot.
+//! Command-line entry point for the private Quint verification authority.
 
 use std::env;
 use std::path::PathBuf;

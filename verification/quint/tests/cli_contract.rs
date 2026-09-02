@@ -1,6 +1,8 @@
 //! Contracts for the pinned, bounded Quint command.
 
 use std::fs;
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -25,8 +27,8 @@ fn event_delivery_spec_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("specs/EventDelivery.qnt")
 }
 
-fn pilot_script_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run-pilot.sh")
+fn authority_script_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("run-verification.sh")
 }
 
 fn readme_path() -> PathBuf {
@@ -80,6 +82,19 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(10));
     }
     condition()
+}
+
+#[cfg(unix)]
+fn make_executable(paths: &[&Path]) {
+    use std::os::unix::fs::PermissionsExt;
+
+    for path in paths {
+        let mut permissions = fs::metadata(path)
+            .expect("script metadata must exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("script must be executable");
+    }
 }
 
 #[cfg(unix)]
@@ -381,7 +396,7 @@ fn cli_declares_verify_model_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
         .arg("--help")
         .output()
-        .expect("pilot CLI must launch");
+        .expect("authority CLI must launch");
     assert!(output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stdout)
@@ -413,17 +428,26 @@ fn cli_rejects_an_unknown_model_before_launching_a_checker() {
 }
 
 #[test]
-fn pilot_script_declares_ordered_dual_run_gates() {
-    let script = fs::read_to_string(pilot_script_path()).expect("pilot script must exist");
+fn authority_script_declares_all_models_and_ordered_gates() {
+    let script = fs::read_to_string(authority_script_path()).expect("authority script must exist");
+    for model in [
+        "AtomicCommitOutbox",
+        "AtomicExportPublication",
+        "AuthTotp",
+        "AwaitIdle",
+        "EventDelivery",
+        "RegexAuthorization",
+        "RulesetActivation",
+        "SessionEpoch",
+        "StorageGeneration",
+    ] {
+        assert!(script.contains(model), "missing authority model {model}");
+    }
     let gates = [
-        "verification/tla/run-tlc.sh EventDelivery",
-        "cargo run -p tla-verification -- check-eventdelivery",
-        "verify-model --model EventDelivery",
-        "deterministic_scenarios_cover_all_actions",
-        "generated_traces_match_rust",
-        "each_projection_field_detects_drift",
-        "mutate-model --model EventDelivery",
-        "verify-evidence --model EventDelivery",
+        "verify-model --model \"$model\"",
+        "cargo test -p fireemu-verification-quint --test \"$test_target\"",
+        "mutate-model --model \"$model\"",
+        "verify-evidence --model \"$model\" --evidence \"$mutation_evidence\"",
         "cargo run -p traceability-check",
     ];
     let mut offset = 0;
@@ -433,7 +457,7 @@ fn pilot_script_declares_ordered_dual_run_gates() {
             .unwrap_or_else(|| panic!("missing or out-of-order gate {gate}"));
         offset += found + gate.len();
     }
-    assert!(script.contains("PILOT_PASSES:-1"));
+    assert!(script.contains("VERIFICATION_PASSES:-1"));
     assert!(script.contains("mktemp -d"));
     assert!(script.contains("trap cleanup"));
     let launch_contract = [
@@ -453,73 +477,78 @@ fn pilot_script_declares_ordered_dual_run_gates() {
 }
 
 #[test]
-fn readme_declares_interrupt_and_retry_timing_conformance() {
-    let readme = fs::read_to_string(readme_path()).expect("pilot README must exist");
-    assert!(readme.contains("`Interrupt` gives the in-flight attempt back"));
-    assert!(readme.contains("retry deadline, exponential delay, and maximum-delay cap"));
+fn readme_declares_the_nine_model_authority_and_generated_conformance() {
+    let readme = fs::read_to_string(readme_path()).expect("authority README must exist");
+    assert!(readme.contains("repository's formal verification authority"));
+    assert!(readme.contains("`AwaitIdle`"));
+    assert!(readme.contains("`StorageGeneration`"));
+    assert!(readme.contains("Generated conformance campaigns"));
 }
 
 #[cfg(unix)]
 #[test]
-fn pilot_term_signal_stops_and_waits_for_the_active_gate_group() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temporary = OwnedTestDirectory::create("pilot-signal");
+fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
+    let temporary = OwnedTestDirectory::create("authority-signal");
     let quint_dir = temporary.0.join("verification/quint");
-    let tla_dir = temporary.0.join("verification/tla");
     fs::create_dir_all(&quint_dir).expect("temporary Quint directory must be created");
-    fs::create_dir_all(&tla_dir).expect("temporary TLA directory must be created");
 
-    let pilot = quint_dir.join("run-pilot.sh");
-    fs::copy(pilot_script_path(), &pilot).expect("pilot script must be copied");
+    let authority = quint_dir.join("run-verification.sh");
+    fs::copy(authority_script_path(), &authority).expect("authority script must be copied");
     let launcher = quint_dir.join("bin/process-group");
     fs::create_dir_all(launcher.parent().expect("launcher must have a parent"))
         .expect("temporary launcher directory must be created");
     fs::copy(process_group_launcher_path(), &launcher).expect("group launcher must be copied");
-    let gate = tla_dir.join("run-tlc.sh");
+    let fake_bin = temporary.0.join("bin");
+    fs::create_dir_all(&fake_bin).expect("temporary bin directory must be created");
+    let gate = fake_bin.join("cargo");
     fs::write(
         &gate,
-        "#!/bin/sh\nsleep 30 &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$PILOT_CHILD_PID_FILE\"\nwait \"$child\"\n",
+        "#!/bin/sh\nsleep 30 &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$AUTHORITY_CHILD_PID_FILE\"\nwait \"$child\"\n",
     )
-    .expect("gate fixture must be written");
-    for path in [&pilot, &launcher, &gate] {
-        let mut permissions = fs::metadata(path)
-            .expect("script metadata must exist")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("script must be executable");
-    }
+    .expect("cargo fixture must be written");
+    make_executable(&[&authority, &launcher, &gate]);
 
     let pid_file = temporary.0.join("children.pid");
-    let pilot_log = temporary.0.join("pilot.log");
-    let stdout = fs::File::create(&pilot_log).expect("pilot log must be created");
-    let stderr = stdout.try_clone().expect("pilot log handle must be cloned");
-    let mut child = Command::new(&pilot)
+    let authority_log = temporary.0.join("authority.log");
+    let stdout = fs::File::create(&authority_log).expect("authority log must be created");
+    let stderr = stdout
+        .try_clone()
+        .expect("authority log handle must be cloned");
+    let mut child = Command::new(&authority)
         .current_dir(&temporary.0)
-        .env("PILOT_CHILD_PID_FILE", &pid_file)
+        .env("AUTHORITY_CHILD_PID_FILE", &pid_file)
         .env("QUINT_REAL_BIN", "/bin/sh")
+        .env(
+            "PATH",
+            std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )))
+            .expect("fixture PATH must be joinable"),
+        )
         .stdout(stdout)
         .stderr(stderr)
         .spawn()
-        .expect("pilot must launch");
+        .expect("authority must launch");
     let mut early_status = None;
     let ready = wait_until(Duration::from_secs(30), || {
         if pid_file.exists() {
             return true;
         }
-        early_status = child.try_wait().expect("pilot readiness wait must succeed");
+        early_status = child
+            .try_wait()
+            .expect("authority readiness wait must succeed");
         early_status.is_some()
     });
     if let Some(status) = early_status {
-        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
-        panic!("pilot exited before the active gate was ready ({status}):\n{log}");
+        let log = fs::read_to_string(&authority_log).unwrap_or_default();
+        panic!("authority exited before the active gate was ready ({status}):\n{log}");
     }
     if !ready {
         let _ = Command::new("/bin/kill")
             .args(["-TERM", &child.id().to_string()])
             .status();
         let _ = child.wait();
-        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
+        let log = fs::read_to_string(&authority_log).unwrap_or_default();
         panic!("active gate did not become ready within 30 seconds:\n{log}");
     }
     let pids = fs::read_to_string(&pid_file).expect("child pid file must be readable");
@@ -535,7 +564,10 @@ fn pilot_term_signal_stops_and_waits_for_the_active_gate_group() {
         .expect("TERM command must launch");
     assert!(signal.success());
     let exited = wait_until(Duration::from_secs(4), || {
-        child.try_wait().expect("pilot wait must succeed").is_some()
+        child
+            .try_wait()
+            .expect("authority wait must succeed")
+            .is_some()
     });
     if !exited {
         let _ = child.kill();
@@ -544,9 +576,9 @@ fn pilot_term_signal_stops_and_waits_for_the_active_gate_group() {
                 .args(["-TERM", &pid.to_string()])
                 .status();
         }
-        panic!("TERM must stop the pilot promptly");
+        panic!("TERM must stop the authority promptly");
     }
-    let status = child.wait().expect("pilot must be reaped");
+    let status = child.wait().expect("authority must be reaped");
     assert_eq!(status.code(), Some(143));
     assert!(
         wait_until(Duration::from_secs(2), || pids
@@ -558,19 +590,15 @@ fn pilot_term_signal_stops_and_waits_for_the_active_gate_group() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn pilot_term_signal_reaches_the_nested_guarded_quint_group() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temporary = OwnedTestDirectory::create("pilot-nested-signal");
+fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
+    let temporary = OwnedTestDirectory::create("authority-nested-signal");
     let quint_dir = temporary.0.join("verification/quint");
-    let tla_dir = temporary.0.join("verification/tla");
     fs::create_dir_all(quint_dir.join("bin")).expect("temporary Quint bin must be created");
-    fs::create_dir_all(&tla_dir).expect("temporary TLA directory must be created");
 
-    let pilot = quint_dir.join("run-pilot.sh");
+    let authority = quint_dir.join("run-verification.sh");
     let launcher = quint_dir.join("bin/process-group");
     let wrapper = quint_dir.join("bin/quint");
-    fs::copy(pilot_script_path(), &pilot).expect("pilot script must be copied");
+    fs::copy(authority_script_path(), &authority).expect("authority script must be copied");
     fs::copy(process_group_launcher_path(), &launcher).expect("group launcher must be copied");
     fs::copy(wrapper_path(), &wrapper).expect("guarded wrapper must be copied");
 
@@ -580,31 +608,39 @@ fn pilot_term_signal_reaches_the_nested_guarded_quint_group() {
         "#!/bin/sh\nsleep 30 &\nchild=$!\ntimeout_pid=$(ps -o ppid= -p \"$$\" | tr -d ' ')\nprintf '%s %s %s\\n' \"$timeout_pid\" \"$$\" \"$child\" > \"$NESTED_PID_FILE\"\nwait \"$child\"\n",
     )
     .expect("fake Quint must be written");
-    let gate = tla_dir.join("run-tlc.sh");
-    fs::write(&gate, "#!/bin/sh\nexec \"$PILOT_QUINT_WRAPPER\" \"$@\"\n")
-        .expect("wrapper gate must be written");
-    for path in [&pilot, &launcher, &wrapper, &real_quint, &gate] {
-        let mut permissions = fs::metadata(path)
-            .expect("script metadata must exist")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("script must be executable");
-    }
+    let fake_bin = temporary.0.join("fixture-bin");
+    fs::create_dir_all(&fake_bin).expect("temporary fixture bin must be created");
+    let gate = fake_bin.join("cargo");
+    fs::write(
+        &gate,
+        "#!/bin/sh\nexec \"$AUTHORITY_QUINT_WRAPPER\" \"$@\"\n",
+    )
+    .expect("wrapper gate must be written");
+    make_executable(&[&authority, &launcher, &wrapper, &real_quint, &gate]);
 
     let pid_file = temporary.0.join("nested.pid");
-    let pilot_log = temporary.0.join("pilot.log");
-    let stdout = fs::File::create(&pilot_log).expect("pilot log must be created");
-    let stderr = stdout.try_clone().expect("pilot log handle must be cloned");
-    let mut child = Command::new(&pilot)
+    let authority_log = temporary.0.join("authority.log");
+    let stdout = fs::File::create(&authority_log).expect("authority log must be created");
+    let stderr = stdout
+        .try_clone()
+        .expect("authority log handle must be cloned");
+    let mut child = Command::new(&authority)
         .current_dir(&temporary.0)
         .env("NESTED_PID_FILE", &pid_file)
-        .env("PILOT_QUINT_WRAPPER", &wrapper)
+        .env("AUTHORITY_QUINT_WRAPPER", &wrapper)
         .env("QUINT_REAL_BIN", &real_quint)
         .env("QUINT_TIMEOUT_SECONDS", "30")
+        .env(
+            "PATH",
+            std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )))
+            .expect("fixture PATH must be joinable"),
+        )
         .stdout(stdout)
         .stderr(stderr)
         .spawn()
-        .expect("nested pilot must launch");
+        .expect("nested authority must launch");
     let mut early_status = None;
     let ready = wait_until(Duration::from_secs(30), || {
         if pid_file.exists() {
@@ -612,19 +648,19 @@ fn pilot_term_signal_reaches_the_nested_guarded_quint_group() {
         }
         early_status = child
             .try_wait()
-            .expect("nested pilot readiness wait must succeed");
+            .expect("nested authority readiness wait must succeed");
         early_status.is_some()
     });
     if let Some(status) = early_status {
-        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
-        panic!("nested pilot exited before readiness ({status}):\n{log}");
+        let log = fs::read_to_string(&authority_log).unwrap_or_default();
+        panic!("nested authority exited before readiness ({status}):\n{log}");
     }
     if !ready {
         let _ = Command::new("/bin/kill")
             .args(["-TERM", &child.id().to_string()])
             .status();
         let _ = child.wait();
-        let log = fs::read_to_string(&pilot_log).unwrap_or_default();
+        let log = fs::read_to_string(&authority_log).unwrap_or_default();
         panic!("nested Quint group did not become ready:\n{log}");
     }
     let pids = fs::read_to_string(&pid_file).expect("nested pid file must be readable");
@@ -642,7 +678,7 @@ fn pilot_term_signal_reaches_the_nested_guarded_quint_group() {
     let exited = wait_until(Duration::from_secs(6), || {
         child
             .try_wait()
-            .expect("nested pilot wait must succeed")
+            .expect("nested authority wait must succeed")
             .is_some()
     });
     if !exited {
@@ -652,9 +688,9 @@ fn pilot_term_signal_reaches_the_nested_guarded_quint_group() {
                 .args(["-TERM", &pid.to_string()])
                 .status();
         }
-        panic!("TERM must stop the nested pilot promptly");
+        panic!("TERM must stop the nested authority promptly");
     }
-    let status = child.wait().expect("nested pilot must be reaped");
+    let status = child.wait().expect("nested authority must be reaped");
     assert_eq!(status.code(), Some(143));
     assert!(
         wait_until(Duration::from_secs(2), || pids
@@ -679,7 +715,7 @@ fn verify_model_cli_checks_event_delivery_with_tlc() {
         ])
         .env("PATH", path_with_pinned_quint())
         .output()
-        .expect("pilot CLI must launch");
+        .expect("authority CLI must launch");
     assert!(
         output.status.success(),
         "verify-model failed:\nstdout:\n{}\nstderr:\n{}",

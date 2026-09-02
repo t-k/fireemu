@@ -242,7 +242,7 @@ fn retry_policy_rejects_zero_attempts_negative_and_inverted_backoffs() {
         RetryPolicy::try_new(1, LogicalDuration::from_seconds(2), one),
         Err(RetryPolicyError::BaseExceedsMax)
     );
-    // One attempt: the first failure dead-letters immediately (matches the TLA+ bound).
+    // One attempt: the first failure dead-letters immediately (matches the Quint bound).
     let no_retry = RetryPolicy::try_new(1, one, one).unwrap();
     let mut r = EventRecord::new(event(Epoch::initial()));
     r.lease().unwrap();

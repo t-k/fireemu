@@ -27,7 +27,7 @@ const COMMON_DIGEST_PATHS: &[&str] = &[
     "verification/quint/bin/quint",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
-    "verification/quint/run-pilot.sh",
+    "verification/quint/run-verification.sh",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",

@@ -5,10 +5,10 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 cd "$repository_root"
 
-passes=${PILOT_PASSES:-1}
+passes=${VERIFICATION_PASSES:-1}
 case "$passes" in
   ''|*[!0-9]*|0)
-    echo "error: PILOT_PASSES must be a positive integer" >&2
+    echo "error: VERIFICATION_PASSES must be a positive integer" >&2
     exit 2
     ;;
 esac
@@ -29,7 +29,7 @@ if [ ! -x "$group_launcher" ]; then
   exit 2
 fi
 
-owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-pilot.XXXXXX")
+owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-authority.XXXXXX")
 active_pid=
 launching=0
 pending_signal=
@@ -94,17 +94,26 @@ run_gate() {
 
 pass=1
 while [ "$pass" -le "$passes" ]; do
-  echo "EventDelivery Quint pilot pass $pass/$passes"
-  mutation_evidence="$owned_temp/EventDelivery-pass-$pass.json"
-
-  run_gate tla-model verification/tla/run-tlc.sh EventDelivery
-  run_gate tla-replay cargo run -p tla-verification -- check-eventdelivery
-  run_gate quint-model cargo run -p fireemu-verification-quint -- verify-model --model EventDelivery
-  run_gate quint-scenarios cargo test -p fireemu-verification-quint --test event_delivery_connect deterministic_scenarios_cover_all_actions -- --ignored --exact
-  run_gate quint-generated cargo test -p fireemu-verification-quint --test event_delivery_connect generated_traces_match_rust -- --ignored --exact
-  run_gate quint-projection-negative cargo test -p fireemu-verification-quint --test event_delivery_connect each_projection_field_detects_drift -- --ignored --exact
-  run_gate quint-mutations cargo run -p fireemu-verification-quint -- mutate-model --model EventDelivery --evidence "$mutation_evidence"
-  run_gate quint-evidence cargo run -p fireemu-verification-quint -- verify-evidence --model EventDelivery
+  echo "Quint authority pass $pass/$passes"
+  for entry in \
+    AtomicCommitOutbox:atomic_commit_outbox_connect \
+    AtomicExportPublication:atomic_export_publication_connect \
+    AuthTotp:auth_totp_connect \
+    AwaitIdle:await_idle_connect \
+    EventDelivery:event_delivery_connect \
+    RegexAuthorization:regex_authorization_connect \
+    RulesetActivation:ruleset_activation_connect \
+    SessionEpoch:session_epoch_connect \
+    StorageGeneration:storage_generation_connect
+  do
+    model=${entry%%:*}
+    test_target=${entry#*:}
+    mutation_evidence="$owned_temp/$model-pass-$pass.json"
+    run_gate "$model-model" cargo run -p fireemu-verification-quint -- verify-model --model "$model"
+    run_gate "$model-connect" cargo test -p fireemu-verification-quint --test "$test_target" -- --ignored --test-threads=1
+    run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --evidence "$mutation_evidence"
+    run_gate "$model-evidence" cargo run -p fireemu-verification-quint -- verify-evidence --model "$model" --evidence "$mutation_evidence"
+  done
   run_gate traceability cargo run -p traceability-check
 
   pass=$((pass + 1))

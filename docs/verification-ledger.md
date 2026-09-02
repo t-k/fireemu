@@ -25,7 +25,7 @@ that exist**. A name that resolves to nothing is a false green, not evidence (AD
 
 | Category | Shape | Resolves against |
 | --- | --- | --- |
-| `tla` | `Module.tla::Property` | `verification/tla/<Module>.tla` must contain `<Property> ==`. |
+| `quint` | `Model.qnt::Property` | The model and property must be registered in `verification/quint/src/model.rs`, the spec must exist under `verification/quint/specs`, and its evidence must validate. |
 | `loom` | list of snake_case names | Defined in `verification/loom/scenarios.json` **and** present as `fn <name>(` under `verification/loom/src`. |
 | `kani` | snake_case function name | A `#[kani::proof]` function of that name under `verification/kani`. An attribute such as `#[kani::unwind(4)]` may sit between the proof attribute and the function; a name that appears only in a comment does not resolve. |
 | `property` | snake_case function name | A function of that name defined in a Rust file under a `tests/` directory anywhere in the workspace (`proptest!` bodies count: they expand to `fn <name>(...)`). Property artifacts for the core invariants live in `verification/property/tests`. |
@@ -66,7 +66,7 @@ in `note`.
 A requirement with `criticality: critical` and `status: implemented` must have all three of:
 
 1. a **dynamic** test: a resolved `integration` file or a resolved `property` test;
-2. a **formal or systematic** artifact: a resolved `tla`, `kani`, `loom`, `property` or `fuzz`
+2. a **formal or systematic** artifact: a resolved `quint`, `kani`, `loom`, `property` or `fuzz`
    artifact;
 3. a **mutation or negative** test: a `mutation` ID or a resolved `conformance` artifact.
 

@@ -1,50 +1,52 @@
-# EventDelivery Quint pilot
+# Quint formal verification authority
 
-This directory is an additive pilot for replacing the EventDelivery TLA+ specification with Quint and Quint Connect. During the pilot, the existing files under `verification/tla` remain the sole formal authority. A successful Quint run is supporting evidence, not permission to remove or weaken the TLA+ checks.
+This directory is the repository's formal verification authority. Nine bounded Quint models define the checked safety and liveness properties, and Quint Connect replays deterministic and generated traces against the production Rust state machines.
 
 ## Pinned tools
 
-`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. The pilot runner also requires Python 3 from the host to create an owned process group without third-party packages. Install the JavaScript dependency with:
+`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. The verification runner also requires Java for Quint's TLC backend and Python 3 to create an owned process group without third-party packages.
+
+Install the JavaScript dependency with:
 
 ```sh
 pnpm -C verification/quint install --frozen-lockfile
 ```
 
-The CI path invokes `bin/quint`, which requires an absolute `QUINT_REAL_BIN` and GNU `timeout`. The wrapper terminates the owned checker process group after the configured limit and maps timeout exits to status 124. On systems without GNU `timeout`, individual development tests may put `verification/quint/node_modules/.bin` directly on `PATH`; the CI evidence still uses the guarded wrapper.
+The CI path invokes `bin/quint`, which requires an absolute `QUINT_REAL_BIN` and GNU `timeout`. The wrapper terminates the owned checker process group after the configured limit and maps timeout exits to status 124. Install GNU Coreutils and make its `timeout` command available on `PATH` before running the complete authority pass. Individual development tests may invoke the pinned real CLI directly, but the complete authority pass must use the guarded wrapper.
 
-Run one complete developer pass with:
+Run one complete authority pass with:
 
 ```sh
-QUINT_REAL_BIN="$PWD/verification/quint/node_modules/.bin/quint" PATH="$PWD/verification/quint/node_modules/.bin:$PATH" PILOT_PASSES=1 verification/quint/run-pilot.sh
+QUINT_REAL_BIN="$PWD/verification/quint/node_modules/.bin/quint" PATH="$PWD/verification/quint/bin:$PATH" VERIFICATION_PASSES=1 verification/quint/run-verification.sh
 ```
 
-## Model instances
+## Models and production conformance
 
-`specs/EventDelivery.qnt` defines one parameterized model and three instances:
+The registry in `src/model.rs` is the single inventory for these authority models:
 
-- `EventDeliveryProof` uses two events, three attempts, two epochs, and bounded logical time for exhaustive TLC checking.
-- `EventDeliveryScenarios` uses one event and two attempts to replay success, retry timing, interruption, stale discard, and cancellation deterministically.
-- `EventDeliveryConnect` uses two events and three attempts for generated implementation-conformance traces.
+- `AtomicCommitOutbox`
+- `AtomicExportPublication`
+- `AuthTotp`
+- `AwaitIdle`
+- `EventDelivery`
+- `RegexAuthorization`
+- `RulesetActivation`
+- `SessionEpoch`
+- `StorageGeneration`
 
-Quint Connect dispatches `Lease`, `Start`, `Succeed`, `Fail`, `RetryDue`, `Interrupt`, `Cancel`, `Tick`, `Reset`, and `DiscardStale` to the real Rust `EventRecord` API. After every action it compares lifecycle, attempts, maximum attempts, captured epoch, current epoch, terminal, cancelled, stale, logical time, retry deadline, base backoff, and maximum backoff. `Interrupt` gives the in-flight attempt back through the production API. The model independently checks the retry deadline, exponential delay, and maximum-delay cap against the real `RetryPolicy` result.
+Every descriptor binds its Quint specification, checker configuration, properties, semantic mutations, production sources, deterministic scenarios, and projection fields. Its Quint Connect driver dispatches model actions through production Rust APIs and compares the resulting production-derived projection after every action. Independent projection faults prove that each declared field can detect drift.
 
-## Generated traces and mutations
+Generated conformance campaigns use the checked-in seeds `0x1`, `0x2`, `0x3`, and `0x4`. Deterministic scenarios cover the complete modeled action inventory. These traces supplement exhaustive bounded checking; neither replaces the other.
 
-CI replays 100 traces for each checked-in seed `0x1`, `0x2`, `0x3`, and `0x4`, with at most 20 actions per trace. A failure reports its seed. These generated traces supplement the five deterministic scenarios and TLC; they do not replace either.
+## Semantic mutations and evidence
 
-Ten semantic source mutations use tool-neutral formal-verification IDs and cover lifecycle safety, liveness, interruption accounting, retry eligibility, exponential backoff, the delay cap, and monotonic time. Every replacement must match exactly once, and every mutant must produce the expected pinned TLC safety or temporal counterexample. Timeout, parser, typechecker, translator, launch, and other tool failures are not mutation kills.
+Mutation manifests under `mutations/` use tool-neutral `M-FORMAL-*` identifiers. Each exact source replacement must match once, and every mutant must produce the expected safety or temporal counterexample. Parser, typechecker, translator, launch, timeout, and other tool failures never count as mutation kills.
 
-## Evidence and regeneration
-
-`evidence/EventDelivery.json` binds the model, TLC configuration, mutation manifest, package manifests, lockfiles, tool versions, properties, scenarios, action coverage, projection negative checks, seeds, bounds, and killed mutations. Regenerate it only after the baseline, deterministic scenarios, generated campaigns, projection negative checks, and real mutation campaign all pass:
+Evidence under `evidence/` binds the model, checker configuration, mutation manifest, package manifests, lockfiles, tool versions, properties, scenarios, action coverage, projection negative checks, seeds, bounds, and production sources. Regenerate a model only after its baseline, deterministic scenarios, generated campaigns, projection negative checks, and real mutation campaign pass:
 
 ```sh
 cargo run -p fireemu-verification-quint -- mutate-model --model EventDelivery --evidence verification/quint/evidence/EventDelivery.json
 cargo run -p fireemu-verification-quint -- verify-evidence --model EventDelivery
 ```
 
-The JSON deliberately stores stable bounded classifications rather than checker timestamps or temporary paths. Any bound input change requires deliberate regeneration and review.
-
-## Rollback
-
-The pilot does not change the existing TLA+ model, trace fixtures, mutation evidence, or CI job. Rollback consists of removing `verification/quint`, its workspace member, and the dedicated `quint` CI job. Do not remove any `verification/tla` artifact as part of pilot rollback.
+The JSON stores stable bounded classifications rather than checker timestamps or temporary paths. Any bound input change requires deliberate regeneration and review.

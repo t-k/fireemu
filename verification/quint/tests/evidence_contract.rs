@@ -12,7 +12,7 @@ const TAMPER_TARGETS: [&str; 9] = [
     ".github/workflows/ci.yml",
     "Cargo.lock",
     "crates/fireemu-core-events/src/state.rs",
-    "verification/quint/run-pilot.sh",
+    "verification/quint/run-verification.sh",
     "verification/quint/specs/EventDelivery.qnt",
     "verification/quint/configs/EventDelivery.json",
     "verification/quint/mutations/EventDelivery.json",

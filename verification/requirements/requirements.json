@@ -9,7 +9,7 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "SessionEpoch.tla::EpochIsolation",
+        "quint": "SessionEpoch.qnt::EpochIsolation",
         "loom": [
           "stale_epoch_never_mutates_new_state",
           "reset_races_with_commit"
@@ -18,7 +18,7 @@
         "property": "prop_epoch_guard_rejects_non_current",
         "mutation": [
           "M-EPOCH-001",
-          "M-TLA-EPOCH-ISOLATION-001"
+          "M-FORMAL-EPOCH-ISOLATION-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/session.rs",
@@ -33,10 +33,10 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "SessionEpoch.tla::WorkCapturedOnlyWhileActive",
+        "quint": "SessionEpoch.qnt::WorkCapturedOnlyWhileActive",
         "mutation": [
           "M-EPOCH-001",
-          "M-TLA-EPOCH-CAPTURE-001"
+          "M-FORMAL-EPOCH-CAPTURE-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/session.rs"
@@ -67,7 +67,7 @@
       "owner": "core-events",
       "status": "implemented",
       "artifacts": {
-        "tla": "EventDelivery.tla::NoTerminalRegression",
+        "quint": "EventDelivery.qnt::NoTerminalRegression",
         "loom": [
           "event_success_races_with_retry_timer"
         ],
@@ -76,11 +76,11 @@
         "mutation": [
           "M-RETRY-001",
           "M-RETRY-002",
-          "M-TLA-EVENT-TERMINAL-001"
+          "M-FORMAL-EVENT-TERMINAL-001"
         ],
         "integration": [
           "crates/fireemu-core-events/tests/state_machine.rs",
-          "tools/tla-verification/tests/event_replay.rs"
+          "verification/quint/tests/event_delivery_connect.rs"
         ]
       },
       "note": "terminal_event_rejects_every_transition builds a real event, so it allocates: on macOS with Kani 0.67 it hits the known 'malloc with missing definition' limitation recorded in the README and only verifies where the allocator is modelled."
@@ -92,13 +92,13 @@
       "owner": "core-events",
       "status": "implemented",
       "artifacts": {
-        "tla": "EventDelivery.tla::LegalStateTransitions",
+        "quint": "EventDelivery.qnt::LegalStateTransitions",
         "mutation": [
-          "M-TLA-EVENT-LEGAL-001"
+          "M-FORMAL-EVENT-LEGAL-001"
         ],
         "integration": [
           "crates/fireemu-core-events/tests/state_machine.rs",
-          "tools/tla-verification/tests/event_replay.rs"
+          "verification/quint/tests/event_delivery_connect.rs"
         ]
       }
     },
@@ -109,14 +109,14 @@
       "owner": "core-events",
       "status": "implemented",
       "artifacts": {
-        "tla": "EventDelivery.tla::AttemptsChangeOnlyOnStart",
+        "quint": "EventDelivery.qnt::AttemptsChangeOnlyOnStart",
         "mutation": [
           "M-RETRY-002",
-          "M-TLA-EVENT-ATTEMPTS-001"
+          "M-FORMAL-EVENT-ATTEMPTS-001"
         ],
         "integration": [
           "crates/fireemu-core-events/tests/state_machine.rs",
-          "tools/tla-verification/tests/event_replay.rs"
+          "verification/quint/tests/event_delivery_connect.rs"
         ]
       }
     },
@@ -127,15 +127,15 @@
       "owner": "core-events",
       "status": "implemented",
       "artifacts": {
-        "tla": "EventDelivery.tla::StaleDiscardRequiresOlderEpoch",
+        "quint": "EventDelivery.qnt::StaleDiscardRequiresOlderEpoch",
         "mutation": [
           "M-EPOCH-001",
-          "M-TLA-EVENT-STALE-001"
+          "M-FORMAL-EVENT-STALE-001"
         ],
         "integration": [
           "crates/fireemu-core-events/tests/outbox.rs",
           "crates/fireemu-core-events/tests/state_machine.rs",
-          "tools/tla-verification/tests/event_replay.rs"
+          "verification/quint/tests/event_delivery_connect.rs"
         ]
       }
     },
@@ -146,7 +146,7 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "AwaitIdle.tla::NoFalseIdle",
+        "quint": "AwaitIdle.qnt::NoFalseIdle",
         "loom": [
           "await_idle_races_with_child_enqueue",
           "active_work_counter_never_underflows",
@@ -158,7 +158,7 @@
           "M-IDLE-001",
           "M-IDLE-002",
           "M-IDLE-003",
-          "M-TLA-IDLE-SAFETY-001"
+          "M-FORMAL-IDLE-SAFETY-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -172,10 +172,10 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "AwaitIdle.tla::NoIdentityReuse",
+        "quint": "AwaitIdle.qnt::NoIdentityReuse",
         "mutation": [
-          "M-TLA-IDLE-IDENTITY-EXTERNAL-001",
-          "M-TLA-IDLE-IDENTITY-CHILD-001"
+          "M-FORMAL-IDLE-IDENTITY-EXTERNAL-001",
+          "M-FORMAL-IDLE-IDENTITY-CHILD-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -189,9 +189,9 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "AwaitIdle.tla::FenceClosedToNewExternalWork",
+        "quint": "AwaitIdle.qnt::FenceClosedToNewExternalWork",
         "mutation": [
-          "M-TLA-IDLE-FENCE-ADMISSION-001"
+          "M-FORMAL-IDLE-FENCE-ADMISSION-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -205,9 +205,9 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "AwaitIdle.tla::FenceLifecycleMonotonic",
+        "quint": "AwaitIdle.qnt::FenceLifecycleMonotonic",
         "mutation": [
-          "M-TLA-IDLE-FENCE-LIFECYCLE-001"
+          "M-FORMAL-IDLE-FENCE-LIFECYCLE-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -221,10 +221,10 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "AwaitIdle.tla::CoveredReservationsBlock",
+        "quint": "AwaitIdle.qnt::CoveredReservationsBlock",
         "mutation": [
           "M-IDLE-002",
-          "M-TLA-IDLE-RESERVATION-001"
+          "M-FORMAL-IDLE-RESERVATION-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -238,10 +238,10 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "SessionEpoch.tla::ResetEventuallyActivatesNewEpoch",
+        "quint": "SessionEpoch.qnt::ResetEventuallyActivatesNewEpoch",
         "mutation": [
           "M-EPOCH-001",
-          "M-TLA-RESET-LIVENESS-001"
+          "M-FORMAL-RESET-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/session.rs"
@@ -255,11 +255,11 @@
       "owner": "core-events",
       "status": "implemented",
       "artifacts": {
-        "tla": "EventDelivery.tla::EventEventuallyTerminates",
+        "quint": "EventDelivery.qnt::EventEventuallyTerminates",
         "mutation": [
           "M-RETRY-001",
           "M-RETRY-002",
-          "M-TLA-EVENT-LIVENESS-001"
+          "M-FORMAL-EVENT-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-events/tests/state_machine.rs"
@@ -273,10 +273,10 @@
       "owner": "core-session",
       "status": "implemented",
       "artifacts": {
-        "tla": "AwaitIdle.tla::AwaitIdleEventuallyReturns",
+        "quint": "AwaitIdle.qnt::AwaitIdleEventuallyReturns",
         "mutation": [
           "M-IDLE-002",
-          "M-TLA-IDLE-LIVENESS-001"
+          "M-FORMAL-IDLE-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-session/tests/idle.rs"
@@ -289,9 +289,9 @@
       "criticality": "critical",
       "owner": "core-limits",
       "status": "partial",
-      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E), and LimitRejection.tla is pending with it.",
+      "note": "Disposition engine and boundary semantics are implemented; the atomic rejection on the commit path arrives with the Firestore core (Milestone E), and LimitRejection.qnt is pending with it.",
       "artifacts": {
-        "tla": "pending:LimitRejection.tla::LimitRejectionAtomicity",
+        "quint": "pending:LimitRejection.qnt::LimitRejectionAtomicity",
         "kani": "limit_boundary_classification",
         "property": "prop_boundary_reject_precedes_warning",
         "mutation": [
@@ -313,10 +313,10 @@
       "owner": "core-firestore",
       "status": "implemented",
       "artifacts": {
-        "tla": "AtomicCommitOutbox.tla::AtomicCommit",
+        "quint": "AtomicCommitOutbox.qnt::AtomicCommit",
         "mutation": [
           "M-COMMIT-001",
-          "M-TLA-COMMIT-ATOMIC-001"
+          "M-FORMAL-COMMIT-ATOMIC-001"
         ],
         "integration": [
           "crates/fireemu-core-firestore/tests/store.rs"
@@ -330,11 +330,11 @@
       "owner": "core-firestore",
       "status": "implemented",
       "artifacts": {
-        "tla": "AtomicCommitOutbox.tla::OutboxCompleteness",
+        "quint": "AtomicCommitOutbox.qnt::OutboxCompleteness",
         "mutation": [
           "M-OUTBOX-001",
           "M-OUTBOX-002",
-          "M-TLA-OUTBOX-COMPLETE-001"
+          "M-FORMAL-OUTBOX-COMPLETE-001"
         ],
         "integration": [
           "crates/fireemu-adapter-grpc/tests/local.rs"
@@ -349,10 +349,10 @@
       "owner": "core-firestore",
       "status": "implemented",
       "artifacts": {
-        "tla": "AtomicCommitOutbox.tla::NoPartialTransaction",
+        "quint": "AtomicCommitOutbox.qnt::NoPartialTransaction",
         "mutation": [
           "M-TXN-001",
-          "M-TLA-TXN-PARTIAL-001"
+          "M-FORMAL-TXN-PARTIAL-001"
         ],
         "integration": [
           "crates/fireemu-core-firestore/tests/store.rs"
@@ -366,11 +366,11 @@
       "owner": "core-storage",
       "status": "implemented",
       "artifacts": {
-        "tla": "StorageGeneration.tla::GenerationNeverReused",
+        "quint": "StorageGeneration.qnt::GenerationNeverReused",
         "mutation": [
           "M-STORAGE-003",
           "M-STORAGE-004",
-          "M-TLA-STORAGE-REUSE-001"
+          "M-FORMAL-STORAGE-REUSE-001"
         ],
         "integration": [
           "crates/fireemu-core-storage/tests/store.rs",
@@ -385,9 +385,9 @@
       "owner": "core-storage",
       "status": "implemented",
       "artifacts": {
-        "tla": "StorageGeneration.tla::RestorePreservesGenerationHighWater",
+        "quint": "StorageGeneration.qnt::RestorePreservesGenerationHighWater",
         "mutation": [
-          "M-TLA-STORAGE-RESTORE-HIGH-WATER-001"
+          "M-FORMAL-STORAGE-RESTORE-HIGH-WATER-001"
         ],
         "integration": [
           "crates/fireemu-core-storage/tests/snapshot.rs"
@@ -420,7 +420,7 @@
       "owner": "core-rules",
       "status": "planned",
       "artifacts": {
-        "tla": "RulesBudget.tla::NoAllowAfterBudgetExceeded",
+        "quint": "RulesBudget.qnt::NoAllowAfterBudgetExceeded",
         "mutation": [
           "M-RULES-002",
           "M-RULES-003",
@@ -437,7 +437,7 @@
       "owner": "core-rules",
       "status": "planned",
       "artifacts": {
-        "tla": "RulesBudget.tla::BudgetIsolation",
+        "quint": "RulesBudget.qnt::BudgetIsolation",
         "loom": [
           "rules_budget_is_never_shared_between_requests"
         ],
@@ -453,10 +453,10 @@
       "owner": "core-rules",
       "status": "implemented",
       "artifacts": {
-        "tla": "RulesetActivation.tla::AtomicRulesetActivation",
+        "quint": "RulesetActivation.qnt::AtomicRulesetActivation",
         "mutation": [
           "M-RULES-010",
-          "M-TLA-RULES-ATOMIC-001"
+          "M-FORMAL-RULES-ATOMIC-001"
         ],
         "integration": [
           "crates/fireemu-adapter-http/tests/control.rs",
@@ -471,11 +471,11 @@
       "owner": "core-rules",
       "status": "implemented",
       "artifacts": {
-        "tla": "RegexAuthorization.tla::ExhaustionNeverAllows",
+        "quint": "RegexAuthorization.qnt::ExhaustionNeverAllows",
         "property": "prop_rules_regex_exhaustion_never_allows",
         "mutation": [
           "M-RULES-015",
-          "M-TLA-RULES-REGEX-001"
+          "M-FORMAL-RULES-REGEX-001"
         ],
         "integration": [
           "crates/fireemu-core-rules/tests/eval.rs",
@@ -490,7 +490,7 @@
       "owner": "core-text-search",
       "status": "planned",
       "artifacts": {
-        "tla": "TextIndexLifecycle.tla::ReadyCompleteness",
+        "quint": "TextIndexLifecycle.qnt::ReadyCompleteness",
         "mutation": [
           "M-TEXT-017"
         ]
@@ -503,7 +503,7 @@
       "owner": "core-text-search",
       "status": "planned",
       "artifacts": {
-        "tla": "TextIndexLifecycle.tla::NoPartialVisibility",
+        "quint": "TextIndexLifecycle.qnt::NoPartialVisibility",
         "loom": [
           "search_never_observes_partial_posting_update"
         ],
@@ -520,7 +520,7 @@
       "owner": "core-text-search",
       "status": "planned",
       "artifacts": {
-        "tla": "TextIndexLifecycle.tla::NoInvalidIndexUse",
+        "quint": "TextIndexLifecycle.qnt::NoInvalidIndexUse",
         "loom": [
           "text_index_ready_publish_races_with_delta_append"
         ],
@@ -538,7 +538,7 @@
       "owner": "core-text-search",
       "status": "planned",
       "artifacts": {
-        "tla": "TextIndexLifecycle.tla::TextIndexEpochSafety",
+        "quint": "TextIndexLifecycle.qnt::TextIndexEpochSafety",
         "loom": [
           "reset_discards_old_text_index_worker"
         ],
@@ -604,7 +604,7 @@
       "owner": "core-scheduler",
       "status": "planned",
       "artifacts": {
-        "tla": "Scheduler.tla::DueScheduleEventuallyRuns",
+        "quint": "Scheduler.qnt::DueScheduleEventuallyRuns",
         "mutation": [
           "M-SCHED-002"
         ]
@@ -650,7 +650,7 @@
       "owner": "core-auth",
       "status": "implemented",
       "artifacts": {
-        "tla": "AuthTotp.tla::NoTotpCodeReuse",
+        "quint": "AuthTotp.qnt::NoTotpCodeReuse",
         "loom": [
           "totp_verify_races_with_clock_advance"
         ],
@@ -659,7 +659,7 @@
         "mutation": [
           "M-AUTH-001",
           "M-AUTH-002",
-          "M-TLA-AUTH-REUSE-001"
+          "M-FORMAL-AUTH-REUSE-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs",
@@ -675,14 +675,14 @@
       "owner": "core-auth",
       "status": "implemented",
       "artifacts": {
-        "tla": "AuthTotp.tla::NoSecondFactorWithoutEnrollment",
+        "quint": "AuthTotp.qnt::NoSecondFactorWithoutEnrollment",
         "loom": [
           "enrollment_finalize_races_with_expiry",
           "token_revocation_races_with_sign_in"
         ],
         "mutation": [
           "M-AUTH-003",
-          "M-TLA-AUTH-ENROLLMENT-001"
+          "M-FORMAL-AUTH-ENROLLMENT-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs"
@@ -714,10 +714,10 @@
       "owner": "core-auth",
       "status": "implemented",
       "artifacts": {
-        "tla": "AuthTotp.tla::EnrollmentEventuallyFinalizesOrExpires",
+        "quint": "AuthTotp.qnt::EnrollmentEventuallyFinalizesOrExpires",
         "mutation": [
           "M-AUTH-001",
-          "M-TLA-AUTH-LIVENESS-001"
+          "M-FORMAL-AUTH-LIVENESS-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs"
@@ -731,11 +731,11 @@
       "owner": "core-auth",
       "status": "implemented",
       "artifacts": {
-        "tla": "AuthTotp.tla::AcceptedOnlyWithinWindow",
+        "quint": "AuthTotp.qnt::AcceptedOnlyWithinWindow",
         "mutation": [
           "M-AUTH-001",
-          "M-TLA-AUTH-WINDOW-FINALIZE-001",
-          "M-TLA-AUTH-WINDOW-VERIFY-001"
+          "M-FORMAL-AUTH-WINDOW-FINALIZE-001",
+          "M-FORMAL-AUTH-WINDOW-VERIFY-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs",
@@ -750,9 +750,9 @@
       "owner": "core-auth",
       "status": "implemented",
       "artifacts": {
-        "tla": "AuthTotp.tla::EnrollmentAcceptedBeforeExpiry",
+        "quint": "AuthTotp.qnt::EnrollmentAcceptedBeforeExpiry",
         "mutation": [
-          "M-TLA-AUTH-EXPIRY-001"
+          "M-FORMAL-AUTH-EXPIRY-001"
         ],
         "integration": [
           "crates/fireemu-core-auth/tests/mfa.rs"
@@ -1322,9 +1322,9 @@
       "status": "implemented",
       "note": "Root manifests, optional Auth configuration and section members are read only after no-symlink regular-file and containment checks. Export roots use non-following metadata, a private sibling stage and identity revalidation immediately before rename exchange. Linux and macOS replace existing exports atomically; platforms without directory exchange refuse replacement and leave the old export unchanged. Integration tests cover missing optional files, symlinks, special files, target replacement, failed stages and private permissions.",
       "artifacts": {
-        "tla": "AtomicExportPublication.tla::AtomicExportPublication",
+        "quint": "AtomicExportPublication.qnt::AtomicExportPublication",
         "mutation": [
-          "M-TLA-EXPORT-ATOMIC-001"
+          "M-FORMAL-EXPORT-ATOMIC-001"
         ],
         "integration": [
           "crates/fireemu/tests/import_export.rs"
@@ -1571,9 +1571,9 @@
       "owner": "fireemu",
       "status": "implemented",
       "artifacts": {
-        "tla": "RulesetActivation.tla::AtomicRulesetActivation",
+        "quint": "RulesetActivation.qnt::AtomicRulesetActivation",
         "mutation": [
-          "M-TLA-RULES-ATOMIC-001"
+          "M-FORMAL-RULES-ATOMIC-001"
         ],
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rules.rs",

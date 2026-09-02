@@ -433,7 +433,7 @@ pub fn mutate_model(
     Ok(results)
 }
 
-/// Compatibility wrapper for the original `EventDelivery` pilot API.
+/// Compatibility wrapper for the original `EventDelivery` authority API.
 pub fn mutate_event_delivery(
     repository_root: &Path,
     evidence_path: Option<&Path>,
@@ -574,7 +574,7 @@ pub fn verify_model(
     }
 }
 
-/// Compatibility wrapper for the original `EventDelivery` pilot API.
+/// Compatibility wrapper for the original `EventDelivery` authority API.
 pub fn verify_event_delivery_model(repository_root: &Path) -> Result<Execution, String> {
     verify_model(
         repository_root,

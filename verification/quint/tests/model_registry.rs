@@ -1,6 +1,8 @@
 //! Cross-model contracts for the sole Quint formal authority.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
 
 use fireemu_verification_quint::model::{all_models, model};
 
@@ -87,4 +89,15 @@ fn unknown_model_is_rejected() {
         model("UnknownModel").unwrap_err(),
         "unknown Quint model UnknownModel"
     );
+}
+
+#[test]
+fn await_idle_authority_checks_both_text_index_policies() {
+    let spec = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("specs/AwaitIdle.qnt");
+    let source = fs::read_to_string(spec).expect("AwaitIdle specification must exist");
+    assert!(source.contains("IGNORE_TEXT_INDEX_VALUES = Set(false, true)"));
+    assert!(source.contains("module AwaitIdleIgnoreTextIndexScenarios"));
+    assert!(source.contains(
+        "beginExternal(\"i1\", \"textIndexBuild\")).then(RequestFence).then(ReturnIdle)"
+    ));
 }

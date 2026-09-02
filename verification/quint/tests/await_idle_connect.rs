@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use fireemu_verification_quint::await_idle::{
-    AwaitIdleConnectDriver, AwaitIdleDriver, AwaitIdleState, ProjectionFault,
-    GENERATED_TRACE_SEEDS, MODELED_ACTIONS,
+    AwaitIdleConnectDriver, AwaitIdleDriver, AwaitIdleIgnoreTextIndexScenarioDriver,
+    AwaitIdleState, ProjectionFault, GENERATED_TRACE_SEEDS, MODELED_ACTIONS,
 };
 use quint_connect::runner::{run_test, Config as RunnerConfig, RunConfig, TestConfig};
 
@@ -121,26 +121,43 @@ fn projection_fault_changes_exactly_one_production_field() {
     }
 }
 
-const SCENARIOS: [&str; 4] = ["leaf", "reservation", "fence", "ignoreTextIndex"];
+const SCENARIOS: [(&str, &str, bool); 4] = [
+    ("AwaitIdleScenarios", "leaf", false),
+    ("AwaitIdleScenarios", "reservation", false),
+    ("AwaitIdleScenarios", "fence", false),
+    (
+        "AwaitIdleIgnoreTextIndexScenarios",
+        "ignoredTextIndexReturns",
+        true,
+    ),
+];
 
 #[test]
 #[ignore = "requires the pinned local Quint CLI"]
 fn deterministic_scenarios_cover_all_actions() {
     let recorded = Arc::new(Mutex::new(BTreeSet::new()));
-    for scenario in SCENARIOS {
-        let driver = AwaitIdleDriver::new(false).with_action_recorder(Arc::clone(&recorded));
+    for (main, scenario, ignore_text_index) in SCENARIOS {
         let config = RunnerConfig {
             test_name: format!("AwaitIdle scenario {scenario}"),
             gen_config: TestConfig {
                 spec: absolute_spec_path().to_string_lossy().into_owned(),
-                main: Some("AwaitIdleScenarios".to_owned()),
+                main: Some(main.to_owned()),
                 test: scenario.to_owned(),
                 max_samples: Some(1),
                 seed: "0x1".to_owned(),
             },
         };
-        run_test(driver, config)
+        if ignore_text_index {
+            run_test(
+                AwaitIdleIgnoreTextIndexScenarioDriver::new(Arc::clone(&recorded)),
+                config,
+            )
             .unwrap_or_else(|error| panic!("scenario {scenario} failed: {error:#}"));
+        } else {
+            let driver = AwaitIdleDriver::new(false).with_action_recorder(Arc::clone(&recorded));
+            run_test(driver, config)
+                .unwrap_or_else(|error| panic!("scenario {scenario} failed: {error:#}"));
+        }
     }
     assert_eq!(
         recorded.lock().expect("action recorder lock").clone(),

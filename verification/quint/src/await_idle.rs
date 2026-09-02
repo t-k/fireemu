@@ -293,6 +293,38 @@ impl Driver for AwaitIdleDriver {
     }
 }
 
+/// Driver configured for the explicit Text Index ignore scenario.
+pub struct AwaitIdleIgnoreTextIndexScenarioDriver(AwaitIdleDriver);
+
+impl AwaitIdleIgnoreTextIndexScenarioDriver {
+    /// Builds a scenario driver whose production policy ignores Text Index builds.
+    #[must_use]
+    pub fn new(recorder: Arc<Mutex<BTreeSet<String>>>) -> Self {
+        Self(AwaitIdleDriver::new(true).with_action_recorder(recorder))
+    }
+}
+
+impl State<AwaitIdleIgnoreTextIndexScenarioDriver> for AwaitIdleState {
+    fn from_driver(driver: &AwaitIdleIgnoreTextIndexScenarioDriver) -> Result<Self> {
+        driver.0.project()
+    }
+}
+
+impl Driver for AwaitIdleIgnoreTextIndexScenarioDriver {
+    type State = AwaitIdleState;
+
+    fn config() -> Config {
+        Config {
+            state: &["AwaitIdleIgnoreTextIndexScenarios::AwaitIdle::observable"],
+            nondet: &["AwaitIdleIgnoreTextIndexScenarios::AwaitIdle::actionTaken"],
+        }
+    }
+
+    fn step(&mut self, step: &Step) -> Result {
+        self.0.step(step)
+    }
+}
+
 /// Driver configured for generated traces.
 pub struct AwaitIdleConnectDriver(AwaitIdleDriver);
 

@@ -1754,15 +1754,15 @@ impl RuntimeConfig {
                 cfg.id_token_signing = m;
             }
             if let Some(totp) = auth.get("totp") {
-                let totp = totp
-                    .as_object()
-                    .ok_or_else(|| ConfigError("auth.totp must be an object".to_owned()))?;
                 const TOTP_KEYS: [&str; 4] = [
                     "periodSeconds",
                     "digits",
                     "windowSteps",
                     "enrollmentSessionTtlSeconds",
                 ];
+                let totp = totp
+                    .as_object()
+                    .ok_or_else(|| ConfigError("auth.totp must be an object".to_owned()))?;
                 for key in totp.keys() {
                     if !TOTP_KEYS.contains(&key.as_str()) {
                         return Err(ConfigError(format!("unknown config key auth.totp.{key}")));

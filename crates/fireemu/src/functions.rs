@@ -415,6 +415,21 @@ fn start_reload_supervisors(
     }
 }
 
+async fn join_codebase_starts<T: Send + 'static>(
+    starts: Vec<(String, tokio::task::JoinHandle<Result<T, String>>)>,
+) -> Vec<Result<T, String>> {
+    let mut outcomes = Vec::with_capacity(starts.len());
+    for (label, start) in starts {
+        outcomes.push(match start.await {
+            Ok(outcome) => outcome,
+            Err(error) => Err(format!(
+                "the Functions codebase {label:?}: startup task failed: {error}"
+            )),
+        });
+    }
+    outcomes
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1454,28 +1469,36 @@ pub async fn start(
                 .join(", ")
         ));
     }
-    let mut started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> = Vec::new();
-    for codebase in &codebases {
-        match start_codebase(
-            cfg,
-            codebase,
-            hosts,
-            runner_secret,
-            callable_trusted_protocol,
-        )
-        .await
-        {
-            Ok(spec) => started.push(spec),
-            Err(e) => {
-                // A codebase that fails takes nothing with it but the runners this call
-                // already spawned; none of them may outlive the refusal.
-                for spec in &started {
-                    spec.runner.kill_now();
-                }
-                return Err(e);
-            }
+    let starts = codebases
+        .iter()
+        .map(|codebase| {
+            let label = codebase.codebase.clone();
+            let cfg = (*cfg).clone();
+            let codebase = codebase.clone();
+            let hosts = hosts.clone();
+            let runner_secret = runner_secret.to_owned();
+            let start = tokio::spawn(async move {
+                start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    &runner_secret,
+                    callable_trusted_protocol,
+                )
+                .await
+            });
+            (label, start)
+        })
+        .collect();
+    let outcomes = join_codebase_starts(starts).await;
+    if let Some(error) = outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
+        for spec in outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()) {
+            spec.runner.kill_now();
         }
+        return Err(error.clone());
     }
+    let started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> =
+        outcomes.into_iter().filter_map(Result::ok).collect();
     let config = FunctionsConfig {
         project: cfg.auth_project.clone(),
         default_bucket: format!("{}.appspot.com", cfg.auth_project),
@@ -2372,6 +2395,7 @@ mod tests {
     use std::collections::BTreeMap;
     #[cfg(unix)]
     use std::process::Command;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use super::path_node_candidates;
@@ -3274,5 +3298,31 @@ mod tests {
             true,
         )
         .expect("a callable that does not consume tokens is servable");
+    }
+
+    #[tokio::test]
+    async fn codebase_start_tasks_run_concurrently_and_report_in_config_order() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let first_barrier = barrier.clone();
+        let first = tokio::spawn(async move {
+            first_barrier.wait().await;
+            Ok::<_, String>("first")
+        });
+        let second = tokio::spawn(async move {
+            barrier.wait().await;
+            Err::<&str, _>("second failed".to_owned())
+        });
+
+        let outcomes = tokio::time::timeout(
+            Duration::from_secs(1),
+            super::join_codebase_starts(vec![
+                ("first".to_owned(), first),
+                ("second".to_owned(), second),
+            ]),
+        )
+        .await
+        .expect("both tasks reach the barrier because they run concurrently");
+
+        assert_eq!(outcomes, vec![Ok("first"), Err("second failed".to_owned())]);
     }
 }

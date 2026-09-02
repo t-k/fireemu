@@ -32,6 +32,17 @@ async fn start_with_write_time(
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_with_write_time_and_policy(wall_clock, IndexValidationPolicy::Conservative).await
+}
+
+async fn start_with_write_time_and_policy(
+    wall_clock: bool,
+    policy: IndexValidationPolicy,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -39,7 +50,7 @@ async fn start_with_write_time(
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Conservative,
+            policy,
         },
         indexes: IndexSet::default(),
     };
@@ -342,6 +353,104 @@ async fn unpinned_server_timestamps_follow_each_write_wall_time() {
     assert!(second_nanos >= before_second - 1_000_000);
     assert!(second_nanos <= after_second);
     assert!(second_nanos / 1_000_000 > first_nanos / 1_000_000);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn transaction_query_immediately_finds_a_recent_server_timestamp_document() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(true, IndexValidationPolicy::Emulator).await;
+    let mut write = server_timestamp_write("recent-jobs/one");
+    let Some(pb::write::Operation::Update(document)) = write.operation.as_mut() else {
+        unreachable!("the server timestamp helper always creates an update")
+    };
+    document.fields.insert("owner".to_owned(), s("user-one"));
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![write],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let threshold_nanos = wall_clock_nanos() - LogicalDuration::from_seconds(30 * 60).as_nanos();
+    let threshold = pb::Value {
+        value_type: Some(pb::value::ValueType::TimestampValue(
+            prost_types::Timestamp {
+                seconds: i64::try_from(threshold_nanos.div_euclid(1_000_000_000)).unwrap(),
+                nanos: i32::try_from(threshold_nanos.rem_euclid(1_000_000_000)).unwrap(),
+            },
+        )),
+    };
+    let comparison = |path: &str, op: sq::field_filter::Operator, value: pb::Value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: path.to_owned(),
+            }),
+            op: op as i32,
+            value: Some(value),
+        })),
+    };
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadWrite(
+                    pb::transaction_options::ReadWrite::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let mut request = query(
+        "recent-jobs",
+        Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::CompositeFilter(
+                sq::CompositeFilter {
+                    op: sq::composite_filter::Operator::And as i32,
+                    filters: vec![
+                        comparison("owner", sq::field_filter::Operator::Equal, s("user-one")),
+                        comparison(
+                            "createdAt",
+                            sq::field_filter::Operator::GreaterThanOrEqual,
+                            threshold,
+                        ),
+                    ],
+                },
+            )),
+        }),
+    );
+    let Some(pb::run_query_request::QueryType::StructuredQuery(structured)) =
+        request.query_type.as_mut()
+    else {
+        unreachable!("the query helper always creates a structured query")
+    };
+    structured.limit = Some(1);
+    request.consistency_selector = Some(pb::run_query_request::ConsistencySelector::Transaction(
+        transaction.clone(),
+    ));
+
+    let documents = collect_docs(&mut client, request).await;
+    assert_eq!(documents.len(), 1);
+    assert!(matches!(
+        documents[0]
+            .fields
+            .get("createdAt")
+            .and_then(|value| value.value_type.as_ref()),
+        Some(pb::value::ValueType::TimestampValue(_))
+    ));
+    client
+        .rollback(pb::RollbackRequest {
+            database: DB.to_owned(),
+            transaction,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     handle.abort();
 }
 

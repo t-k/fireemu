@@ -31,7 +31,7 @@ use fireemu_core_auth::store::{
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::json::JsonValue;
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
 mod routes;
@@ -41,6 +41,39 @@ mod widget_templates;
 /// Observer of user lifecycle events (Auth triggers), called after each request while
 /// the store is locked, in the order the events happened.
 pub type AuthEventSink = Arc<dyn Fn(&fireemu_core_auth::store::UserEvent) + Send + Sync>;
+
+/// A monotonic wall-time anchor for unpinned daemon sessions. The shared virtual clock remains
+/// authoritative and may be advanced explicitly; this anchor only prevents Auth request time
+/// from freezing at daemon startup when no clock was configured.
+#[derive(Debug, Clone)]
+pub struct AuthWallClock {
+    logical_start: LogicalInstant,
+    monotonic_start: std::time::Instant,
+}
+
+impl AuthWallClock {
+    /// Anchors elapsed monotonic time to a wall-clock instant sampled at the same point in
+    /// daemon startup. Capturing the monotonic instant at request-state construction would
+    /// lose the setup duration and can put Auth behind the caller near a second boundary.
+    #[must_use]
+    pub const fn from_anchor(
+        logical_start: LogicalInstant,
+        monotonic_start: std::time::Instant,
+    ) -> Self {
+        Self {
+            logical_start,
+            monotonic_start,
+        }
+    }
+
+    fn now(&self) -> LogicalInstant {
+        let elapsed =
+            i128::try_from(self.monotonic_start.elapsed().as_nanos()).unwrap_or(i128::MAX);
+        self.logical_start
+            .checked_add(LogicalDuration::from_nanos(elapsed))
+            .unwrap_or(LogicalInstant::MAX)
+    }
+}
 
 /// Synchronous bridge to Identity Platform blocking functions. Implementations must perform
 /// no Auth store access; the adapter releases the store before calling it.
@@ -60,6 +93,11 @@ pub struct AuthState {
     pub store: Arc<Mutex<AuthStore>>,
     /// Virtual clock shared with the other adapters.
     pub clock: Arc<Mutex<VirtualClock>>,
+    /// Monotonic wall-time progression for unpinned daemon sessions. Tests and pinned sessions
+    /// leave this absent so the virtual clock remains exactly deterministic.
+    pub wall_clock: Option<AuthWallClock>,
+    /// Whether the fireemu-only TOTP extension was explicitly enabled by `auth.totp`.
+    pub totp_extension_enabled: bool,
     /// Session admission barrier (reset waits for requests in flight), when shared.
     pub barrier: Option<Arc<fireemu_core_session::barrier::AdmissionBarrier>>,
     /// User lifecycle observer; `None` drops the events.
@@ -212,11 +250,16 @@ fn jwt_error(e: &JwtError) -> JsonResponse {
 }
 
 fn now(state: &AuthState) -> LogicalInstant {
-    state
-        .clock
-        .lock()
-        .map(|c| c.now())
-        .unwrap_or(LogicalInstant::UNIX_EPOCH)
+    let Ok(mut clock) = state.clock.lock() else {
+        return LogicalInstant::UNIX_EPOCH;
+    };
+    if let Some(wall_clock) = &state.wall_clock {
+        let wall_now = wall_clock.now();
+        if wall_now > clock.now() {
+            let _ = clock.advance_to(wall_now);
+        }
+    }
+    clock.now()
 }
 
 fn str_field<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
@@ -671,7 +714,15 @@ fn dispatch_with_blocking_hook(
     at: LogicalInstant,
 ) -> JsonResponse {
     let mut candidate = store.clone();
-    let response = dispatch(handler, &mut candidate, query, body, headers, at);
+    let response = dispatch(
+        handler,
+        &mut candidate,
+        query,
+        body,
+        headers,
+        at,
+        state.totp_extension_enabled,
+    );
     let is_authentication = matches!(
         handler,
         routes::Handler::SignUp
@@ -779,7 +830,15 @@ fn dispatch_with_blocking_hook(
                     .map(fireemu_core_auth::store::LocalId::as_str),
             )
         } else {
-            dispatch(handler, &mut committed, query, body, headers, at)
+            dispatch(
+                handler,
+                &mut committed,
+                query,
+                body,
+                headers,
+                at,
+                state.totp_extension_enabled,
+            )
         };
         if committed_response.status != 200 {
             return committed_response;
@@ -1056,7 +1115,15 @@ pub fn handle_with(
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
     if route.class != routes::RouteClass::EndUser {
-        let response = dispatch(route.handler, &mut store, query, body, headers, at);
+        let response = dispatch(
+            route.handler,
+            &mut store,
+            query,
+            body,
+            headers,
+            at,
+            state.totp_extension_enabled,
+        );
         let retain_candidate = response.status == 200
             && pending_routed_project.is_some()
             && matches!(
@@ -1104,7 +1171,15 @@ pub fn handle_with(
             at,
         )
     } else {
-        dispatch(route.handler, &mut store, query, body, headers, at)
+        dispatch(
+            route.handler,
+            &mut store,
+            query,
+            body,
+            headers,
+            at,
+            state.totp_extension_enabled,
+        )
     };
     if response.status == 200 {
         JsonResponse {
@@ -1146,6 +1221,7 @@ fn dispatch(
     body: &Value,
     headers: &RequestHeaders,
     at: LogicalInstant,
+    totp_extension_enabled: bool,
 ) -> JsonResponse {
     use routes::Handler;
     match handler {
@@ -1186,7 +1262,9 @@ fn dispatch(
                 "recaptchaSiteKey": "Fake-key__Do-not-send-this-to-Recaptcha_",
             }),
         },
-        Handler::MfaEnrollmentStart => mfa_enrollment_start(store, body, at),
+        Handler::MfaEnrollmentStart => {
+            mfa_enrollment_start(store, body, at, totp_extension_enabled)
+        }
         Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
         Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
@@ -3279,7 +3357,12 @@ fn phone_enrollment_refusal(
     None
 }
 
-fn mfa_enrollment_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn mfa_enrollment_start(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    totp_extension_enabled: bool,
+) -> JsonResponse {
     let session = match verify_session(store, body, at) {
         Ok(s) => s,
         Err(r) => return r,
@@ -3307,6 +3390,9 @@ fn mfa_enrollment_start(store: &mut AuthStore, body: &Value, at: LogicalInstant)
             400,
             "INVALID_ARGUMENT : totpEnrollmentInfo or phoneEnrollmentInfo is required",
         );
+    }
+    if !totp_extension_enabled {
+        return error(400, "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))");
     }
     match store.start_totp_enrollment(&uid, at) {
         Ok(material) => {
@@ -4599,4 +4685,20 @@ fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> V
         "signIn": {"allowDuplicateEmails": config.allow_duplicate_emails},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": config.enable_improved_email_privacy},
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_wall_clock_advances_from_its_monotonic_anchor() {
+        let start = LogicalInstant::from_unix_seconds(1_800_000_000);
+        let mut wall_clock = AuthWallClock::from_anchor(start, std::time::Instant::now());
+        wall_clock.monotonic_start = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(2))
+            .unwrap();
+
+        assert!(wall_clock.now() >= start.checked_add(LogicalDuration::from_seconds(2)).unwrap());
+    }
 }

@@ -103,12 +103,16 @@ exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => 
     }
     const barrierPort = context.data().barrierPort;
     const barrierToken = context.data().barrierToken;
+    const protectedPhaseMillis = context.data().protectedPhaseMillis;
     if (
       !Number.isSafeInteger(barrierPort) ||
       barrierPort < 1 ||
       barrierPort > 65535 ||
       typeof barrierToken !== "string" ||
-      !/^[0-9a-f]{32}$/.test(barrierToken)
+      !/^[0-9a-f]{32}$/.test(barrierToken) ||
+      !Number.isSafeInteger(protectedPhaseMillis) ||
+      protectedPhaseMillis < 0 ||
+      protectedPhaseMillis > 10_000
     ) {
       throw new Error("conditional lock barrier configuration is invalid");
     }
@@ -122,23 +126,33 @@ exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => 
     if (attempts === 1) {
       await reachLatch("arrive", barrierPort, barrierToken);
     }
-    if (locked) return { authorized: true, acquired: false, barrierPort, barrierToken };
+    if (locked) {
+      return {
+        authorized: true,
+        acquired: false,
+        barrierPort,
+        barrierToken,
+        protectedPhaseMillis,
+      };
+    }
     tx.update(lockRef, { locked: true, owner: participant });
-    return { authorized: true, acquired: true, barrierPort, barrierToken };
+    return {
+      authorized: true,
+      acquired: true,
+      barrierPort,
+      barrierToken,
+      protectedPhaseMillis,
+    };
   });
   if (!result.authorized) {
     res.status(403).json({ error: "conditional lock credential is invalid" });
     return;
   }
-  const { acquired, barrierPort, barrierToken } = result;
+  const { acquired, protectedPhaseMillis } = result;
   if (acquired) {
     await actionsRef.update({ count: FieldValue.increment(1) });
-    await reachLatch("await-retry", barrierPort, barrierToken);
+    await new Promise((resolve) => setTimeout(resolve, protectedPhaseMillis));
     await lockRef.update({ locked: false });
-  } else {
-    // The winner may release only after this read-only retry has completed. Signalling from
-    // inside the callback would let the unlock abort it and permit a third attempt to acquire.
-    await reachLatch("retry-observed", barrierPort, barrierToken);
   }
   res.status(acquired ? 200 : 409).json({ acquired, attempts, observations });
 });

@@ -105,6 +105,8 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
     let state = AuthState {
         store: Arc::new(Mutex::new(store)),
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
+        wall_clock: None,
+        totp_extension_enabled: false,
         barrier: None,
         events: None,
         blocking: None,
@@ -164,6 +166,8 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
             TotpPolicy::default(),
         ))),
         clock: Arc::new(Mutex::new(VirtualClock::new(START))),
+        wall_clock: None,
+        totp_extension_enabled: false,
         barrier: None,
         events: None,
         blocking: None,

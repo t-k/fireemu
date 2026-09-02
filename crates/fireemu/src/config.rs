@@ -7,9 +7,10 @@
 use std::collections::BTreeMap;
 
 use fireemu_core_auth::jwt::TokenAcceptance;
+use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_firestore::index::IndexValidationPolicy;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::Value;
 
 /// The compatibility profile (`profile`), the one switch that decides whether fireemu
@@ -141,6 +142,9 @@ pub struct RuntimeConfig {
     pub seed: u64,
     /// Project ID used for Auth token issuance.
     pub auth_project: String,
+    /// fireemu-only TOTP policy. Absence preserves the official Auth emulator's rejection
+    /// of TOTP enrollment; declaring `auth.totp` explicitly enables the extension.
+    pub auth_totp: Option<TotpPolicy>,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
     /// Path of `firestore.text-indexes.json`, if configured.
@@ -369,6 +373,7 @@ impl Default for RuntimeConfig {
             clock_start_pinned: false,
             seed: 42,
             auth_project: "demo-app".to_owned(),
+            auth_totp: None,
             index_file: None,
             text_index_file: None,
             rules_file: None,
@@ -1748,6 +1753,77 @@ impl RuntimeConfig {
                 }
                 cfg.id_token_signing = m;
             }
+            if let Some(totp) = auth.get("totp") {
+                const TOTP_KEYS: [&str; 4] = [
+                    "periodSeconds",
+                    "digits",
+                    "windowSteps",
+                    "enrollmentSessionTtlSeconds",
+                ];
+                let totp = totp
+                    .as_object()
+                    .ok_or_else(|| ConfigError("auth.totp must be an object".to_owned()))?;
+                for key in totp.keys() {
+                    if !TOTP_KEYS.contains(&key.as_str()) {
+                        return Err(ConfigError(format!("unknown config key auth.totp.{key}")));
+                    }
+                }
+                let positive = |key: &str, default: u64| -> Result<u64, ConfigError> {
+                    match totp.get(key) {
+                        None => Ok(default),
+                        Some(value) => value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                            ConfigError(format!("auth.totp.{key} must be a positive integer"))
+                        }),
+                    }
+                };
+                let bounded = |key: &str,
+                               default: u64,
+                               minimum: u64,
+                               maximum: u64|
+                 -> Result<u64, ConfigError> {
+                    match totp.get(key) {
+                        None => Ok(default),
+                        Some(value) => value
+                            .as_u64()
+                            .filter(|value| (minimum..=maximum).contains(value))
+                            .ok_or_else(|| {
+                                ConfigError(format!(
+                                    "auth.totp.{key} must be an integer from {minimum} through {maximum}"
+                                ))
+                            }),
+                    }
+                };
+                let defaults = TotpPolicy::default();
+                let period_seconds = u32::try_from(positive(
+                    "periodSeconds",
+                    u64::from(defaults.period_seconds),
+                )?)
+                .map_err(|_| ConfigError("auth.totp.periodSeconds is too large".to_owned()))?;
+                let digits = u8::try_from(bounded("digits", u64::from(defaults.digits), 6, 8)?)
+                    .expect("the validated digit range fits u8");
+                let window_steps = u8::try_from(bounded(
+                    "windowSteps",
+                    u64::from(defaults.window_steps),
+                    0,
+                    10,
+                )?)
+                .expect("the validated window range fits u8");
+                let ttl_seconds = i64::try_from(positive(
+                    "enrollmentSessionTtlSeconds",
+                    u64::try_from(defaults.enrollment_session_ttl.as_seconds())
+                        .expect("the default TOTP TTL is positive"),
+                )?)
+                .map_err(|_| {
+                    ConfigError("auth.totp.enrollmentSessionTtlSeconds is too large".to_owned())
+                })?;
+                cfg.auth_totp = Some(TotpPolicy {
+                    period_seconds,
+                    digits,
+                    window_steps,
+                    enrollment_session_ttl: LogicalDuration::from_seconds(ttl_seconds),
+                    ..defaults
+                });
+            }
         }
         if let Some(app_check) = obj.get("appCheck") {
             let app_check = app_check
@@ -2585,5 +2661,41 @@ mod tests {
             Err(ConfigError("auth must be an object".to_owned()))
         );
         assert!(parse(&json!({"idTokenSigning": "hs256"})).is_err());
+    }
+
+    #[test]
+    fn totp_is_an_explicit_auth_extension_with_strict_bounds() {
+        assert!(parse(&json!({})).unwrap().auth_totp.is_none());
+
+        let configured = parse(&json!({
+            "totp": {
+                "periodSeconds": 45,
+                "digits": 8,
+                "windowSteps": 2,
+                "enrollmentSessionTtlSeconds": 600
+            }
+        }))
+        .unwrap()
+        .auth_totp
+        .expect("the TOTP object explicitly enables the extension");
+        assert_eq!(configured.period_seconds, 45);
+        assert_eq!(configured.digits, 8);
+        assert_eq!(configured.window_steps, 2);
+        assert_eq!(configured.enrollment_session_ttl.as_seconds(), 600);
+
+        for invalid in [
+            json!({"totp": true}),
+            json!({"totp": {"periodSeconds": 0}}),
+            json!({"totp": {"digits": 5}}),
+            json!({"totp": {"digits": 9}}),
+            json!({"totp": {"windowSteps": 11}}),
+            json!({"totp": {"enrollmentSessionTtlSeconds": 0}}),
+            json!({"totp": {"unknown": 1}}),
+        ] {
+            assert!(
+                parse(&invalid).is_err(),
+                "accepted invalid Auth config: {invalid}"
+            );
+        }
     }
 }

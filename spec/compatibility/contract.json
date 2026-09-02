@@ -375,7 +375,7 @@
       "claims": [
         {
           "id": "FS-CLAIM-RPC",
-          "statement": "The Firestore v1 gRPC service serves documents, atomic commits, serializable transactions, queries, aggregations and the Write and Listen streams against local state, with the same status codes and error shapes as the pinned official emulator.",
+          "statement": "The Firestore v1 gRPC service serves documents, atomic commits, serializable transactions, queries, aggregations and the Write and Listen streams against local state, with the same status codes and error shapes as the pinned official emulator. A committed server timestamp is immediately available to a transaction query, including a combined equality and timestamp-range filter with limit(1). Removing and replacing a listener target never delivers the removed target's changes, and replacing a WebChannel backchannel cancels the superseded response before it can deliver queued arrays.",
           "capabilities": [
             {
               "id": "FS-RPC-1",
@@ -401,7 +401,9 @@
               "crates/fireemu-adapter-grpc/tests/streams.rs",
               "crates/fireemu-core-firestore/tests/query_execution.rs",
               "crates/fireemu-core-firestore/tests/store.rs",
-              "conformance/firestore-matrix.json"
+              "conformance/firestore-matrix.json",
+              "tools/sdk-smoke/server-timestamp-transaction-query.mjs",
+              "tools/sdk-smoke/listener-replacement.mjs"
             ],
             "conformance": [
               "firestore/values-and-ordering",
@@ -798,7 +800,7 @@
       "claims": [
         {
           "id": "AUTH-CLAIM-IDENTITY-TOOLKIT",
-          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration.",
+          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
           "capabilities": [
             {
               "id": "AUTH-CORE-1",
@@ -813,7 +815,8 @@
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-http/tests/auth_flows.rs",
-              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "tools/sdk-smoke/auth.mjs"
             ],
             "conformance": [
               "auth/sign-up-and-sign-in-errors",
@@ -882,7 +885,7 @@
         },
         {
           "id": "AUTH-CLAIM-MFA",
-          "statement": "TOTP and SMS second factors are enrolled, signed in with and withdrawn through the Identity Platform routes the official emulator serves, with the official eligibility refusals (first factor, verified email, duplicate number) and pending-credential shape.",
+          "statement": "SMS second factors are enrolled, signed in with and withdrawn through the Identity Platform routes the official emulator serves, with the official eligibility refusals (first factor, verified email, duplicate number) and pending-credential shape. The official emulator's TOTP enrollment refusal is the default; declaring auth.totp explicitly enables fireemu's local TOTP extension.",
           "capabilities": [
             {
               "id": "AUTH-MFA-TOTP-1",
@@ -910,7 +913,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "the TOTP acceptance window and the enrolment session TTL are local policies driven by the virtual clock",
+              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal",
               "precision": "boundary-conformance"
             },
             {
@@ -1215,7 +1218,7 @@
         },
         {
           "id": "FN-CLAIM-ENV",
-          "statement": "A codebase's .env chain, .secret.local and .runtimeconfig.json are read in the official order and dialect; ordinary parameters resolve from the runtime environment, while each local secret is exposed only to a function that declared it.",
+          "statement": "Under the firebase profile, a codebase inherits ordinary SCREAMING_SNAKE variables from the daemon process before its .env chain, .secret.local and .runtimeconfig.json are applied in the official order and dialect, while emulator-owned names and ambient Google credentials stay isolated; the strict profile isolates the entire parent environment, ordinary parameters resolve from the resulting runtime environment, and each local secret is exposed only to a function that declared it.",
           "capabilities": [
             {
               "id": "FN-ENV-1",

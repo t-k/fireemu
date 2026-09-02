@@ -94,6 +94,8 @@ fn state() -> AuthState {
         clock: Arc::new(Mutex::new(VirtualClock::new(
             LogicalInstant::from_unix_seconds(1_788_004_860),
         ))),
+        wall_clock: None,
+        totp_extension_enabled: false,
         barrier: None,
         events: None,
         blocking: None,
@@ -104,6 +106,13 @@ fn state() -> AuthState {
         app_check: None,
         app_check_policy: None,
         tenancy: None,
+    }
+}
+
+fn state_with_totp_extension() -> AuthState {
+    AuthState {
+        totp_extension_enabled: true,
+        ..state()
     }
 }
 
@@ -401,9 +410,31 @@ fn custom_claims_via_accounts_update_show_up_in_tokens() {
 }
 
 #[test]
+fn totp_enrollment_matches_the_official_emulator_unless_the_extension_is_enabled() {
+    let s = state();
+    let (_, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "totp-default@example.com", "password": "hunter22"}),
+    );
+
+    let (status, rejected) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": signed_up["idToken"], "totpEnrollmentInfo": {}}),
+    );
+
+    assert_eq!(status, 400, "{rejected}");
+    assert_eq!(
+        rejected["error"]["message"],
+        "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))"
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
-    let s = state();
+    let s = state_with_totp_extension();
     let (_, body) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
@@ -543,7 +574,7 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
 
 #[test]
 fn expired_enrollment_session_and_disabled_user() {
-    let s = state();
+    let s = state_with_totp_extension();
     let (_, body) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
@@ -1156,6 +1187,93 @@ fn admin_password_change_revokes_sessions_and_update_is_atomic() {
         &json!({"email": "p@example.com", "password": "password2", "returnSecureToken": true}),
     );
     assert_eq!(status, 200);
+}
+
+#[test]
+fn self_service_password_change_invalidates_an_existing_session_cookie() {
+    let s = state();
+    let (status, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "email": "session-cookie@example.com",
+            "password": "password1",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{signed_up}");
+    let uid = signed_up["localId"].as_str().unwrap().to_owned();
+    let old_id_token = signed_up["idToken"].as_str().unwrap().to_owned();
+    let (status, old_cookie) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}:createSessionCookie"),
+        &json!({"idToken": old_id_token, "validDuration": "3600"}),
+    );
+    assert_eq!(status, 200, "{old_cookie}");
+
+    let changed_at = advance(&s, 1);
+    let (status, changed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({
+            "idToken": old_id_token,
+            "password": "password2",
+            "returnSecureToken": true
+        }),
+    );
+    assert_eq!(status, 200, "{changed}");
+    let old_auth_time =
+        fireemu_core_auth::jwt::decode_unsigned(old_cookie["sessionCookie"].as_str().unwrap())
+            .unwrap()
+            .payload
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64)
+            .unwrap();
+    let (status, lookup) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [uid.clone()]}),
+    );
+    assert_eq!(status, 200, "{lookup}");
+    let valid_since = lookup["users"][0]["validSince"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    assert!(
+        old_auth_time < valid_since,
+        "the Admin SDK compares cookie auth_time={old_auth_time} with lookup validSince={valid_since}"
+    );
+    let (status, new_cookie) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}:createSessionCookie"),
+        &json!({"idToken": changed["idToken"], "validDuration": "3600"}),
+    );
+    assert_eq!(status, 200, "{new_cookie}");
+
+    let valid = |encoded: &str| {
+        let decoded = fireemu_core_auth::jwt::decode_unsigned(encoded).unwrap();
+        let auth_time = decoded
+            .payload
+            .get("auth_time")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64)
+            .map(LogicalInstant::from_unix_seconds)
+            .unwrap();
+        let exp = decoded
+            .payload
+            .get("exp")
+            .and_then(fireemu_core_types::json::JsonValue::as_i64)
+            .map(LogicalInstant::from_unix_seconds)
+            .unwrap();
+        let store = s.store.lock().unwrap();
+        let local_id = store.user_by_id(&uid).unwrap().local_id.clone();
+        store.token_is_valid(&local_id, auth_time, exp, changed_at)
+    };
+    assert!(!valid(old_cookie["sessionCookie"].as_str().unwrap()));
+    assert!(valid(new_cookie["sessionCookie"].as_str().unwrap()));
 }
 
 #[test]

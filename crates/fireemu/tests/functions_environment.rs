@@ -86,6 +86,31 @@ fn exec_script(source: &Path, project: &str, script: &str) -> Output {
         .unwrap()
 }
 
+fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
+    let config = source.join(format!("fireemu-{profile}.json"));
+    write(
+        source,
+        config.file_name().unwrap().to_str().unwrap(),
+        &format!(
+            r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}}}}"#
+        ),
+    );
+    fireemu_exec(source, project)
+        .args(["--config", config.to_str().unwrap(), "--", "true"])
+        .env("FX_FROM_PARENT", "inherited parent value")
+        .env(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "/must/not/reach-functions.json",
+        )
+        .env("CLOUDSDK_CONFIG", "/must/not/reach-gcloud")
+        .env("FIREBASE_DEBUG_MODE", "must-not-reach")
+        .env("FIREBASE_DEBUG_FEATURES", "must-not-reach")
+        .env("FIREEMU_RUNNER_SECRET", "must-not-reach")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 /// The one line the fixture prints at load, parsed.
 fn observed(out: &Output) -> serde_json::Value {
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -95,6 +120,50 @@ fn observed(out: &Output) -> serde_json::Value {
         .unwrap_or_else(|| panic!("the fixture printed no environment:\n{err}"))
         .1;
     serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}"))
+}
+
+#[test]
+fn the_firebase_profile_inherits_the_parent_environment_but_strict_stays_isolated() {
+    if !have_sdk() {
+        return;
+    }
+    let dir = scratch_codebase("parent-env");
+    write(
+        &dir,
+        ".env",
+        "FX_FROM_DOTENV=fixture\nFX_INT=1\nFX_BOOL=true\nFX_LIST=[\"fixture\"]\n",
+    );
+
+    let firebase = exec_with_profile(&dir, "demo-parent-env", "firebase");
+    assert_eq!(
+        firebase.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&firebase.stderr)
+    );
+    assert_eq!(observed(&firebase)["fromParent"], "inherited parent value");
+    assert_ne!(
+        observed(&firebase)["googleCredentials"],
+        "/must/not/reach-functions.json"
+    );
+    for field in [
+        "cloudSdkConfigIsParent",
+        "debugModeIsParent",
+        "debugFeaturesIsParent",
+        "runnerSecretIsParent",
+    ] {
+        assert_eq!(observed(&firebase)[field], false, "{field}");
+    }
+
+    let strict = exec_with_profile(&dir, "demo-parent-env", "strict");
+    assert_eq!(
+        strict.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+    assert_eq!(observed(&strict)["fromParent"], serde_json::Value::Null);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Functions scenario 4: the chain is applied in the official order, the emulator-only file

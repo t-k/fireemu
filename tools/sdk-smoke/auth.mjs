@@ -22,6 +22,7 @@ import {
   OAuthProvider,
   fetchSignInMethodsForEmail,
   getMultiFactorResolver,
+  updatePassword,
   signOut,
 } from "firebase/auth";
 import { initializeApp as initializeAdmin } from "firebase-admin/app";
@@ -63,6 +64,36 @@ const app = initializeApp({ apiKey: "fake-api-key", projectId: project, appId: "
 const auth = getAuth(app);
 connectAuthEmulator(auth, `http://${authHost}`, { disableWarnings: true });
 const adminAuth = getAdminAuth(initializeAdmin({ projectId: project }));
+
+await check("password change invalidates an existing session cookie", async () => {
+  const credential = await createUserWithEmailAndPassword(
+    auth,
+    "session-cookie@example.com",
+    "password1",
+  );
+  const oldIdToken = await credential.user.getIdToken();
+  const oldClaims = await adminAuth.verifyIdToken(oldIdToken);
+  const oldCookie = await adminAuth.createSessionCookie(oldIdToken, { expiresIn: 60 * 60 * 1000 });
+  while (Math.floor(Date.now() / 1000) <= oldClaims.auth_time) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  await updatePassword(credential.user, "password2");
+  let oldCookieRejected = false;
+  try {
+    await adminAuth.verifySessionCookie(oldCookie, true);
+  } catch (error) {
+    oldCookieRejected = error?.code === "auth/session-cookie-revoked";
+  }
+  assert(oldCookieRejected, "the pre-change session cookie remained valid");
+
+  const newIdToken = await credential.user.getIdToken(true);
+  const newCookie = await adminAuth.createSessionCookie(newIdToken, { expiresIn: 60 * 60 * 1000 });
+  const verified = await adminAuth.verifySessionCookie(newCookie, true);
+  assert(verified.uid === credential.user.uid, "the replacement session cookie was rejected");
+  await signOut(auth);
+  return { uid: verified.uid };
+});
 
 await check("password reset through an oob code", async () => {
   await createUserWithEmailAndPassword(auth, "reset@example.com", "hunter22");

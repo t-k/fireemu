@@ -57,9 +57,8 @@ use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::rules::RulesEnforcer;
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
-use fireemu_adapter_http::identity_toolkit::AuthState;
+use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
 use fireemu_core_auth::jwt::IdTokenSigner;
-use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::index::{IndexSet, PlanningContext};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
@@ -1800,15 +1799,17 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         export_on_exit,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
-    if !cfg.clock_start_pinned {
-        // Unpinned: start at the wall clock (whole seconds) so ID tokens verify against
-        // real time; daemon.clockStart pins it for reproducible runs.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_secs()).unwrap_or(0))
-            .unwrap_or(0);
-        cfg.clock_start = LogicalInstant::from_unix_seconds(now);
-    }
+    let auth_wall_clock = if cfg.clock_start_pinned {
+        None
+    } else {
+        // Unpinned: start at the precise wall-clock instant so a credential mutation around
+        // a second boundary cannot lag the caller by the subsecond part discarded at startup.
+        // Token claims are still serialized at second precision; daemon.clockStart pins the
+        // logical clock for reproducible runs.
+        let monotonic_start = std::time::Instant::now();
+        cfg.clock_start = logical_system_time(std::time::SystemTime::now());
+        Some(AuthWallClock::from_anchor(cfg.clock_start, monotonic_start))
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -1859,7 +1860,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
             SplitMix64::new(cfg.seed ^ 0xA0),
-            TotpPolicy::default(),
+            cfg.auth_totp.unwrap_or_default(),
         )));
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
@@ -2073,6 +2074,8 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let auth = Arc::new(AuthState {
             store: auth_store.clone(),
             clock: clock.clone(),
+            wall_clock: auth_wall_clock,
+            totp_extension_enabled: cfg.auth_totp.is_some(),
             barrier: Some(barrier.clone()),
             events: functions_runtime.as_ref().map(functions::auth_sink),
             blocking: functions_runtime.as_ref().map(|runtime| {
@@ -2490,6 +2493,14 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     }
 }
 
+fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
+    let nanos = system_time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX))
+        .unwrap_or(0);
+    LogicalInstant::from_nanos(nanos)
+}
+
 #[cfg(test)]
 mod config_reload_tests {
     use super::*;
@@ -2507,19 +2518,20 @@ mod config_reload_tests {
         dir
     }
 
+    #[test]
+    fn unpinned_clock_start_preserves_subsecond_wall_time() {
+        let wall_time = std::time::UNIX_EPOCH
+            .checked_add(std::time::Duration::new(1_800_000_000, 123_456_789))
+            .unwrap();
+
+        assert_eq!(
+            logical_system_time(wall_time),
+            LogicalInstant::from_nanos(1_800_000_000_123_456_789)
+        );
+    }
+
     #[tokio::test]
     async fn a_selected_product_wins_a_port_shared_with_the_default_hub() {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = probe.local_addr().unwrap().to_string();
-        drop(probe);
-
-        let cfg = RuntimeConfig {
-            firestore_addr: addr.clone(),
-            hub_addr: addr,
-            hub_addr_explicit: false,
-            logging_enabled: false,
-            ..RuntimeConfig::default()
-        };
         let only = Selection {
             firestore: true,
             auth: false,
@@ -2530,10 +2542,31 @@ mod config_reload_tests {
             explicit: true,
             functions_codebase: None,
         };
-
-        let listeners = bind_listeners(&cfg, &only).await.unwrap();
-        assert!(listeners.firestore.is_some());
-        assert!(listeners.hub.is_none());
+        let mut last_error = None;
+        for _ in 0..32 {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = probe.local_addr().unwrap().to_string();
+            drop(probe);
+            let cfg = RuntimeConfig {
+                firestore_addr: addr.clone(),
+                hub_addr: addr,
+                hub_addr_explicit: false,
+                logging_enabled: false,
+                ..RuntimeConfig::default()
+            };
+            match bind_listeners(&cfg, &only).await {
+                Ok(listeners) => {
+                    assert!(listeners.firestore.is_some());
+                    assert!(listeners.hub.is_none());
+                    return;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        panic!(
+            "could not reacquire any freshly selected loopback port: {}",
+            last_error.unwrap_or_else(|| "no bind attempt was made".to_owned())
+        );
     }
 
     #[tokio::test]

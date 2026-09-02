@@ -17,6 +17,12 @@ const observed = {
   fromDotEnv: process.env.FX_FROM_DOTENV ?? null,
   overriddenByProject: process.env.FX_OVERRIDDEN_BY_PROJECT ?? null,
   overriddenByLocal: process.env.FX_OVERRIDDEN_BY_LOCAL ?? null,
+  fromParent: process.env.FX_FROM_PARENT ?? null,
+  googleCredentials: process.env.GOOGLE_APPLICATION_CREDENTIALS ?? null,
+  cloudSdkConfigIsParent: process.env.CLOUDSDK_CONFIG === "/must/not/reach-gcloud",
+  debugModeIsParent: process.env.FIREBASE_DEBUG_MODE === "must-not-reach",
+  debugFeaturesIsParent: process.env.FIREBASE_DEBUG_FEATURES === "must-not-reach",
+  runnerSecretIsParent: process.env.FIREEMU_RUNNER_SECRET === "must-not-reach",
   quoted: process.env.FX_QUOTED ?? null,
   // Parameters, resolved from the same variables.
   paramString: params.defineString("FX_FROM_DOTENV").value(),

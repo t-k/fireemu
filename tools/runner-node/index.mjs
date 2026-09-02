@@ -679,10 +679,19 @@ function secretMatches(presented, expected) {
 function makeHttpServer(functions, manifest) {
   const require = createRequire(join(sourceDir, "package.json"));
   let express;
+  let expressRequire = require;
   try {
     express = require("express");
   } catch {
-    return null;
+    // A Functions codebase is required to install firebase-functions, not Express directly.
+    // npm commonly hoists the SDK's dependency, while pnpm keeps it beside the SDK. Resolve
+    // from firebase-functions as a fallback so both valid layouts behave the same way.
+    try {
+      expressRequire = createRequire(require.resolve("firebase-functions"));
+      express = expressRequire("express");
+    } catch {
+      return null;
+    }
   }
   const app = express();
   app.use(
@@ -719,7 +728,10 @@ function makeHttpServer(functions, manifest) {
       },
     }),
   );
-  const major = Number.parseInt(String(require("express/package.json").version).split(".")[0], 10);
+  const major = Number.parseInt(
+    String(expressRequire("express/package.json").version).split(".")[0],
+    10,
+  );
   // Express 5 (path-to-regexp 8) and Express 4 spell the optional rest differently.
   const route = major >= 5 ? "/:project/:region/:name{/*rest}" : "/:project/:region/:name*";
   const secret = process.env.FIREEMU_RUNNER_SECRET || "";

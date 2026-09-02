@@ -43,6 +43,8 @@ fn harness(mode: BaselineMode) -> Harness {
             TotpPolicy::default(),
         ))),
         clock,
+        wall_clock: None,
+        totp_extension_enabled: false,
         barrier: None,
         events: None,
         blocking: None,
@@ -55,6 +57,14 @@ fn harness(mode: BaselineMode) -> Harness {
         tenancy: None,
     });
     Harness { auth, app_check }
+}
+
+fn harness_with_totp_extension(mode: BaselineMode) -> Harness {
+    let mut harness = harness(mode);
+    Arc::get_mut(&mut harness.auth)
+        .expect("the harness is the sole AuthState owner")
+        .totp_extension_enabled = true;
+    harness
 }
 
 impl Harness {
@@ -162,7 +172,7 @@ fn an_enforced_refresh_without_app_check_does_not_rotate_credentials() {
 
 #[test]
 fn an_enforced_mfa_finalize_without_app_check_does_not_consume_the_assertion() {
-    let h = harness(BaselineMode::Enforced);
+    let h = harness_with_totp_extension(BaselineMode::Enforced);
     let token = h.valid_token();
     let signed_up = h.post(
         &format!("{V1}/accounts:signUp"),

@@ -106,6 +106,8 @@ fn auth_state(app_check: Option<Arc<AppCheckState>>) -> Arc<AuthState> {
             TotpPolicy::default(),
         ))),
         clock: clock(),
+        wall_clock: None,
+        totp_extension_enabled: false,
         barrier: None,
         events: None,
         blocking: None,

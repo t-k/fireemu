@@ -1868,8 +1868,15 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
     )
 }
 
-fn blocking_auth_project_matches(runtime_project: &str, request_project: &str) -> bool {
-    runtime_project == request_project
+fn with_blocking_auth_project<T>(
+    runtime_project: &str,
+    request_project: &str,
+    forward: impl FnOnce() -> Result<Option<T>, String>,
+) -> Result<Option<T>, String> {
+    if runtime_project != request_project {
+        return Ok(None);
+    }
+    forward()
 }
 
 impl BlockingAuthBridge {
@@ -1880,9 +1887,18 @@ impl BlockingAuthBridge {
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Option<serde_json::Value>, String> {
-        if !blocking_auth_project_matches(self.0.project(), project) {
-            return Ok(None);
-        }
+        with_blocking_auth_project(self.0.project(), project, || {
+            self.invoke_matching_namespace(project, tenant, event, user)
+        })
+    }
+
+    fn invoke_matching_namespace(
+        &self,
+        project: &str,
+        tenant: Option<&str>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Option<serde_json::Value>, String> {
         let Some(target) = self.0.blocking_auth_target(event) else {
             return Ok(None);
         };
@@ -2117,11 +2133,22 @@ mod tests {
             super::blocking_auth_resource_name("demo-app", Some("customer")),
             "projects/demo-app/tenants/customer"
         );
-        assert!(super::blocking_auth_project_matches("demo-app", "demo-app"));
-        assert!(!super::blocking_auth_project_matches(
-            "demo-app",
-            "demo-worker"
-        ));
+        let forwarded = std::cell::Cell::new(false);
+        let value = super::with_blocking_auth_project("demo-app", "demo-worker", || {
+            forwarded.set(true);
+            Ok(Some(json!({})))
+        })
+        .unwrap();
+        assert!(value.is_none());
+        assert!(!forwarded.get());
+
+        let value = super::with_blocking_auth_project("demo-app", "demo-app", || {
+            forwarded.set(true);
+            Ok(Some(json!({"accepted": true})))
+        })
+        .unwrap();
+        assert_eq!(value, Some(json!({"accepted": true})));
+        assert!(forwarded.get());
     }
 
     fn installed_node(version: &str, require_module: bool) -> NodeInstallation {

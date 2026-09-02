@@ -169,12 +169,11 @@ struct Session {
     /// Arrays produced by the stream, not yet acknowledged: `(array id, json text)`.
     outbound: Mutex<VecDeque<(u64, String)>>,
     next_aid: AtomicU64,
-    /// Bumped whenever a back channel attaches; older back channels stop.
-    backchannel_generation: AtomicU64,
+    /// The response allowed to commit the next chunk. Replacement and the final generation
+    /// check before enqueue share this lock, so a superseded response cannot win between a
+    /// generation check and delivery.
+    backchannel_owner: Mutex<BackchannelOwner>,
     backchannel_attached: AtomicBool,
-    /// Cancellation handle for the attached response. A replacement signals it before the
-    /// new response starts, so the superseded task cannot race a queued array delivery.
-    backchannel_cancel: Mutex<Option<oneshot::Sender<()>>>,
     /// Data arrived (permit-keeping wakeup) / channel replaced (broadcast wakeup).
     notify: Notify,
     last_seen: Mutex<Instant>,
@@ -190,6 +189,11 @@ struct Session {
     closed: AtomicBool,
 }
 
+struct BackchannelOwner {
+    generation: u64,
+    cancel: Option<oneshot::Sender<()>>,
+}
+
 /// What a `WebChannel` is bound to once it has been admitted.
 ///
 /// The channel outlives its opening request, and later envelopes may present a replacement
@@ -203,6 +207,26 @@ struct ChannelApp {
 }
 
 impl Session {
+    fn replace_backchannel(&self, cancel: oneshot::Sender<()>) -> Result<u64, ()> {
+        let mut owner = self.backchannel_owner.lock().map_err(|_| ())?;
+        owner.generation = owner.generation.checked_add(1).ok_or(())?;
+        if let Some(previous) = owner.cancel.replace(cancel) {
+            let _ = previous.send(());
+        }
+        Ok(owner.generation)
+    }
+
+    fn finish_backchannel(&self, generation: u64) -> bool {
+        let Ok(mut owner) = self.backchannel_owner.lock() else {
+            return false;
+        };
+        if owner.generation != generation {
+            return false;
+        }
+        owner.cancel.take();
+        true
+    }
+
     fn push(&self, payload: &Value) -> Result<u64, ()> {
         let aid = self.next_aid.fetch_add(1, Ordering::SeqCst) + 1;
         let text = json!([aid, payload]).to_string();
@@ -636,9 +660,11 @@ impl Hub {
             inbound: Mutex::new(Some(inbound_tx)),
             outbound: Mutex::new(VecDeque::new()),
             next_aid: AtomicU64::new(0),
-            backchannel_generation: AtomicU64::new(0),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
             backchannel_attached: AtomicBool::new(false),
-            backchannel_cancel: Mutex::new(None),
             notify: Notify::new(),
             last_seen: Mutex::new(Instant::now()),
             maps: Mutex::new((0, BTreeMap::new())),
@@ -735,16 +761,10 @@ impl Hub {
             .and_then(|t| t.parse::<u64>().ok())
             .map_or(LONG_POLL_WAIT, Duration::from_millis)
             .clamp(Duration::from_secs(1), LONG_POLL_MAX);
-        let generation = session
-            .backchannel_generation
-            .fetch_add(1, Ordering::SeqCst)
-            + 1;
         let (cancel_tx, mut cancelled) = oneshot::channel();
-        if let Ok(mut active) = session.backchannel_cancel.lock() {
-            if let Some(previous) = active.replace(cancel_tx) {
-                let _ = previous.send(());
-            }
-        }
+        let Ok(generation) = session.replace_backchannel(cancel_tx) else {
+            return text_response(500, "session lock poisoned".to_owned());
+        };
         session.backchannel_attached.store(true, Ordering::SeqCst);
         // Wake a previous back channel so it notices it was replaced.
         session.notify.notify_waiters();
@@ -761,7 +781,7 @@ impl Hub {
                 &mut cancelled,
             )
             .await;
-            if session.backchannel_generation.load(Ordering::SeqCst) == generation {
+            if session.finish_backchannel(generation) {
                 session.backchannel_attached.store(false, Ordering::SeqCst);
                 session.touch();
             }
@@ -777,6 +797,46 @@ impl Hub {
     }
 }
 
+/// Commits a reserved response slot only if this response still owns the session.
+///
+/// The permit makes enqueue synchronous. Holding the ownership lock across the generation
+/// check and `send` gives replacement one linearization point without holding a lock across
+/// an await.
+fn commit_backchannel_chunk(
+    session: &Session,
+    generation: u64,
+    permit: mpsc::Permit<'_, Result<bytes::Bytes, Status>>,
+    body: bytes::Bytes,
+) -> bool {
+    let Ok(owner) = session.backchannel_owner.lock() else {
+        return false;
+    };
+    if owner.generation != generation {
+        return false;
+    }
+    permit.send(Ok(body));
+    true
+}
+
+async fn send_backchannel_chunk(
+    session: &Session,
+    generation: u64,
+    tx: &mpsc::Sender<Result<bytes::Bytes, Status>>,
+    cancelled: &mut oneshot::Receiver<()>,
+    body: bytes::Bytes,
+) -> Result<(), &'static str> {
+    let permit = tokio::select! {
+        biased;
+        _ = &mut *cancelled => return Err("superseded"),
+        permit = tx.reserve() => permit.map_err(|_| "receiver gone")?,
+    };
+    if commit_backchannel_chunk(session, generation, permit, body) {
+        Ok(())
+    } else {
+        Err("superseded")
+    }
+}
+
 /// Serves one back channel until the client goes away, the session closes, a newer back
 /// channel takes over, or (long polling) one batch was delivered.
 async fn backchannel_loop(
@@ -789,7 +849,11 @@ async fn backchannel_loop(
     cancelled: &mut oneshot::Receiver<()>,
 ) -> &'static str {
     loop {
-        if session.backchannel_generation.load(Ordering::SeqCst) != generation {
+        if session
+            .backchannel_owner
+            .lock()
+            .map_or(true, |owner| owner.generation != generation)
+        {
             return "superseded";
         }
         let pending = session.pending_after(*cursor);
@@ -800,13 +864,16 @@ async fn backchannel_loop(
                 "backchannel send",
                 &format!("{} gen={generation} arrays={}", session.sid, pending.len()),
             );
-            let delivered = tokio::select! {
-                biased;
-                _ = &mut *cancelled => return "superseded",
-                delivered = tx.send(Ok(bytes::Bytes::from(chunk(&text)))) => delivered,
-            };
-            if delivered.is_err() {
-                return "receiver gone";
+            if let Err(outcome) = send_backchannel_chunk(
+                session,
+                generation,
+                tx,
+                cancelled,
+                bytes::Bytes::from(chunk(&text)),
+            )
+            .await
+            {
+                return outcome;
             }
             // The cursor is the last id actually sent; arrays pushed meanwhile are picked
             // up by the next iteration.
@@ -824,7 +891,11 @@ async fn backchannel_loop(
             _ = &mut *cancelled => return "superseded",
             waited = tokio::time::timeout(idle, session.notify.notified()) => waited,
         };
-        if session.backchannel_generation.load(Ordering::SeqCst) != generation {
+        if session
+            .backchannel_owner
+            .lock()
+            .map_or(true, |owner| owner.generation != generation)
+        {
             // Hand a possibly consumed data permit to the newer back channel.
             session.notify.notify_one();
             return "superseded";
@@ -833,13 +904,16 @@ async fn backchannel_loop(
             // Silence: a framed keep-alive (a completed request with no bytes would be
             // treated as an error by the client).
             let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
-            let delivered = tokio::select! {
-                biased;
-                _ = &mut *cancelled => return "superseded",
-                delivered = tx.send(Ok(bytes::Bytes::from(chunk(&noop)))) => delivered,
-            };
-            if delivered.is_err() {
-                return "receiver gone";
+            if let Err(outcome) = send_backchannel_chunk(
+                session,
+                generation,
+                tx,
+                cancelled,
+                bytes::Bytes::from(chunk(&noop)),
+            )
+            .await
+            {
+                return outcome;
             }
             if long_poll {
                 return "long poll timeout";
@@ -1002,9 +1076,11 @@ mod tests {
             inbound: Mutex::new(Some(inbound)),
             outbound: Mutex::new(VecDeque::from([(1, "[1,[{\"current\":true}]]".to_owned())])),
             next_aid: AtomicU64::new(1),
-            backchannel_generation: AtomicU64::new(2),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 2,
+                cancel: None,
+            }),
             backchannel_attached: AtomicBool::new(true),
-            backchannel_cancel: Mutex::new(None),
             notify: Notify::new(),
             last_seen: Mutex::new(Instant::now()),
             maps: Mutex::new((0, BTreeMap::new())),
@@ -1029,6 +1105,56 @@ mod tests {
 
         assert_eq!(outcome, "superseded");
         assert_eq!(cursor, 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn replacement_and_delivery_commit_have_one_linearization_point() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "session-one".to_owned(),
+            kind: StreamKind::Listen,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            outbound: Mutex::new(VecDeque::new()),
+            next_aid: AtomicU64::new(1),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 1,
+                cancel: None,
+            }),
+            backchannel_attached: AtomicBool::new(true),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            closed: AtomicBool::new(false),
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let old_permit = tx.reserve().await.unwrap();
+        let (replacement_cancel, _replacement_cancelled) = oneshot::channel();
+
+        let replacement_generation = session.replace_backchannel(replacement_cancel).unwrap();
+        assert_eq!(replacement_generation, 2);
+        assert!(!commit_backchannel_chunk(
+            &session,
+            1,
+            old_permit,
+            bytes::Bytes::from_static(b"old"),
+        ));
+        assert!(rx.try_recv().is_err());
+
+        let replacement_permit = tx.reserve().await.unwrap();
+        assert!(commit_backchannel_chunk(
+            &session,
+            replacement_generation,
+            replacement_permit,
+            bytes::Bytes::from_static(b"new"),
+        ));
+        assert_eq!(
+            rx.recv().await.unwrap().unwrap(),
+            bytes::Bytes::from_static(b"new")
+        );
         assert!(rx.try_recv().is_err());
     }
 }

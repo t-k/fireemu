@@ -171,6 +171,12 @@ fn second_generation_concurrency_resolves_per_instance_defaults_and_virtual_capa
     assert_eq!(spec.effective_concurrency(), 1);
     assert_eq!(spec.http_capacity(8), 8);
 
+    spec.platform_options.available_memory_mb = Some(4_096);
+    spec.platform_options.cpu = Some("0.5".to_owned());
+    assert_eq!(spec.effective_concurrency(), 1);
+    spec.platform_options.cpu = Some("1".to_owned());
+    assert_eq!(spec.effective_concurrency(), 80);
+
     spec.concurrency = Some(1);
     spec.platform_options.max_instances = Some(2);
     assert_eq!(spec.http_capacity(8), 2);

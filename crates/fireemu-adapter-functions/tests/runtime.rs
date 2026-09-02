@@ -69,6 +69,14 @@ async fn start_with_policies(
     overlap: fireemu_adapter_functions::runtime::OverlapPolicy,
     catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy,
 ) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with_policies_and_manifest(overlap, catch_up, |_| {}).await
+}
+
+async fn start_with_policies_and_manifest(
+    overlap: fireemu_adapter_functions::runtime::OverlapPolicy,
+    catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy,
+    configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -77,7 +85,8 @@ async fn start_with_policies(
         hello_timeout: Duration::from_secs(20),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
-    let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    configure(&mut manifest);
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::new(
         manifest,
@@ -115,6 +124,49 @@ async fn omitted_second_generation_concurrency_admits_two_http_requests() {
 
     assert_eq!(first.unwrap().status, 204);
     assert_eq!(second.unwrap().status, 204);
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn max_instances_caps_http_admission_before_the_global_limit() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let hold = manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "hold")
+                .unwrap();
+            hold.concurrency = Some(1);
+            hold.platform_options.max_instances = Some(1);
+        },
+    )
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let first_runtime = runtime.clone();
+    let first_target = target.clone();
+    let first = tokio::spawn(async move {
+        first_runtime
+            .invoke_http(&first_target, "POST", "/hold", &[], &[])
+            .await
+    });
+    for _ in 0..100 {
+        if !runtime.is_idle() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(!runtime.is_idle(), "the first HTTP request did not enter");
+
+    let second = runtime
+        .invoke_http(&target, "POST", "/hold", &[], &[])
+        .await
+        .unwrap_err();
+    assert!(second.contains("concurrency limit"), "{second}");
+    assert_eq!(first.await.unwrap().unwrap().status, 204);
     runtime.runner().shutdown().await;
 }
 
@@ -415,7 +467,7 @@ async fn schedule_retry_options_control_attempts_and_logical_backoff() {
 #[test]
 fn manifest_json_round_trips_and_rejects_bad_input() {
     let v = json!({"functions": [
-        {"name": "a", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.updated", "document": "x/{id}"}, "timeoutSeconds": 5, "retry": true},
+        {"name": "a", "generation": 1, "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.updated", "document": "x/{id}"}, "timeoutSeconds": 5, "retry": true},
         {"name": "b", "generation": 2, "concurrency": null, "trigger": {"type": "callable"}, "platformOptions": {"preserveExternalChanges": true, "availableMemoryMb": 1024, "minInstances": 1, "maxInstances": 5, "cpu": "gcf_gen1", "ingressSettings": "ALLOW_INTERNAL_ONLY", "invoker": ["public"], "serviceAccountEmail": "runner@example.test", "vpcConnector": "connector", "vpcEgressSettings": "PRIVATE_RANGES_ONLY", "networkInterfaces": [{"network": "default", "tags": ["local"]}], "labels": {"team": "emulator"}, "secrets": ["API_KEY"]}},
         {"name": "c", "trigger": {"type": "schedule", "schedule": "0 3 * * *", "timeZone": "Asia/Tokyo", "retryConfig": {"retryCount": 4, "maxRetrySeconds": 90, "maxBackoffSeconds": 30, "maxDoublings": 2, "minBackoffSeconds": 3}}, "region": "asia-northeast1", "retry": true},
         {"name": "d", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "b"}},
@@ -426,6 +478,7 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
     assert_eq!(m.functions[2].region, "asia-northeast1");
     let back = manifest_to_json(&m);
     assert_eq!(back["functions"][0]["retry"], true);
+    assert_eq!(back["functions"][0]["generation"], 1);
     assert_eq!(back["functions"][1]["trigger"]["callable"], true);
     assert_eq!(back["functions"][1]["generation"], 2);
     assert!(back["functions"][1]["concurrency"].is_null());
@@ -454,6 +507,10 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
     ] {
         assert!(parse_manifest(&bad).is_err(), "{bad}");
     }
+    assert!(parse_manifest(&json!({
+        "functions": [{"name": "bad", "generation": 3, "trigger": {"type": "http"}}]
+    }))
+    .is_err());
 }
 
 #[test]

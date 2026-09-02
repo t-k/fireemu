@@ -1304,6 +1304,10 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 .map_err(|e| format!("bind {addr}: {e}"))
         }
     };
+    // Bind an explicitly requested Hub address before any port-zero listeners. Apart from
+    // reporting configuration errors sooner, this closes the handoff race used by launchers
+    // that probe a free port and immediately start the suite.
+    let hub = hub::bind(&cfg.hub_addr, cfg.hub_addr_explicit).await?;
     let firestore = if only.firestore {
         Some(bind(&cfg.firestore_addr).await?)
     } else {
@@ -1332,7 +1336,6 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
-    let hub = hub::bind(&cfg.hub_addr, cfg.hub_addr_explicit).await?;
     // The Logging emulator is not a `--only` service (the official suite configures it through
     // `emulators.logging`), so it is bound on every run unless it was turned off. Best effort
     // like the Hub and UI: a busy default port only disables it, a busy explicit one is an error.

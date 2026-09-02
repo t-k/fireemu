@@ -167,7 +167,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
             b"",
         ),
     );
-    assert_eq!((r.status, r.body.as_slice()), (200, &b"PNGDATA"[..]));
+    assert_eq!((r.status, r.body.as_ref()), (200, &b"PNGDATA"[..]));
     assert_eq!(header(&r, "content-type"), Some("image/png"));
     let r = handle(
         &s,
@@ -178,7 +178,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
             b"",
         ),
     );
-    assert_eq!((r.status, r.body.as_slice()), (206, &b"NGD"[..]));
+    assert_eq!((r.status, r.body.as_ref()), (206, &b"NGD"[..]));
     assert_eq!(header(&r, "content-range"), Some("bytes 1-3/7"));
 
     // List with a delimiter.
@@ -240,7 +240,7 @@ fn firebase_protocol_upload_download_list_update_delete() {
     );
     // The official Firebase dialect answers a missing object with a bare status text.
     assert_eq!(r.status, 404);
-    assert_eq!(r.body, b"Not Found");
+    assert_eq!(r.body.as_ref(), b"Not Found");
 }
 
 #[test]
@@ -374,7 +374,7 @@ service firebase.storage {{
                 b"",
             ),
         );
-        assert_eq!((response.status, response.body.as_slice()), (200, bytes));
+        assert_eq!((response.status, response.body.as_ref()), (200, bytes));
     }
 }
 
@@ -467,7 +467,7 @@ fn firebase_resumable_upload_protocol() {
             b"",
         ),
     );
-    assert_eq!(r.body, b"abcdef");
+    assert_eq!(r.body.as_ref(), b"abcdef");
 }
 
 #[test]
@@ -592,7 +592,7 @@ fn json_api_dialect_for_the_admin_sdk() {
             b"",
         ),
     );
-    assert_eq!(r.body, b"hello");
+    assert_eq!(r.body.as_ref(), b"hello");
     assert!(header(&r, "x-goog-hash").unwrap().starts_with("crc32c="));
     let r = handle(
         &s,
@@ -1065,7 +1065,7 @@ fn client_library_emulator_paths_and_open_ended_ranges() {
             b"",
         ),
     );
-    assert_eq!((r.status, r.body.as_slice()), (200, &b"whole object"[..]));
+    assert_eq!((r.status, r.body.as_ref()), (200, &b"whole object"[..]));
     let r = handle(
         &s,
         req("GET", &format!("/b/{BUCKET}/o?prefix=stream"), &owner, b""),
@@ -1458,16 +1458,16 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
         )
     };
     let r = get("bytes=-3");
-    assert_eq!((r.status, r.body.as_slice()), (206, &b"789"[..]));
+    assert_eq!((r.status, r.body.as_ref()), (206, &b"789"[..]));
     assert_eq!(header(&r, "content-range"), Some("bytes 7-9/10"));
     let r = get("bytes=8-");
-    assert_eq!((r.status, r.body.as_slice()), (206, &b"89"[..]));
+    assert_eq!((r.status, r.body.as_ref()), (206, &b"89"[..]));
     let r = get("bytes=2-4");
-    assert_eq!((r.status, r.body.as_slice()), (206, &b"234"[..]));
+    assert_eq!((r.status, r.body.as_ref()), (206, &b"234"[..]));
     // An unsatisfiable range is ignored and the whole object served, as the official
     // emulator (express `req.range` answering -1) serves it.
     let r = get("bytes=10-");
-    assert_eq!((r.status, r.body.as_slice()), (200, &b"0123456789"[..]));
+    assert_eq!((r.status, r.body.as_ref()), (200, &b"0123456789"[..]));
     // Resumable JSON API: the declared span must match the body and the total.
     let r = handle(
         &s,

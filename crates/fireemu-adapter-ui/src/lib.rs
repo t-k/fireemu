@@ -155,7 +155,7 @@ impl UiRequest {
 #[derive(Debug)]
 pub enum UiBody {
     /// A complete body.
-    Full(Vec<u8>),
+    Full(bytes::Bytes),
     /// Chunks produced by a task until the client goes away.
     Stream(tokio::sync::mpsc::Receiver<bytes::Bytes>),
 }
@@ -184,7 +184,9 @@ impl UiResponse {
                 ),
                 ("x-content-type-options".to_owned(), "nosniff".to_owned()),
             ],
-            body: UiBody::Full(serde_json::to_vec(body).unwrap_or_default()),
+            body: UiBody::Full(bytes::Bytes::from(
+                serde_json::to_vec(body).unwrap_or_default(),
+            )),
         }
     }
 
@@ -364,7 +366,7 @@ pub async fn handle(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
                         ),
                     ),
                 ],
-                body: UiBody::Full(asset.body),
+                body: UiBody::Full(bytes::Bytes::from(asset.body)),
             },
             None => UiResponse::error(404, "NOT_FOUND"),
         };

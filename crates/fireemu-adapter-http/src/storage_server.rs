@@ -391,7 +391,7 @@ async fn respond(
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
-    match builder.body(Full::new(Bytes::from(response.body))) {
+    match builder.body(Full::new(response.body)) {
         Ok(response) => Ok(response),
         // A header value the handler built is not a valid HTTP header (a metadata string with
         // a control character reached `Builder::header`). The input boundary rejects those, so

@@ -44,6 +44,12 @@ impl std::error::Error for NameError {}
 pub struct ObjectName(String);
 
 impl ObjectName {
+    /// Builds a lexical range boundary. Boundaries are never stored and may be empty or
+    /// otherwise invalid as object names.
+    pub(crate) fn range_start(name: &str) -> Self {
+        Self(name.to_owned())
+    }
+
     /// Validates a decoded object name (the protocol layer decodes exactly once).
     pub fn try_new(name: impl Into<String>) -> Result<Self, NameError> {
         let name = name.into();

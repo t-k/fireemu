@@ -46,7 +46,7 @@ fn to_hyper(response: UiResponse) -> Response<OutBody> {
         builder = builder.header(k, v);
     }
     let body: OutBody = match response.body {
-        UiBody::Full(bytes) => Full::new(Bytes::from(bytes)).boxed(),
+        UiBody::Full(bytes) => Full::new(bytes).boxed(),
         UiBody::Stream(rx) => {
             StreamBody::new(ReceiverStream::new(rx).map(|chunk| Ok(Frame::data(chunk)))).boxed()
         }

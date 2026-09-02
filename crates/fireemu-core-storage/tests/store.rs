@@ -326,6 +326,40 @@ fn pagination_pages_items_only_and_repeats_every_prefix() {
 }
 
 #[test]
+fn folded_object_names_are_not_valid_page_tokens() {
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let item = s
+        .put(
+            &b,
+            &name("a-item"),
+            b"shared".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    s.put(
+        &b,
+        &name("z/folded"),
+        Vec::new(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(1),
+    )
+    .unwrap();
+
+    let page = s.list(&b, "", Some("/"), Some("z/folded"), Some(1));
+    assert_eq!(page.items, [item.clone()]);
+    assert_eq!(page.prefixes, ["z/"]);
+
+    let first = s.shared_bytes(&item);
+    let second = s.shared_bytes(&item);
+    assert_eq!(first.as_slice(), b"shared");
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+}
+
+#[test]
 fn not_match_preconditions_and_patch_apply() {
     let mut s = StorageState::new(1);
     let b = bucket();

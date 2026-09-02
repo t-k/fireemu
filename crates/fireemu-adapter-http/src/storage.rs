@@ -290,7 +290,7 @@ pub struct StorageResponse {
     /// Headers.
     pub headers: Vec<(String, String)>,
     /// Body.
-    pub body: Vec<u8>,
+    pub body: bytes::Bytes,
 }
 
 impl From<(u16, String)> for StorageResponse {
@@ -308,7 +308,7 @@ impl StorageResponse {
                 "content-type".into(),
                 "application/json; charset=utf-8".into(),
             )],
-            body: serde_json::to_vec(body).unwrap_or_default(),
+            body: bytes::Bytes::from(serde_json::to_vec(body).unwrap_or_default()),
         }
     }
 
@@ -316,7 +316,7 @@ impl StorageResponse {
         Self {
             status,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: bytes::Bytes::new(),
         }
     }
 
@@ -400,7 +400,7 @@ fn plain_status(status: u16) -> StorageResponse {
     StorageResponse {
         status,
         headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
-        body: status_text(status).as_bytes().to_vec(),
+        body: bytes::Bytes::copy_from_slice(status_text(status).as_bytes()),
     }
 }
 
@@ -409,7 +409,7 @@ fn html_text(status: u16, text: &str) -> StorageResponse {
     StorageResponse {
         status,
         headers: vec![("content-type".into(), "text/html; charset=utf-8".into())],
-        body: text.as_bytes().to_vec(),
+        body: bytes::Bytes::copy_from_slice(text.as_bytes()),
     }
 }
 
@@ -504,7 +504,7 @@ fn plain_text(status: u16, text: &str) -> StorageResponse {
     StorageResponse {
         status,
         headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
-        body: text.as_bytes().to_vec(),
+        body: bytes::Bytes::copy_from_slice(text.as_bytes()),
     }
 }
 
@@ -1822,7 +1822,7 @@ fn error_with_reason(
     if let Some(error) = body.get_mut("error").and_then(Value::as_object_mut) {
         error.insert("reason".to_owned(), json!(reason));
     }
-    response.body = serde_json::to_vec(&body).unwrap_or_default();
+    response.body = bytes::Bytes::from(serde_json::to_vec(&body).unwrap_or_default());
     response
 }
 
@@ -2160,19 +2160,29 @@ fn fb_get(
     }
     let media = params.get("alt").map(String::as_str) == Some("media");
     if media {
-        Ok(send_file_bytes(&store, &meta, req))
+        let bytes = store.shared_bytes(&meta);
+        drop(store);
+        Ok(send_file_bytes(bytes, &meta, req))
     } else {
         Ok(StorageResponse::json(200, &firebase_json(&meta)))
     }
 }
 
 /// The official `sendFileBytes`: object bytes with the header set both dialects share.
+struct SharedBlob(Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBlob {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
 fn send_file_bytes(
-    store: &ObjectStore,
+    shared: Arc<Vec<u8>>,
     meta: &ObjectMetadata,
     req: &StorageRequest,
 ) -> StorageResponse {
-    let bytes = store.bytes(meta);
+    let bytes = bytes::Bytes::from_owner(SharedBlob(shared));
     let filename = meta
         .name
         .as_str()
@@ -2222,16 +2232,19 @@ fn send_file_bytes(
             usize::try_from(start).unwrap_or(usize::MAX),
             usize::try_from(end).unwrap_or(usize::MAX),
         );
+        let body = bytes
+            .get(s..e)
+            .map_or_else(bytes::Bytes::new, |_| bytes.slice(s..e));
         return StorageResponse {
             status: 206,
             headers,
-            body: bytes.get(s..e).unwrap_or_default().to_vec(),
+            body,
         };
     }
     StorageResponse {
         status: 200,
         headers,
-        body: bytes.to_vec(),
+        body: bytes,
     }
 }
 
@@ -2809,7 +2822,9 @@ fn gcs_object(
                 Err(e) => return Ok(gcs_core_err(e)),
             }
             if media {
-                Ok(send_file_bytes(&store, &meta, req))
+                let bytes = store.shared_bytes(&meta);
+                drop(store);
+                Ok(send_file_bytes(bytes, &meta, req))
             } else {
                 Ok(StorageResponse::json(200, &gcs_json(&meta, host)))
             }
@@ -3395,5 +3410,7 @@ fn xml_style_get(
     let Some(meta) = store.get(&b, &n).cloned() else {
         return Ok(gcs_no_such_object(bucket, name, media));
     };
-    Ok(send_file_bytes(&store, &meta, req))
+    let bytes = store.shared_bytes(&meta);
+    drop(store);
+    Ok(send_file_bytes(bytes, &meta, req))
 }

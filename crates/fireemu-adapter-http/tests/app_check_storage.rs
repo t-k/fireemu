@@ -292,7 +292,7 @@ fn a_valid_download_token_url_follows_the_explicit_bypass() {
         "{}",
         String::from_utf8_lossy(&admitted.body)
     );
-    assert_eq!(admitted.body, b"hello");
+    assert_eq!(admitted.body.as_ref(), b"hello");
 }
 
 /// The bypass is the token, not the query parameter: a wrong or absent token is an ordinary

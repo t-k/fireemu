@@ -153,8 +153,8 @@ pub enum ChannelResponse {
     Stream {
         /// Extra headers.
         headers: Vec<(&'static str, String)>,
-        /// Chunks.
-        body: ReceiverStream<Result<bytes::Bytes, Status>>,
+        /// Chunks and the ownership lease for this HTTP response.
+        body: BackchannelBody,
     },
 }
 
@@ -191,6 +191,60 @@ struct Session {
 struct BackchannelOwner {
     generation: u64,
     cancel: Option<oneshot::Sender<()>>,
+}
+
+/// A back-channel HTTP body that retains ownership until the response reaches EOF or is dropped.
+pub struct BackchannelBody {
+    inner: ReceiverStream<Result<bytes::Bytes, Status>>,
+    session: Arc<Session>,
+    generation: u64,
+    released: bool,
+}
+
+impl BackchannelBody {
+    fn new(
+        receiver: mpsc::Receiver<Result<bytes::Bytes, Status>>,
+        session: Arc<Session>,
+        generation: u64,
+    ) -> Self {
+        Self {
+            inner: ReceiverStream::new(receiver),
+            session,
+            generation,
+            released: false,
+        }
+    }
+
+    fn release(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        if self.session.finish_backchannel(self.generation) {
+            self.session.touch();
+        }
+    }
+}
+
+impl tokio_stream::Stream for BackchannelBody {
+    type Item = Result<bytes::Bytes, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let next = std::pin::Pin::new(&mut self.inner).poll_next(cx);
+        if matches!(&next, std::task::Poll::Ready(None)) {
+            self.release();
+        }
+        next
+    }
+}
+
+impl Drop for BackchannelBody {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// What a `WebChannel` is bound to once it has been admitted.
@@ -772,6 +826,7 @@ impl Hub {
         // Wake a previous back channel so it notices it was replaced.
         session.notify.notify_waiters();
         let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, Status>>(64);
+        let response_session = session.clone();
         tokio::spawn(async move {
             let mut cursor = acked;
             let outcome = backchannel_loop(
@@ -784,9 +839,6 @@ impl Hub {
                 &mut cancelled,
             )
             .await;
-            if session.finish_backchannel(generation) {
-                session.touch();
-            }
             trace(
                 "backchannel end",
                 &format!("{} gen={generation} {outcome}", session.sid),
@@ -794,7 +846,7 @@ impl Hub {
         });
         ChannelResponse::Stream {
             headers: vec![("content-type", "text/plain; charset=utf-8".to_owned())],
-            body: ReceiverStream::new(rx),
+            body: BackchannelBody::new(rx, response_session, generation),
         }
     }
 }

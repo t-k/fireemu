@@ -2,6 +2,7 @@
 //! so every rule is unit-testable.
 
 use base64::Engine as _;
+use fireemu_core_session::loopback::authority_is_loopback;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 
@@ -261,12 +262,7 @@ pub fn parse_handshake(head: &str) -> Result<Handshake, HandshakeError> {
 /// (HTTP/1.0) is treated as local, and `127.0.0.0/8`, `localhost` and `::1` all pass.
 #[must_use]
 pub fn host_is_loopback(host: Option<&str>) -> bool {
-    let Some(host) = host else {
-        return true;
-    };
-    let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
-    let name = name.trim_start_matches('[').trim_end_matches(']');
-    matches!(name, "localhost" | "127.0.0.1" | "::1") || name.starts_with("127.")
+    host.is_none_or(authority_is_loopback)
 }
 
 /// A decoded client WebSocket frame that the server acts on.
@@ -381,8 +377,12 @@ mod tests {
         assert!(host_is_loopback(Some("localhost:4500")));
         assert!(host_is_loopback(Some("[::1]:4500")));
         assert!(host_is_loopback(Some("127.9.9.9")));
+        assert!(host_is_loopback(Some("LOCALHOST:4500")));
         assert!(!host_is_loopback(Some("evil.example.com")));
         assert!(!host_is_loopback(Some("10.0.0.1:4500")));
+        assert!(!host_is_loopback(Some("localhost.")));
+        assert!(!host_is_loopback(Some("127.attacker.example")));
+        assert!(!host_is_loopback(Some("127.0.0.1.attacker.example")));
     }
 
     #[test]

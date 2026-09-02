@@ -601,6 +601,7 @@ name = "fireemu-adapter-logging"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "fireemu-core-session",
  "serde_json",
  "sha1",
  "tokio",

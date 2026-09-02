@@ -13,6 +13,7 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::fmt::Write as _;
 
+pub use fireemu_core_session::loopback::origin_is_local;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -716,24 +717,6 @@ fn callable_preflight(headers: &hyper::HeaderMap) -> Option<Response<Full<Bytes>
         builder = builder.header("access-control-allow-headers", admitted.join(","));
     }
     builder.body(Full::new(Bytes::new())).ok()
-}
-
-/// Whether a browser `Origin` is a loopback origin.
-#[must_use]
-pub fn origin_is_local(origin: &str) -> bool {
-    // `null` (sandboxed or opaque contexts) is not a loopback origin.
-    let Some(rest) = origin
-        .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"))
-    else {
-        return false;
-    };
-    let host = rest.split('/').next().unwrap_or("");
-    let host = host
-        .strip_prefix('[')
-        .and_then(|h| h.split(']').next())
-        .unwrap_or_else(|| host.split(':').next().unwrap_or(host));
-    host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 /// Serves the functions port.

@@ -46,6 +46,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 
 use fireemu_adapter_functions::runtime::FunctionsRuntime;
+use fireemu_core_session::loopback::{authority_is_loopback, origin_is_local};
 
 /// The project ID the locator file uses when none is configured, as upstream.
 const MISSING_PROJECT_PLACEHOLDER: &str = "demo-no-project";
@@ -281,48 +282,7 @@ fn local_origin(req: &Request<Incoming>) -> Option<&str> {
     if values.next().is_some() || origin == "null" {
         return None;
     }
-    let uri = origin.parse::<hyper::Uri>().ok()?;
-    if !matches!(uri.scheme_str(), Some("http" | "https"))
-        || uri.path() != "/"
-        || uri.query().is_some()
-    {
-        return None;
-    }
-    authority_is_loopback(uri.authority()?.as_str()).then_some(origin)
-}
-
-fn authority_is_loopback(authority: &str) -> bool {
-    if authority.is_empty() || authority.contains('@') {
-        return false;
-    }
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        let Some((host, suffix)) = rest.split_once(']') else {
-            return false;
-        };
-        if !suffix.is_empty()
-            && suffix
-                .strip_prefix(':')
-                .is_none_or(|port| port.parse::<u16>().is_err())
-        {
-            return false;
-        }
-        host
-    } else {
-        let mut parts = authority.split(':');
-        let Some(host) = parts.next() else {
-            return false;
-        };
-        if let Some(port) = parts.next() {
-            if parts.next().is_some() || port.parse::<u16>().is_err() {
-                return false;
-            }
-        }
-        host
-    };
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
+    origin_is_local(origin).then_some(origin)
 }
 
 fn fetch_metadata_allows(req: &Request<Incoming>) -> bool {

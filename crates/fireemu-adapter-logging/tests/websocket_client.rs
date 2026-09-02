@@ -161,13 +161,22 @@ async fn a_ping_is_answered_with_a_pong() {
 #[tokio::test]
 async fn a_foreign_host_is_refused() {
     let (_bus, addr) = start().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let request = "GET / HTTP/1.1\r\nHost: evil.example.com\r\nUpgrade: websocket\r\n\
-                   Connection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n";
-    stream.write_all(request.as_bytes()).await.unwrap();
-    let head = read_http_head(&mut stream).await;
-    assert!(
-        head.starts_with("HTTP/1.1 403"),
-        "expected 403, got: {head}"
-    );
+    for host in [
+        "evil.example.com",
+        "localhost.",
+        "127.attacker.example",
+        "127.0.0.1.attacker.example",
+    ] {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET / HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n\
+             Connection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let head = read_http_head(&mut stream).await;
+        assert!(
+            head.starts_with("HTTP/1.1 403"),
+            "expected 403 for {host}, got: {head}"
+        );
+    }
 }

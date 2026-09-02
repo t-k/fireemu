@@ -9,6 +9,7 @@ publish.workspace = true
 description = "The official Firebase Logging emulator: an RFC 6455 WebSocket server that streams the EmulatorLog wire format (firebase-tools loggingEmulator.js) over a bounded log bus"
 
 [dependencies]
+fireemu-core-session = { path = "../fireemu-core-session" }
 serde_json.workspace = true
 sha1 = "0.10"
 base64 = "0.22"

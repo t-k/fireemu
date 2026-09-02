@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub use fireemu_core_session::loopback::origin_is_local;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Notify};
@@ -113,20 +114,6 @@ fn keyed_sid() -> String {
     b.write_u64(n ^ 0x5A5A_5A5A);
     b.write_u64(u64::from(std::process::id()));
     format!("{:016x}{:016x}", a.finish(), b.finish())
-}
-
-/// Whether a browser `Origin` names this machine (loopback).
-#[must_use]
-pub fn origin_is_local(origin: &str) -> bool {
-    let rest = origin
-        .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"));
-    let Some(rest) = rest else { return false };
-    let host = rest.strip_prefix('[').map_or_else(
-        || rest.split(':').next().unwrap_or(""),
-        |v6| v6.split(']').next().unwrap_or(""),
-    );
-    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 /// Which gRPC stream a session carries.

@@ -8,5 +8,6 @@ pub mod barrier;
 pub mod clock;
 pub mod fault;
 pub mod idle;
+pub mod loopback;
 pub mod session;
 pub mod tenancy;

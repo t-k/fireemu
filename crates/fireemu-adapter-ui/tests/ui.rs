@@ -622,8 +622,12 @@ fn host_and_control_character_checks() {
     use fireemu_adapter_ui::{has_control_chars, host_is_local};
     assert!(host_is_local("localhost:4000"));
     assert!(host_is_local("127.0.0.1"));
+    assert!(host_is_local("127.0.0.2"));
+    assert!(host_is_local("LOCALHOST:4000"));
     assert!(host_is_local("[::1]:4000"));
     assert!(!host_is_local("evil.example:4000"));
+    assert!(!host_is_local("localhost."));
+    assert!(!host_is_local("127.attacker.example"));
     assert!(!host_is_local("127.0.0.1.evil.example"));
     assert!(has_control_chars("a\u{0}b"));
     assert!(has_control_chars("a\nb"));

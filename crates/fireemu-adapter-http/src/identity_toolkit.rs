@@ -29,6 +29,7 @@ use fireemu_core_auth::store::{
     RoutedStoreInstall, SecondFactorAssertion, VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
+pub use fireemu_core_session::loopback::origin_is_local;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::json::JsonValue;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -617,21 +618,6 @@ pub struct RequestHeaders {
     /// Every `X-Firebase-AppCheck` field instance, in wire order. A value the transport could
     /// not render as text is carried as an empty string, which classifies as malformed.
     pub app_check: Vec<String>,
-}
-
-/// Whether a browser `Origin` names this machine (loopback) — the only origins allowed to
-/// reach privileged routes.
-#[must_use]
-pub fn origin_is_local(origin: &str) -> bool {
-    let rest = origin
-        .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"));
-    let Some(rest) = rest else { return false };
-    let host = rest.strip_prefix('[').map_or_else(
-        || rest.split(':').next().unwrap_or(""),
-        |v6| v6.split(']').next().unwrap_or(""),
-    );
-    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 /// The exact credential the emulator's Admin SDK surface requires. It is the privileged

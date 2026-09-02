@@ -606,6 +606,22 @@ fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
             ],
         ),
         (
+            "rebinding origin",
+            vec![
+                ("Origin", "http://127.0.0.1.attacker.example"),
+                ("Access-Control-Request-Method", "PUT"),
+                ("Access-Control-Request-Headers", "authorization"),
+            ],
+        ),
+        (
+            "userinfo origin",
+            vec![
+                ("Origin", "http://user@localhost"),
+                ("Access-Control-Request-Method", "PUT"),
+                ("Access-Control-Request-Headers", "authorization"),
+            ],
+        ),
+        (
             "wrong requested method",
             vec![
                 ("Origin", "http://127.0.0.1:4000"),

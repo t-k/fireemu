@@ -41,6 +41,7 @@ use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_http::control::ControlState;
 use fireemu_adapter_http::identity_toolkit::AuthState;
 use fireemu_adapter_http::storage::StorageState;
+pub use fireemu_core_session::loopback::authority_is_loopback as host_is_local;
 use serde_json::{json, Value};
 
 /// Maximum accepted body of a JSON route.
@@ -227,18 +228,6 @@ pub fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Whether a `Host` header names this machine (loopback), with or without a port.
-#[must_use]
-pub fn host_is_local(host: &str) -> bool {
-    let host = host.trim();
-    let name = if let Some(rest) = host.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
-    } else {
-        host.rsplit_once(':').map_or(host, |(h, _)| h)
-    };
-    matches!(name, "localhost" | "127.0.0.1" | "::1")
 }
 
 /// Whether `s` contains a NUL or another control character (refused at the boundary).

@@ -250,6 +250,18 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
                 hash_bytes(hash, relative.to_string_lossy().bytes().chain([0]));
                 hash_bytes(hash, metadata.len().to_le_bytes());
                 hash_bytes(hash, modified.to_le_bytes());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt as _;
+                    hash_bytes(hash, metadata.ctime().to_le_bytes());
+                    hash_bytes(hash, metadata.ctime_nsec().to_le_bytes());
+                }
+                #[cfg(not(unix))]
+                {
+                    let bytes = std::fs::read(&child)
+                        .map_err(|error| format!("watch {}: {error}", child.display()))?;
+                    hash_bytes(hash, bytes);
+                }
             } else if kind.is_symlink() {
                 return Err(format!(
                     "watch {}: symbolic links outside node_modules are not supported",
@@ -2809,7 +2821,9 @@ mod tests {
         std::fs::write(root.join("node_modules/pkg/index.js"), "still ignored").unwrap();
         assert_eq!(functions_source_signature(&root, &[]).unwrap(), first);
         assert_eq!(functions_source_stamp(&root, &[]).unwrap(), first_stamp);
-        std::fs::write(root.join("lib/index.js"), "export const value = 22;").unwrap();
+        // Same-size rewrites must invalidate the cheap stamp even when a tool restores mtime.
+        // POSIX change time supplies that signal; non-POSIX builds hash content in the stamp.
+        std::fs::write(root.join("lib/index.js"), "export const value = 2;").unwrap();
         let build_changed = functions_source_signature(&root, &[]).unwrap();
         assert_ne!(build_changed, first);
         assert_ne!(functions_source_stamp(&root, &[]).unwrap(), first_stamp);

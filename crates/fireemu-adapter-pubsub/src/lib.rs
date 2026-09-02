@@ -22,7 +22,6 @@ mod convert;
 mod publisher;
 mod subscriber;
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_pubsub::PubSubState;
@@ -42,14 +41,8 @@ pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
 /// A message handed to the functions bridge for topic-trigger delivery.
 #[derive(Debug, Clone)]
 pub struct BridgeMessage {
-    /// The broker-assigned message id.
-    pub message_id: String,
-    /// The raw payload.
-    pub data: Vec<u8>,
-    /// String attributes.
-    pub attributes: BTreeMap<String, String>,
-    /// The ordering key (empty when unset).
-    pub ordering_key: String,
+    /// The broker record shared with every subscription.
+    pub message: Arc<fireemu_core_pubsub::StoredMessage>,
 }
 
 /// Bridge to the Functions runtime: a message published on a topic is also delivered to any

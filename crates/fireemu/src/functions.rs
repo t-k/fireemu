@@ -2329,11 +2329,12 @@ impl fireemu_adapter_pubsub::TopicDelivery for PubSubBridge {
             .iter()
             .map(|m| {
                 let mut value = serde_json::json!({
-                    "data": base64_encode(&m.data),
-                    "attributes": m.attributes,
+                    "data": base64_encode(&m.message.message.data),
+                    "attributes": &m.message.message.attributes,
                 });
-                if !m.ordering_key.is_empty() {
-                    value["orderingKey"] = serde_json::Value::String(m.ordering_key.clone());
+                if !m.message.message.ordering_key.is_empty() {
+                    value["orderingKey"] =
+                        serde_json::Value::String(m.message.message.ordering_key.clone());
                 }
                 value
             })

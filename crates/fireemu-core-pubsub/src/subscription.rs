@@ -6,6 +6,9 @@
 //! run against an explicit [`LogicalInstant`]; the state machine never reads a clock itself, so
 //! redelivery timing is driven by the virtual clock the rest of fireemu uses.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
 use crate::error::{PubSubError, Result};
@@ -25,6 +28,8 @@ pub const MIN_DEAD_LETTER_ATTEMPTS: u32 = 5;
 pub const MAX_DEAD_LETTER_ATTEMPTS: u32 = 100;
 /// Upper bound on the number of retained entries a single subscription keeps in memory.
 pub const MAX_RETAINED_PER_SUB: usize = 100_000;
+/// Upper bound on message bytes retained by one subscription.
+pub const MAX_RETAINED_BYTES_PER_SUB: usize = 1024 * 1024 * 1024;
 
 /// A dead-letter policy: after `max_delivery_attempts` failed deliveries a message is forwarded
 /// to `dead_letter_topic`.
@@ -139,7 +144,7 @@ enum Delivery {
 
 #[derive(Debug, Clone)]
 struct Entry {
-    stored: StoredMessage,
+    stored: Arc<StoredMessage>,
     state: Delivery,
     /// How many times this message has been handed to a subscriber.
     delivery_attempt: u32,
@@ -151,7 +156,7 @@ pub struct ReceivedMessage {
     /// The ack id the subscriber uses to acknowledge or nack.
     pub ack_id: String,
     /// The message.
-    pub message: StoredMessage,
+    pub message: Arc<StoredMessage>,
     /// 1-based delivery attempt.
     pub delivery_attempt: u32,
 }
@@ -163,7 +168,7 @@ pub struct PullOutcome {
     /// Messages delivered to the caller.
     pub received: Vec<ReceivedMessage>,
     /// Messages to forward to the subscription's dead-letter topic (registry does the publish).
-    pub dead_lettered: Vec<StoredMessage>,
+    pub dead_lettered: Vec<Arc<StoredMessage>>,
 }
 
 /// The live state of one subscription: its configuration plus its message log.
@@ -171,6 +176,9 @@ pub struct PullOutcome {
 pub struct SubscriptionState {
     config: SubscriptionConfig,
     entries: Vec<Entry>,
+    first_unacked: usize,
+    outstanding: BTreeMap<String, usize>,
+    retained_bytes: usize,
 }
 
 impl SubscriptionState {
@@ -180,6 +188,9 @@ impl SubscriptionState {
         Self {
             config,
             entries: Vec::new(),
+            first_unacked: 0,
+            outstanding: BTreeMap::new(),
+            retained_bytes: 0,
         }
     }
 
@@ -199,15 +210,67 @@ impl SubscriptionState {
         self.config.push_config = push;
     }
 
+    fn message_bytes(stored: &StoredMessage) -> usize {
+        stored
+            .message
+            .data
+            .len()
+            .saturating_add(stored.message.ordering_key.len())
+            .saturating_add(
+                stored
+                    .message
+                    .attributes
+                    .iter()
+                    .map(|(key, value)| key.len().saturating_add(value.len()))
+                    .sum::<usize>(),
+            )
+    }
+
+    fn rebuild_indexes(&mut self) {
+        self.first_unacked = self
+            .entries
+            .iter()
+            .position(|entry| entry.state != Delivery::Acked)
+            .unwrap_or(self.entries.len());
+        self.outstanding.clear();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if let Delivery::Outstanding { ack_id, .. } = &entry.state {
+                self.outstanding.insert(ack_id.clone(), index);
+            }
+        }
+        self.retained_bytes = self
+            .entries
+            .iter()
+            .map(|entry| Self::message_bytes(&entry.stored))
+            .sum();
+    }
+
+    fn advance_first_unacked(&mut self) {
+        while self
+            .entries
+            .get(self.first_unacked)
+            .is_some_and(|entry| entry.state == Delivery::Acked)
+        {
+            self.first_unacked += 1;
+        }
+    }
+
     /// Appends a message that already passed the subscription filter. Returns
     /// `RESOURCE_EXHAUSTED` when the retention bound is reached and no acked entry can be
     /// reclaimed.
-    pub fn enqueue(&mut self, stored: StoredMessage, now: LogicalInstant) -> Result<()> {
+    pub fn enqueue(
+        &mut self,
+        stored: impl Into<Arc<StoredMessage>>,
+        now: LogicalInstant,
+    ) -> Result<()> {
+        let stored = stored.into();
+        let message_bytes = Self::message_bytes(&stored);
         if self.entries.len() >= MAX_RETAINED_PER_SUB {
             // Reclaim the oldest acked entries first; a backlog of live messages cannot be
             // dropped, so a subscription that is never drained is bounded and refuses further
             // publishes rather than growing without limit.
             self.entries.retain(|e| e.state != Delivery::Acked);
+            self.rebuild_indexes();
             if self.entries.len() >= MAX_RETAINED_PER_SUB {
                 return Err(PubSubError::resource_exhausted(format!(
                     "subscription {} retains the maximum of {MAX_RETAINED_PER_SUB} messages",
@@ -215,11 +278,22 @@ impl SubscriptionState {
                 )));
             }
         }
+        if self
+            .retained_bytes
+            .checked_add(message_bytes)
+            .is_none_or(|total| total > MAX_RETAINED_BYTES_PER_SUB)
+        {
+            return Err(PubSubError::resource_exhausted(format!(
+                "subscription {} retains the maximum of {MAX_RETAINED_BYTES_PER_SUB} message bytes",
+                self.config.name.to_full()
+            )));
+        }
         self.entries.push(Entry {
             stored,
             state: Delivery::Available { available_at: now },
             delivery_attempt: 0,
         });
+        self.retained_bytes += message_bytes;
         Ok(())
     }
 
@@ -233,20 +307,19 @@ impl SubscriptionState {
     /// with undelivered or unacked messages is not idle).
     #[must_use]
     pub fn has_pending(&self, now: LogicalInstant) -> bool {
-        self.entries.iter().any(|e| match &e.state {
-            Delivery::Outstanding { .. } => true,
-            Delivery::Available { available_at } => *available_at <= now,
-            Delivery::Acked => false,
-        })
+        self.entries[self.first_unacked..]
+            .iter()
+            .any(|e| match &e.state {
+                Delivery::Outstanding { .. } => true,
+                Delivery::Available { available_at } => *available_at <= now,
+                Delivery::Acked => false,
+            })
     }
 
     /// The number of outstanding (delivered, unacked) messages.
     #[must_use]
     pub fn outstanding_count(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|e| matches!(e.state, Delivery::Outstanding { .. }))
-            .count()
+        self.outstanding.len()
     }
 
     /// Moves every outstanding message whose ack deadline has passed back to available, so the
@@ -254,11 +327,18 @@ impl SubscriptionState {
     pub fn expire_deadlines(&mut self, now: LogicalInstant) {
         let backoff = self.config.redelivery_backoff();
         let available_at = now.checked_add(backoff).unwrap_or(now);
-        for e in &mut self.entries {
-            if let Delivery::Outstanding { deadline, .. } = &e.state {
-                if *deadline <= now {
-                    e.state = Delivery::Available { available_at };
-                }
+        let expired: Vec<String> = self
+            .outstanding
+            .iter()
+            .filter(|(_, index)| match &self.entries[**index].state {
+                Delivery::Outstanding { deadline, .. } => *deadline <= now,
+                Delivery::Available { .. } | Delivery::Acked => false,
+            })
+            .map(|(ack_id, _)| ack_id.clone())
+            .collect();
+        for ack_id in expired {
+            if let Some(index) = self.outstanding.remove(&ack_id) {
+                self.entries[index].state = Delivery::Available { available_at };
             }
         }
     }
@@ -285,15 +365,21 @@ impl SubscriptionState {
             .as_ref()
             .map(|d| d.max_delivery_attempts);
         let ordered = self.config.enable_message_ordering;
+        let mut blocked_keys = BTreeSet::new();
 
-        for i in 0..self.entries.len() {
+        for i in self.first_unacked..self.entries.len() {
             if out.received.len() >= max {
                 break;
             }
-            if !self.is_available(i, now) {
+            if self.entries[i].state == Delivery::Acked {
                 continue;
             }
-            if ordered && self.blocked_by_earlier_same_key(i) {
+            let ordering_key = self.entries[i].stored.message.ordering_key.clone();
+            if ordered && !ordering_key.is_empty() && !blocked_keys.insert(ordering_key.clone()) {
+                continue;
+            }
+            if !matches!(&self.entries[i].state, Delivery::Available { available_at } if *available_at <= now)
+            {
                 continue;
             }
             // Dead-letter: a message that already used its whole attempt budget is forwarded
@@ -301,7 +387,8 @@ impl SubscriptionState {
             if let Some(limit) = max_attempts {
                 if self.entries[i].delivery_attempt >= limit {
                     self.entries[i].state = Delivery::Acked;
-                    out.dead_lettered.push(self.entries[i].stored.clone());
+                    out.dead_lettered.push(Arc::clone(&self.entries[i].stored));
+                    blocked_keys.remove(&ordering_key);
                     continue;
                 }
             }
@@ -312,43 +399,28 @@ impl SubscriptionState {
                 ack_id: ack_id.clone(),
                 deadline,
             };
+            self.outstanding.insert(ack_id.clone(), i);
             out.received.push(ReceivedMessage {
                 ack_id,
-                message: entry.stored.clone(),
+                message: Arc::clone(&entry.stored),
                 delivery_attempt: entry.delivery_attempt,
             });
         }
+        self.advance_first_unacked();
         out
-    }
-
-    fn is_available(&self, i: usize, now: LogicalInstant) -> bool {
-        matches!(&self.entries[i].state, Delivery::Available { available_at } if *available_at <= now)
-    }
-
-    /// For an ordered subscription, a message is blocked while an earlier message with the same
-    /// ordering key is not yet acked.
-    fn blocked_by_earlier_same_key(&self, i: usize) -> bool {
-        let key = &self.entries[i].stored.message.ordering_key;
-        if key.is_empty() {
-            return false;
-        }
-        self.entries[..i]
-            .iter()
-            .any(|e| e.stored.message.ordering_key == *key && !matches!(e.state, Delivery::Acked))
     }
 
     /// Acknowledges the messages named by `ack_ids`. Unknown or already-expired ack ids are
     /// ignored, exactly as the service ignores them. Returns the number actually acked.
     pub fn acknowledge(&mut self, ack_ids: &[String]) -> usize {
         let mut acked = 0;
-        for e in &mut self.entries {
-            if let Delivery::Outstanding { ack_id, .. } = &e.state {
-                if ack_ids.iter().any(|a| a == ack_id) {
-                    e.state = Delivery::Acked;
-                    acked += 1;
-                }
+        for ack_id in ack_ids {
+            if let Some(index) = self.outstanding.remove(ack_id) {
+                self.entries[index].state = Delivery::Acked;
+                acked += 1;
             }
         }
+        self.advance_first_unacked();
         acked
     }
 
@@ -357,24 +429,17 @@ impl SubscriptionState {
     /// Unknown ack ids are ignored.
     pub fn modify_ack_deadline(&mut self, ack_id: &str, seconds: u32, now: LogicalInstant) {
         let backoff = self.config.redelivery_backoff();
-        for e in &mut self.entries {
-            if let Delivery::Outstanding {
-                ack_id: id,
-                deadline,
-            } = &mut e.state
-            {
-                if id == ack_id {
-                    if seconds == 0 {
-                        e.state = Delivery::Available {
-                            available_at: now.checked_add(backoff).unwrap_or(now),
-                        };
-                    } else {
-                        let d = LogicalDuration::from_seconds(i64::from(seconds));
-                        *deadline = now.checked_add(d).unwrap_or(LogicalInstant::MAX);
-                    }
-                    return;
-                }
-            }
+        let Some(index) = self.outstanding.get(ack_id).copied() else {
+            return;
+        };
+        if seconds == 0 {
+            self.outstanding.remove(ack_id);
+            self.entries[index].state = Delivery::Available {
+                available_at: now.checked_add(backoff).unwrap_or(now),
+            };
+        } else if let Delivery::Outstanding { deadline, .. } = &mut self.entries[index].state {
+            let duration = LogicalDuration::from_seconds(i64::from(seconds));
+            *deadline = now.checked_add(duration).unwrap_or(LogicalInstant::MAX);
         }
     }
 
@@ -396,6 +461,7 @@ impl SubscriptionState {
                 e.delivery_attempt = 0;
             }
         }
+        self.rebuild_indexes();
         Ok(())
     }
 }
@@ -452,6 +518,75 @@ mod tests {
         assert!(s.pull(10, now, &mut ids).received.is_empty());
         assert_eq!(s.acknowledge(&[ack]), 1);
         assert!(!s.has_pending(now));
+    }
+
+    #[test]
+    fn acknowledgement_indexes_skip_acked_prefixes_and_redelivery_shares_payloads() {
+        let mut s = SubscriptionState::new(cfg());
+        let now = LogicalInstant::from_unix_seconds(100);
+        for id in ["1", "2", "3"] {
+            s.enqueue(stored(id, id.as_bytes(), 100), now).unwrap();
+        }
+        let mut ids = counter();
+        let pulled = s.pull(3, now, &mut ids);
+        assert_eq!(s.outstanding_count(), 3);
+        assert_eq!(s.acknowledge(&[pulled.received[0].ack_id.clone()]), 1);
+        assert_eq!(s.first_unacked, 1);
+        assert_eq!(
+            s.acknowledge(&[
+                pulled.received[1].ack_id.clone(),
+                pulled.received[2].ack_id.clone(),
+            ]),
+            2
+        );
+        assert_eq!(s.first_unacked, 3);
+        assert_eq!(s.outstanding_count(), 0);
+
+        s.seek_to_time(now, now).unwrap();
+        let replay = s.pull(1, now, &mut ids);
+        let first_allocation = Arc::clone(&replay.received[0].message);
+        s.modify_ack_deadline(&replay.received[0].ack_id, 0, now);
+        let redelivery = s.pull(1, now, &mut ids);
+        assert!(Arc::ptr_eq(
+            &first_allocation,
+            &redelivery.received[0].message
+        ));
+    }
+
+    #[test]
+    fn retained_message_bytes_are_bounded_without_allocating_the_limit() {
+        let mut s = SubscriptionState::new(cfg());
+        let mut measured = stored("measured", b"abc", 100);
+        measured.message.ordering_key = "key".to_owned();
+        measured
+            .message
+            .attributes
+            .insert("name".to_owned(), "value".to_owned());
+        assert_eq!(SubscriptionState::message_bytes(&measured), 3 + 3 + 4 + 5);
+        s.retained_bytes = MAX_RETAINED_BYTES_PER_SUB - 1;
+        let now = LogicalInstant::from_unix_seconds(100);
+        assert!(s.enqueue(stored("1", b"a", 100), now).is_ok());
+        let error = s.enqueue(stored("2", b"b", 100), now).unwrap_err();
+        assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
+    }
+
+    #[test]
+    fn entry_cap_reclaims_acked_tombstones_before_refusing_a_publish() {
+        let mut s = SubscriptionState::new(cfg());
+        let shared = Arc::new(stored("old", b"a", 100));
+        s.entries = (0..MAX_RETAINED_PER_SUB)
+            .map(|_| Entry {
+                stored: Arc::clone(&shared),
+                state: Delivery::Acked,
+                delivery_attempt: 1,
+            })
+            .collect();
+        s.rebuild_indexes();
+
+        let now = LogicalInstant::from_unix_seconds(100);
+        s.enqueue(stored("new", b"b", 100), now).unwrap();
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.entries[0].stored.message_id, "new");
     }
 
     #[test]

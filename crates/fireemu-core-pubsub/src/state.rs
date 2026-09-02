@@ -7,6 +7,7 @@
 //! it, forwarding the virtual clock and holding the lock.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::time::LogicalInstant;
@@ -264,6 +265,21 @@ impl PubSubState {
         messages: Vec<PubsubMessage>,
         now: LogicalInstant,
     ) -> Result<Vec<String>> {
+        self.publish_shared(topic, messages, now).map(|published| {
+            published
+                .iter()
+                .map(|message| message.message_id.clone())
+                .collect()
+        })
+    }
+
+    /// Publishes messages and returns the shared stored records used by every subscription.
+    pub fn publish_shared(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<PubsubMessage>,
+        now: LogicalInstant,
+    ) -> Result<Vec<Arc<StoredMessage>>> {
         let topic_key = topic.to_full();
         if !self.topics.contains_key(&topic_key) {
             return Err(PubSubError::not_found(format!(
@@ -284,28 +300,28 @@ impl PubSubState {
             .map(|s| s.iter().cloned().collect())
             .unwrap_or_default();
 
-        let mut ids = Vec::with_capacity(messages.len());
+        let mut published = Vec::with_capacity(messages.len());
         for message in messages {
             self.message_counter += 1;
             let message_id = self.message_counter.to_string();
-            let stored = StoredMessage {
+            let stored = Arc::new(StoredMessage {
                 message_id: message_id.clone(),
                 publish_time: now,
                 message,
-            };
+            });
             for key in &sub_keys {
                 if self.function_subscriptions.contains(key) {
                     continue;
                 }
                 if let Some(sub) = self.subscriptions.get_mut(key) {
                     if sub.admits(&stored.message.attributes) {
-                        sub.enqueue(stored.clone(), now)?;
+                        sub.enqueue(Arc::clone(&stored), now)?;
                     }
                 }
             }
-            ids.push(message_id);
+            published.push(stored);
         }
-        Ok(ids)
+        Ok(published)
     }
 
     /// Delivers up to `max` messages from a subscription. Dead-lettered messages are forwarded
@@ -353,13 +369,16 @@ impl PubSubState {
     fn forward_dead_letters(
         &mut self,
         dl_topic: &TopicName,
-        messages: Vec<StoredMessage>,
+        messages: Vec<Arc<StoredMessage>>,
         now: LogicalInstant,
     ) {
         if !self.topics.contains_key(&dl_topic.to_full()) {
             return;
         }
-        let bodies: Vec<PubsubMessage> = messages.into_iter().map(|m| m.message).collect();
+        let bodies: Vec<PubsubMessage> = messages
+            .into_iter()
+            .map(|message| message.message.clone())
+            .collect();
         // Ignore the result: a dead-letter republish that hits a bound is dropped rather than
         // failing the original pull.
         let _ = self.publish(dl_topic, bodies, now);
@@ -472,15 +491,54 @@ mod tests {
             .publish(&topic("demo-app", "orders"), vec![data(b"hello")], now)
             .unwrap();
         assert_eq!(ids.len(), 1);
-        let msgs = s
-            .pull(
-                &SubscriptionName::new("demo-app", "orders-sub").unwrap(),
-                10,
-                now,
-            )
-            .unwrap();
+        let subscription = SubscriptionName::new("demo-app", "orders-sub").unwrap();
+        let msgs = s.pull(&subscription, 10, now).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].message.message.data, b"hello");
+        assert_eq!(s.acknowledge(&subscription, &["unknown".to_owned()]), Ok(0));
+        assert_eq!(
+            s.acknowledge(&subscription, &[msgs[0].ack_id.clone()]),
+            Ok(1)
+        );
+
+        s.publish(&topic("demo-app", "orders"), vec![data(b"again")], now)
+            .unwrap();
+        let delivered = s.pull(&subscription, 1, now).unwrap();
+        s.modify_ack_deadline(&subscription, &[delivered[0].ack_id.clone()], 0, now)
+            .unwrap();
+        assert_eq!(s.pull(&subscription, 1, now).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn subscriptions_share_one_published_message_allocation() {
+        let mut state = PubSubState::new(42);
+        let now = LogicalInstant::from_unix_seconds(1000);
+        let topic = topic("demo-app", "shared");
+        state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+        let first = SubscriptionName::new("demo-app", "first-sub").unwrap();
+        let second = SubscriptionName::new("demo-app", "second-sub").unwrap();
+        state
+            .create_subscription(sub_cfg("demo-app", "first-sub", "shared", Filter::always()))
+            .unwrap();
+        state
+            .create_subscription(sub_cfg(
+                "demo-app",
+                "second-sub",
+                "shared",
+                Filter::always(),
+            ))
+            .unwrap();
+
+        let published = state
+            .publish_shared(&topic, vec![data(b"one allocation")], now)
+            .unwrap();
+        let first_message = state.pull(&first, 1, now).unwrap();
+        let second_message = state.pull(&second, 1, now).unwrap();
+        assert!(Arc::ptr_eq(&published[0], &first_message[0].message));
+        assert!(Arc::ptr_eq(
+            &first_message[0].message,
+            &second_message[0].message
+        ));
     }
 
     #[test]

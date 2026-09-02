@@ -72,22 +72,20 @@ impl Publisher for PublisherService {
         let messages: Vec<PubsubMessage> =
             req.messages.into_iter().map(message_from_proto).collect();
         let now = self.handle.now();
-        let ids = {
+        let published = {
             let mut state = self.handle.state();
             state
-                .publish(&topic, messages.clone(), now)
+                .publish_shared(&topic, messages, now)
                 .map_err(|e| status(&e))?
         };
-        // Bridge to subscribed Cloud Functions (EVTINFRA-02), preserving the topic-trigger path.
-        let bridge: Vec<BridgeMessage> = ids
+        let ids: Vec<String> = published
             .iter()
-            .zip(messages)
-            .map(|(id, m)| BridgeMessage {
-                message_id: id.clone(),
-                data: m.data,
-                attributes: m.attributes,
-                ordering_key: m.ordering_key,
-            })
+            .map(|message| message.message_id.clone())
+            .collect();
+        // Bridge to subscribed Cloud Functions (EVTINFRA-02), preserving the topic-trigger path.
+        let bridge: Vec<BridgeMessage> = published
+            .into_iter()
+            .map(|message| BridgeMessage { message })
             .collect();
         self.handle.bridge_deliver(topic.topic(), &bridge);
         Ok(Response::new(pb::PublishResponse { message_ids: ids }))

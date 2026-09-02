@@ -19,6 +19,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tools/sdk-smoke/package-lock.json
+      - name: install real Functions SDK discovery fixture
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
       - name: the pinned toolchain is the one in use
         run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
       - uses: taiki-e/install-action@v2
@@ -38,6 +45,8 @@ jobs:
         run: scripts/check-core-deps.sh
       - name: tests (profile pr, retries 0)
         run: cargo nextest run --workspace --profile pr
+      - name: real Functions SDK discovery preserves reset-value metadata
+        run: cargo test -p fireemu --test functions_discovery second_generation_omitted_concurrency_remains_defaultable -- --ignored --exact
       - name: limit catalog matches generated constants
         run: cargo run -p limit-catalog-gen -- check
       - name: requirement / mutant / loom traceability

@@ -323,10 +323,8 @@ async fn global_and_schedule_options_reach_the_runtime_manifest() {
 }
 
 #[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 async fn second_generation_omitted_concurrency_remains_defaultable() {
-    if !have_sdk() {
-        return;
-    }
     let runner_script =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
     let source = fixture("omitted-concurrency");

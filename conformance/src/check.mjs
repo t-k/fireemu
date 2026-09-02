@@ -10,8 +10,9 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { RUNS_DIR } from "./config.mjs";
-import { scenariosFor, variantsUsed } from "./corpus/index.mjs";
+import { SCENARIOS, scenariosFor, variantsUsed } from "./corpus/index.mjs";
 import { compareScenario } from "./diff.mjs";
+import { fixtureOwnershipFailures } from "./fixture-ownership.mjs";
 import { readAllFixtures } from "./fixtures.mjs";
 import { configFor, runTestd } from "./sides.mjs";
 
@@ -65,16 +66,7 @@ for (const variant of variantsUsed()) {
   }
 }
 
-// A fixture with no scenario is a corpus that shrank without re-recording.
-for (const id of fixtures.keys()) {
-  if (
-    !scenariosFor("baseline")
-      .concat(scenariosFor("appCheckEnforced"))
-      .some((s) => s.id === id)
-  ) {
-    failures.push(`${id}: a fixture exists but the corpus no longer declares the scenario`);
-  }
-}
+failures.push(...fixtureOwnershipFailures(fixtures, SCENARIOS));
 
 if (warnings.length > 0) {
   console.log(`\n${warnings.length} known-debt row(s) changed since they were recorded:`);

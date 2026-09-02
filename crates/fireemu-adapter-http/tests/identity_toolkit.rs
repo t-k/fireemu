@@ -332,7 +332,9 @@ fn production_blocking_failure_fixture_matches_identity_toolkit() {
         BlockingFunctionFailure::unhandled(),
         BlockingFunctionFailure::timeout(),
     ];
-    for (step, failure) in fixture["steps"].as_array().unwrap().iter().zip(failures) {
+    let steps = fixture["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), failures.len());
+    for (step, failure) in steps.iter().zip(failures) {
         let expected = &step["value"];
         let mut s = state();
         s.blocking = Some(Arc::new(FixtureFailureHook(failure)));

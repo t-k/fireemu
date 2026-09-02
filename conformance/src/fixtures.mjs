@@ -32,6 +32,7 @@ const FIXTURE_KEY_ORDER = [
   "title",
   "sdks",
   "variant",
+  "ownership",
   "oracle",
   "summary",
   "steps",

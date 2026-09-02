@@ -5,6 +5,7 @@
   "title": "Production Identity Platform Blocking Function failure classes",
   "sdks": ["identity-toolkit-rest"],
   "variant": "production-oracle",
+  "ownership": "external-oracle",
   "oracle": "production Identity Platform",
   "summary": {
     "parity": 3,

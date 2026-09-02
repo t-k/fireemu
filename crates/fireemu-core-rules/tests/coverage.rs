@@ -171,3 +171,63 @@ fn a_recorded_value_never_carries_a_token() {
     // The claim the rule actually read is recorded, because that is the point of a report.
     assert!(printed.contains("admin"));
 }
+
+#[test]
+fn coverage_merge_adds_distinct_value_counts_without_replaying_observations() {
+    use fireemu_core_rules::ast::Span;
+    use fireemu_core_rules::coverage::Coverage;
+
+    let span = Span {
+        line: 1,
+        column: 1,
+        offset: 4,
+    };
+    let mut accumulated = Coverage::default();
+    accumulated.record(span, 9, ExprValue::Bool(true));
+    let mut request = Coverage::default();
+    for _ in 0..10_000 {
+        request.record(span, 9, ExprValue::Bool(true));
+    }
+    for _ in 0..7 {
+        request.record(span, 9, ExprValue::Bool(false));
+    }
+
+    accumulated.merge(&request);
+
+    assert_eq!(
+        accumulated.entries()[0].values,
+        vec![(ExprValue::Bool(true), 10_001), (ExprValue::Bool(false), 7)]
+    );
+}
+
+#[test]
+fn request_trace_payloads_are_lazy_until_a_client_enables_the_ring() {
+    use std::cell::Cell;
+
+    use fireemu_core_rules::coverage::{Coverage, RequestTrace, RulesDiagnostics};
+
+    let coverage = Coverage::default();
+    let called = Cell::new(0);
+    let trace = |sequence| {
+        called.set(called.get() + 1);
+        RequestTrace {
+            sequence,
+            method: "get",
+            path: "notes/one".to_owned(),
+            allowed: true,
+            reason: String::new(),
+            uid: None,
+            expressions: Vec::new(),
+        }
+    };
+    let mut diagnostics = RulesDiagnostics::default();
+
+    diagnostics.push(&coverage, trace);
+    assert_eq!(called.get(), 0);
+    assert!(diagnostics.requests().is_empty());
+
+    diagnostics.enable_request_traces();
+    diagnostics.push(&coverage, trace);
+    assert_eq!(called.get(), 1);
+    assert_eq!(diagnostics.requests().len(), 1);
+}

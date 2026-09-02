@@ -102,9 +102,21 @@ impl Coverage {
     /// Folds another recording into this one.
     pub fn merge(&mut self, other: &Self) {
         for entry in other.entries.values() {
+            let target = self
+                .entries
+                .entry((entry.span.offset, entry.end))
+                .or_insert_with(|| CoverageEntry {
+                    span: entry.span,
+                    end: entry.end,
+                    values: Vec::new(),
+                });
             for (value, count) in &entry.values {
-                for _ in 0..*count {
-                    self.record(entry.span, entry.end, value.clone());
+                if let Some((_, target_count)) =
+                    target.values.iter_mut().find(|(seen, _)| seen == value)
+                {
+                    *target_count = target_count.saturating_add(*count);
+                } else {
+                    target.values.push((value.clone(), *count));
                 }
             }
         }
@@ -215,6 +227,7 @@ pub struct RulesDiagnostics {
     coverage: Coverage,
     requests: VecDeque<RequestTrace>,
     next_sequence: u64,
+    request_traces_enabled: bool,
 }
 
 impl RulesDiagnostics {
@@ -230,6 +243,17 @@ impl RulesDiagnostics {
         self.requests.iter().rev().collect()
     }
 
+    /// Enables the fireemu-specific request trace ring for subsequent decisions.
+    pub fn enable_request_traces(&mut self) {
+        self.request_traces_enabled = true;
+    }
+
+    /// Whether a client has requested fireemu-specific request traces.
+    #[must_use]
+    pub const fn request_traces_enabled(&self) -> bool {
+        self.request_traces_enabled
+    }
+
     /// Drops everything, which is what loading a new ruleset has to do: the recorded
     /// positions describe source that no longer exists.
     pub fn clear(&mut self) {
@@ -240,11 +264,19 @@ impl RulesDiagnostics {
     /// Folds one decided request into the session's diagnostics.
     pub fn push(&mut self, coverage: &Coverage, trace: impl FnOnce(u64) -> RequestTrace) {
         self.coverage.merge(coverage);
+        if !self.request_traces_enabled {
+            return;
+        }
         self.next_sequence += 1;
         let sequence = self.next_sequence;
         if self.requests.len() >= REQUEST_TRACE_CAPACITY {
             self.requests.pop_front();
         }
         self.requests.push_back(trace(sequence));
+    }
+
+    /// Folds coverage without constructing a fireemu-specific request trace.
+    pub fn merge_coverage(&mut self, coverage: &Coverage) {
+        self.coverage.merge(coverage);
     }
 }

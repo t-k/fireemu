@@ -469,9 +469,10 @@ fn rules_requests_route(state: &ControlState, method: &str) -> JsonResponse {
     let Ok(rules) = state.rules.snapshot() else {
         return error(500, "INTERNAL");
     };
-    let Ok(diagnostics) = rules.diagnostics.lock() else {
+    let Ok(mut diagnostics) = rules.diagnostics.lock() else {
         return error(500, "INTERNAL");
     };
+    diagnostics.enable_request_traces();
     let value = |v: &ExprValue| match v {
         ExprValue::Null => json!({"kind": "null"}),
         ExprValue::Bool(b) => json!({"kind": "bool", "bool": b}),

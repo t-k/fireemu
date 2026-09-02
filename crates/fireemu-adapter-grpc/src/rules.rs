@@ -904,20 +904,28 @@ fn decide(
         )),
     };
     if let Some(sink) = diagnostics {
-        if let Ok(mut sink) = sink.lock() {
+        let trace_enabled = sink.lock().is_ok_and(|sink| sink.request_traces_enabled());
+        let trace = trace_enabled.then(|| {
             let expressions: Vec<CoverageEntry> = coverage.entries().into_iter().cloned().collect();
             let path = path.relative();
             let uid = ctx.auth.as_ref().map(|a| a.uid.clone());
             let reason = denial.clone().unwrap_or_default();
-            sink.push(&coverage, move |sequence| RequestTrace {
-                sequence,
-                method: method_name(method),
-                path,
-                allowed: reason.is_empty(),
-                reason,
-                uid,
-                expressions,
-            });
+            (expressions, path, uid, reason)
+        });
+        if let Ok(mut sink) = sink.lock() {
+            if let Some((expressions, path, uid, reason)) = trace {
+                sink.push(&coverage, move |sequence| RequestTrace {
+                    sequence,
+                    method: method_name(method),
+                    path,
+                    allowed: reason.is_empty(),
+                    reason,
+                    uid,
+                    expressions,
+                });
+            } else {
+                sink.merge_coverage(&coverage);
+            }
         }
     }
     match denial {

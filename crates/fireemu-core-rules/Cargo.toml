@@ -22,3 +22,7 @@ workspace = true
 [[bench]]
 name = "regex_match"
 harness = false
+
+[[bench]]
+name = "coverage_merge"
+harness = false

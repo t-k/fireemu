@@ -108,6 +108,75 @@ pub struct FaultState {
 }
 
 impl FaultState {
+    /// A cheap, saturating estimate of heap bytes retained by a session snapshot.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        const BTREE_ENTRY_OVERHEAD: u64 = 128;
+
+        fn bytes(value: usize) -> u64 {
+            u64::try_from(value).unwrap_or(u64::MAX)
+        }
+
+        fn action_bytes(action: &FaultAction) -> u64 {
+            match action {
+                FaultAction::ReturnError { code } => bytes(code.capacity()),
+                FaultAction::Delay { .. }
+                | FaultAction::Duplicate { .. }
+                | FaultAction::CrashRunner
+                | FaultAction::Timeout
+                | FaultAction::DeadLetter
+                | FaultAction::TransactionConflict
+                | FaultAction::DropConnection => 0,
+            }
+        }
+
+        let mut total = 0u64;
+        if let Some(plan) = &self.plan {
+            total = total.saturating_add(
+                bytes(plan.rules.capacity())
+                    .saturating_mul(bytes(core::mem::size_of::<FaultRule>())),
+            );
+            for rule in &plan.rules {
+                total = total
+                    .saturating_add(bytes(rule.matches.operation.capacity()))
+                    .saturating_add(
+                        rule.matches
+                            .function
+                            .as_ref()
+                            .map_or(0, |value| bytes(value.capacity())),
+                    )
+                    .saturating_add(
+                        rule.matches
+                            .event_type
+                            .as_ref()
+                            .map_or(0, |value| bytes(value.capacity())),
+                    )
+                    .saturating_add(action_bytes(&rule.action));
+            }
+        }
+        for key in self.counters.keys() {
+            total = total
+                .saturating_add(BTREE_ENTRY_OVERHEAD)
+                .saturating_add(bytes(core::mem::size_of::<(String, u64)>()))
+                .saturating_add(bytes(key.capacity()));
+        }
+        total = total.saturating_add(
+            bytes(self.fired.capacity()).saturating_mul(bytes(core::mem::size_of::<FaultRecord>())),
+        );
+        for record in &self.fired {
+            total = total
+                .saturating_add(bytes(record.operation.capacity()))
+                .saturating_add(
+                    record
+                        .function
+                        .as_ref()
+                        .map_or(0, |value| bytes(value.capacity())),
+                )
+                .saturating_add(action_bytes(&record.action));
+        }
+        total
+    }
+
     /// Installs a plan; counters and history start over.
     pub fn install(&mut self, plan: FaultPlan) {
         self.plan = Some(plan);
@@ -189,6 +258,42 @@ impl FaultState {
             });
         }
         actions
+    }
+}
+
+#[cfg(test)]
+mod retained_bytes_tests {
+    use super::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+
+    #[test]
+    fn fired_records_increase_the_snapshot_estimate() {
+        let mut state = FaultState::default();
+        state.install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.commit".repeat(32),
+                    nth: None,
+                    function: Some("function-name".repeat(32)),
+                    event_type: Some("event-type".repeat(32)),
+                },
+                action: FaultAction::ReturnError {
+                    code: "UNAVAILABLE".repeat(32),
+                },
+            }],
+        });
+        let before = state.retained_bytes();
+        let operation = "firestore.commit".repeat(32);
+        let function = "function-name".repeat(32);
+        let event_type = "event-type".repeat(32);
+        assert_eq!(
+            state.decide(&operation, Some(&function), Some(&event_type)),
+            vec![FaultAction::ReturnError {
+                code: "UNAVAILABLE".repeat(32),
+            }]
+        );
+
+        assert!(state.retained_bytes() > before);
     }
 }
 

@@ -1428,9 +1428,9 @@ fn export_firestore(
     let now = endpoints.now();
     let micros = u64::try_from(now.as_nanos() / 1_000).unwrap_or(0);
     let mut by_database: BTreeMap<String, Vec<ExportDocument>> = BTreeMap::new();
-    for ((project, database), state) in &snapshot.databases {
+    for ((project, database), state) in snapshot.databases {
         let documents: Vec<ExportDocument> = state
-            .documents()
+            .into_documents()
             .into_iter()
             .map(|d| ExportDocument {
                 project: project.clone(),
@@ -1443,10 +1443,7 @@ fn export_firestore(
                 fields: d.fields,
             })
             .collect();
-        by_database
-            .entry(database.clone())
-            .or_default()
-            .extend(documents);
+        by_database.entry(database).or_default().extend(documents);
     }
     // The default database always gets a section, even when it is empty: the official CLI
     // writes one whenever the Firestore emulator runs, and an absent section reads as "this

@@ -1190,6 +1190,18 @@ impl FirestoreState {
         self.live_documents(None).cloned().collect()
     }
 
+    /// Consumes a detached state and returns its live documents without cloning them.
+    ///
+    /// Export owns the visible-only state returned by `snapshot_scope`, so moving documents
+    /// out avoids keeping a second full copy beside the snapshot while preserving path order.
+    #[must_use]
+    pub fn into_documents(self) -> Vec<Document> {
+        self.history
+            .into_values()
+            .filter_map(|versions| versions.into_iter().next_back()?.1)
+            .collect()
+    }
+
     /// A cheap, saturating estimate of the bytes the visible documents hold (`SNAP-MEM-01`):
     /// the newest version of every live document, sized by the same `document_size` model the
     /// limits use. A document whose size overflows the model contributes zero rather than
@@ -3734,5 +3746,46 @@ mod scope_index_tests {
             FirestoreState::with_limit_scope(LimitScope::OfficialEmulator).limit_scope(),
             LimitScope::OfficialEmulator
         );
+    }
+
+    #[test]
+    fn owned_visible_state_moves_documents_without_cloning_fields() {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "payload".to_owned(),
+            Value::String("large-payload".repeat(128)),
+        );
+        let mut state = FirestoreState::new();
+        state
+            .commit(
+                &[Write {
+                    op: WriteOp::Set {
+                        path: path("items/a"),
+                        fields,
+                        update_mask: None,
+                    },
+                    precondition: None,
+                    transforms: Vec::new(),
+                }],
+                None,
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .expect("create document");
+        let before = match state
+            .get(&path("items/a"))
+            .and_then(|document| document.fields.get("payload"))
+        {
+            Some(Value::String(value)) => value.as_ptr(),
+            other => panic!("expected string field, got {other:?}"),
+        };
+
+        let documents = state.into_documents();
+        let after = match documents[0].fields.get("payload") {
+            Some(Value::String(value)) => value.as_ptr(),
+            other => panic!("expected string field, got {other:?}"),
+        };
+
+        assert_eq!(documents.len(), 1);
+        assert_eq!(before, after, "the owned field allocation is moved");
     }
 }

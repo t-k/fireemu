@@ -283,6 +283,55 @@ pub struct TextIndexCatalog {
 }
 
 impl TextIndexCatalog {
+    /// A cheap, saturating estimate of heap bytes retained by a session snapshot.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        const BTREE_ENTRY_OVERHEAD: u64 = 128;
+
+        fn bytes(value: usize) -> u64 {
+            u64::try_from(value).unwrap_or(u64::MAX)
+        }
+
+        fn field_path_bytes(path: &FieldPath) -> u64 {
+            path.segments().iter().fold(
+                bytes(path.segments().len()).saturating_mul(bytes(core::mem::size_of::<String>())),
+                |total, segment| total.saturating_add(bytes(segment.capacity())),
+            )
+        }
+
+        let mut total = 0u64;
+        for ((project, database), set) in &self.sets {
+            total = total
+                .saturating_add(BTREE_ENTRY_OVERHEAD)
+                .saturating_add(bytes(project.capacity()))
+                .saturating_add(bytes(database.capacity()))
+                .saturating_add(
+                    bytes(set.definitions.capacity())
+                        .saturating_mul(bytes(core::mem::size_of::<TextIndexDefinition>())),
+                );
+            for definition in &set.definitions {
+                total = total
+                    .saturating_add(bytes(definition.id.capacity()))
+                    .saturating_add(bytes(definition.collection_id.as_str().len()))
+                    .saturating_add(bytes(definition.api_scope.capacity()))
+                    .saturating_add(
+                        bytes(definition.fields.capacity())
+                            .saturating_mul(bytes(core::mem::size_of::<TextIndexedField>())),
+                    );
+                for field in &definition.fields {
+                    total = total.saturating_add(field_path_bytes(&field.path));
+                }
+                if let DefaultTextLanguage::Tag(language) = &definition.language {
+                    total = total.saturating_add(bytes(language.capacity()));
+                }
+                if let LanguageOverridePolicy::ExplicitField(path) = &definition.language_override {
+                    total = total.saturating_add(field_path_bytes(path));
+                }
+            }
+        }
+        total
+    }
+
     /// Validates and adds a definition to one database; returns its warnings.
     pub fn add(
         &mut self,
@@ -364,5 +413,40 @@ impl TextIndexCatalog {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod retained_bytes_tests {
+    use super::*;
+
+    #[test]
+    fn definitions_increase_the_snapshot_estimate() {
+        let mut catalog = TextIndexCatalog::default();
+        let empty = catalog.retained_bytes();
+        catalog
+            .add(
+                "demo-app",
+                "(default)",
+                TextIndexDefinition {
+                    id: "search-index".repeat(8),
+                    collection_id: CollectionId::try_new("articles").expect("collection"),
+                    query_scope: IndexQueryScope::Collection,
+                    api_scope: "ANY_API".to_owned(),
+                    fields: vec![TextIndexedField {
+                        path: FieldPath::parse("description.long_field").expect("field path"),
+                        index_type: TextIndexType::Tokenized,
+                        match_type: TextMatchType::MatchGlobally,
+                    }],
+                    language: DefaultTextLanguage::Tag("en-US".to_owned()),
+                    language_override: LanguageOverridePolicy::ExplicitField(
+                        FieldPath::parse("locale").expect("field path"),
+                    ),
+                    state: TextIndexState::Ready,
+                },
+            )
+            .expect("valid definition");
+
+        assert!(catalog.retained_bytes() > empty);
     }
 }

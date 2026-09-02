@@ -863,6 +863,34 @@ pub struct DynamicDebugTokens {
 }
 
 impl DynamicDebugTokens {
+    /// A cheap, saturating estimate of heap bytes retained by a session snapshot.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        const BTREE_ENTRY_OVERHEAD: u64 = 128;
+
+        fn bytes(value: usize) -> u64 {
+            u64::try_from(value).unwrap_or(u64::MAX)
+        }
+
+        self.apps
+            .iter()
+            .fold(0u64, |total, ((project, app), records)| {
+                let total = total
+                    .saturating_add(BTREE_ENTRY_OVERHEAD)
+                    .saturating_add(bytes(project.capacity()))
+                    .saturating_add(bytes(app.capacity()))
+                    .saturating_add(
+                        bytes(records.capacity())
+                            .saturating_mul(bytes(core::mem::size_of::<DebugTokenRecord>())),
+                    );
+                records.iter().fold(total, |total, record| {
+                    total
+                        .saturating_add(bytes(record.id.capacity()))
+                        .saturating_add(bytes(record.display_name.capacity()))
+                })
+            })
+    }
+
     /// How many apps the capture covers.
     #[must_use]
     pub fn app_count(&self) -> usize {
@@ -882,5 +910,27 @@ impl fmt::Debug for DynamicDebugTokens {
             .field("apps", &self.apps.len())
             .field("tokens", &self.token_count())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod dynamic_snapshot_size_tests {
+    use super::*;
+
+    #[test]
+    fn app_keys_and_dynamic_records_contribute_to_the_snapshot_estimate() {
+        let mut apps = BTreeMap::new();
+        apps.insert(
+            ("demo-app".repeat(8), "app-id".repeat(8)),
+            vec![DebugTokenRecord {
+                id: "token-id".repeat(8),
+                display_name: "display-name".repeat(8),
+                created_at: LogicalInstant::UNIX_EPOCH,
+                digest: DebugTokenDigest::from_bytes([7; 32]),
+            }],
+        );
+        let captured = DynamicDebugTokens { apps };
+
+        assert!(captured.retained_bytes() > 0);
     }
 }

@@ -47,6 +47,20 @@ impl Clone for LoadedRules {
 }
 
 impl LoadedRules {
+    /// A conservative, saturating estimate of heap bytes retained by a snapshot.
+    ///
+    /// The parsed tree is linear in the accepted source. Multiplying the source allocation
+    /// by 32 deliberately over-counts node, vector and compiled-regex allocations so the
+    /// admission budget fails on the safe side without walking the full tree on every capture.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.source.as_ref().map_or(0, |source| {
+            u64::try_from(source.capacity())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(32)
+        })
+    }
+
     /// Parses `source` and returns the loaded rules.
     ///
     /// Two call-graph rules are compile errors rather than runtime ones, which is where the
@@ -231,5 +245,14 @@ mod tests {
         assert!(slot.replace_source(V2).is_err());
         assert_eq!(retained.source.as_deref(), Some(V1));
         assert_eq!(retained.generation(), 0);
+    }
+
+    #[test]
+    fn source_and_parsed_tree_contribute_to_the_snapshot_estimate() {
+        let empty = LoadedRules::default();
+        let loaded = LoadedRules::from_source(V1).expect("valid rules");
+
+        assert!(loaded.retained_bytes() > empty.retained_bytes());
+        assert!(loaded.retained_bytes() >= V1.len() as u64);
     }
 }

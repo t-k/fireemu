@@ -160,6 +160,7 @@ impl SnapshotHook for Auth {
             .lock()
             .map_err(|_| poisoned(self.name(), "the Auth store"))?;
         let report = snapshot.restore_into(&mut store);
+        drop(store);
         if report.totp_factors_dropped > 0 {
             eprintln!(
                 "auth: restored project {} without {} TOTP factor(s) whose secret the store no longer held (default snapshots carry no shared secret; enrol again)",
@@ -215,6 +216,10 @@ impl SnapshotHook for Faults {
         *state = copy.clone();
         Ok(())
     }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<FaultState>()
+            .map_or(0, FaultState::retained_bytes)
+    }
 }
 
 /// The session's text index definitions.
@@ -249,6 +254,10 @@ impl SnapshotHook for TextIndexes {
             .map_err(|_| poisoned(self.name(), "the text index catalog"))?;
         catalog.replace(|p| scope.owns_project(p), captured);
         Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<TextIndexCatalog>()
+            .map_or(0, TextIndexCatalog::retained_bytes)
     }
 }
 
@@ -326,6 +335,10 @@ impl SnapshotHook for Rules {
             .map(|_| ())
             .map_err(|_| poisoned(self.name(), "the ruleset"))
     }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<LoadedRules>()
+            .map_or(0, LoadedRules::retained_bytes)
+    }
 }
 
 /// The session's dynamic App Check debug-token registrations (specification section 14).
@@ -371,6 +384,13 @@ impl SnapshotHook for AppCheck {
         self.0.set_epochs(&epochs);
         self.0.clear_observations(accept);
         Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<fireemu_core_app_check::DynamicDebugTokens>()
+            .map_or(
+                0,
+                fireemu_core_app_check::DynamicDebugTokens::retained_bytes,
+            )
     }
 }
 
@@ -427,6 +447,8 @@ mod tests {
         let analytics_part = analytics_hook
             .capture(&scope)
             .expect("capture analytics rules");
+        assert!(staging_hook.retained_bytes(&staging_part) > 0);
+        assert!(analytics_hook.retained_bytes(&analytics_part) > 0);
 
         staging.replace_source(ALLOW).expect("change staging");
         analytics.replace_source(DENY).expect("change analytics");
@@ -471,6 +493,7 @@ mod tests {
         let part = hook.capture(&scope).expect("the capture succeeds");
         hook.validate(&scope, &part)
             .expect("the part is this hook's");
+        assert!(hook.retained_bytes(&part) > 0);
 
         let before = token_for(&gate, "demo-app", APP_ID);
         assert!(admits_for(&gate, "demo-app", &before));
@@ -666,5 +689,42 @@ mod tests {
         // A part of another shape contributes zero rather than a wrong count.
         let foreign: super::SnapshotPart = Arc::new(7u8);
         assert_eq!(hook.retained_bytes(&foreign), 0);
+    }
+
+    /// `SNAP-MEM-01`: fault history is unbounded by the fault injector itself, so every
+    /// fired record must contribute to the session snapshot byte budget.
+    #[test]
+    fn the_fault_hook_counts_fired_records_toward_the_snapshot_budget() {
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+        };
+
+        let registry = Arc::new(FaultRegistry::new());
+        let hook = super::Faults(registry.clone(), "demo-app".to_owned());
+        let scope = Scope::Project("demo-app".to_owned());
+        let state = registry.for_project("demo-app");
+        state.lock().expect("writable").install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.commit".to_owned(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: FaultAction::ReturnError {
+                    code: "UNAVAILABLE".to_owned(),
+                },
+            }],
+        });
+        let before = hook.capture(&scope).expect("capture plan");
+        state
+            .lock()
+            .expect("writable")
+            .decide("firestore.commit", None, None);
+        let after = hook.capture(&scope).expect("capture fired record");
+
+        assert!(hook.retained_bytes(&before) > 0);
+        assert!(hook.retained_bytes(&after) > hook.retained_bytes(&before));
     }
 }

@@ -18,10 +18,9 @@
 
 use fireemu_core_functions::cron::Schedule;
 use fireemu_core_functions::manifest::{
-    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionManifest, FunctionSpec,
-    IgnoredFunction, IgnoredScope, ObjectEvent, PlatformOptions, ScheduleRetryConfig,
-    TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION,
-    DEFAULT_TIMEOUT_SECONDS,
+    AuthEvent, ConsumeAppCheckToken, DocumentEvent, FunctionGeneration, FunctionManifest,
+    FunctionSpec, IgnoredFunction, IgnoredScope, ObjectEvent, PlatformOptions, ScheduleRetryConfig,
+    TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::PathPattern;
 use serde_json::{json, Value};
@@ -413,13 +412,35 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 .ok_or_else(|| format!("manifest: function {name:?}: {k} must be an integer")),
         }
     };
+    let generation = match f.get("generation") {
+        None | Some(Value::Null) => FunctionGeneration::First,
+        Some(Value::Number(number)) if number.as_u64() == Some(1) => FunctionGeneration::First,
+        Some(Value::Number(number)) if number.as_u64() == Some(2) => FunctionGeneration::Second,
+        Some(_) => {
+            return Err(format!(
+                "manifest: function {name:?}: generation must be 1 or 2"
+            ))
+        }
+    };
+    let concurrency = match f.get("concurrency") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|number| u32::try_from(number).ok())
+                .ok_or_else(|| {
+                    format!("manifest: function {name:?}: concurrency must be an integer")
+                })?,
+        ),
+    };
     let platform_options = parse_platform_options(&name, f.get("platformOptions"))?;
     Ok(FunctionSpec {
         region: s(f, "region").unwrap_or_else(|| DEFAULT_REGION.to_owned()),
         entry_point: s(f, "entryPoint").unwrap_or_else(|| name.clone()),
         timeout_seconds: u32_field("timeoutSeconds", DEFAULT_TIMEOUT_SECONDS)?,
         retry: f.get("retry").and_then(Value::as_bool).unwrap_or(false),
-        concurrency: u32_field("concurrency", DEFAULT_CONCURRENCY)?,
+        generation,
+        concurrency,
         platform_options,
         name,
         trigger,
@@ -544,6 +565,7 @@ pub fn manifest_to_json(m: &FunctionManifest) -> Value {
                 "trigger": trigger,
                 "timeoutSeconds": f.timeout_seconds,
                 "retry": f.retry,
+                "generation": f.generation.as_u8(),
                 "concurrency": f.concurrency,
             });
             if let Some(options) = platform_options_to_json(&f.platform_options) {

@@ -5,7 +5,7 @@
 // quickly and the rows compare request handling rather than trigger scheduling.
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { getApps, initializeApp } = require("firebase-admin/app");
-const { FieldValue, getFirestore } = require("firebase-admin/firestore");
+const { FieldValue, Timestamp, getFirestore } = require("firebase-admin/firestore");
 const { bearerToken, tokenMatches } = require("./conditional-lock-auth");
 
 const adminApp = getApps()[0] ?? initializeApp();
@@ -72,7 +72,7 @@ exports.confSlow = onRequest({ timeoutSeconds: 1 }, async (_req, res) => {
   res.status(200).send("this answer arrives after the deadline");
 });
 
-exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => {
+exports.confConditionalLock = onRequest(async (req, res) => {
   const participant = Number(req.body?.participant);
   if (participant !== 0 && participant !== 1) {
     res.status(400).json({ error: "participant must be 0 or 1" });
@@ -127,6 +127,14 @@ exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => 
       await reachLatch("arrive", barrierPort, barrierToken);
     }
     if (locked) {
+      const startedAt = lock.data().startedAt;
+      if (!(startedAt instanceof Timestamp)) {
+        throw new Error("conditional lock start time is not a Firestore Timestamp");
+      }
+      const updatedAt = lock.data().updatedAt;
+      if (!(updatedAt instanceof Timestamp) || !updatedAt.isEqual(startedAt)) {
+        throw new Error("conditional lock timestamps do not share one commit time");
+      }
       return {
         authorized: true,
         acquired: false,
@@ -135,7 +143,12 @@ exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => 
         protectedPhaseMillis,
       };
     }
-    tx.update(lockRef, { locked: true, owner: participant });
+    tx.update(lockRef, {
+      locked: true,
+      owner: participant,
+      startedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     return {
       authorized: true,
       acquired: true,

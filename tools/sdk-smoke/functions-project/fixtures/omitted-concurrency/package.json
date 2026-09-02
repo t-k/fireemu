@@ -1,0 +1,5 @@
+{
+  "name": "fireemu-smoke-functions-omitted-concurrency",
+  "private": true,
+  "main": "index.js"
+}

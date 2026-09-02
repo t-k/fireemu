@@ -1865,10 +1865,27 @@ impl AuthStore {
 
     /// The session behind a refresh token (validated like [`Self::redeem_refresh_token`]).
     pub fn refresh_session(&self, token: &str) -> Result<&RefreshSession, AuthError> {
-        self.redeem_refresh_token(token)?;
+        self.validate_refresh_token(token, true)?;
         self.refresh_tokens
             .get(token)
             .ok_or(AuthError::InvalidRefreshToken)
+    }
+
+    /// The session behind a refresh token when the compatibility profile treats refresh
+    /// tokens as stateless credentials. The user must still exist and be enabled, but an
+    /// account-level `validSince` change does not revoke the credential.
+    pub fn stateless_refresh_session(&self, token: &str) -> Result<&RefreshSession, AuthError> {
+        self.validate_refresh_token(token, false)?;
+        self.refresh_tokens
+            .get(token)
+            .ok_or(AuthError::InvalidRefreshToken)
+    }
+
+    /// Whether this project issued a refresh token. Routing uses ownership without treating
+    /// revocation or disablement as absence; the selected project returns the precise error.
+    #[must_use]
+    pub fn owns_refresh_token(&self, token: &str) -> bool {
+        self.refresh_tokens.contains_key(token)
     }
 
     /// ID token claims for a refreshed session.
@@ -1893,6 +1910,14 @@ impl AuthStore {
     /// Redeems a refresh token: unknown tokens, tokens issued before a revocation, and disabled
     /// users are rejected.
     pub fn redeem_refresh_token(&self, token: &str) -> Result<LocalId, AuthError> {
+        self.validate_refresh_token(token, true)
+    }
+
+    fn validate_refresh_token(
+        &self,
+        token: &str,
+        enforce_revocation: bool,
+    ) -> Result<LocalId, AuthError> {
         let session = self
             .refresh_tokens
             .get(token)
@@ -1904,7 +1929,7 @@ impl AuthStore {
         if user.disabled {
             return Err(AuthError::UserDisabled);
         }
-        if session.issued_at < user.tokens_valid_after {
+        if enforce_revocation && session.issued_at < user.tokens_valid_after {
             return Err(AuthError::InvalidRefreshToken);
         }
         Ok(session.uid.clone())

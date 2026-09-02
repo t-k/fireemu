@@ -4,8 +4,8 @@ use fireemu_core_functions::cron::{
     fixed_offset_seconds, Civil, FixedOffset, RunCount, Schedule, ScheduleError, ZoneRules,
 };
 use fireemu_core_functions::manifest::{
-    DocumentEvent, FunctionManifest, FunctionSpec, ObjectEvent, PlatformOptions, Trigger,
-    DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
+    DocumentEvent, FunctionGeneration, FunctionManifest, FunctionSpec, ObjectEvent,
+    PlatformOptions, Trigger, DEFAULT_CONCURRENCY, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::{PathPattern, PatternError};
 use fireemu_core_types::time::LogicalInstant;
@@ -52,7 +52,8 @@ fn function(name: &str, trigger: Trigger) -> FunctionSpec {
         trigger,
         timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
         retry: false,
-        concurrency: DEFAULT_CONCURRENCY,
+        generation: FunctionGeneration::First,
+        concurrency: Some(DEFAULT_CONCURRENCY),
         platform_options: PlatformOptions::default(),
     }
 }
@@ -147,6 +148,38 @@ fn manifests_match_firestore_and_storage_triggers() {
         ignored: Vec::new(),
     };
     assert!(dup.validate().is_err());
+}
+
+#[test]
+fn second_generation_concurrency_resolves_per_instance_defaults_and_virtual_capacity() {
+    let mut spec = function(
+        "http",
+        Trigger::Http {
+            callable: false,
+            enforce_app_check: false,
+            consume_app_check_token:
+                fireemu_core_functions::manifest::ConsumeAppCheckToken::Undetermined,
+        },
+    );
+    spec.generation = FunctionGeneration::Second;
+    spec.concurrency = None;
+    spec.platform_options.available_memory_mb = Some(2_048);
+    assert_eq!(spec.effective_concurrency(), 80);
+    assert_eq!(spec.http_capacity(8), 8);
+
+    spec.platform_options.available_memory_mb = Some(512);
+    assert_eq!(spec.effective_concurrency(), 1);
+    assert_eq!(spec.http_capacity(8), 8);
+
+    spec.platform_options.available_memory_mb = Some(4_096);
+    spec.platform_options.cpu = Some("0.5".to_owned());
+    assert_eq!(spec.effective_concurrency(), 1);
+    spec.platform_options.cpu = Some("1".to_owned());
+    assert_eq!(spec.effective_concurrency(), 80);
+
+    spec.concurrency = Some(1);
+    spec.platform_options.max_instances = Some(2);
+    assert_eq!(spec.http_capacity(8), 2);
 }
 
 #[test]

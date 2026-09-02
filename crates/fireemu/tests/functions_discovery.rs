@@ -323,6 +323,40 @@ async fn global_and_schedule_options_reach_the_runtime_manifest() {
 }
 
 #[tokio::test]
+async fn second_generation_omitted_concurrency_remains_defaultable() {
+    if !have_sdk() {
+        return;
+    }
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("omitted-concurrency");
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![
+            ("GCLOUD_PROJECT".to_owned(), "demo-options".to_owned()),
+            ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
+        ],
+        hello_timeout: Duration::from_secs(20),
+    })
+    .await
+    .unwrap();
+    let function = &runner.hello().manifest.as_ref().unwrap()["functions"][0];
+
+    assert_eq!(function["generation"], 2);
+    assert!(function["concurrency"].is_null());
+    assert_eq!(function["platformOptions"]["availableMemoryMb"], 2048);
+    runner.shutdown().await;
+}
+
+#[tokio::test]
 async fn esm_callable_app_check_options_are_observed_by_the_loaded_module_graph() {
     if !have_sdk() {
         return;

@@ -118,6 +118,9 @@ pub struct AuthState {
     /// Whether unregistered project-scoped Admin routes may use isolated compatibility
     /// namespaces. Strict profile leaves this disabled.
     pub allow_routed_projects: bool,
+    /// Whether refresh tokens keep the official emulator's stateless lifecycle. The strict
+    /// profile may revoke them to model the production security boundary more closely.
+    pub stateless_refresh_tokens: bool,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
     pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
@@ -721,7 +724,7 @@ fn dispatch_with_blocking_hook(
         body,
         headers,
         at,
-        state.totp_extension_enabled,
+        state.into(),
     );
     let is_authentication = matches!(
         handler,
@@ -837,7 +840,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                state.totp_extension_enabled,
+                state.into(),
             )
         };
         if committed_response.status != 200 {
@@ -1122,7 +1125,7 @@ pub fn handle_with(
             body,
             headers,
             at,
-            state.totp_extension_enabled,
+            state.into(),
         );
         let retain_candidate = response.status == 200
             && pending_routed_project.is_some()
@@ -1178,7 +1181,7 @@ pub fn handle_with(
             body,
             headers,
             at,
-            state.totp_extension_enabled,
+            state.into(),
         )
     };
     if response.status == 200 {
@@ -1214,6 +1217,21 @@ fn privilege_check(
 }
 
 /// Runs the handler of a resolved route.
+#[derive(Clone, Copy)]
+struct DispatchOptions {
+    totp_extension_enabled: bool,
+    stateless_refresh_tokens: bool,
+}
+
+impl From<&AuthState> for DispatchOptions {
+    fn from(state: &AuthState) -> Self {
+        Self {
+            totp_extension_enabled: state.totp_extension_enabled,
+            stateless_refresh_tokens: state.stateless_refresh_tokens,
+        }
+    }
+}
+
 fn dispatch(
     handler: routes::Handler,
     store: &mut AuthStore,
@@ -1221,7 +1239,7 @@ fn dispatch(
     body: &Value,
     headers: &RequestHeaders,
     at: LogicalInstant,
-    totp_extension_enabled: bool,
+    options: DispatchOptions,
 ) -> JsonResponse {
     use routes::Handler;
     match handler {
@@ -1241,10 +1259,12 @@ fn dispatch(
         Handler::SignInWithPassword => sign_in_with_password(store, body, at),
         Handler::SignInWithCustomToken => sign_in_with_custom_token(store, body, at),
         Handler::Lookup => lookup(store, body, at, false),
-        Handler::Update | Handler::AdminUpdate => update(store, body, at),
+        Handler::Update | Handler::AdminUpdate => {
+            update(store, body, at, options.stateless_refresh_tokens)
+        }
         Handler::Delete => delete_account(store, body, at, false),
         Handler::SendOobCode => send_oob_code(store, body, at, headers),
-        Handler::ResetPassword => reset_password(store, body, at),
+        Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
         Handler::SendVerificationCode => send_verification_code(store, body, at),
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
@@ -1263,13 +1283,13 @@ fn dispatch(
             }),
         },
         Handler::MfaEnrollmentStart => {
-            mfa_enrollment_start(store, body, at, totp_extension_enabled)
+            mfa_enrollment_start(store, body, at, options.totp_extension_enabled)
         }
         Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
         Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
         Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
-        Handler::Token => refresh(store, body, at),
+        Handler::Token => refresh(store, body, at, options.stateless_refresh_tokens),
         Handler::AdminCreate => admin_create(store, body, at),
         Handler::AdminLookup => lookup(store, body, at, true),
         Handler::AdminDelete => delete_account(store, body, at, true),
@@ -1704,7 +1724,7 @@ fn select_store(
         }
     }
     if let Some(token) = str_field(body, "refresh_token") {
-        if let Some(store) = registry.find(|s| s.refresh_session(token).is_ok()) {
+        if let Some(store) = registry.find(|s| s.owns_refresh_token(token)) {
             return Ok(store);
         }
     }
@@ -2515,7 +2535,12 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn update(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    stateless_refresh_tokens: bool,
+) -> JsonResponse {
     // `applyActionCode`: an email verification / change code instead of a session.
     if let Some(code) = str_field(body, "oobCode") {
         return apply_oob_code(store, code, at);
@@ -2660,21 +2685,19 @@ fn update(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonRespon
     }
     // A password change, an email change, an explicit `validSince` and a disablement all
     // move `validSince`, so ID tokens issued before this second are refused (what the
-    // official emulator does). Refresh tokens: a privileged revocation, a disablement and a
-    // privileged credential change end every session (fireemu keeps production's refresh
-    // token revocation there, where the official emulator lets an old refresh token keep
-    // minting); a self-service credential change through the session's own ID token keeps
-    // that session's refresh tokens, because the client SDK continues on whichever refresh
-    // token it holds -- its response tokens when they differ, its previous ones when the ID
-    // token is byte-identical (same second, same claims), which a pinned clock makes certain.
+    // official emulator does). Under the firebase profile, refresh tokens remain stateless
+    // and usable after these mutations, matching the official emulator. The strict profile
+    // revokes them after privileged revocation, disablement and privileged credential changes.
+    // Self-service credential changes keep the current refresh token in both profiles.
     let credentials_changed = plan.password.is_some() || email_changed || plan.revoke_at.is_some();
     if credentials_changed || plan.disable == Some(true) {
         let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
     }
     let self_service = local_id.is_none();
-    if plan.revoke_at.is_some()
-        || plan.disable == Some(true)
-        || (credentials_changed && !self_service)
+    if !stateless_refresh_tokens
+        && (plan.revoke_at.is_some()
+            || plan.disable == Some(true)
+            || (credentials_changed && !self_service))
     {
         store.revoke_refresh_tokens(&uid);
     }
@@ -3509,14 +3532,23 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
     }
 }
 
-fn refresh(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn refresh(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    stateless_refresh_tokens: bool,
+) -> JsonResponse {
     if str_field(body, "grant_type") != Some("refresh_token") {
         return error(400, "INVALID_GRANT_TYPE");
     }
     let Some(token) = str_field(body, "refresh_token") else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
-    let session = match store.refresh_session(token) {
+    let session = match if stateless_refresh_tokens {
+        store.stateless_refresh_session(token)
+    } else {
+        store.refresh_session(token)
+    } {
         Ok(s) => s.clone(),
         Err(e) => return auth_error(&e),
     };
@@ -3704,7 +3736,12 @@ fn send_oob_code(
 
 /// `accounts:resetPassword`: verifies a `PASSWORD_RESET` code (`verifyPasswordResetCode`)
 /// and, with `newPassword`, consumes it and sets the password (`confirmPasswordReset`).
-fn reset_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn reset_password(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    stateless_refresh_tokens: bool,
+) -> JsonResponse {
     let Some(code) = str_field(body, "oobCode") else {
         return error(400, "MISSING_OOB_CODE");
     };
@@ -3735,9 +3772,13 @@ fn reset_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Js
     if let Err(e) = store.set_password(&uid, new_password) {
         return auth_error(&e);
     }
-    // A reset ends every existing session and verifies the address (the user read the mail).
+    // A reset advances `validSince` and verifies the address (the user read the mail). The
+    // Firebase profile keeps the official emulator's stateless refresh credentials; strict
+    // mode also removes them.
     let _ = store.revoke_tokens(&uid, at);
-    store.revoke_refresh_tokens(&uid);
+    if !stateless_refresh_tokens {
+        store.revoke_refresh_tokens(&uid);
+    }
     if let Some(u) = store.user_mut(&uid) {
         u.email_verified = true;
     }

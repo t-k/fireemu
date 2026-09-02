@@ -12,6 +12,29 @@ pub const DEFAULT_REGION: &str = "us-central1";
 pub const DEFAULT_TIMEOUT_SECONDS: u32 = 60;
 /// Default per-function concurrency.
 pub const DEFAULT_CONCURRENCY: u32 = 1;
+/// Default concurrency of a second-generation function with at least one CPU.
+pub const DEFAULT_GEN2_CONCURRENCY: u32 = 80;
+
+/// Managed Functions generation discovered from the SDK endpoint metadata.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FunctionGeneration {
+    /// First-generation or legacy manifest with no generation field.
+    #[default]
+    First,
+    /// Second-generation Cloud Run-backed function.
+    Second,
+}
+
+impl FunctionGeneration {
+    /// Canonical manifest number.
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::First => 1,
+            Self::Second => 2,
+        }
+    }
+}
 
 /// Deployment-oriented 2nd-gen options discovered from the Firebase Functions SDK.
 ///
@@ -474,10 +497,52 @@ pub struct FunctionSpec {
     pub timeout_seconds: u32,
     /// Retry failed event invocations (up to the runtime's retry policy).
     pub retry: bool,
-    /// Maximum concurrent invocations.
-    pub concurrency: u32,
+    /// Managed Functions generation.
+    pub generation: FunctionGeneration,
+    /// Explicit per-instance concurrency. `None` retains SDK reset/default semantics.
+    pub concurrency: Option<u32>,
     /// Deployment-only options retained for faithful discovery and diagnostics.
     pub platform_options: PlatformOptions,
+}
+
+impl FunctionSpec {
+    /// Effective per-instance concurrency after applying the managed-platform defaults.
+    #[must_use]
+    pub fn effective_concurrency(&self) -> u32 {
+        if let Some(configured) = self.concurrency {
+            return configured;
+        }
+        if self.generation == FunctionGeneration::First {
+            return DEFAULT_CONCURRENCY;
+        }
+        let cpu_at_least_one = self
+            .platform_options
+            .cpu
+            .as_deref()
+            .and_then(|cpu| cpu.parse::<f64>().ok())
+            .map_or_else(
+                || self.platform_options.available_memory_mb.unwrap_or(256) >= 2_048,
+                |cpu| cpu >= 1.0,
+            );
+        if cpu_at_least_one {
+            DEFAULT_GEN2_CONCURRENCY
+        } else {
+            DEFAULT_CONCURRENCY
+        }
+    }
+
+    /// Local function-wide HTTP capacity. Per-instance concurrency alone is not a hard cap:
+    /// without `maxInstances`, the runtime may model more workers up to its global limit.
+    #[must_use]
+    pub fn http_capacity(&self, global_capacity: usize) -> usize {
+        let Some(instances) = self.platform_options.max_instances else {
+            return global_capacity;
+        };
+        usize::try_from(self.effective_concurrency())
+            .unwrap_or(usize::MAX)
+            .saturating_mul(usize::try_from(instances).unwrap_or(usize::MAX))
+            .min(global_capacity)
+    }
 }
 
 /// Why an exported function is not served, in the daemon's product-scope vocabulary.
@@ -632,7 +697,7 @@ impl FunctionManifest {
                     field: "timeoutSeconds",
                 });
             }
-            if f.concurrency == 0 {
+            if f.concurrency == Some(0) {
                 return Err(ManifestError::InvalidLimit {
                     function: f.name.clone(),
                     field: "concurrency",

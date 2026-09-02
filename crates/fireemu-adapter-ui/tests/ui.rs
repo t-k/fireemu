@@ -142,6 +142,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             control_token: Some(TOKEN.to_owned()),
             registry: None,
             allow_routed_projects: false,
+            stateless_refresh_tokens: true,
             app_check: None,
             app_check_policy: None,
             tenancy: None,

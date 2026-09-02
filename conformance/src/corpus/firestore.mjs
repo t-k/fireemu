@@ -183,6 +183,56 @@ const transactionReadSetAbort = {
       return { attempts, value: (await ref.get()).data().value };
     });
 
+    await ctx.step("concurrent-conditional-lock-retries-the-loser", async () => {
+      const contextRef = db.doc("conf_txn/lock-context");
+      const lockRef = db.doc("conf_txn/conditional-lock");
+      await Promise.all([contextRef.set({ enabled: true }), lockRef.set({ locked: false })]);
+
+      const attempts = [0, 0];
+      const observations = [[], []];
+      let firstReads = 0;
+      let releaseFirstReads;
+      const bothFirstReads = new Promise((resolve) => {
+        releaseFirstReads = resolve;
+      });
+
+      const acquired = await Promise.all(
+        [0, 1].map((participant) =>
+          db.runTransaction(async (tx) => {
+            attempts[participant] += 1;
+            const [context, lock] = await tx.getAll(contextRef, lockRef);
+            if (!context.exists || context.data().enabled !== true || !lock.exists) {
+              throw new Error("conditional lock fixtures are missing");
+            }
+            const locked = lock.data().locked === true;
+            observations[participant].push(locked);
+            if (attempts[participant] === 1) {
+              firstReads += 1;
+              if (firstReads === 2) releaseFirstReads();
+              await bothFirstReads;
+            }
+            if (locked) return false;
+            tx.update(lockRef, { locked: true, owner: participant });
+            return true;
+          }),
+        ),
+      );
+
+      const loser = acquired
+        .map((didAcquire, participant) => ({
+          acquired: didAcquire,
+          attempts: attempts[participant],
+          observations: observations[participant],
+        }))
+        .find((record) => !record.acquired);
+      const finalLock = (await lockRef.get()).data();
+      return {
+        loser: { attempts: loser.attempts, observations: loser.observations },
+        protectedActions: acquired.filter(Boolean).length,
+        finalLocked: finalLock.locked,
+      };
+    });
+
     await ctx.step("transaction-write-before-read-is-refused-client-side", async () => {
       await db.runTransaction(async (tx) => {
         tx.set(db.doc("conf_txn/early"), { v: 1 });

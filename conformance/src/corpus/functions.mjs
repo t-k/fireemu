@@ -1,10 +1,99 @@
 // Callable Cloud Functions rows: the success and error envelopes, and the Auth context a
 // callable sees for an anonymous caller, a signed-in caller and a forged credential.
 
+import { randomBytes } from "node:crypto";
+import { createServer } from "node:http";
+
 import { signInWithEmailAndPassword } from "firebase/auth";
 
 import { PROJECT, VARIANTS } from "../config.mjs";
 import { emailFor } from "./context.mjs";
+
+const openTwoPartyLatch = async () => {
+  const token = randomBytes(16).toString("hex");
+  const firstReadWaiters = new Map();
+  const actionWaiters = new Map();
+  const retryObservers = new Set();
+  const sockets = new Set();
+  const server = createServer((request, response) => {
+    request.resume();
+    const parts = new URL(request.url, "http://127.0.0.1").pathname.split("/").filter(Boolean);
+    if (
+      request.method !== "POST" ||
+      parts.length !== 3 ||
+      parts[1] !== token ||
+      (parts[2] !== "0" && parts[2] !== "1")
+    ) {
+      response.writeHead(404).end();
+      return;
+    }
+    const participant = parts[2];
+    if (parts[0] === "arrive") {
+      if (firstReadWaiters.has(participant)) {
+        response.writeHead(409).end();
+        return;
+      }
+      firstReadWaiters.set(participant, response);
+      if (firstReadWaiters.size === 2) {
+        const arrivals = [...firstReadWaiters.values()];
+        firstReadWaiters.clear();
+        for (const arrival of arrivals) arrival.writeHead(204).end();
+      }
+      return;
+    }
+    if (parts[0] === "retry-observed") {
+      if (retryObservers.has(participant)) {
+        response.writeHead(409).end();
+        return;
+      }
+      retryObservers.add(participant);
+      response.writeHead(204).end();
+      for (const waiter of actionWaiters.values()) waiter.writeHead(204).end();
+      actionWaiters.clear();
+      return;
+    }
+    if (parts[0] === "await-retry") {
+      if (retryObservers.size > 0) {
+        response.writeHead(204).end();
+      } else if (actionWaiters.has(participant)) {
+        response.writeHead(409).end();
+      } else {
+        actionWaiters.set(participant, response);
+      }
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  await new Promise((resolve, reject) => {
+    const onError = (error) => reject(error);
+    server.once("error", onError);
+    server.listen({ host: "127.0.0.1", port: 0 }, () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (address == null || typeof address === "string") throw new Error("latch did not bind a port");
+  return {
+    port: address.port,
+    token,
+    async close() {
+      for (const response of [...firstReadWaiters.values(), ...actionWaiters.values()]) {
+        response.writeHead(503).end();
+      }
+      firstReadWaiters.clear();
+      actionWaiters.clear();
+      const closed = new Promise((resolve) => server.close(resolve));
+      server.closeAllConnections?.();
+      for (const socket of sockets) socket.destroy();
+      await closed;
+    },
+  };
+};
 
 const callable = async (ctx, name, data, headers = {}) => {
   const response = await fetch(ctx.functionUrl(name), {
@@ -236,4 +325,55 @@ const httpRouting = {
   },
 };
 
-export const scenarios = [errorEnvelope, authContext, httpRouting];
+const concurrentConditionalLock = {
+  id: "functions/concurrent-conditional-lock",
+  product: "functions",
+  variant: VARIANTS.baseline,
+  sdks: ["firebase-admin", "rest"],
+  title: "Concurrent function requests execute one action behind a Firestore transaction lock",
+  async run(ctx) {
+    const db = ctx.shared.adminFirestore();
+    const contextRef = db.doc("conf_fn_lock/context");
+    const lockRef = db.doc("conf_fn_lock/lock");
+    const actionsRef = db.doc("conf_fn_lock/actions");
+    const latch = await openTwoPartyLatch();
+    try {
+      await ctx.step("seed", async () => {
+        await Promise.all([
+          contextRef.set({ enabled: true, barrierPort: latch.port, barrierToken: latch.token }),
+          lockRef.set({ locked: false }),
+          actionsRef.set({ count: 0 }),
+        ]);
+        return "seeded";
+      });
+      await ctx.step("only-one-request-passes-the-lock", async () => {
+        const responses = await Promise.all(
+          [0, 1].map((participant) =>
+            fetch(ctx.functionUrl("confConditionalLock"), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ participant }),
+            }).then(async (response) => {
+              const responseText = await response.text();
+              try {
+                return { status: response.status, body: JSON.parse(responseText) };
+              } catch {
+                return { status: response.status, body: responseText };
+              }
+            }),
+          ),
+        );
+        const [lock, actions] = await Promise.all([lockRef.get(), actionsRef.get()]);
+        return {
+          responses: responses.toSorted((left, right) => left.status - right.status),
+          finalLocked: lock.data().locked,
+          protectedActions: actions.data().count,
+        };
+      });
+    } finally {
+      await latch.close();
+    }
+  },
+};
+
+export const scenarios = [errorEnvelope, authContext, httpRouting, concurrentConditionalLock];

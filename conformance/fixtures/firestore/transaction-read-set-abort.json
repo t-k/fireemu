@@ -9,7 +9,7 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 4,
+    "parity": 5,
     "documented-divergence": 0,
     "debt": 0,
     "pending": 0
@@ -26,6 +26,21 @@
       "value": {
         "attempts": 2,
         "value": 101
+      }
+    },
+    {
+      "id": "concurrent-conditional-lock-retries-the-loser",
+      "status": "parity",
+      "value": {
+        "finalLocked": true,
+        "loser": {
+          "attempts": 2,
+          "observations": [
+            false,
+            true
+          ]
+        },
+        "protectedActions": 1
       }
     },
     {

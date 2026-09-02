@@ -878,7 +878,7 @@ fn execute_command(command: &mut Command, timeout: Duration) -> Execution {
 fn classify_execution(execution: Execution) -> (MutationOutcome, String) {
     match execution {
         Execution::Timeout => (MutationOutcome::Timeout, "TLC timed out".to_owned()),
-        Execution::LaunchError(error) => (MutationOutcome::ToolError, bounded_detail(&error)),
+        Execution::LaunchError(error) => (MutationOutcome::ToolError, publication_detail(&error)),
         Execution::Completed {
             status,
             stdout,
@@ -905,9 +905,30 @@ fn classify_execution(execution: Execution) -> (MutationOutcome, String) {
             let status_label = status
                 .code()
                 .map_or_else(|| "signal".to_owned(), |code| format!("exit {code}"));
-            (outcome, bounded_detail(&format!("{status_label}: {text}")))
+            (
+                outcome,
+                publication_detail(&format!("{status_label}\n{text}")),
+            )
         }
     }
+}
+
+fn publication_detail(value: &str) -> String {
+    let mut sanitized = value
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !line.starts_with("Running breadth-first search") && !line.starts_with("Parsing file ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(home) = std::env::var_os("HOME").and_then(|path| path.into_string().ok()) {
+        sanitized = sanitized.replace(&home, "<home>");
+    }
+    if let Some(temporary) = std::env::temp_dir().to_str() {
+        sanitized = sanitized.replace(temporary, "<temp>");
+    }
+    bounded_detail(&sanitized)
 }
 
 fn bounded_detail(value: &str) -> String {

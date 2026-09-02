@@ -150,6 +150,32 @@ fn a_named_temporal_property_violation_is_a_temporal_kill() {
 }
 
 #[test]
+fn evidence_omits_local_paths_process_ids_and_machine_capacity() {
+    let fixture = prepare("redacted-detail");
+    let java = fixture.executable(
+        "fake-java",
+        r##"#!/bin/sh
+case "$*" in
+  *-version*) printf '%s\n' 'TLC fixture'; exit 0 ;;
+esac
+printf '%s\n' 'Running breadth-first search with 18 workers and 30688MB heap [pid: 123].'
+printf '%s\n' 'Parsing file /Users/alice/private/Model.tla'
+printf '%s\n' 'Error: Invariant Safe is violated.'
+exit 12
+"##,
+    );
+
+    let evidence =
+        run_mutations(&fixture.options(java, Duration::from_secs(2))).expect("mutation execution");
+    let detail = &evidence.results[0].detail;
+
+    assert!(detail.contains("Invariant Safe is violated"));
+    assert!(!detail.contains("/Users/alice"));
+    assert!(!detail.contains("pid: 123"));
+    assert!(!detail.contains("30688MB"));
+}
+
+#[test]
 fn timeout_and_launch_failure_never_count_as_killed() {
     let timeout = prepare("timeout");
     let slow_java = timeout.executable("fake-java", "#!/bin/sh\nwhile :; do :; done\n");

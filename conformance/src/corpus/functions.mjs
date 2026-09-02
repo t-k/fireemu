@@ -377,7 +377,11 @@ const concurrentConditionalLock = {
         };
       });
     } finally {
-      await latch.close();
+      try {
+        await Promise.all([contextRef.delete(), lockRef.delete(), actionsRef.delete()]);
+      } finally {
+        await latch.close();
+      }
     }
   },
 };

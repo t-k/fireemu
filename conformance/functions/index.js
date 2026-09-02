@@ -89,7 +89,7 @@ exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => 
     );
     if (barrier.status !== 204) throw new Error(`conditional lock ${phase} failed`);
   };
-  const acquired = await adminDb.runTransaction(async (tx) => {
+  const result = await adminDb.runTransaction(async (tx) => {
     attempts += 1;
     const context = await tx.get(contextRef);
     const lock = await tx.get(lockRef);
@@ -111,18 +111,20 @@ exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => 
     observations.push(locked);
     if (attempts === 1) {
       await reachLatch("arrive", barrierPort, barrierToken);
-    } else if (locked) {
-      await reachLatch("retry-observed", barrierPort, barrierToken);
     }
-    if (locked) return false;
+    if (locked) return { acquired: false, barrierPort, barrierToken };
     tx.update(lockRef, { locked: true, owner: participant });
-    return true;
+    return { acquired: true, barrierPort, barrierToken };
   });
+  const { acquired, barrierPort, barrierToken } = result;
   if (acquired) {
     await actionsRef.update({ count: FieldValue.increment(1) });
-    const context = (await contextRef.get()).data();
-    await reachLatch("await-retry", context.barrierPort, context.barrierToken);
+    await reachLatch("await-retry", barrierPort, barrierToken);
     await lockRef.update({ locked: false });
+  } else {
+    // The winner may release only after this read-only retry has completed. Signalling from
+    // inside the callback would let the unlock abort it and permit a third attempt to acquire.
+    await reachLatch("retry-observed", barrierPort, barrierToken);
   }
   res.status(acquired ? 200 : 409).json({ acquired, attempts, observations });
 });

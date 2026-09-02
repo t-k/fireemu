@@ -399,6 +399,18 @@ function describe(name, fn, instrumentation) {
     if (region) base.region = region;
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
+    if (ep.blockingTrigger) {
+      const eventType = String(ep.blockingTrigger.eventType || "");
+      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+        return { ...base, trigger: { type: "blockingAuth", eventType } };
+      }
+      return ignored(
+        base,
+        "blocking",
+        "unsupported",
+        `blocking identity event ${eventType} is not served`,
+      );
+    }
     const et = ep.eventTrigger || {};
     return describeV1Event(
       base,
@@ -429,6 +441,18 @@ function describe(name, fn, instrumentation) {
           retryConfig: ep.scheduleTrigger.retryConfig || {},
         },
       };
+    }
+    if (ep.blockingTrigger) {
+      const eventType = String(ep.blockingTrigger.eventType || "");
+      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+        return { ...base, trigger: { type: "blockingAuth", eventType } };
+      }
+      return ignored(
+        base,
+        "blocking",
+        "unsupported",
+        `blocking identity event ${eventType} is not served`,
+      );
     }
     if (ep.eventTrigger) {
       const et = ep.eventTrigger;
@@ -495,18 +519,6 @@ function describe(name, fn, instrumentation) {
       if (product) return ignored(base, product.triggerType, product.scope, product.reason);
       return ignored(base, "unknown", "unsupported", `event type ${type} is not recognised`);
     }
-    if (ep.blockingTrigger) {
-      const eventType = String(ep.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
-        return { ...base, trigger: { type: "blockingAuth", eventType } };
-      }
-      return ignored(
-        base,
-        "blocking",
-        "unsupported",
-        `blocking identity event ${eventType} is not served`,
-      );
-    }
     if (ep.taskQueueTrigger) {
       // An `onTaskDispatched` function is an HTTP function that only its queue calls: the
       // official emulator sets both `httpsTrigger` and `taskQueueTrigger` on the definition
@@ -539,15 +551,6 @@ function describe(name, fn, instrumentation) {
         trigger: t.labels?.["deployment-callable"] ? callable() : { type: "http", callable: false },
       };
     }
-    const et = t.eventTrigger;
-    if (et)
-      return describeV1Event(
-        base,
-        String(et.eventType || ""),
-        String(et.resource || ""),
-        t.schedule,
-        !!et.failurePolicy || !!t.failurePolicy,
-      );
     if (t.blockingTrigger) {
       const eventType = String(t.blockingTrigger.eventType || "");
       if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
@@ -560,6 +563,15 @@ function describe(name, fn, instrumentation) {
         `blocking identity event ${eventType} is not served`,
       );
     }
+    const et = t.eventTrigger;
+    if (et)
+      return describeV1Event(
+        base,
+        String(et.eventType || ""),
+        String(et.resource || ""),
+        t.schedule,
+        !!et.failurePolicy || !!t.failurePolicy,
+      );
     return ignored(
       base,
       "unknown",

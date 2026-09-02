@@ -1825,38 +1825,72 @@ pub fn auth_sink(
 /// Identity Platform's synchronous bridge to before-create and before-sign-in functions.
 pub struct BlockingAuthBridge(pub Arc<FunctionsRuntime>);
 
-impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBridge {
-    fn invoke(
+fn blocking_auth_user_json(
+    user: &fireemu_core_auth::store::UserRecord,
+    tenant: Option<&str>,
+) -> serde_json::Value {
+    let provider_data = user
+        .federated
+        .iter()
+        .map(|identity| {
+            serde_json::json!({
+                "uid": identity.raw_id,
+                "displayName": identity.display_name,
+                "email": identity.email,
+                "photoURL": identity.photo_url,
+                "providerId": identity.provider_id,
+                "phoneNumber": null,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "uid": user.local_id.as_str(),
+        "email": user.email,
+        "emailVerified": user.email_verified,
+        "displayName": user.display_name,
+        "photoURL": user.photo_url,
+        "phoneNumber": user.phone_number,
+        "disabled": user.disabled,
+        "customClaims": serde_json::from_str::<serde_json::Value>(&user.custom_claims.canonical_json()).unwrap_or_else(|_| serde_json::json!({})),
+        "tenantId": tenant,
+        "metadata": {
+            "creationTime": fireemu_core_types::time::LogicalInstant::to_rfc3339(user.created_at).unwrap_or_default(),
+            "lastSignInTime": user.last_sign_in_at.and_then(|instant| instant.to_rfc3339().ok()),
+        },
+        "providerData": provider_data,
+    })
+}
+
+fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
+    tenant.map_or_else(
+        || format!("projects/{project}"),
+        |tenant| format!("projects/{project}/tenants/{tenant}"),
+    )
+}
+
+impl BlockingAuthBridge {
+    fn invoke_for_namespace(
         &self,
+        project: &str,
+        tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<Option<serde_json::Value>, String> {
+        if project != self.0.project() {
+            return Ok(None);
+        }
         let Some(target) = self.0.blocking_auth_target(event) else {
-            return Ok(serde_json::json!({}));
+            return Ok(None);
         };
-        let project = self.0.project();
-        let user_json = serde_json::json!({
-            "uid": user.local_id.as_str(),
-            "email": user.email,
-            "email_verified": user.email_verified,
-            "display_name": user.display_name,
-            "photo_url": user.photo_url,
-            "phone_number": user.phone_number,
-            "disabled": user.disabled,
-            "custom_claims": serde_json::from_str::<serde_json::Value>(&user.custom_claims.canonical_json()).unwrap_or_else(|_| serde_json::json!({})),
-            "metadata": {
-                "creation_time": fireemu_core_types::time::LogicalInstant::to_rfc3339(user.created_at).unwrap_or_default(),
-                "last_sign_in_time": user.last_sign_in_at.and_then(|instant| instant.to_rfc3339().ok()),
-            },
-            "provider_data": [],
-        });
+        let user_json = blocking_auth_user_json(user, tenant);
+        let resource_name = blocking_auth_resource_name(project, tenant);
         let body = serde_json::json!({
             "data": {
                 "user": user_json,
                 "context": {
                     "eventId": format!("fireemu-blocking-{}", self.0.trigger_generation()),
                     "eventType": event.as_str(),
-                    "resource": {"service": "identitytoolkit.googleapis.com", "name": format!("projects/{project}")},
+                    "resource": {"service": "identitytoolkit.googleapis.com", "name": resource_name},
                     "timestamp": fireemu_core_types::time::LogicalInstant::to_rfc3339(self.0.now()).unwrap_or_default(),
                     "params": {},
                 }
@@ -1902,7 +1936,28 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         if !value.is_object() {
             return Err("BLOCKING_FUNCTION_ERROR_RESPONSE : response must be an object".to_owned());
         }
-        Ok(value)
+        Ok(Some(value))
+    }
+}
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBridge {
+    fn invoke(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<serde_json::Value, String> {
+        self.invoke_for_namespace(self.0.project(), None, event, user)
+            .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
+    }
+
+    fn invoke_for(
+        &self,
+        project: &str,
+        tenant: Option<&str>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Option<serde_json::Value>, String> {
+        self.invoke_for_namespace(project, tenant, event, user)
     }
 }
 
@@ -2025,6 +2080,40 @@ mod tests {
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
     use serde_json::json;
+
+    #[test]
+    fn blocking_auth_user_uses_the_functions_sdk_record_shape() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+
+        let value = super::blocking_auth_user_json(
+            store.user_by_id(uid.as_str()).unwrap(),
+            Some("customer"),
+        );
+
+        assert_eq!(value["emailVerified"], false);
+        assert!(value.get("email_verified").is_none());
+        assert!(value.get("displayName").is_some());
+        assert!(value.get("photoURL").is_some());
+        assert!(value.get("phoneNumber").is_some());
+        assert_eq!(value["customClaims"], json!({}));
+        assert_eq!(value["tenantId"], "customer");
+        assert!(value.get("providerData").is_some());
+        assert_eq!(value["metadata"]["creationTime"], "2026-08-29T12:01:00Z");
+        assert!(value["metadata"].get("lastSignInTime").is_some());
+        assert_eq!(
+            super::blocking_auth_resource_name("demo-app", Some("customer")),
+            "projects/demo-app/tenants/customer"
+        );
+    }
 
     fn installed_node(version: &str, require_module: bool) -> NodeInstallation {
         let (_, major, minor, patch) = parse_node_version(version).unwrap();

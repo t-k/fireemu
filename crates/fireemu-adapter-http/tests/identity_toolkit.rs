@@ -27,6 +27,34 @@ struct ClearingClaimsHook;
 
 struct MalformedBeforeSignInHook;
 
+struct NamespaceRecordingHook {
+    calls: Arc<Mutex<Vec<(String, Option<String>, BlockingAuthEvent)>>>,
+}
+
+impl AuthBlockingHook for NamespaceRecordingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        panic!("namespace-aware dispatch must use invoke_for")
+    }
+
+    fn invoke_for(
+        &self,
+        project: &str,
+        tenant: Option<&str>,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Option<Value>, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((project.to_owned(), tenant.map(str::to_owned), event));
+        Ok(Some(json!({})))
+    }
+}
+
 impl AuthBlockingHook for MalformedBeforeSignInHook {
     fn invoke(
         &self,
@@ -986,6 +1014,77 @@ fn blocking_auth_rechecks_tenant_disablement_and_deletion_before_commit() {
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], expected);
     }
+}
+
+#[test]
+fn blocking_auth_dispatch_carries_the_selected_project_and_tenant_namespace() {
+    use fireemu_core_auth::store::AuthRegistry;
+    use fireemu_core_session::tenancy::Tenancy;
+    use std::sync::RwLock;
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut state = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    assert!(registry.register(
+        "demo-worker",
+        AuthStore::new("demo-worker", SplitMix64::new(6), TotpPolicy::default())
+    ));
+    state.registry = Some(registry);
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy
+        .register("demo-worker", &[], &["worker-key".to_owned()])
+        .unwrap();
+    state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    state.blocking = Some(Arc::new(NamespaceRecordingHook {
+        calls: calls.clone(),
+    }));
+
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "tenantId": "customer",
+            "email": "namespace@example.com",
+            "password": "hunter22"
+        }),
+    );
+
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signUp?key=worker-key"),
+        &json!({
+            "email": "worker@example.com",
+            "password": "hunter22"
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![
+            (
+                "demo-app".to_owned(),
+                Some("customer".to_owned()),
+                BlockingAuthEvent::BeforeCreate,
+            ),
+            (
+                "demo-app".to_owned(),
+                Some("customer".to_owned()),
+                BlockingAuthEvent::BeforeSignIn,
+            ),
+            (
+                "demo-worker".to_owned(),
+                None,
+                BlockingAuthEvent::BeforeCreate,
+            ),
+            (
+                "demo-worker".to_owned(),
+                None,
+                BlockingAuthEvent::BeforeSignIn,
+            ),
+        ]
+    );
 }
 
 #[test]

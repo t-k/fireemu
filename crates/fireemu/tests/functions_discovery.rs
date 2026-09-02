@@ -176,10 +176,8 @@ fn blocking_identity_exports_are_discovered_as_served_triggers() {
 }
 
 #[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
-    if !have_sdk() {
-        return;
-    }
     let runner_script =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
     let source = fixture("blocking-auth");
@@ -206,26 +204,52 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
         .expect("blocking triggers need HTTP");
     let body = serde_json::json!({
         "data": {
-            "user": {"uid": "user-1", "email": "a@example.com"},
+            "user": {
+                "uid": "user-1",
+                "email": "a@example.com",
+                "emailVerified": true,
+                "displayName": "Input name",
+                "photoURL": "https://example.test/input.png",
+                "phoneNumber": "+15555550123",
+                "disabled": false,
+                "customClaims": {"role": "tester"},
+                "metadata": {
+                    "creationTime": "2026-08-29T12:01:00Z",
+                    "lastSignInTime": "2026-08-30T12:01:00Z"
+                },
+                "providerData": [{
+                    "uid": "provider-user",
+                    "displayName": "Provider name",
+                    "email": "provider@example.com",
+                    "photoURL": "https://example.test/provider.png",
+                    "providerId": "example.com",
+                    "phoneNumber": null
+                }]
+            },
             "context": {"eventType": "beforeCreate"}
         }
     })
     .to_string();
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    write!(
-        stream,
-        "POST /demo-blocking/us-central1/fxBeforeCreate HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: test-secret\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    )
-    .unwrap();
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).unwrap();
-    let response = fireemu_adapter_functions::http::parse_response(&raw, "POST").unwrap();
-    assert_eq!(response.status, 200);
-    let response = serde_json::from_slice::<serde_json::Value>(&response.body).unwrap();
-    assert_eq!(response["userRecord"]["displayName"], "created");
-    assert_eq!(response["userRecord"]["updateMask"], "displayName");
+    for function in ["fxBeforeCreate", "fxLegacyBeforeCreate"] {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            stream,
+            "POST /demo-blocking/us-central1/{function} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: test-secret\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).unwrap();
+        let response = fireemu_adapter_functions::http::parse_response(&raw, "POST").unwrap();
+        assert_eq!(response.status, 200, "{function}");
+        let response = serde_json::from_slice::<serde_json::Value>(&response.body).unwrap();
+        assert_eq!(
+            response["userRecord"]["displayName"], "observed:Input name",
+            "{function}"
+        );
+        assert_eq!(response["userRecord"]["updateMask"], "displayName");
+    }
     runner.shutdown().await;
 }
 

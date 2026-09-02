@@ -85,6 +85,20 @@ pub trait AuthBlockingHook: Send + Sync {
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, String>;
+
+    /// Runs a hook for the Auth store namespace selected by request routing. Implementations
+    /// that host only one project must return `Ok(None)` for every other project before
+    /// serializing or forwarding the user record. The default preserves simple in-process
+    /// hooks used by embedders and tests.
+    fn invoke_for(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Option<Value>, String> {
+        self.invoke(event, user).map(Some)
+    }
 }
 
 /// Shared Auth state behind the REST surface.
@@ -764,7 +778,9 @@ fn dispatch_with_blocking_hook(
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    match blocking.invoke(
+                    match blocking.invoke_for(
+                        &project,
+                        tenant.as_deref(),
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
                         user,
                     ) {
@@ -772,25 +788,29 @@ fn dispatch_with_blocking_hook(
                         Err(reason) => return error(400, &reason),
                     }
                 };
-                if let Err(reason) = apply_blocking_response(
-                    &mut candidate,
-                    &uid,
-                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                    &value,
-                ) {
-                    return error(400, &reason);
+                if let Some(value) = value {
+                    if let Err(reason) = apply_blocking_response(
+                        &mut candidate,
+                        &uid,
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                        &value,
+                    ) {
+                        return error(400, &reason);
+                    }
+                    blocking_responses.push((
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                        value,
+                    ));
                 }
-                blocking_responses.push((
-                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                    value,
-                ));
             }
             if signed_in {
                 let value = {
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    match blocking.invoke(
+                    match blocking.invoke_for(
+                        &project,
+                        tenant.as_deref(),
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         user,
                     ) {
@@ -798,18 +818,20 @@ fn dispatch_with_blocking_hook(
                         Err(reason) => return error(400, &reason),
                     }
                 };
-                if let Err(reason) = apply_blocking_response(
-                    &mut candidate,
-                    &uid,
-                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                    &value,
-                ) {
-                    return error(400, &reason);
+                if let Some(value) = value {
+                    if let Err(reason) = apply_blocking_response(
+                        &mut candidate,
+                        &uid,
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                        &value,
+                    ) {
+                        return error(400, &reason);
+                    }
+                    blocking_responses.push((
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                        value,
+                    ));
                 }
-                blocking_responses.push((
-                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                    value,
-                ));
             }
         }
     }

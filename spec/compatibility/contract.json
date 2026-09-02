@@ -847,7 +847,7 @@
         },
         {
           "id": "AUTH-CLAIM-BLOCKING-FUNCTIONS",
-          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit; a rejection or malformed response rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
+          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, a rejection or malformed response rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
           "capabilities": [
             {
               "id": "FN-EVT-1",

@@ -154,7 +154,7 @@ fn evidence_omits_local_paths_process_ids_and_machine_capacity() {
     let fixture = prepare("redacted-detail");
     let java = fixture.executable(
         "fake-java",
-        r##"#!/bin/sh
+        r#"#!/bin/sh
 case "$*" in
   *-version*) printf '%s\n' 'TLC fixture'; exit 0 ;;
 esac
@@ -162,7 +162,7 @@ printf '%s\n' 'Running breadth-first search with 18 workers and 30688MB heap [pi
 printf '%s\n' 'Parsing file /Users/alice/private/Model.tla'
 printf '%s\n' 'Error: Invariant Safe is violated.'
 exit 12
-"##,
+"#,
     );
 
     let evidence =

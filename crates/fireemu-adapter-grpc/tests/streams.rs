@@ -1,10 +1,11 @@
 //! `Write` and `Listen` streams through a real tonic client: handshake, sequential commits,
 //! initial snapshots, live diffs after commits, target removal and rules denials.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
-use fireemu_adapter_grpc::local::LocalBackend;
+use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_adapter_grpc::rules::RulesEnforcer;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -14,11 +15,15 @@ use fireemu_core_firestore::index::{
     IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
     PlanningContext,
 };
+use fireemu_core_firestore::path::DocumentPath;
+use fireemu_core_firestore::store::{FirestoreState, Write as CoreWrite, WriteOp};
+use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::tenancy::Scope;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
-use fireemu_core_types::ids::CollectionId;
+use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
 use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
@@ -52,6 +57,15 @@ async fn start(
     FirestoreClient<tonic::transport::Channel>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_with_rules_source(with_rules.then_some(RULES)).await
+}
+
+async fn start_with_rules_source(
+    rules_source: Option<&str>,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -69,13 +83,15 @@ async fn start(
     let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
     BACKEND.with(|b| *b.borrow_mut() = Some(backend.clone()));
     let mut service = GatewayService::local(gateway, backend);
-    if with_rules {
+    if let Some(rules_source) = rules_source {
         let auth = Arc::new(Mutex::new(AuthStore::new(
             "demo-app",
             SplitMix64::new(3),
             TotpPolicy::default(),
         )));
-        let rules = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(rules_source).unwrap(),
+        ));
         service = service.with_rules(Arc::new(RulesEnforcer::new(rules, auth, clock)));
     }
     let svc = FirestoreServer::new(service);
@@ -139,6 +155,52 @@ fn add_query_target(id: i32, collection: &str) -> pb::ListenRequest {
         })),
         ..Default::default()
     }
+}
+fn add_filtered_query_target(id: i32, collection: &str) -> pb::ListenRequest {
+    let mut request = add_query_target(id, collection);
+    let Some(pb::listen_request::TargetChange::AddTarget(target)) = &mut request.target_change
+    else {
+        unreachable!();
+    };
+    let Some(pb::target::TargetType::Query(target)) = &mut target.target_type else {
+        unreachable!();
+    };
+    let Some(pb::target::query_target::QueryType::StructuredQuery(query)) = &mut target.query_type
+    else {
+        unreachable!();
+    };
+    query.r#where = Some(pb::structured_query::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "state".to_owned(),
+            }),
+            op: sq::field_filter::Operator::Equal as i32,
+            value: Some(s("included")),
+        })),
+    });
+    request
+}
+fn add_limited_query_target(id: i32, collection: &str) -> pb::ListenRequest {
+    let mut request = add_query_target(id, collection);
+    let Some(pb::listen_request::TargetChange::AddTarget(target)) = &mut request.target_change
+    else {
+        unreachable!();
+    };
+    let Some(pb::target::TargetType::Query(target)) = &mut target.target_type else {
+        unreachable!();
+    };
+    let Some(pb::target::query_target::QueryType::StructuredQuery(query)) = &mut target.query_type
+    else {
+        unreachable!();
+    };
+    query.order_by = vec![sq::Order {
+        field: Some(sq::FieldReference {
+            field_path: "v".to_owned(),
+        }),
+        direction: sq::Direction::Ascending as i32,
+    }];
+    query.limit = Some(1);
+    request
 }
 fn add_documents_target(id: i32, names: &[&str]) -> pb::ListenRequest {
     pb::ListenRequest {
@@ -349,6 +411,115 @@ async fn listen_delivers_snapshot_then_live_diffs() {
 }
 
 #[tokio::test]
+async fn incremental_listen_preserves_enter_update_remove_and_delete() {
+    let (mut client, handle) = start(false).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("delta/a", &[("state", s("excluded"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_filtered_query_target(1, "delta"))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec!["ADD[1]", "CURRENT[1]", "NO_CHANGE[1]", "NO_CHANGE[]"]
+    );
+
+    for (write, expected) in [
+        (
+            set_write("delta/a", &[("state", s("included")), ("revision", s("1"))]),
+            "CHANGE a",
+        ),
+        (
+            set_write("delta/a", &[("state", s("included")), ("revision", s("2"))]),
+            "CHANGE a",
+        ),
+        (
+            set_write("delta/a", &[("state", s("excluded"))]),
+            "REMOVE a",
+        ),
+        (
+            set_write("delta/a", &[("state", s("included"))]),
+            "CHANGE a",
+        ),
+        (delete_write("delta/a"), "DELETE a"),
+    ] {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![write],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            next_until(&mut responses, "NO_CHANGE[]").await,
+            vec![expected, "NO_CHANGE[1]", "NO_CHANGE[]"]
+        );
+    }
+    handle.abort();
+}
+
+#[tokio::test]
+async fn limited_listen_recomputes_the_boundary_after_an_update() {
+    let (mut client, handle) = start(false).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                set_write("limited/a", &[("v", s("1"))]),
+                set_write("limited/b", &[("v", s("2"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_limited_query_target(1, "limited"))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec![
+            "ADD[1]",
+            "CHANGE a",
+            "CURRENT[1]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[]"
+        ]
+    );
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("limited/a", &[("v", s("3"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec!["CHANGE b", "REMOVE a", "NO_CHANGE[1]", "NO_CHANGE[]"]
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 async fn listen_and_write_streams_enforce_rules() {
     let (mut client, handle) = start(true).await;
     let (tx, rx) = mpsc::channel(8);
@@ -389,6 +560,65 @@ async fn listen_and_write_streams_enforce_rules() {
     .unwrap();
     let err = writes.next().await.unwrap().unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn listen_reauthorizes_when_a_rules_dependency_changes() {
+    const DEPENDENT_RULES: &str = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /gate/{id} { allow read, write: if true; }
+    match /protected/{id} {
+      allow read: if get(/databases/$(database)/documents/gate/access).data.enabled == 'yes';
+      allow write: if true;
+    }
+  }
+}
+";
+    let (mut client, handle) = start_with_rules_source(Some(DEPENDENT_RULES)).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                set_write("gate/access", &[("enabled", s("yes"))]),
+                set_write("protected/a", &[("v", s("1"))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(1, "protected")).await.unwrap();
+    assert_eq!(
+        next_until(&mut responses, "NO_CHANGE[]").await,
+        vec![
+            "ADD[1]",
+            "CHANGE a",
+            "CURRENT[1]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[]"
+        ]
+    );
+
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("gate/access", &[("enabled", s("no"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        next_until(&mut responses, "REMOVE[1] cause=7").await,
+        vec!["REMOVE[1] cause=7"]
+    );
     handle.abort();
 }
 
@@ -921,6 +1151,122 @@ async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
     ltx.send(resumed).await.unwrap();
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(trace[..3], ["ADD[3]", "RESET[3]", "CHANGE b"]);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn current_boundary_tokens_are_bound_to_their_target() {
+    let (mut client, handle) = start(false).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(1, "first")).await.unwrap();
+    let (_, current_token) = trace_and_token(&mut listen, "CURRENT[1]").await;
+    assert!(!current_token.is_empty());
+    let _ = next_until(&mut listen, "NO_CHANGE[]").await;
+
+    let mut other = add_query_target(2, "second");
+    if let Some(pb::listen_request::TargetChange::AddTarget(target)) = &mut other.target_change {
+        target.resume_type = Some(pb::target::ResumeType::ResumeToken(current_token));
+    }
+    tx.send(other).await.unwrap();
+    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(trace[..2], ["ADD[2]", "RESET[2]"]);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn project_restore_replays_a_same_version_document_with_new_fields() {
+    let (mut client, handle) = start(false).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![set_write("restored/a", &[("v", s("before"))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut listen = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_query_target(1, "restored")).await.unwrap();
+    let _ = next_until(&mut listen, "NO_CHANGE[]").await;
+
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let path = DocumentPath::parse(&project, &database, "restored/a").unwrap();
+    let mut restored = FirestoreState::new();
+    restored
+        .commit(
+            &[CoreWrite {
+                op: WriteOp::Set {
+                    path,
+                    fields: BTreeMap::from([("v".to_owned(), Value::String("after".to_owned()))]),
+                    update_mask: None,
+                },
+                precondition: None,
+                transforms: Vec::new(),
+            }],
+            None,
+            LogicalInstant::from_unix_seconds(1_788_004_861),
+        )
+        .unwrap();
+    let snapshot = FirestoreSnapshot {
+        databases: BTreeMap::from([(("demo-app".to_owned(), "(default)".to_owned()), restored)]),
+        ids: None,
+    };
+    BACKEND.with(|backend| {
+        backend
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .restore_scope(&Scope::Project("demo-app".to_owned()), &snapshot);
+    });
+
+    let mut trace = Vec::new();
+    let mut restored_value = None;
+    loop {
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next())
+            .await
+            .expect("listen response within 5 s")
+            .expect("stream open")
+            .unwrap();
+        if let Some(pb::listen_response::ResponseType::DocumentChange(change)) =
+            &response.response_type
+        {
+            restored_value = change.document.as_ref().and_then(|document| {
+                document.fields.get("v").and_then(|value| {
+                    if let Some(pb::value::ValueType::StringValue(value)) = &value.value_type {
+                        Some(value.clone())
+                    } else {
+                        None
+                    }
+                })
+            });
+        }
+        let description = describe(&response);
+        trace.push(description.clone());
+        if description == "NO_CHANGE[]" {
+            break;
+        }
+    }
+    assert_eq!(
+        trace,
+        vec![
+            "RESET[1]",
+            "CHANGE a",
+            "CURRENT[1]",
+            "NO_CHANGE[1]",
+            "NO_CHANGE[]"
+        ]
+    );
+    assert_eq!(restored_value.as_deref(), Some("after"));
     handle.abort();
 }
 

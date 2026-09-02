@@ -21,7 +21,7 @@
 // `tonic::Status` is the error type dictated by the generated trait.
 #![allow(clippy::result_large_err)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ use tonic::Status;
 use crate::decode::{parse_parent, Parent};
 use crate::encode::{decode_instant, decode_write, encode_document, encode_instant};
 use crate::gateway::Gateway;
-use crate::local::{CommitEvent, LocalBackend};
+use crate::local::{CommitNotification, LocalBackend};
 use crate::rules::{write_guard, Principal, RulesEnforcer};
 
 /// The App Check credential a stream opened with (specification section 13.1).
@@ -307,6 +307,7 @@ enum Resume {
 
 struct TargetState {
     kind: TargetKind,
+    target_hash: u64,
     parent: Parent,
     known: BTreeMap<DocumentPath, CommitVersion>,
     /// Pending resume, resolved on the first refresh (it needs the snapshot).
@@ -316,6 +317,21 @@ struct TargetState {
     current: bool,
     /// Responses produced by the last refresh, drained by the caller.
     pending: Vec<pb::ListenResponse>,
+}
+
+#[derive(Debug, Clone)]
+enum RefreshInput {
+    Full,
+    Delta {
+        through: CommitVersion,
+        paths: BTreeSet<DocumentPath>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DatabaseHashCache {
+    generation: u64,
+    hash: u64,
 }
 
 /// Maximum targets one `Listen` stream may hold (spec 10.6: queue length caps are explicit,
@@ -336,6 +352,8 @@ pub async fn listen_stream(
 ) {
     let mut parent: Option<Parent> = None;
     let mut targets: BTreeMap<i32, TargetState> = BTreeMap::new();
+    let mut database_hash_cache = None;
+    let mut last_snapshot_version = None;
     let mut events = ctx.local.subscribe();
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
@@ -344,19 +362,36 @@ pub async fn listen_stream(
             msg = inbound.next() => match msg {
                 None => Ok(false),
                 Some(Err(e)) => Err(e),
-                Some(Ok(req)) => handle_listen_request(&ctx, &mut parent, &mut targets, &req, &mut out).map(|()| true),
+                Some(Ok(req)) => handle_listen_request(
+                    &ctx,
+                    &mut parent,
+                    &mut targets,
+                    &req,
+                    &mut database_hash_cache,
+                    &mut last_snapshot_version,
+                    &mut out,
+                ).map(|()| true),
             },
             ev = events.recv() => match ev {
                 Ok(first) => {
                     // Coalesce: every commit already queued behind this one is covered by
                     // the single refresh below.
-                    let mut relevant = is_relevant(parent.as_ref(), &first);
+                    let mut input = refresh_input_for_event(
+                        parent.as_ref(),
+                        last_snapshot_version,
+                        &first,
+                    );
                     let mut closed = false;
                     loop {
                         match events.try_recv() {
-                            Ok(ev) => relevant |= is_relevant(parent.as_ref(), &ev),
+                            Ok(ev) => merge_refresh_event(
+                                &mut input,
+                                parent.as_ref(),
+                                last_snapshot_version,
+                                &ev,
+                            ),
                             Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
-                                relevant = true;
+                                input = Some(RefreshInput::Full);
                             }
                             Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
                                 closed = true;
@@ -367,14 +402,30 @@ pub async fn listen_stream(
                     }
                     if closed {
                         Ok(false)
-                    } else if relevant {
-                        refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out).map(|()| true)
+                    } else if let Some(input) = input {
+                        refresh_all(
+                            &ctx,
+                            parent.as_ref(),
+                            &mut targets,
+                            input,
+                            &mut database_hash_cache,
+                            &mut last_snapshot_version,
+                            &mut out,
+                        ).map(|()| true)
                     } else {
                         Ok(true)
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    refresh_all(&ctx, parent.as_ref(), &mut targets, &mut out).map(|()| true)
+                    refresh_all(
+                        &ctx,
+                        parent.as_ref(),
+                        &mut targets,
+                        RefreshInput::Full,
+                        &mut database_hash_cache,
+                        &mut last_snapshot_version,
+                        &mut out,
+                    ).map(|()| true)
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(false),
             },
@@ -396,8 +447,79 @@ pub async fn listen_stream(
 }
 
 /// Whether a commit concerns the stream's database.
-fn is_relevant(parent: Option<&Parent>, ev: &CommitEvent) -> bool {
+fn is_relevant(parent: Option<&Parent>, ev: &CommitNotification) -> bool {
     parent.is_some_and(|p| p.project.as_str() == ev.project && p.database.as_str() == ev.database)
+}
+
+fn refresh_input_for_event(
+    parent: Option<&Parent>,
+    last_snapshot_version: Option<CommitVersion>,
+    event: &CommitNotification,
+) -> Option<RefreshInput> {
+    if !is_relevant(parent, event) {
+        return None;
+    }
+    let Some(last) = last_snapshot_version else {
+        return Some(RefreshInput::Full);
+    };
+    if event.reset {
+        return Some(RefreshInput::Full);
+    }
+    let version = CommitVersion::from_value(event.version);
+    if version <= last {
+        return None;
+    }
+    if version.value() != last.value().saturating_add(1) {
+        return Some(RefreshInput::Full);
+    }
+    Some(RefreshInput::Delta {
+        through: version,
+        paths: event
+            .changes
+            .iter()
+            .map(|change| change.path.clone())
+            .collect(),
+    })
+}
+
+fn merge_refresh_event(
+    input: &mut Option<RefreshInput>,
+    parent: Option<&Parent>,
+    last_snapshot_version: Option<CommitVersion>,
+    event: &CommitNotification,
+) {
+    if !is_relevant(parent, event) {
+        return;
+    }
+    if event.reset {
+        *input = Some(RefreshInput::Full);
+        return;
+    }
+    let Some(last) = last_snapshot_version else {
+        *input = Some(RefreshInput::Full);
+        return;
+    };
+    let version = CommitVersion::from_value(event.version);
+    if version <= last {
+        return;
+    }
+    match input {
+        Some(RefreshInput::Delta { through, paths }) => {
+            if version <= *through {
+                return;
+            }
+            if version.value() != through.value().saturating_add(1) {
+                *input = Some(RefreshInput::Full);
+                return;
+            }
+            *through = version;
+            paths.extend(event.changes.iter().map(|change| change.path.clone()));
+        }
+        None => {
+            *input = refresh_input_for_event(parent, Some(last), event);
+        }
+        Some(RefreshInput::Full) => {}
+    }
 }
 
 fn handle_listen_request(
@@ -405,6 +527,8 @@ fn handle_listen_request(
     parent: &mut Option<Parent>,
     targets: &mut BTreeMap<i32, TargetState>,
     req: &pb::ListenRequest,
+    database_hash_cache: &mut Option<DatabaseHashCache>,
+    last_snapshot_version: &mut Option<CommitVersion>,
     out: &mut Vec<pb::ListenResponse>,
 ) -> Result<(), Status> {
     if parent.is_none() {
@@ -452,6 +576,14 @@ fn handle_listen_request(
                     return Ok(());
                 }
             };
+            let target_hash = target_hash(&kind);
+            let database_hash = synchronize_database_generation(
+                parent,
+                &ctx.local,
+                database_hash_cache,
+                targets,
+                out,
+            );
             out.push(target_change(
                 pb::target_change::TargetChangeType::Add,
                 vec![id],
@@ -463,8 +595,8 @@ fn handle_listen_request(
             // start over and would silently line up with unrelated history.
             let binding = TokenBinding {
                 epoch: ctx.local.epoch(),
-                database: database_hash(parent, ctx.local.database_generation(parent)),
-                target: target_hash(&kind),
+                database: database_hash,
+                target: target_hash,
             };
             let resume = match &target.resume_type {
                 None => None,
@@ -479,6 +611,7 @@ fn handle_listen_request(
                 id,
                 TargetState {
                     kind,
+                    target_hash,
                     parent: parent.clone(),
                     known: BTreeMap::new(),
                     resume,
@@ -488,7 +621,15 @@ fn handle_listen_request(
                 },
             );
             // Every target is brought to the same snapshot before one global boundary.
-            refresh_all(ctx, Some(parent), targets, out)?;
+            refresh_all(
+                ctx,
+                Some(parent),
+                targets,
+                RefreshInput::Full,
+                database_hash_cache,
+                last_snapshot_version,
+                out,
+            )?;
         }
         Some(pb::listen_request::TargetChange::RemoveTarget(id)) => {
             if targets.remove(id).is_some() {
@@ -550,6 +691,9 @@ fn refresh_all(
     ctx: &StreamContext,
     parent: Option<&Parent>,
     targets: &mut BTreeMap<i32, TargetState>,
+    mut input: RefreshInput,
+    database_hash_cache: &mut Option<DatabaseHashCache>,
+    last_snapshot_version: &mut Option<CommitVersion>,
     out: &mut Vec<pb::ListenResponse>,
 ) -> Result<(), Status> {
     let Some(parent) = parent else { return Ok(()) };
@@ -579,45 +723,64 @@ fn refresh_all(
     // One critical section: every target sees the same version, read time and documents.
     let expected_epoch = ctx.epoch;
     let local = ctx.local.clone();
-    let snapshot = ctx.local.with_snapshot(parent, |db, version, read_at| {
-        if local.epoch() != expected_epoch {
-            return Err(Status::aborted("the session was reset"));
-        }
-        let read_time = encode_instant(read_at);
-        let binding = TokenBinding {
-            epoch: local.epoch(),
-            database: database_hash(parent, local.database_generation(parent)),
-            target: 0,
-        };
-        let token = resume_token(version, &binding);
-        let mut removed = Vec::new();
-        for (id, state) in targets.iter_mut() {
-            match refresh_target(ctx, &principal, db, *id, state, read_time) {
-                Ok(()) => {
-                    out.append(&mut state.pending);
-                    if !state.current {
-                        state.current = true;
-                        let bound = TokenBinding {
-                            target: target_hash(&state.kind),
-                            ..binding
-                        };
-                        out.push(target_change(
-                            pb::target_change::TargetChangeType::Current,
-                            vec![*id],
-                            Some(resume_token(version, &bound)),
-                            Some(read_time),
-                        ));
+    let snapshot = ctx
+        .local
+        .with_snapshot(parent, |db, version, read_at, generation| {
+            let (database_hash, generation_changed) =
+                cached_database_hash_at(parent, generation, database_hash_cache);
+            if generation_changed {
+                input = RefreshInput::Full;
+                invalidate_targets(targets, out);
+            }
+            if local.epoch() != expected_epoch {
+                return Err(Status::aborted("the session was reset"));
+            }
+            let read_time = encode_instant(read_at);
+            let binding = TokenBinding {
+                epoch: local.epoch(),
+                database: database_hash,
+                target: 0,
+            };
+            let token = resume_token(version, &binding);
+            let delta_paths = complete_delta_paths(&input, version);
+            let mut removed = Vec::new();
+            for (id, state) in targets.iter_mut() {
+                let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
+                    if state.current && state.resume.is_none() {
+                        if let Some(paths) = delta_paths {
+                            if refresh_target_delta(db, *id, state, read_time, paths)?.is_some() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    refresh_target_full(db, *id, state, read_time)
+                });
+                match refreshed {
+                    Ok(()) => {
+                        out.append(&mut state.pending);
+                        if !state.current {
+                            state.current = true;
+                            let bound = TokenBinding {
+                                target: state.target_hash,
+                                ..binding
+                            };
+                            out.push(target_change(
+                                pb::target_change::TargetChangeType::Current,
+                                vec![*id],
+                                Some(resume_token(version, &bound)),
+                                Some(read_time),
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        state.pending.clear();
+                        out.push(removed_with_cause(*id, &e));
+                        removed.push(*id);
                     }
                 }
-                Err(e) => {
-                    state.pending.clear();
-                    out.push(removed_with_cause(*id, &e));
-                    removed.push(*id);
-                }
             }
-        }
-        Ok((read_time, token, removed, version, binding))
-    });
+            Ok((read_time, token, removed, version, binding))
+        });
     let (read_time, token, removed, version, binding) = match snapshot.and_then(|r| r) {
         Ok(s) => s,
         Err(e) => {
@@ -628,6 +791,7 @@ fn refresh_all(
             return Err(e);
         }
     };
+    *last_snapshot_version = Some(version);
     for id in removed {
         targets.remove(&id);
     }
@@ -636,7 +800,7 @@ fn refresh_all(
     }
     for (id, state) in &*targets {
         let bound = TokenBinding {
-            target: target_hash(&state.kind),
+            target: state.target_hash,
             ..binding
         };
         out.push(target_change(
@@ -669,23 +833,19 @@ fn refresh_all(
     Ok(())
 }
 
-/// Recomputes one target and appends the diff against its last known state.
-fn refresh_target(
+fn authorize_target(
     ctx: &StreamContext,
     principal: &Principal,
     db: &fireemu_core_firestore::store::FirestoreState,
-    id: i32,
-    state: &mut TargetState,
-    read_time: prost_types::Timestamp,
+    state: &TargetState,
 ) -> Result<(), Status> {
-    let resumed = resolve_resume(db, id, state)?;
-    let current: Vec<Document> = match &state.kind {
+    match &state.kind {
         TargetKind::Documents(paths) => {
-            let items = paths
-                .iter()
-                .map(|path| (path.clone(), db.get(path).cloned()))
-                .collect::<Vec<_>>();
             if let Some(rules) = &ctx.rules {
+                let items = paths
+                    .iter()
+                    .map(|path| (path.clone(), db.get(path).cloned()))
+                    .collect::<Vec<_>>();
                 let reader = crate::rules::StateReader {
                     db,
                     parent: &state.parent,
@@ -693,7 +853,6 @@ fn refresh_target(
                 };
                 rules.authorize_gets(principal, &items, &reader)?;
             }
-            items.into_iter().filter_map(|(_, doc)| doc).collect()
         }
         TargetKind::Query(query) => {
             if let Some(rules) = &ctx.rules {
@@ -704,9 +863,27 @@ fn refresh_target(
                 };
                 rules.authorize_query(principal, &state.parent, query, &reader)?;
             }
-            db.run_query(query, None)
-                .map_err(|e| crate::encode::status_from_error(&e))?
         }
+    }
+    Ok(())
+}
+
+/// Recomputes one target and appends the diff against its last known state.
+fn refresh_target_full(
+    db: &fireemu_core_firestore::store::FirestoreState,
+    id: i32,
+    state: &mut TargetState,
+    read_time: prost_types::Timestamp,
+) -> Result<(), Status> {
+    let resumed = resolve_resume(db, id, state)?;
+    let current: Vec<Document> = match &state.kind {
+        TargetKind::Documents(paths) => paths
+            .iter()
+            .filter_map(|path| db.get(path).cloned())
+            .collect(),
+        TargetKind::Query(query) => db
+            .run_query(query, None)
+            .map_err(|error| crate::encode::status_from_error(&error))?,
     };
     let mut next_known: BTreeMap<DocumentPath, CommitVersion> = BTreeMap::new();
     for doc in &current {
@@ -719,24 +896,7 @@ fn refresh_target(
         if next_known.contains_key(path) {
             continue;
         }
-        let name = path.resource_name();
-        let still_exists = db.get(path).is_some();
-        let response_type = if still_exists {
-            pb::listen_response::ResponseType::DocumentRemove(pb::DocumentRemove {
-                document: name,
-                removed_target_ids: vec![id],
-                read_time: Some(read_time),
-            })
-        } else {
-            pb::listen_response::ResponseType::DocumentDelete(pb::DocumentDelete {
-                document: name,
-                removed_target_ids: vec![id],
-                read_time: Some(read_time),
-            })
-        };
-        state.pending.push(pb::ListenResponse {
-            response_type: Some(response_type),
-        });
+        out_removal(db, path, id, read_time, &mut state.pending);
     }
     state.known = next_known;
     if resumed {
@@ -753,6 +913,102 @@ fn refresh_target(
         });
     }
     Ok(())
+}
+
+/// Applies one complete changed-path set to a target. Returns `false` when the query shape
+/// has nonlocal membership and requires a full refresh.
+fn refresh_target_delta(
+    db: &fireemu_core_firestore::store::FirestoreState,
+    id: i32,
+    state: &mut TargetState,
+    read_time: prost_types::Timestamp,
+    changed_paths: &BTreeSet<DocumentPath>,
+) -> Result<Option<usize>, Status> {
+    let mut examined = 0;
+    match &state.kind {
+        TargetKind::Documents(paths) => {
+            for path in paths.iter().filter(|path| changed_paths.contains(*path)) {
+                examined += 1;
+                match db.get(path) {
+                    Some(document) => {
+                        if state.known.get(path) != Some(&document.version) {
+                            out_change(document, id, &mut state.pending);
+                            state.known.insert(path.clone(), document.version);
+                        }
+                    }
+                    None => {
+                        if state.known.remove(path).is_some() {
+                            out_removal(db, path, id, read_time, &mut state.pending);
+                        }
+                    }
+                }
+            }
+        }
+        TargetKind::Query(query) => {
+            let changed_documents = changed_paths
+                .iter()
+                .filter_map(|path| db.get(path))
+                .collect::<Vec<_>>();
+            let Some(matched) = db
+                .run_incremental_query(query, changed_documents)
+                .map_err(|error| crate::encode::status_from_error(&error))?
+            else {
+                return Ok(None);
+            };
+            examined = changed_paths.len();
+            let matched_paths = matched
+                .iter()
+                .map(|document| document.path.clone())
+                .collect::<BTreeSet<_>>();
+            for document in &matched {
+                if state.known.get(&document.path) != Some(&document.version) {
+                    out_change(document, id, &mut state.pending);
+                    state.known.insert(document.path.clone(), document.version);
+                }
+            }
+            for path in changed_paths {
+                if !matched_paths.contains(path) && state.known.remove(path).is_some() {
+                    out_removal(db, path, id, read_time, &mut state.pending);
+                }
+            }
+        }
+    }
+    Ok(Some(examined))
+}
+
+fn complete_delta_paths(
+    input: &RefreshInput,
+    snapshot_version: CommitVersion,
+) -> Option<&BTreeSet<DocumentPath>> {
+    match input {
+        RefreshInput::Delta { through, paths } if *through == snapshot_version => Some(paths),
+        RefreshInput::Full | RefreshInput::Delta { .. } => None,
+    }
+}
+
+fn out_removal(
+    db: &fireemu_core_firestore::store::FirestoreState,
+    path: &DocumentPath,
+    id: i32,
+    read_time: prost_types::Timestamp,
+    out: &mut Vec<pb::ListenResponse>,
+) {
+    let response_type = if db.get(path).is_some() {
+        pb::listen_response::ResponseType::DocumentRemove(pb::DocumentRemove {
+            document: path.resource_name(),
+            removed_target_ids: vec![id],
+            read_time: Some(read_time),
+        })
+    } else {
+        pb::listen_response::ResponseType::DocumentDelete(pb::DocumentDelete {
+            document: path.resource_name(),
+            removed_target_ids: vec![id],
+            read_time: Some(read_time),
+        })
+    };
+    out.push(pb::ListenResponse {
+        response_type: Some(response_type),
+    });
 }
 
 /// Resume: the target's state at the token becomes the known state, so the diff carries
@@ -815,6 +1071,60 @@ fn database_hash(parent: &Parent, generation: u64) -> u64 {
         parent.project.as_str(),
         parent.database.as_str()
     ))
+}
+
+fn cached_database_hash(
+    parent: &Parent,
+    local: &LocalBackend,
+    cache: &mut Option<DatabaseHashCache>,
+) -> (u64, bool) {
+    let generation = local.database_generation(parent);
+    cached_database_hash_at(parent, generation, cache)
+}
+
+fn cached_database_hash_at(
+    parent: &Parent,
+    generation: u64,
+    cache: &mut Option<DatabaseHashCache>,
+) -> (u64, bool) {
+    if let Some(cached) = cache {
+        if cached.generation == generation {
+            return (cached.hash, false);
+        }
+    }
+    let generation_changed = cache.is_some();
+    let hash = database_hash(parent, generation);
+    *cache = Some(DatabaseHashCache { generation, hash });
+    (hash, generation_changed)
+}
+
+fn synchronize_database_generation(
+    parent: &Parent,
+    local: &LocalBackend,
+    cache: &mut Option<DatabaseHashCache>,
+    targets: &mut BTreeMap<i32, TargetState>,
+    out: &mut Vec<pb::ListenResponse>,
+) -> u64 {
+    let (hash, generation_changed) = cached_database_hash(parent, local, cache);
+    if generation_changed {
+        invalidate_targets(targets, out);
+    }
+    hash
+}
+
+fn invalidate_targets(targets: &mut BTreeMap<i32, TargetState>, out: &mut Vec<pb::ListenResponse>) {
+    for (id, state) in targets {
+        state.known.clear();
+        state.resume = None;
+        state.current = false;
+        state.pending.clear();
+        out.push(target_change(
+            pb::target_change::TargetChangeType::Reset,
+            vec![*id],
+            None,
+            None,
+        ));
+    }
 }
 
 fn target_hash(kind: &TargetKind) -> u64 {
@@ -931,5 +1241,380 @@ impl WireCommit {
             write_results: encoded.write_results,
             commit_time: encoded.commit_time,
         }
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+    use crate::local::{CommitChangeKind, CommitPathChange, FirestoreSnapshot};
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_firestore::store::{FirestoreState, WriteOp};
+    use fireemu_core_firestore::value::Value;
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_session::tenancy::Scope;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::ids::CollectionId;
+    use fireemu_core_types::time::LogicalInstant;
+
+    fn path(relative: &str) -> DocumentPath {
+        crate::encode::decode_document_name(&format!(
+            "projects/demo-app/databases/(default)/documents/{relative}"
+        ))
+        .unwrap()
+    }
+
+    fn set(relative: &str) -> Write {
+        Write {
+            op: WriteOp::Set {
+                path: path(relative),
+                fields: BTreeMap::new(),
+                update_mask: None,
+            },
+            precondition: None,
+            transforms: Vec::new(),
+        }
+    }
+
+    fn notification(version: u64, relative: &str) -> CommitNotification {
+        CommitNotification {
+            project: "demo-app".to_owned(),
+            database: "(default)".to_owned(),
+            version,
+            reset: false,
+            changes: Arc::from([CommitPathChange {
+                path: path(relative),
+                kind: CommitChangeKind::Updated,
+            }]),
+        }
+    }
+
+    fn state_with_value(value: &str) -> FirestoreState {
+        let mut state = FirestoreState::new();
+        let mut write = set("restored/a");
+        let WriteOp::Set { fields, .. } = &mut write.op else {
+            unreachable!();
+        };
+        fields.insert("v".to_owned(), Value::String(value.to_owned()));
+        state
+            .commit(&[write], None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        state
+    }
+
+    fn query_request(id: i32, collection: &str) -> pb::ListenRequest {
+        pb::ListenRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+                target_id: id,
+                target_type: Some(pb::target::TargetType::Query(pb::target::QueryTarget {
+                    parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+                    query_type: Some(pb::target::query_target::QueryType::StructuredQuery(
+                        pb::StructuredQuery {
+                            from: vec![pb::structured_query::CollectionSelector {
+                                collection_id: collection.to_owned(),
+                                all_descendants: false,
+                            }],
+                            ..Default::default()
+                        },
+                    )),
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    struct GenerationFixture {
+        context: StreamContext,
+        scope: Scope,
+        parent: Option<Parent>,
+        cache: Option<DatabaseHashCache>,
+        targets: BTreeMap<i32, TargetState>,
+        last_snapshot_version: Option<CommitVersion>,
+    }
+
+    fn generation_fixture() -> GenerationFixture {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
+            LogicalInstant::UNIX_EPOCH,
+        )));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        let scope = Scope::Project("demo-app".to_owned());
+        local.restore_scope(&scope, &restored_snapshot("before"));
+        let parent = database_parent("projects/demo-app/databases/(default)").unwrap();
+        let generation = local.database_generation(&parent);
+        let query = Query::new(fireemu_core_firestore::query::QueryScope::collection(
+            None,
+            CollectionId::try_new("restored").unwrap(),
+        ));
+        let targets = BTreeMap::from([(
+            1,
+            TargetState {
+                target_hash: target_hash(&TargetKind::Query(Box::new(query.clone()))),
+                kind: TargetKind::Query(Box::new(query)),
+                parent: parent.clone(),
+                known: BTreeMap::from([(path("restored/a"), CommitVersion::from_value(1))]),
+                resume: None,
+                once: false,
+                current: true,
+                pending: Vec::new(),
+            },
+        )]);
+        GenerationFixture {
+            context: StreamContext {
+                local: local.clone(),
+                gateway: Arc::new(gateway),
+                rules: None,
+                principal: Principal::Owner,
+                authorization: None,
+                epoch: local.epoch(),
+                app_check: None,
+            },
+            scope,
+            parent: Some(parent.clone()),
+            cache: Some(DatabaseHashCache {
+                generation,
+                hash: database_hash(&parent, generation),
+            }),
+            targets,
+            last_snapshot_version: Some(CommitVersion::from_value(1)),
+        }
+    }
+
+    fn restored_snapshot(value: &str) -> FirestoreSnapshot {
+        FirestoreSnapshot {
+            databases: BTreeMap::from([(
+                ("demo-app".to_owned(), "(default)".to_owned()),
+                state_with_value(value),
+            )]),
+            ids: None,
+        }
+    }
+
+    fn assert_reset_replay(out: &[pb::ListenResponse], value: &str) {
+        assert!(out.iter().any(|response| matches!(
+            &response.response_type,
+            Some(pb::listen_response::ResponseType::TargetChange(change))
+                if change.target_change_type == pb::target_change::TargetChangeType::Reset as i32
+                    && change.target_ids == [1]
+        )));
+        let replay = out
+            .iter()
+            .find_map(|response| match &response.response_type {
+                Some(pb::listen_response::ResponseType::DocumentChange(change))
+                    if change.target_ids == [1] =>
+                {
+                    change
+                        .document
+                        .as_ref()?
+                        .fields
+                        .get("v")?
+                        .value_type
+                        .as_ref()
+                }
+                _ => None,
+            });
+        assert_eq!(
+            replay,
+            Some(&pb::value::ValueType::StringValue(value.to_owned()))
+        );
+    }
+
+    #[test]
+    fn add_target_cannot_consume_a_restore_generation_before_existing_targets_reset() {
+        let mut fixture = generation_fixture();
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &restored_snapshot("after"));
+        let mut out = Vec::new();
+
+        handle_listen_request(
+            &fixture.context,
+            &mut fixture.parent,
+            &mut fixture.targets,
+            &query_request(2, "second"),
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert_reset_replay(&out, "after");
+
+        out.clear();
+        let current_hash = synchronize_database_generation(
+            fixture.parent.as_ref().unwrap(),
+            &fixture.context.local,
+            &mut fixture.cache,
+            &mut fixture.targets,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        fixture
+            .context
+            .local
+            .restore_scope(&fixture.scope, &restored_snapshot("after-precheck"));
+        refresh_all(
+            &fixture.context,
+            fixture.parent.as_ref(),
+            &mut fixture.targets,
+            RefreshInput::Full,
+            &mut fixture.cache,
+            &mut fixture.last_snapshot_version,
+            &mut out,
+        )
+        .unwrap();
+        assert_ne!(
+            current_hash,
+            fixture
+                .cache
+                .expect("snapshot refresh caches the restored generation")
+                .hash
+        );
+        assert_reset_replay(&out, "after-precheck");
+    }
+
+    #[test]
+    fn adjacent_notifications_coalesce_paths_and_gaps_force_a_full_refresh() {
+        let parent = database_parent("projects/demo-app/databases/(default)").unwrap();
+        let last = Some(CommitVersion::from_value(1));
+        let mut input = refresh_input_for_event(Some(&parent), last, &notification(2, "items/a"));
+        merge_refresh_event(&mut input, Some(&parent), last, &notification(3, "items/b"));
+        let Some(RefreshInput::Delta { through, paths }) = input else {
+            panic!("adjacent notifications must remain incremental");
+        };
+        assert_eq!(through, CommitVersion::from_value(3));
+        assert_eq!(paths, BTreeSet::from([path("items/a"), path("items/b")]));
+
+        let mut input = Some(RefreshInput::Delta { through, paths });
+        merge_refresh_event(&mut input, Some(&parent), last, &notification(5, "items/c"));
+        assert!(matches!(input, Some(RefreshInput::Full)));
+
+        merge_refresh_event(&mut input, Some(&parent), last, &notification(6, "items/d"));
+        assert!(matches!(input, Some(RefreshInput::Full)));
+    }
+
+    #[test]
+    fn document_delta_counts_only_intersecting_paths_and_suppresses_unchanged_versions() {
+        let mut database = FirestoreState::new();
+        let mut updated = set("target/a");
+        let WriteOp::Set { fields, .. } = &mut updated.op else {
+            unreachable!();
+        };
+        fields.insert("revision".to_owned(), Value::Integer(2));
+        database
+            .commit(&[updated], None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let document = database.get(&path("target/a")).unwrap();
+        let parent = database_parent("projects/demo-app/databases/(default)").unwrap();
+        let mut target = TargetState {
+            target_hash: 1,
+            kind: TargetKind::Documents(vec![path("target/a")]),
+            parent,
+            known: BTreeMap::from([(document.path.clone(), document.version)]),
+            resume: None,
+            once: false,
+            current: true,
+            pending: Vec::new(),
+        };
+        let changed = BTreeSet::from([path("target/a"), path("unrelated/b")]);
+        let examined = refresh_target_delta(
+            &database,
+            1,
+            &mut target,
+            prost_types::Timestamp::default(),
+            &changed,
+        )
+        .unwrap();
+        assert_eq!(examined, Some(1));
+        assert!(target.pending.is_empty());
+
+        let examined = refresh_target_delta(
+            &database,
+            1,
+            &mut target,
+            prost_types::Timestamp::default(),
+            &BTreeSet::from([path("unrelated/b")]),
+        )
+        .unwrap();
+        assert_eq!(examined, Some(0));
+        assert!(target.pending.is_empty());
+
+        database
+            .commit(&[set("target/a")], None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let examined = refresh_target_delta(
+            &database,
+            1,
+            &mut target,
+            prost_types::Timestamp::default(),
+            &changed,
+        )
+        .unwrap();
+        assert_eq!(examined, Some(1));
+        assert_eq!(target.pending.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_version_mismatch_forces_full_refresh() {
+        let paths = BTreeSet::from([path("items/a")]);
+        let input = RefreshInput::Delta {
+            through: CommitVersion::from_value(1),
+            paths,
+        };
+        assert!(complete_delta_paths(&input, CommitVersion::from_value(1)).is_some());
+        assert!(complete_delta_paths(&input, CommitVersion::from_value(2)).is_none());
+        assert!(complete_delta_paths(&RefreshInput::Full, CommitVersion::from_value(1)).is_none());
+    }
+
+    #[test]
+    #[ignore = "large release-mode acceptance check"]
+    fn fifty_targets_examine_one_changed_document_fifty_times() {
+        let mut database = FirestoreState::new();
+        for start in (0..100_000).step_by(500) {
+            let writes = (start..start + 500)
+                .map(|index| set(&format!("unrelated/d{index:06}")))
+                .collect::<Vec<_>>();
+            database
+                .commit(&writes, None, LogicalInstant::UNIX_EPOCH)
+                .unwrap();
+        }
+        database
+            .commit(&[set("target/a")], None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let changed = BTreeSet::from([path("target/a")]);
+        let parent = database_parent("projects/demo-app/databases/(default)").unwrap();
+        let query = Query::new(fireemu_core_firestore::query::QueryScope::collection(
+            None,
+            CollectionId::try_new("target").unwrap(),
+        ));
+        let read_time = prost_types::Timestamp::default();
+        let mut examined = 0;
+        for target_id in 1..=50 {
+            let mut target = TargetState {
+                target_hash: target_hash(&TargetKind::Query(Box::new(query.clone()))),
+                kind: TargetKind::Query(Box::new(query.clone())),
+                parent: parent.clone(),
+                known: BTreeMap::new(),
+                resume: None,
+                once: false,
+                current: true,
+                pending: Vec::new(),
+            };
+            examined +=
+                refresh_target_delta(&database, target_id, &mut target, read_time, &changed)
+                    .unwrap()
+                    .expect("unbounded query stays incremental");
+        }
+        assert_eq!(examined, 50);
     }
 }

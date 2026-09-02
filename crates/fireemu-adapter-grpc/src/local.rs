@@ -155,7 +155,7 @@ pub struct LocalBackend {
     /// bound to it, so a project reset invalidates that project's tokens only).
     generations: Mutex<BTreeMap<(String, String), u64>>,
     ids: Mutex<SplitMix64>,
-    commits: tokio::sync::broadcast::Sender<CommitEvent>,
+    commits: tokio::sync::broadcast::Sender<CommitNotification>,
     /// Bumped by every reset; long-lived streams compare it to refuse stale sessions.
     epoch: std::sync::atomic::AtomicU64,
     /// Session-wide admission barrier shared with the other surfaces (reset holds it
@@ -169,6 +169,10 @@ pub struct LocalBackend {
 
 /// Synchronous observer of commits (see [`LocalBackend::set_change_sink`]).
 pub type ChangeSink = Arc<dyn Fn(&CommitEvent) + Send + Sync>;
+
+/// Commit notifications retained for slow Listen and UI subscribers. Lag is recoverable by
+/// reading one current database snapshot, so a small ring bounds retained path metadata.
+pub const COMMIT_NOTIFICATION_CAPACITY: usize = 32;
 
 /// Metadata key a `dropConnection` fault sets on its status: the server closes the
 /// connection (or resets the stream) instead of delivering the response.
@@ -212,6 +216,42 @@ pub struct CommitEvent {
     pub commit_time: Option<fireemu_core_types::time::LogicalInstant>,
     /// Documents the commit changed (before / after), shared with every subscriber.
     pub changes: Arc<Vec<DocumentChange>>,
+}
+
+/// Observable kind of one changed path in a compact broadcast notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitChangeKind {
+    /// A previously missing document now exists.
+    Created,
+    /// A live document changed while remaining live.
+    Updated,
+    /// A previously live document is now missing.
+    Deleted,
+}
+
+/// One compact changed path. Document images stay in [`CommitEvent`] for synchronous sinks
+/// and are never retained by the broadcast ring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitPathChange {
+    /// Changed document path.
+    pub path: DocumentPath,
+    /// Final transition kind.
+    pub kind: CommitChangeKind,
+}
+
+/// Compact notification used by Listen and UI subscribers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitNotification {
+    /// Project.
+    pub project: String,
+    /// Database.
+    pub database: String,
+    /// Version after the commit.
+    pub version: u64,
+    /// A reset or restore invalidated all retained stream state.
+    pub reset: bool,
+    /// Changed paths without before/after document images.
+    pub changes: Arc<[CommitPathChange]>,
 }
 
 fn status(e: DecodeError) -> Status {
@@ -405,7 +445,7 @@ impl LocalBackend {
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
-            commits: tokio::sync::broadcast::channel(1024).0,
+            commits: tokio::sync::broadcast::channel(COMMIT_NOTIFICATION_CAPACITY).0,
             epoch: std::sync::atomic::AtomicU64::new(0),
             change_sink: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
@@ -525,13 +565,12 @@ impl LocalBackend {
 
     fn announce_wipe(&self, databases: Vec<(String, String)>) {
         for (project, database) in databases {
-            let _ = self.commits.send(CommitEvent {
-                actor: Actor::system(),
+            let _ = self.commits.send(CommitNotification {
                 project,
                 database,
                 version: 0,
-                commit_time: None,
-                changes: Arc::new(Vec::new()),
+                reset: true,
+                changes: Arc::from([]),
             });
         }
     }
@@ -674,7 +713,7 @@ impl LocalBackend {
 
     /// Subscribes to commit events.
     #[must_use]
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<CommitEvent> {
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<CommitNotification> {
         self.commits.subscribe()
     }
 
@@ -788,7 +827,25 @@ impl LocalBackend {
         if let Some(sink) = self.change_sink.lock().ok().and_then(|s| s.clone()) {
             sink(&event);
         }
-        let _ = self.commits.send(event);
+        let changes = result
+            .changes
+            .iter()
+            .map(|change| CommitPathChange {
+                path: change.path.clone(),
+                kind: match (&change.before, &change.after) {
+                    (None, Some(_)) => CommitChangeKind::Created,
+                    (Some(_), None) => CommitChangeKind::Deleted,
+                    _ => CommitChangeKind::Updated,
+                },
+            })
+            .collect::<Arc<[_]>>();
+        let _ = self.commits.send(CommitNotification {
+            project: event.project,
+            database: event.database,
+            version: event.version,
+            reset: false,
+            changes,
+        });
     }
 
     /// Commits `writes` outside a transaction (used by the `Write` stream).
@@ -820,16 +877,27 @@ impl LocalBackend {
         self.with_db(parent, |db| Ok((db.current_version(), db.read_time(now))))
     }
 
-    /// Runs `f` against one consistent database snapshot (version, read time, lookups and
-    /// queries all see the same state). `Listen` refreshes use it.
+    /// Runs `f` against one consistent database snapshot and wipe generation (version,
+    /// generation, read time, lookups and queries all see the same state). `Listen`
+    /// refreshes use it.
     pub fn with_snapshot<T>(
         &self,
         parent: &Parent,
-        f: impl FnOnce(&FirestoreState, CommitVersion, fireemu_core_types::time::LogicalInstant) -> T,
+        f: impl FnOnce(
+            &FirestoreState,
+            CommitVersion,
+            fireemu_core_types::time::LogicalInstant,
+            u64,
+        ) -> T,
     ) -> Result<T, Status> {
         let now = self.write_time();
         self.with_db(parent, |db| {
-            Ok(f(db, db.current_version(), db.read_time(now)))
+            Ok(f(
+                db,
+                db.current_version(),
+                db.read_time(now),
+                self.database_generation(parent),
+            ))
         })
     }
 

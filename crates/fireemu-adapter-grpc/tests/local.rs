@@ -235,6 +235,12 @@ fn update_write(name: &str, fields: &[(&str, pb::Value)]) -> pb::Write {
         ..Default::default()
     }
 }
+fn delete_write(name: &str) -> pb::Write {
+    pb::Write {
+        operation: Some(pb::write::Operation::Delete(format!("{DOCS}/{name}"))),
+        ..Default::default()
+    }
+}
 fn server_timestamp_write(name: &str) -> pb::Write {
     let mut write = update_write(name, &[]);
     write.update_transforms = ["createdAt", "updatedAt"]
@@ -1405,6 +1411,57 @@ async fn ordered_list_pages_continue_across_present_and_missing_rows() {
     let expected = ["d4", "d3", "d2", "d1", "d0", "m0", "m1", "m2"]
         .map(|document| format!("{DOCS}/mixed/{document}"));
     assert_eq!(seen, expected);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn commit_notifications_are_compact_and_the_ring_is_bounded() {
+    use fireemu_adapter_grpc::local::{CommitChangeKind, COMMIT_NOTIFICATION_CAPACITY};
+
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    let mut notifications = backend.subscribe();
+    for write in [
+        update_write("events/a", &[("v", i(1))]),
+        update_write("events/a", &[("v", i(2))]),
+        delete_write("events/a"),
+    ] {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![write],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    for expected in [
+        CommitChangeKind::Created,
+        CommitChangeKind::Updated,
+        CommitChangeKind::Deleted,
+    ] {
+        let notification = notifications.recv().await.unwrap();
+        assert!(!notification.reset);
+        assert_eq!(notification.changes.len(), 1);
+        assert_eq!(notification.changes[0].kind, expected);
+        assert_eq!(notification.changes[0].path.relative(), "events/a");
+    }
+
+    for value in 0..=COMMIT_NOTIFICATION_CAPACITY {
+        let value = i64::try_from(value).unwrap();
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("events/a", &[("v", i(value))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        notifications.recv().await,
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_))
+    ));
     handle.abort();
 }
 

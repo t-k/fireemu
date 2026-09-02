@@ -310,12 +310,24 @@ impl Session {
         Ok(())
     }
 
-    /// Unacknowledged arrays after `aid`, with their ids.
-    fn pending_after(&self, aid: u64) -> Vec<(u64, String)> {
-        self.outbound.lock().map_or_else(
-            |_| Vec::new(),
-            |q| q.iter().filter(|(id, _)| *id > aid).cloned().collect(),
-        )
+    /// Serializes unacknowledged arrays after `aid` without cloning the retained strings.
+    fn pending_chunk_after(&self, aid: u64) -> Option<(u64, usize, String)> {
+        let queue = self.outbound.lock().ok()?;
+        let pending = queue.iter().skip_while(|(id, _)| *id <= aid);
+        let mut body = String::new();
+        body.push('[');
+        let mut last = None;
+        let mut count = 0;
+        for (id, text) in pending {
+            if count != 0 {
+                body.push(',');
+            }
+            body.push_str(text);
+            last = Some(*id);
+            count += 1;
+        }
+        body.push(']');
+        last.map(|last| (last, count, body))
     }
 
     fn last_aid(&self) -> u64 {
@@ -897,20 +909,18 @@ async fn backchannel_loop(
         {
             return "superseded";
         }
-        let pending = session.pending_after(*cursor);
-        if let Some((last, _)) = pending.last() {
-            let texts: Vec<&str> = pending.iter().map(|(_, t)| t.as_str()).collect();
-            let text = format!("[{}]", texts.join(","));
+        let pending = session.pending_chunk_after(*cursor);
+        if let Some((last, count, text)) = &pending {
             trace(
                 "backchannel send",
-                &format!("{} gen={generation} arrays={}", session.sid, pending.len()),
+                &format!("{} gen={generation} arrays={count}", session.sid),
             );
             if let Err(outcome) = send_backchannel_chunk(
                 session,
                 generation,
                 tx,
                 cancelled,
-                bytes::Bytes::from(chunk(&text)),
+                bytes::Bytes::from(chunk(text)),
             )
             .await
             {
@@ -923,7 +933,7 @@ async fn backchannel_loop(
                 return "long poll batch";
             }
         }
-        if session.is_closed() && pending.is_empty() {
+        if session.is_closed() && pending.is_none() {
             return "session closed";
         }
         let idle = if long_poll { wait } else { KEEPALIVE };
@@ -1126,6 +1136,39 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_chunk_starts_after_the_backchannel_cursor() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "session-one".to_owned(),
+            kind: StreamKind::Listen,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            outbound: Mutex::new(VecDeque::from([
+                (1, "[1,[\"first\"]]".to_owned()),
+                (2, "[2,[\"second\"]]".to_owned()),
+                (3, "[3,[\"third\"]]".to_owned()),
+            ])),
+            next_aid: AtomicU64::new(3),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            closed: AtomicBool::new(false),
+        };
+
+        assert_eq!(
+            session.pending_chunk_after(1),
+            Some((3, 2, "[[2,[\"second\"]],[3,[\"third\"]]]".to_owned()))
+        );
+        assert_eq!(session.pending_chunk_after(3), None);
+    }
 
     #[tokio::test]
     async fn a_superseded_backchannel_cannot_send_queued_arrays() {

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use fireemu_adapter_grpc::local::CommitChangeKind;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -121,14 +122,18 @@ pub fn firestore_watch(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
                         {
                             continue;
                         }
+                        if commit.reset {
+                            let _ = tx.send(event("reset", &json!({}))).await;
+                            return;
+                        }
                         let changes: Vec<Value> = commit
                             .changes
                             .iter()
                             .map(|c| {
-                                let kind = match (&c.before, &c.after) {
-                                    (None, Some(_)) => "created",
-                                    (Some(_), None) => "deleted",
-                                    _ => "updated",
+                                let kind = match c.kind {
+                                    CommitChangeKind::Created => "created",
+                                    CommitChangeKind::Updated => "updated",
+                                    CommitChangeKind::Deleted => "deleted",
                                 };
                                 json!({"path": c.path.to_string(), "kind": kind})
                             })

@@ -195,22 +195,37 @@ module RulesetActivation {
     (lastAction == "Activate").implies(previousCandidatePhase == "Checked")
 
   val CandidatePhaseTransitionsAreOrdered = and {
-    (lastAction == "Create").implies(previousCandidatePhase == "Absent"),
-    (lastAction == "Parse").implies(previousCandidatePhase == "Created"),
-    (lastAction == "Compile").implies(previousCandidatePhase == "Parsed"),
-    (lastAction == "Check").implies(previousCandidatePhase == "Compiled"),
-    (lastAction == "Reject").implies(
-      previousCandidatePhase.in(Set("Created", "Parsed", "Compiled", "Checked"))
-    ),
+    (lastAction == "Create").implies(and {
+      previousCandidatePhase == "Absent", candidatePhase == "Created"
+    }),
+    (lastAction == "Parse").implies(and {
+      previousCandidatePhase == "Created", candidatePhase == "Parsed"
+    }),
+    (lastAction == "Compile").implies(and {
+      previousCandidatePhase == "Parsed", candidatePhase == "Compiled"
+    }),
+    (lastAction == "Check").implies(and {
+      previousCandidatePhase == "Compiled", candidatePhase == "Checked"
+    }),
+    (lastAction == "Reject").implies(and {
+      previousCandidatePhase.in(Set("Created", "Parsed", "Compiled", "Checked")),
+      candidatePhase == "Rejected",
+    }),
   }
 
-  val EvaluationTransitionsRequireRunning = EVALUATIONS.forall(evaluation => and {
-    (lastAction == "ProgressEvaluation" and lastEvaluation == evaluation).implies(
-      previousEvaluationState.get(evaluation) == "Running"
-    ),
-    (lastAction == "FinishEvaluation" and lastEvaluation == evaluation).implies(
-      previousEvaluationState.get(evaluation) == "Running"
-    ),
+  val EvaluationTransitionsAreOrdered = EVALUATIONS.forall(evaluation => and {
+    (lastAction == "StartEvaluation" and lastEvaluation == evaluation).implies(and {
+      previousEvaluationState.get(evaluation) == "Idle",
+      evaluationState.get(evaluation) == "Running",
+    }),
+    (lastAction == "ProgressEvaluation" and lastEvaluation == evaluation).implies(and {
+      previousEvaluationState.get(evaluation) == "Running",
+      evaluationState.get(evaluation) == "Running",
+    }),
+    (lastAction == "FinishEvaluation" and lastEvaluation == evaluation).implies(and {
+      previousEvaluationState.get(evaluation) == "Running",
+      evaluationState.get(evaluation) == "Finished",
+    }),
   })
 
   val FailedCandidateNeverActivates =
@@ -240,7 +255,7 @@ module RulesetActivation {
   val AtomicRulesetActivation = and {
     ActivationRequiresAllChecks,
     CandidatePhaseTransitionsAreOrdered,
-    EvaluationTransitionsRequireRunning,
+    EvaluationTransitionsAreOrdered,
     FailedCandidateNeverActivates,
     EvaluationSnapshotIsImmutable,
     ActiveVersionChangesAtomically,

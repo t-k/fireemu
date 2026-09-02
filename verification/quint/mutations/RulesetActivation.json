@@ -92,6 +92,69 @@
       "operator": "delete-finish-state-guard",
       "from": "evaluationState.get(evaluation) == \"Running\",\n    record(\"FinishEvaluation\"",
       "to": "record(\"FinishEvaluation\""
+    },
+    {
+      "id": "M-FORMAL-RULES-START-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-start-state-guard",
+      "from": "evaluationState.get(evaluation) == \"Idle\",\n    record(\"StartEvaluation\"",
+      "to": "record(\"StartEvaluation\""
+    },
+    {
+      "id": "M-FORMAL-RULES-CREATE-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "create-enters-wrong-phase",
+      "from": "candidatePhase' = \"Created\"",
+      "to": "candidatePhase' = \"Parsed\""
+    },
+    {
+      "id": "M-FORMAL-RULES-PARSE-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "parse-enters-wrong-phase",
+      "from": "candidatePhase' = \"Parsed\"",
+      "to": "candidatePhase' = \"Compiled\""
+    },
+    {
+      "id": "M-FORMAL-RULES-COMPILE-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "compile-enters-wrong-phase",
+      "from": "candidatePhase' = \"Compiled\"",
+      "to": "candidatePhase' = \"Checked\""
+    },
+    {
+      "id": "M-FORMAL-RULES-CHECK-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "check-enters-wrong-phase",
+      "from": "candidatePhase' = \"Checked\"",
+      "to": "candidatePhase' = \"Active\""
+    },
+    {
+      "id": "M-FORMAL-RULES-REJECT-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "reject-enters-wrong-phase",
+      "from": "candidatePhase' = \"Rejected\"",
+      "to": "candidatePhase' = \"Created\""
+    },
+    {
+      "id": "M-FORMAL-RULES-START-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "start-finishes-evaluation",
+      "from": "evaluationState' = evaluationState.set(evaluation, \"Running\")",
+      "to": "evaluationState' = evaluationState.set(evaluation, \"Finished\")"
+    },
+    {
+      "id": "M-FORMAL-RULES-PROGRESS-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "progress-finishes-evaluation",
+      "from": "record(\"ProgressEvaluation\", evaluation, observable),\n    candidatePhase' = candidatePhase,\n    evaluationState' = evaluationState",
+      "to": "record(\"ProgressEvaluation\", evaluation, observable),\n    candidatePhase' = candidatePhase,\n    evaluationState' = evaluationState.set(evaluation, \"Finished\")"
+    },
+    {
+      "id": "M-FORMAL-RULES-FINISH-DESTINATION-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "finish-leaves-evaluation-running",
+      "from": "evaluationState' = evaluationState.set(evaluation, \"Finished\")",
+      "to": "evaluationState' = evaluationState.set(evaluation, \"Running\")"
     }
   ]
 }

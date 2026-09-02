@@ -2318,6 +2318,36 @@ fn string_list(v: &Value, what: &str) -> Result<Vec<String>, JsonResponse> {
         .collect()
 }
 
+fn parse_valid_since(body: &Value) -> Result<Option<LogicalInstant>, JsonResponse> {
+    match body.get("validSince") {
+        None => Ok(None),
+        Some(Value::String(seconds))
+            if !seconds.is_empty() && seconds.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            let seconds = seconds
+                .parse::<i64>()
+                .map_err(|_| error(400, "INVALID_ARGUMENT : validSince is out of range"))?;
+            Ok(Some(LogicalInstant::from_unix_seconds(seconds)))
+        }
+        Some(Value::Number(seconds)) => {
+            let seconds = seconds
+                .as_i64()
+                .filter(|seconds| *seconds >= 0)
+                .ok_or_else(|| {
+                    error(
+                        400,
+                        "INVALID_ARGUMENT : validSince must be a non-negative whole second",
+                    )
+                })?;
+            Ok(Some(LogicalInstant::from_unix_seconds(seconds)))
+        }
+        Some(_) => Err(error(
+            400,
+            "INVALID_ARGUMENT : validSince must be a non-negative whole second",
+        )),
+    }
+}
+
 fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     reject_unsupported(body, UNSUPPORTED_UPDATE_FIELDS)?;
     let claims = match opt_str(body, "customAttributes")? {
@@ -2384,35 +2414,7 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         None | Some(Value::Null) => None,
         Some(v) => Some(parse_phone_factors(v)?),
     };
-    let revoke_at = match body.get("validSince") {
-        None => None,
-        Some(Value::String(seconds))
-            if !seconds.is_empty() && seconds.bytes().all(|byte| byte.is_ascii_digit()) =>
-        {
-            let seconds = seconds
-                .parse::<i64>()
-                .map_err(|_| error(400, "INVALID_ARGUMENT : validSince is out of range"))?;
-            Some(LogicalInstant::from_unix_seconds(seconds))
-        }
-        Some(Value::Number(seconds)) => {
-            let seconds = seconds
-                .as_i64()
-                .filter(|seconds| *seconds >= 0)
-                .ok_or_else(|| {
-                    error(
-                        400,
-                        "INVALID_ARGUMENT : validSince must be a non-negative whole second",
-                    )
-                })?;
-            Some(LogicalInstant::from_unix_seconds(seconds))
-        }
-        Some(_) => {
-            return Err(error(
-                400,
-                "INVALID_ARGUMENT : validSince must be a non-negative whole second",
-            ))
-        }
-    };
+    let revoke_at = parse_valid_since(body)?;
     Ok(UpdatePlan {
         claims,
         password,

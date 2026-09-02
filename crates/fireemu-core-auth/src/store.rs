@@ -1,7 +1,7 @@
 //! In-memory user store with TOTP enrollment / sign-in and ID token claim construction.
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -577,6 +577,9 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: BTreeMap<String, LocalId>,
+    /// Users that currently own a pending enrollment or sign-in. Credential sweeping only
+    /// visits this bounded subset instead of cloning or scanning every account.
+    pending_user_ids: BTreeSet<LocalId>,
     created_users: Vec<LocalId>,
     deleted_users: Vec<UserRecord>,
     /// The project-level Auth configuration an import carried, kept so an export can write
@@ -669,6 +672,7 @@ impl AuthStore {
             oob_codes: BTreeMap::new(),
             verification_codes: BTreeMap::new(),
             pending_sign_in_owners: BTreeMap::new(),
+            pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
             config: ProjectAuthConfig::default(),
@@ -815,6 +819,7 @@ impl AuthStore {
         self.by_sequence.remove(&user.sequence);
         self.refresh_tokens.retain(|_, s| s.uid != key);
         self.pending_sign_in_owners.retain(|_, owner| *owner != key);
+        self.pending_user_ids.remove(&key);
         self.verification_codes.retain(|_, c| match &c.purpose {
             VerificationPurpose::SignIn => true,
             VerificationPurpose::Enrollment { uid }
@@ -834,6 +839,7 @@ impl AuthStore {
         self.oob_codes.clear();
         self.verification_codes.clear();
         self.pending_sign_in_owners.clear();
+        self.pending_user_ids.clear();
     }
 
     /// Drops every transient credential past its lifetime: email action codes
@@ -853,17 +859,18 @@ impl AuthStore {
             .retain(|_, c| !Self::expired(c.created_at, SMS_CODE_TTL_SECONDS, now));
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
         let enrollment_grace = self.policy.enrollment_session_ttl;
-        for user in self.users.values_mut() {
-            // A user with nothing pending has nothing to sweep; leave its `Arc` shared with
-            // any snapshot rather than cloning it for a no-op (`SNAP-MEM-03`).
-            if user.mfa.pending_count() == 0 {
-                continue;
+        let candidates: Vec<LocalId> = self.pending_user_ids.iter().cloned().collect();
+        for uid in candidates {
+            let mut remains_pending = false;
+            if let Some(user) = self.users.get_mut(&uid) {
+                let user = Arc::make_mut(user);
+                for dropped in user.mfa.sweep(now, sign_in_ttl, enrollment_grace) {
+                    self.pending_sign_in_owners.remove(&dropped);
+                }
+                remains_pending = user.mfa.pending_count() != 0;
             }
-            for dropped in Arc::make_mut(user)
-                .mfa
-                .sweep(now, sign_in_ttl, enrollment_grace)
-            {
-                self.pending_sign_in_owners.remove(&dropped);
+            if !remains_pending {
+                self.pending_user_ids.remove(&uid);
             }
         }
         // A phone code for a pending sign-in that no longer exists can never be finalized.
@@ -878,6 +885,12 @@ impl AuthStore {
     #[must_use]
     pub fn pending_sign_in_count(&self) -> usize {
         self.pending_sign_in_owners.len()
+    }
+
+    /// Users that currently own any pending MFA state.
+    #[must_use]
+    pub fn pending_mfa_user_count(&self) -> usize {
+        self.pending_user_ids.len()
     }
 
     /// Records a successful sign-in (Admin `lastLoginAt`).
@@ -1707,6 +1720,9 @@ impl AuthStore {
             return Err(MfaError::PendingSignInUnknown);
         }
         self.pending_sign_in_owners.remove(&pending.0);
+        if user.mfa.pending_count() == 0 {
+            self.pending_user_ids.remove(uid);
+        }
         if !user
             .mfa
             .phone_factors()
@@ -2075,6 +2091,7 @@ impl AuthStore {
         user.mfa
             .pending_enrollments_mut()
             .insert(session_id, PendingEnrollment { secret, expires_at });
+        self.pending_user_ids.insert(uid.clone());
         Ok(material)
     }
 
@@ -2101,6 +2118,9 @@ impl AuthStore {
             .ok_or(MfaError::EnrollmentSessionUnknown)?;
         if now > pending.expires_at {
             user.mfa.pending_enrollments_mut().remove(session_id);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
             return Err(MfaError::EnrollmentSessionExpired);
         }
         let step = match match_code(
@@ -2115,6 +2135,9 @@ impl AuthStore {
             CodeMatch::Replayed | CodeMatch::NoMatch => return Err(MfaError::InvalidCode),
         };
         user.mfa.pending_enrollments_mut().remove(session_id);
+        if user.mfa.pending_count() == 0 {
+            self.pending_user_ids.remove(uid);
+        }
         let factor = TotpFactor {
             mfa_enrollment_id: enrollment_id.clone(),
             display_name: None,
@@ -2157,6 +2180,7 @@ impl AuthStore {
             .insert(pending_id.clone(), PendingSignIn { started_at: now });
         self.pending_sign_in_owners
             .insert(pending_id.clone(), uid.clone());
+        self.pending_user_ids.insert(uid.clone());
         Ok(PendingSignInId(pending_id))
     }
 
@@ -2189,6 +2213,9 @@ impl AuthStore {
             return Err(MfaError::PendingSignInUnknown);
         }
         self.pending_sign_in_owners.remove(&pending.0);
+        if user.mfa.pending_count() == 0 {
+            self.pending_user_ids.remove(uid);
+        }
         let mut replayed = false;
         for factor in user.mfa.totp_factors_mut() {
             match match_code(

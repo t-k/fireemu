@@ -150,6 +150,7 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     // Pending enrollments: expired at ttl + 1 (SESSION_EXPIRED for one grace window), reaped
     // after 2 * ttl.
     let material = s.start_totp_enrollment(&uid, t0()).unwrap();
+    assert_eq!(s.pending_mfa_user_count(), 1);
     let code = totp_at(
         material.secret_for_test(),
         &s.policy().params(),
@@ -168,6 +169,7 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
         "reaped after the grace window"
     );
     assert_eq!(s.user(&uid).unwrap().mfa.pending_count(), 0);
+    assert_eq!(s.pending_mfa_user_count(), 0);
 
     // The per-user budget counts enrollments and sign-ins together and refuses atomically.
     for _ in 0..MAX_PENDING_PER_USER {
@@ -195,6 +197,7 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     let pending = s.start_mfa_sign_in(&uid, after(1000)).unwrap();
     assert_eq!(s.pending_sign_in_user(&pending), Some(uid.clone()));
     assert_eq!(s.pending_sign_in_count(), 1);
+    assert_eq!(s.pending_mfa_user_count(), 1);
     s.sweep_transient_credentials(after(1000 + PENDING_SIGN_IN_TTL_SECONDS));
     assert_eq!(
         s.pending_sign_in_user(&pending),
@@ -204,6 +207,7 @@ fn pending_enrollments_and_sign_ins_expire_and_the_per_user_budget_refuses() {
     s.sweep_transient_credentials(after(1000 + PENDING_SIGN_IN_TTL_SECONDS + 1));
     assert_eq!(s.pending_sign_in_user(&pending), None);
     assert_eq!(s.pending_sign_in_count(), 0);
+    assert_eq!(s.pending_mfa_user_count(), 0);
     let late = after(1000 + PENDING_SIGN_IN_TTL_SECONDS + 1);
     assert_eq!(
         s.finalize_mfa_sign_in(

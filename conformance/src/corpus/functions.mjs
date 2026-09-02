@@ -12,8 +12,6 @@ import { emailFor } from "./context.mjs";
 const openTwoPartyLatch = async () => {
   const token = randomBytes(16).toString("hex");
   const firstReadWaiters = new Map();
-  const actionWaiters = new Map();
-  const retryObservers = new Set();
   const sockets = new Set();
   const server = createServer((request, response) => {
     request.resume();
@@ -41,27 +39,6 @@ const openTwoPartyLatch = async () => {
       }
       return;
     }
-    if (parts[0] === "retry-observed") {
-      if (retryObservers.has(participant)) {
-        response.writeHead(409).end();
-        return;
-      }
-      retryObservers.add(participant);
-      response.writeHead(204).end();
-      for (const waiter of actionWaiters.values()) waiter.writeHead(204).end();
-      actionWaiters.clear();
-      return;
-    }
-    if (parts[0] === "await-retry") {
-      if (retryObservers.size > 0) {
-        response.writeHead(204).end();
-      } else if (actionWaiters.has(participant)) {
-        response.writeHead(409).end();
-      } else {
-        actionWaiters.set(participant, response);
-      }
-      return;
-    }
     response.writeHead(404).end();
   });
   server.on("connection", (socket) => {
@@ -82,11 +59,10 @@ const openTwoPartyLatch = async () => {
     port: address.port,
     token,
     async close() {
-      for (const response of [...firstReadWaiters.values(), ...actionWaiters.values()]) {
+      for (const response of firstReadWaiters.values()) {
         response.writeHead(503).end();
       }
       firstReadWaiters.clear();
-      actionWaiters.clear();
       const closed = new Promise((resolve) => server.close(resolve));
       server.closeAllConnections?.();
       for (const socket of sockets) socket.destroy();
@@ -340,7 +316,12 @@ const concurrentConditionalLock = {
     try {
       await ctx.step("seed", async () => {
         await Promise.all([
-          contextRef.set({ enabled: true, barrierPort: latch.port, barrierToken: latch.token }),
+          contextRef.set({
+            enabled: true,
+            barrierPort: latch.port,
+            barrierToken: latch.token,
+            protectedPhaseMillis: 2_000,
+          }),
           lockRef.set({ locked: false }),
           actionsRef.set({ count: 0 }),
         ]);

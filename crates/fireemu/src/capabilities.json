@@ -805,6 +805,7 @@
   "FN-ENV-1": {
     "status": "implemented",
     "implemented": [
+      "under the firebase profile, the runner inherits ordinary SCREAMING_SNAKE variables from the daemon process before dotenv, system and emulator overrides, matching wrappers such as dotenv -- firebase emulators:exec while emulator-owned names and ambient Google credentials stay isolated; the strict profile keeps the entire parent environment isolated",
       "the dotenv chain in the official order and dialect (firebase-tools lib/functions/env.js): .env, .env.<projectId>, .env.<alias>, and emulator-only .env.local, later files overriding earlier ones",
       "the official refusals, with their sentences: both a projectId and an alias file present, a line that is not an assignment, a reserved key, a key that is not SCREAMING_SNAKE, a key under a reserved prefix",
       "the official quoting: single-quoted literal, double-quoted expanding \\n \\r \\t \\v \\\\ \\' \\\", unquoted ending at the first #, and a quoted value allowed to cross lines",

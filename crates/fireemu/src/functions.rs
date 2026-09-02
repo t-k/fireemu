@@ -19,7 +19,7 @@ use fireemu_adapter_http::control::FunctionsHook;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
 
-use crate::config::RuntimeConfig;
+use crate::config::{CompatibilityProfile, RuntimeConfig};
 
 /// One Pub/Sub topic and emulator subscription required by a loaded function manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,6 +432,22 @@ pub struct UserEnvironment {
     pub runtime_config: Option<String>,
     /// The files that were read, in the order they were applied, for the startup line.
     pub files: Vec<String>,
+}
+
+/// Parent variables the official CLI would leave on the Functions child, excluding names
+/// owned by the emulator and ambient Google credentials. Function code is trusted local code,
+/// but these exclusions keep the callable trust boundary and the no-ADC guarantee intact.
+fn inheritable_parent_environment() -> Vec<(String, String)> {
+    use fireemu_core_functions::env;
+
+    std::env::vars()
+        .filter(|(name, _)| {
+            env::validate_key(name).is_ok()
+                && name != "GOOGLE_APPLICATION_CREDENTIALS"
+                && !name.starts_with("CLOUDSDK_")
+                && !name.starts_with("FIREEMU_")
+        })
+        .collect()
 }
 
 impl UserEnvironment {
@@ -1425,7 +1441,17 @@ async fn start_codebase(
             user_env.files.join(", ")
         );
     }
-    let mut env = user_env.applied();
+    // The official Functions emulator inherits the Firebase CLI process environment before
+    // applying dotenv, system and emulator values. The firebase profile preserves that
+    // behavior so wrappers such as `dotenv -- firebase emulators:exec` reach function code.
+    // The strict profile keeps the runner isolated and receives only the explicit values
+    // below. In both profiles, later entries override parent values in the official order.
+    let mut env: Vec<(String, String)> = if cfg.profile == CompatibilityProfile::Firebase {
+        inheritable_parent_environment()
+    } else {
+        Vec::new()
+    };
+    env.extend(user_env.applied());
     if !user_env.secrets.is_empty() {
         let secrets: serde_json::Map<String, serde_json::Value> = user_env
             .secrets

@@ -1218,7 +1218,7 @@
         },
         {
           "id": "FN-CLAIM-ENV",
-          "statement": "A codebase's .env chain, .secret.local and .runtimeconfig.json are read in the official order and dialect; ordinary parameters resolve from the runtime environment, while each local secret is exposed only to a function that declared it.",
+          "statement": "Under the firebase profile, a codebase inherits ordinary SCREAMING_SNAKE variables from the daemon process before its .env chain, .secret.local and .runtimeconfig.json are applied in the official order and dialect, while emulator-owned names and ambient Google credentials stay isolated; the strict profile isolates the entire parent environment, ordinary parameters resolve from the resulting runtime environment, and each local secret is exposed only to a function that declared it.",
           "capabilities": [
             {
               "id": "FN-ENV-1",

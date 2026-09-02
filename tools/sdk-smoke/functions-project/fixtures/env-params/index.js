@@ -17,6 +17,8 @@ const observed = {
   fromDotEnv: process.env.FX_FROM_DOTENV ?? null,
   overriddenByProject: process.env.FX_OVERRIDDEN_BY_PROJECT ?? null,
   overriddenByLocal: process.env.FX_OVERRIDDEN_BY_LOCAL ?? null,
+  fromParent: process.env.FX_FROM_PARENT ?? null,
+  googleCredentials: process.env.GOOGLE_APPLICATION_CREDENTIALS ?? null,
   quoted: process.env.FX_QUOTED ?? null,
   // Parameters, resolved from the same variables.
   paramString: params.defineString("FX_FROM_DOTENV").value(),

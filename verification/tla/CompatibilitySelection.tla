@@ -1,17 +1,23 @@
 ----------------------- MODULE CompatibilitySelection -----------------------
 EXTENDS FiniteSets, Naturals
 
-CONSTANTS DefaultProject, RoutedProjects, Nodes, ExplicitNode
+CONSTANTS DefaultProject, RoutedProjects, StoreIds, DefaultStore, Nodes, ExplicitNode
 
 ASSUME DefaultProject \notin RoutedProjects
 ASSUME Cardinality(RoutedProjects) > 0
+ASSUME DefaultStore \in StoreIds
 ASSUME ExplicitNode \in Nodes
 
 Projects == {DefaultProject} \union RoutedProjects
+NoStore == "none"
 
-VARIABLES userProjects, lockedProjects, authDecision, automaticNode, explicitNode, phase
+VARIABLES storeOf, userProjects, lockedProjects, authDecision, automaticNode, explicitNode, phase
 
-vars == <<userProjects, lockedProjects, authDecision, automaticNode, explicitNode, phase>>
+vars == <<storeOf, userProjects, lockedProjects, authDecision, automaticNode, explicitNode, phase>>
+
+InstalledProjects == {project \in Projects : storeOf[project] # NoStore}
+
+InstalledStoreIds == {storeOf[project] : project \in InstalledProjects}
 
 NodeCapability == [
   node \in Nodes |->
@@ -47,6 +53,8 @@ AutomaticChoice ==
   CHOOSE node \in Nodes : \A other \in Nodes : ~BetterNode(other, node)
 
 Init ==
+  /\ storeOf = [project \in Projects |->
+       IF project = DefaultProject THEN DefaultStore ELSE NoStore]
   /\ userProjects = {}
   /\ lockedProjects = {}
   /\ authDecision = "pending"
@@ -54,34 +62,49 @@ Init ==
   /\ explicitNode = "pending"
   /\ phase = "setup"
 
+InstallRouted(project, store) ==
+  /\ phase = "setup"
+  /\ project \in RoutedProjects
+  /\ storeOf[project] = NoStore
+  /\ store \in StoreIds \ InstalledStoreIds
+  /\ storeOf' = [storeOf EXCEPT ![project] = store]
+  /\ UNCHANGED <<userProjects, lockedProjects, authDecision, automaticNode, explicitNode, phase>>
+
+RejectAliasedInstall(project, source) ==
+  /\ phase = "setup"
+  /\ project \in RoutedProjects
+  /\ storeOf[project] = NoStore
+  /\ source \in InstalledProjects
+  /\ UNCHANGED vars
+
 AddUser(project) ==
   /\ phase \in {"setup", "scanning"}
-  /\ project \in Projects
+  /\ project \in InstalledProjects
   /\ project \notin lockedProjects
   /\ userProjects' = userProjects \union {project}
-  /\ UNCHANGED <<lockedProjects, authDecision, automaticNode, explicitNode, phase>>
+  /\ UNCHANGED <<storeOf, lockedProjects, authDecision, automaticNode, explicitNode, phase>>
 
 RemoveUser(project) ==
   /\ phase \in {"setup", "scanning"}
-  /\ project \in Projects
+  /\ project \in InstalledProjects
   /\ project \notin lockedProjects
   /\ userProjects' = userProjects \ {project}
-  /\ UNCHANGED <<lockedProjects, authDecision, automaticNode, explicitNode, phase>>
+  /\ UNCHANGED <<storeOf, lockedProjects, authDecision, automaticNode, explicitNode, phase>>
 
 BeginExchange ==
   /\ phase = "setup"
   /\ phase' = "scanning"
-  /\ UNCHANGED <<userProjects, lockedProjects, authDecision, automaticNode, explicitNode>>
+  /\ UNCHANGED <<storeOf, userProjects, lockedProjects, authDecision, automaticNode, explicitNode>>
 
 LockProject(project) ==
   /\ phase = "scanning"
-  /\ project \in Projects \ lockedProjects
+  /\ project \in InstalledProjects \ lockedProjects
   /\ lockedProjects' = lockedProjects \union {project}
-  /\ UNCHANGED <<userProjects, authDecision, automaticNode, explicitNode, phase>>
+  /\ UNCHANGED <<storeOf, userProjects, authDecision, automaticNode, explicitNode, phase>>
 
 Exchange ==
   /\ phase = "scanning"
-  /\ lockedProjects = Projects
+  /\ lockedProjects = InstalledProjects
   /\ authDecision' =
        IF Cardinality(userProjects) = 0
        THEN DefaultProject
@@ -91,29 +114,37 @@ Exchange ==
   /\ automaticNode' = AutomaticChoice
   /\ explicitNode' = ExplicitNode
   /\ phase' = "done"
-  /\ UNCHANGED <<userProjects, lockedProjects>>
+  /\ UNCHANGED <<storeOf, userProjects, lockedProjects>>
 
 Done ==
   /\ phase = "done"
   /\ UNCHANGED vars
 
 Next ==
-  \/ \E project \in Projects : AddUser(project)
-  \/ \E project \in Projects : RemoveUser(project)
+  \/ \E project \in RoutedProjects, store \in StoreIds : InstallRouted(project, store)
+  \/ \E project \in RoutedProjects, source \in Projects : RejectAliasedInstall(project, source)
+  \/ \E project \in InstalledProjects : AddUser(project)
+  \/ \E project \in InstalledProjects : RemoveUser(project)
   \/ BeginExchange
-  \/ \E project \in Projects : LockProject(project)
+  \/ \E project \in InstalledProjects : LockProject(project)
   \/ Exchange
   \/ Done
 
 Spec == Init /\ [][Next]_vars
 
 TypeOK ==
-  /\ userProjects \subseteq Projects
-  /\ lockedProjects \subseteq Projects
+  /\ storeOf \in [Projects -> StoreIds \union {NoStore}]
+  /\ storeOf[DefaultProject] = DefaultStore
+  /\ userProjects \subseteq InstalledProjects
+  /\ lockedProjects \subseteq InstalledProjects
   /\ authDecision \in Projects \union {"pending", "deny"}
   /\ automaticNode \in Nodes \union {"pending"}
   /\ explicitNode \in Nodes \union {"pending"}
   /\ phase \in {"setup", "scanning", "done"}
+
+NoStoreAliases ==
+  \A left, right \in InstalledProjects :
+    storeOf[left] = storeOf[right] => left = right
 
 UniqueUserRoutesToItsProject ==
   phase = "done" /\ Cardinality(userProjects) = 1

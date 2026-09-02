@@ -519,7 +519,6 @@ dependencies = [
  "rustix",
  "serde_json",
  "tokio",
- "tonic",
 ]
 
 [[package]]

@@ -17,13 +17,37 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let base = trusted_scratch_base();
+    std::fs::create_dir_all(&base).expect("create trusted import/export test base");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))
+            .expect("restrict trusted import/export test base");
+    }
+    let dir = base.join(format!(
         "fireemu-import-export-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+#[cfg(target_os = "macos")]
+fn trusted_scratch_base() -> PathBuf {
+    let output = Command::new("getconf")
+        .arg("DARWIN_USER_TEMP_DIR")
+        .output()
+        .expect("read the per-user macOS temporary directory");
+    assert!(output.status.success(), "getconf DARWIN_USER_TEMP_DIR");
+    let path = String::from_utf8(output.stdout).expect("UTF-8 temporary directory");
+    PathBuf::from(path.trim()).join("fireemu-import-export-tests")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn trusted_scratch_base() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fireemu-import-export-tests")
 }
 
 /// A copy of a recorded fixture that a scenario may damage.
@@ -1107,6 +1131,40 @@ fn a_failed_staged_export_leaves_the_existing_export_unchanged() {
                 .to_string_lossy()
                 .starts_with(&stage_prefix)),
         "a failed export must remove its private stage"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_unmanaged_file_leaves_the_existing_export_unchanged() {
+    let dir = scratch("hard-linked-unmanaged");
+    let out = copy_fixture("official-multiproduct", &dir);
+    let manifest = out.join("firebase-export-metadata.json");
+    let original_manifest = std::fs::read(&manifest).unwrap();
+    let outside = dir.join("outside.txt");
+    std::fs::write(&outside, "outside").unwrap();
+    std::fs::hard_link(&outside, out.join("unmanaged-hard-link")).unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(fixture("official-multiproduct"))
+        .arg("--export-on-exit")
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+
+    assert!(
+        output.status.success(),
+        "the command's exit code is preserved: {log}"
+    );
+    assert!(log.contains("multiple hard links"), "{log}");
+    assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside");
+    assert_eq!(
+        std::fs::read_to_string(out.join("unmanaged-hard-link")).unwrap(),
+        "outside"
     );
 }
 

@@ -766,7 +766,7 @@
       "--export-on-exit [dir] writes the export on a clean exit, on the command's failure and on SIGINT or SIGTERM; an omitted directory resolves to the --import one, and the working directory or a parent is refused",
       "emulators:export <dir> finds the running suite through its Emulator Hub locator file and drives POST /_admin/export, whose body is the official {\"path\", \"initiatedBy\"} and which refuses a request carrying an Origin header",
       "overwrite protection: a directory is overwritten only when it is empty or already holds a firebase-export-metadata.json",
-      "every exported directory is created 0700 and every file 0600, because an Auth export carries password material and TOTP secrets",
+      "on Unix, every exported directory is created 0700 and every file 0600, because an Auth export carries password material and TOTP secrets",
       "an import fires no Auth user event and no Storage object event: it restores state rather than producing it"
     ],
     "unimplemented": [
@@ -774,7 +774,9 @@
     ],
     "notes": [
       "fireemu's own session snapshots, fault plans, text index definitions and every App Check secret (debug tokens, project epochs, the instance signing key) never reach an export directory",
-      "a password set through fireemu's own API has no reversible emulator form and is exported without a passwordHash rather than with an invented one; a password that arrived from an official import is written back exactly as it was read"
+      "a password set through fireemu's own API has no reversible emulator form and is exported without a passwordHash rather than with an invented one; a password that arrived from an official import is written back exactly as it was read",
+      "Windows export publication is fail-closed: emulators:export and --export-on-exit return an error before creating or modifying any export path until an identity-bound atomic publication implementation is available",
+      "Unix export publication refuses a destination beneath an ancestor owned by another user, writable by group or other users, or carrying an extended ACL on macOS; use a dedicated private namespace rather than /tmp or a shared project directory"
     ]
   },
   "FN-DISCOVERY-1": {

@@ -32,8 +32,8 @@ fn descriptor() -> &'static ModelDescriptor {
     model("EventDelivery").expect("EventDelivery must remain registered")
 }
 
-fn assert_rejected(value: serde_json::Value) {
-    let json = serde_json::to_string(&value).expect("changed evidence must serialize");
+fn assert_rejected(value: &serde_json::Value) {
+    let json = serde_json::to_string(value).expect("changed evidence must serialize");
     assert!(
         validate_evidence_json(&json, descriptor(), Some(&repository_root())).is_err(),
         "changed evidence unexpectedly validated: {json}"
@@ -55,7 +55,7 @@ fn mutation_results_are_exact_ordered_and_killed() {
         .as_array_mut()
         .expect("mutations array")
         .pop();
-    assert_rejected(missing);
+    assert_rejected(&missing);
 
     let mut extra = baseline.clone();
     let duplicate = extra["mutations"][0].clone();
@@ -63,24 +63,24 @@ fn mutation_results_are_exact_ordered_and_killed() {
         .as_array_mut()
         .expect("mutations array")
         .push(duplicate);
-    assert_rejected(extra);
+    assert_rejected(&extra);
 
     let mut reordered = baseline.clone();
     reordered["mutations"]
         .as_array_mut()
         .expect("mutations array")
         .swap(0, 1);
-    assert_rejected(reordered);
+    assert_rejected(&reordered);
 
     for outcome in ["survived", "timeout", "tool_error"] {
         let mut changed = baseline.clone();
         changed["mutations"][0]["outcome"] = outcome.into();
-        assert_rejected(changed);
+        assert_rejected(&changed);
     }
 
     let mut wrong_property = baseline;
     wrong_property["mutations"][0]["property"] = "AttemptsBounded".into();
-    assert_rejected(wrong_property);
+    assert_rejected(&wrong_property);
 }
 
 #[test]

@@ -3,10 +3,11 @@
 //! This crate reads and writes the on-disk format `firebase emulators:export` produces with
 //! `firebase-tools@15.28.2`, so that a fixture recorded with the official suite can be
 //! imported into fireemu and an export fireemu writes can be imported back into the official
-//! suite. It is std-only, like every other `fireemu-core-*` crate: the JSON documents are
-//! parsed with [`fireemu_core_types::json`] and written by [`json`], and the Firestore
-//! managed export -- a legacy proto2 schema with groups, which `prost` cannot express -- is
-//! encoded directly against the protocol buffer wire format in [`wire`].
+//! suite. The JSON documents are parsed with [`fireemu_core_types::json`] and written by
+//! [`json`], and the Firestore managed export -- a legacy proto2 schema with groups, which
+//! `prost` cannot express -- is encoded directly against the protocol buffer wire format in
+//! [`wire`]. Atomic filesystem publication is provided by the separate
+//! `fireemu-export-publication` boundary crate.
 //!
 //! ```text
 //! <export dir>/
@@ -28,10 +29,11 @@
 //! # Sensitive material
 //!
 //! An Auth export carries password hashes, salts, MFA secrets and phone numbers. The crate
-//! itself only produces the bytes; the caller is responsible for the file permissions, and
-//! `fireemu` writes every export directory and file with owner-only access. fireemu's own
-//! session snapshots and App Check debug secrets are deliberately *not* part of this format
-//! and never reach an export directory.
+//! format code only produces the bytes; the caller remains responsible for owner-only file
+//! creation inside the stage. The `fireemu-export-publication` crate creates the stage directory
+//! owner-only and exposes atomic publication only after the caller marks the tree complete.
+//! fireemu's own session snapshots and App Check debug secrets are deliberately *not* part of
+//! this format and never reach an export directory.
 
 pub mod auth;
 pub mod firestore;

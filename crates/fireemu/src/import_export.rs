@@ -58,6 +58,7 @@ use fireemu_core_storage::store::ImportedObject;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
 use fireemu_core_types::time::LogicalInstant;
+use fireemu_export_publication::PublicationStage;
 
 use crate::config::Selection;
 
@@ -1385,17 +1386,17 @@ pub fn export(
     endpoints: &Endpoints,
     initiated_by: &str,
 ) -> Result<(), ArtifactError> {
-    may_overwrite(dir).map_err(|e| ArtifactError::new("export", dir, e))?;
-    let expected = target_identity(dir).map_err(|e| ArtifactError::new("export", dir, e))?;
-    let stage = create_export_stage(dir).map_err(|e| ArtifactError::new("export", dir, e))?;
-    let staged = StagedExport(stage.clone());
-    if expected.present {
-        copy_unmanaged_entries(dir, &stage).map_err(|e| ArtifactError::new("export", dir, e))?;
+    let staged = PublicationStage::create(dir, may_overwrite)
+        .map_err(|e| ArtifactError::new("export", dir, e))?;
+    if staged.target_was_present() {
+        copy_unmanaged_entries(dir, staged.root())
+            .map_err(|e| ArtifactError::new("export", dir, e))?;
     }
-    write_export_tree(&stage, products, endpoints, initiated_by)?;
-    publish_stage(&stage, dir, expected).map_err(|e| ArtifactError::new("export", dir, e))?;
-    drop(staged);
-    Ok(())
+    write_export_tree(staged.root(), products, endpoints, initiated_by)?;
+    staged
+        .complete()
+        .publish()
+        .map_err(|e| ArtifactError::new("export", dir, e))
 }
 
 fn write_export_tree(
@@ -1799,101 +1800,6 @@ fn export_storage(
 // Overwrite protection and permissions
 // ---------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TargetIdentity {
-    present: bool,
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-}
-
-fn target_identity(path: &Path) -> Result<TargetIdentity, String> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(TargetIdentity {
-                present: false,
-                #[cfg(unix)]
-                device: 0,
-                #[cfg(unix)]
-                inode: 0,
-            })
-        }
-        Err(e) => return Err(format!("cannot inspect it: {e}")),
-    };
-    if metadata.file_type().is_symlink() {
-        return Err("it is a symlink, which an export never follows".to_owned());
-    }
-    if !metadata.file_type().is_dir() {
-        return Err("it is not a directory".to_owned());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        Ok(TargetIdentity {
-            present: true,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        })
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(TargetIdentity { present: true })
-    }
-}
-
-struct StagedExport(PathBuf);
-
-impl Drop for StagedExport {
-    fn drop(&mut self) {
-        if std::fs::symlink_metadata(&self.0).is_ok_and(|metadata| metadata.file_type().is_dir()) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-}
-
-fn create_export_stage(target: &Path) -> Result<PathBuf, String> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| "the export path has no parent directory".to_owned())?;
-    match std::fs::symlink_metadata(parent) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err("the export parent is a symlink, which an export never follows".to_owned())
-        }
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            return Err("the export parent is not a directory".to_owned())
-        }
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_private_dir(parent)?,
-        Err(e) => return Err(format!("cannot inspect the export parent: {e}")),
-    }
-    let name = target
-        .file_name()
-        .map_or_else(|| "export".into(), |name| name.to_string_lossy());
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    let stage = parent.join(format!(
-        ".{name}.fireemu-stage-{}-{nonce}",
-        std::process::id()
-    ));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&stage)
-            .map_err(|e| format!("cannot create private export stage: {e}"))?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir(&stage)
-            .map_err(|e| format!("cannot create private export stage: {e}"))?;
-    }
-    Ok(stage)
-}
-
 fn export_owns(name: &str) -> bool {
     EXPORT_OWNED_ENTRIES.contains(&name) || name.ends_with(".overall_export_metadata")
 }
@@ -2089,6 +1995,7 @@ fn copy_unmanaged_entry_at(
     budget: &mut UnmanagedCopyBudget,
 ) -> Result<(), String> {
     use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::MetadataExt as _;
 
     if depth > EXPORT_UNMANAGED_NESTING_DEPTH_LIMIT {
         return Err(format!(
@@ -2128,6 +2035,12 @@ fn copy_unmanaged_entry_at(
     if !metadata.file_type().is_file() {
         return Err(format!(
             "export entry {} is not a regular file or directory and will not be followed",
+            source_path.display()
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(format!(
+            "export entry {} has multiple hard links and will not be copied",
             source_path.display()
         ));
     }
@@ -2203,68 +2116,6 @@ fn copy_private_file(source: &Path, destination: &Path, byte_limit: u64) -> Resu
     output
         .flush()
         .map_err(|e| format!("cannot flush {}: {e}", destination.display()))
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn atomic_publish(stage: &Path, target: &Path, target_present: bool) -> Result<(), String> {
-    let flags = if target_present {
-        rustix::fs::RenameFlags::EXCHANGE
-    } else {
-        rustix::fs::RenameFlags::NOREPLACE
-    };
-    rustix::fs::renameat_with(rustix::fs::CWD, stage, rustix::fs::CWD, target, flags)
-        .map_err(|e| format!("atomic export publication is unavailable or failed: {e}"))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn atomic_publish(stage: &Path, target: &Path, target_present: bool) -> Result<(), String> {
-    if target_present {
-        return Err(
-            "atomic directory replacement is unavailable on this platform; the existing export was left unchanged"
-                .to_owned(),
-        );
-    }
-    std::fs::rename(stage, target)
-        .map_err(|e| format!("cannot atomically publish the new export directory: {e}"))
-}
-
-fn publish_stage(stage: &Path, target: &Path, expected: TargetIdentity) -> Result<(), String> {
-    let current = target_identity(target)?;
-    if current != expected {
-        return Err(
-            "the export target changed after it was checked; it was left unchanged".to_owned(),
-        );
-    }
-    atomic_publish(stage, target, expected.present)?;
-    if expected.present {
-        verify_displaced_target_or_rollback(stage, target, expected)?;
-    }
-    Ok(())
-}
-
-fn verify_displaced_target_or_rollback(
-    stage: &Path,
-    target: &Path,
-    expected: TargetIdentity,
-) -> Result<(), String> {
-    let displaced = target_identity(stage);
-    if displaced
-        .as_ref()
-        .is_ok_and(|identity| *identity == expected)
-    {
-        return Ok(());
-    }
-    let detail = displaced
-        .err()
-        .unwrap_or_else(|| "the displaced target has a different identity".to_owned());
-    match atomic_publish(stage, target, true) {
-        Ok(()) => Err(format!(
-            "the export target changed during publication ({detail}); the prior target was restored"
-        )),
-        Err(rollback) => Err(format!(
-            "the export target changed during publication ({detail}), and atomic rollback failed: {rollback}"
-        )),
-    }
 }
 
 /// Whether `dir` may be overwritten by an export.
@@ -2381,13 +2232,94 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::{
-        atomic_publish, civil_from_days, create_export_stage, days_from_civil, decode_base32,
-        decode_base64, enforce_storage_object_count, may_overwrite, publish_stage,
-        read_inside_budgeted, read_inside_limited, rfc3339_instant, rfc3339_text, scan_import_tree,
-        target_identity, verify_displaced_target_or_rollback, UnmanagedCopyBudget,
+        civil_from_days, days_from_civil, decode_base32, decode_base64,
+        enforce_storage_object_count, may_overwrite, read_inside_budgeted, read_inside_limited,
+        rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
         IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
     use fireemu_core_types::time::LogicalInstant;
+    use fireemu_export_publication::PublicationStage;
+
+    #[cfg(windows)]
+    #[test]
+    fn export_entry_fails_before_creating_a_destination_on_windows() {
+        use std::sync::{Arc, Mutex, RwLock};
+
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_rules::runtime::LoadedRules;
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(gateway, clock.clone(), 7));
+        let auth_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let auth = Arc::new(AuthRegistry::new("demo-app", auth_store.clone()));
+        let storage = Arc::new(fireemu_adapter_http::storage::StorageState {
+            store: Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
+            clock: clock.clone(),
+            auth: auth.clone(),
+            tenancy: None,
+            rules: Arc::new(RwLock::new(LoadedRules::default())),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+        });
+        let endpoints = super::Endpoints {
+            backend: &backend,
+            auth: &auth,
+            storage: &storage,
+            clock: &clock,
+            project: "demo-app",
+        };
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-windows-export-entry-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let target = root.join("export");
+
+        let error = super::export(
+            &target,
+            super::Products {
+                firestore: false,
+                auth: false,
+                storage: false,
+            },
+            &endpoints,
+            "test",
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("unavailable on Windows"),
+            "{error}"
+        );
+        assert!(!root.exists());
+    }
 
     fn budget_dir(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -2552,114 +2484,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn atomic_directory_publication_exposes_the_complete_new_tree() {
-        let root = budget_dir("publish");
-        let target = root.join("target");
-        let stage = root.join("stage");
-        std::fs::create_dir(&target).unwrap();
-        std::fs::create_dir(&stage).unwrap();
-        std::fs::write(target.join("old"), b"old").unwrap();
-        std::fs::write(stage.join("new"), b"new").unwrap();
-        let expected = target_identity(&target).unwrap();
-        publish_stage(&stage, &target, expected).unwrap();
-        assert_eq!(std::fs::read(target.join("new")).unwrap(), b"new");
-        assert_eq!(std::fs::read(stage.join("old")).unwrap(), b"old");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn creating_an_export_stage_does_not_restrict_an_existing_parent() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let root = budget_dir("stage-parent-mode");
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let stage = create_export_stage(&root.join("export")).unwrap();
-
-        assert_eq!(
-            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-            0o755
-        );
-        assert_eq!(
-            std::fs::metadata(&stage).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn replacing_a_checked_target_before_publication_is_refused() {
-        let root = budget_dir("publish-race");
-        let target = root.join("target");
-        let displaced = root.join("displaced");
-        let stage = root.join("stage");
-        std::fs::create_dir(&target).unwrap();
-        std::fs::write(target.join("old"), b"old").unwrap();
-        let expected = target_identity(&target).unwrap();
-        std::fs::rename(&target, &displaced).unwrap();
-        std::fs::create_dir(&target).unwrap();
-        std::fs::write(target.join("attacker"), b"unchanged").unwrap();
-        std::fs::create_dir(&stage).unwrap();
-        std::fs::write(stage.join("new"), b"new").unwrap();
-
-        let error = publish_stage(&stage, &target, expected).unwrap_err();
-        assert!(error.contains("changed after it was checked"), "{error}");
-        assert_eq!(
-            std::fs::read(target.join("attacker")).unwrap(),
-            b"unchanged"
-        );
-        assert_eq!(std::fs::read(stage.join("new")).unwrap(), b"new");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn replacing_a_target_during_publication_is_rolled_back() {
-        let root = budget_dir("publish-race-rollback");
-        let target = root.join("target");
-        let displaced = root.join("displaced");
-        let stage = root.join("stage");
-        std::fs::create_dir(&target).unwrap();
-        std::fs::write(target.join("old"), b"old").unwrap();
-        let expected = target_identity(&target).unwrap();
-        std::fs::rename(&target, &displaced).unwrap();
-        std::fs::create_dir(&target).unwrap();
-        std::fs::write(target.join("attacker"), b"unchanged").unwrap();
-        std::fs::create_dir(&stage).unwrap();
-        std::fs::write(stage.join("new"), b"new").unwrap();
-
-        // This exchange represents the narrow race after the pre-publication identity check.
-        atomic_publish(&stage, &target, true).unwrap();
-        let error = verify_displaced_target_or_rollback(&stage, &target, expected).unwrap_err();
-        assert!(error.contains("prior target was restored"), "{error}");
-        assert_eq!(
-            std::fs::read(target.join("attacker")).unwrap(),
-            b"unchanged"
-        );
-        assert_eq!(std::fs::read(stage.join("new")).unwrap(), b"new");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    #[test]
-    fn replacing_an_existing_export_refuses_when_atomic_exchange_is_unavailable() {
-        let root = budget_dir("publish-unsupported");
-        let target = root.join("target");
-        let stage = root.join("stage");
-        std::fs::create_dir(&target).unwrap();
-        std::fs::create_dir(&stage).unwrap();
-        let expected = target_identity(&target).unwrap();
-
-        let error = publish_stage(&stage, &target, expected).unwrap_err();
-        assert!(error.contains("unavailable on this platform"), "{error}");
-        assert!(target.is_dir());
-        assert!(stage.is_dir());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[test]
     fn an_rfc_3339_timestamp_round_trips_through_the_instant() {
         for text in [
@@ -2733,5 +2557,29 @@ mod tests {
         assert!(may_overwrite(&file).is_err());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_authorization_is_bound_to_the_captured_target_identity() {
+        let base = budget_dir("overwrite-identity");
+        let target = base.join("export");
+
+        let error = PublicationStage::create(&target, |checked| {
+            may_overwrite(checked)?;
+            std::fs::create_dir(checked).map_err(|error| error.to_string())?;
+            std::fs::write(checked.join("notes.txt"), "preserve")
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(error.contains("overwrite policy was checked"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(target.join("notes.txt")).unwrap(),
+            "preserve"
+        );
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(base);
     }
 }

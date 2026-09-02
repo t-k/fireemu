@@ -1,6 +1,6 @@
 //! Quint Connect driver for the production storage generation allocator.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -219,7 +219,7 @@ impl StorageGenerationDriver {
             content_encoding: None,
             content_language: None,
             cache_control: None,
-            custom: Default::default(),
+            custom: BTreeMap::default(),
             custom_defined: false,
             time_created: LogicalInstant::UNIX_EPOCH,
             updated: LogicalInstant::UNIX_EPOCH,

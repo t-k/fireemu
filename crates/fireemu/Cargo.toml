@@ -31,6 +31,7 @@ fireemu-adapter-ui = { path = "../fireemu-adapter-ui" }
 fireemu-core-functions = { path = "../fireemu-core-functions" }
 fireemu-core-pubsub = { path = "../fireemu-core-pubsub" }
 fireemu-core-export = { path = "../fireemu-core-export" }
+fireemu-export-publication = { path = "../fireemu-export-publication" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time"] }
 hyper = { version = "1", features = ["http1", "server"] }

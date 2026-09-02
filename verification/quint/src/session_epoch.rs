@@ -117,7 +117,7 @@ impl SessionEpochDriver {
         self.session = fresh_session();
         self.work_epochs = empty_slots();
         self.applied.clear();
-        self.last_work_result = "NotChecked".to_owned();
+        "NotChecked".clone_into(&mut self.last_work_result);
         Ok(())
     }
 
@@ -220,7 +220,7 @@ impl SessionEpochDriver {
         };
         match self.projection_fault {
             None => {}
-            Some(ProjectionFault::State) => projected.state = "Closed".to_owned(),
+            Some(ProjectionFault::State) => "Closed".clone_into(&mut projected.state),
             Some(ProjectionFault::Epoch) => projected.epoch = projected.epoch.saturating_add(1),
             Some(ProjectionFault::WorkEpochResult) => {
                 projected.work_epoch_result = if projected.work_epoch_result == "Proceed" {

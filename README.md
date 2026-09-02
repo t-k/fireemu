@@ -113,6 +113,10 @@ Common commands:
 | `fireemu doctor` | Check the installed binary, Node.js, UI, and Functions runner |
 | `fireemu capabilities` | Print the current capability manifest |
 
+On Windows, `emulators:export` and `--export-on-exit` currently fail before writing any path. Import and the rest of the emulator runtime remain available. Atomic export publication will be enabled when the Windows implementation can provide the same identity-bound replacement and cleanup guarantees as the Unix implementation.
+
+On Unix, export publication also refuses a destination below any namespace ancestor that is owned by another user, writable by the group or other users, or, on macOS, carries an extended ACL. Choose a dedicated directory below a private namespace rather than `/tmp` or a shared project directory. This restriction ensures that cleanup can remove only the private stage identity created by the current process.
+
 ## Supported features
 
 The following is a product-level summary, not a claim that every API and edge case is implemented.

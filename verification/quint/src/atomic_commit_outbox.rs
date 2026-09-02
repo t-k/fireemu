@@ -139,7 +139,7 @@ impl AtomicCommitOutboxDriver {
     /// Stages one symbolic write for the later real commit.
     pub fn stage_write(&mut self, doc: &str) -> Result {
         self.require_phase("Staging")?;
-        self.require_doc(doc)?;
+        Self::require_doc(doc)?;
         if self.staged.contains(doc) {
             return Err(invalid_data("document write is already staged"));
         }
@@ -157,7 +157,7 @@ impl AtomicCommitOutboxDriver {
     /// Stages the matching logical event; this remains harness state until commit.
     pub fn stage_outbox(&mut self, doc: &str) -> Result {
         self.require_phase("Staging")?;
-        self.require_doc(doc)?;
+        Self::require_doc(doc)?;
         if !self.staged.contains(doc) {
             return Err(invalid_data("outbox entry requires a staged write"));
         }
@@ -273,7 +273,7 @@ impl AtomicCommitOutboxDriver {
         }
     }
 
-    fn require_doc(&self, doc: &str) -> Result {
+    fn require_doc(doc: &str) -> Result {
         if DOCS.contains(&doc) {
             Ok(())
         } else {

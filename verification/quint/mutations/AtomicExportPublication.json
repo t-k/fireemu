@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "model": "AtomicExportPublication",
+  "mutations": [
+    {
+      "id": "M-FORMAL-EXPORT-PARTIAL-001",
+      "property": "NoPartialPublication",
+      "operator": "publish-partial-stage",
+      "from": "publicArtifact: observable.publicArtifact,\n      stagePrivate: observable.stagePrivate,\n      publicPrivate: observable.publicPrivate,\n      lastResult: observable.lastResult,\n    }),\n  }\n\n  action completeStage",
+      "to": "publicArtifact: \"Partial\",\n      stagePrivate: observable.stagePrivate,\n      publicPrivate: observable.publicPrivate,\n      lastResult: observable.lastResult,\n    }),\n  }\n\n  action completeStage"
+    },
+    {
+      "id": "M-FORMAL-EXPORT-IDENTITY-001",
+      "property": "PublicationRequiresCompletePrivateStage",
+      "operator": "publish-after-target-swap",
+      "from": "observable.targetIdentity == \"Original\",\n    observable.stagePrivate,",
+      "to": "true,\n    observable.stagePrivate,"
+    },
+    {
+      "id": "M-FORMAL-EXPORT-REFUSAL-001",
+      "property": "RefusalPreservesPublicArtifact",
+      "operator": "replace-public-artifact-on-refusal",
+      "from": "publicArtifact: observable.publicArtifact,\n      stagePrivate: true,\n      publicPrivate: observable.publicPrivate,\n      lastResult: \"Refused\",",
+      "to": "publicArtifact: \"New\",\n      stagePrivate: true,\n      publicPrivate: observable.publicPrivate,\n      lastResult: \"Refused\","
+    },
+    {
+      "id": "M-FORMAL-EXPORT-PRIVATE-001",
+      "property": "PublishedArtifactIsPrivate",
+      "operator": "publish-world-readable-artifact",
+      "from": "publicPrivate: true,\n      lastResult: \"Published\",",
+      "to": "publicPrivate: false,\n      lastResult: \"Published\","
+    },
+    {
+      "id": "M-FORMAL-EXPORT-ATOMIC-001",
+      "property": "AtomicExportPublication",
+      "operator": "composite-partial-publication",
+      "from": "action createStage = all {\n    observable.stageState == \"Absent\",\n    record(\"Create\", {\n      stageState: \"Created\",\n      stageIdentity: \"Owned\",\n      targetIdentity: observable.targetIdentity,\n      publicArtifact: observable.publicArtifact,",
+      "to": "action createStage = all {\n    observable.stageState == \"Absent\",\n    record(\"Create\", {\n      stageState: \"Created\",\n      stageIdentity: \"Owned\",\n      targetIdentity: observable.targetIdentity,\n      publicArtifact: \"Partial\","
+    },
+    {
+      "id": "M-FORMAL-EXPORT-STAGE-IDENTITY-001",
+      "property": "PublicationRequiresOwnedStage",
+      "operator": "publish-replaced-stage",
+      "from": "observable.stageState == \"Complete\",\n    observable.stageIdentity == \"Owned\",\n    observable.targetIdentity == \"Original\",",
+      "to": "observable.stageState == \"Complete\",\n    true,\n    observable.targetIdentity == \"Original\","
+    },
+    {
+      "id": "M-FORMAL-EXPORT-STAGE-REFUSAL-001",
+      "property": "RefusalPreservesChangedStage",
+      "operator": "erase-replaced-stage-on-refusal",
+      "from": "stageIdentity: if (observable.stageIdentity == \"Changed\") \"Changed\" else \"Absent\",",
+      "to": "stageIdentity: \"Absent\","
+    }
+  ]
+}

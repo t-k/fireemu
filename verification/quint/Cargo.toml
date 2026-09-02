@@ -12,6 +12,8 @@ description = "private Quint model checking and Quint Connect conformance pilot"
 anyhow = "1.0"
 fireemu-core-auth = { path = "../../crates/fireemu-core-auth" }
 fireemu-core-events = { path = "../../crates/fireemu-core-events" }
+fireemu-core-export = { path = "../../crates/fireemu-core-export" }
+fireemu-export-publication = { path = "../../crates/fireemu-export-publication" }
 fireemu-core-firestore = { path = "../../crates/fireemu-core-firestore" }
 fireemu-core-rules = { path = "../../crates/fireemu-core-rules" }
 fireemu-core-session = { path = "../../crates/fireemu-core-session" }

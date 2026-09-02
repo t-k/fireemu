@@ -13,6 +13,7 @@ members = [
     "crates/fireemu-core-functions",
     "crates/fireemu-core-pubsub",
     "crates/fireemu-core-export",
+    "crates/fireemu-export-publication",
     "crates/fireemu-proto-firestore",
     "crates/fireemu-proto-pubsub",
     "crates/fireemu-adapter-grpc",

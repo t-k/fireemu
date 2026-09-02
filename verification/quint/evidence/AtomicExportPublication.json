@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
-  "model": "AuthTotp",
-  "spec": "specs/AuthTotp.qnt",
-  "main": "AuthTotpProof",
-  "config": "configs/AuthTotp.json",
-  "mutationManifest": "mutations/AuthTotp.json",
+  "model": "AtomicExportPublication",
+  "spec": "specs/AtomicExportPublication.qnt",
+  "main": "AtomicExportPublicationProof",
+  "config": "configs/AtomicExportPublication.json",
+  "mutationManifest": "mutations/AtomicExportPublication.json",
   "tools": {
     "quint": "0.32.0",
     "quintConnect": "0.1.2",
@@ -12,34 +12,31 @@
     "backend": "tlc"
   },
   "bounds": {
-    "MaxStep": "4",
-    "SessionTtl": "2",
-    "Window": "1"
+    "Domain": "finite-enumerated"
   },
   "boundInputs": [
     ".github/workflows/ci.yml",
     "Cargo.lock",
     "Cargo.toml",
-    "crates/fireemu-core-auth/src/mfa.rs",
-    "crates/fireemu-core-auth/src/store.rs",
-    "crates/fireemu-core-auth/src/totp.rs",
+    "crates/fireemu-export-publication/src/lib.rs",
+    "crates/fireemu/src/import_export.rs",
     "verification/quint/Cargo.toml",
     "verification/quint/README.md",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
-    "verification/quint/configs/AuthTotp.json",
-    "verification/quint/mutations/AuthTotp.json",
+    "verification/quint/configs/AtomicExportPublication.json",
+    "verification/quint/mutations/AtomicExportPublication.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-pilot.sh",
-    "verification/quint/specs/AuthTotp.qnt",
-    "verification/quint/src/auth_totp.rs",
+    "verification/quint/specs/AtomicExportPublication.qnt",
+    "verification/quint/src/atomic_export_publication.rs",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
-    "verification/quint/tests/auth_totp_connect.rs",
+    "verification/quint/tests/atomic_export_publication_connect.rs",
     "verification/quint/tests/cli_contract.rs",
     "verification/quint/tests/evidence_contract.rs",
     "verification/quint/tests/model_registry.rs"
@@ -48,99 +45,107 @@
     ".github/workflows/ci.yml": "e813033b9f67c87d9ce61a9295ce4594573fbe06a8be170c1e94499be7e96a08",
     "Cargo.lock": "91fed9c26a7d5e0a7a9b0a115c2e1b35f6e5b7f96b6290666c61bde6a2a80fcf",
     "Cargo.toml": "dfbc561aadb7e9de517b9450d40d44af10dfe23a246d244ec5144737ce55681b",
-    "crates/fireemu-core-auth/src/mfa.rs": "214c5b296965f4b0b44f9c8df40e49579a24d1ae1d2c9e77c8648d05ac808400",
-    "crates/fireemu-core-auth/src/store.rs": "dcc65e8da37206bc945c0ebb618ebc88f66b6fc9031e4e39cbb62c7a09402394",
-    "crates/fireemu-core-auth/src/totp.rs": "71d3b816fd50d184455dd33f7689ea0c5c9fb6b25c77ac7e069175ca174b73e4",
+    "crates/fireemu-export-publication/src/lib.rs": "fb8be7314cb41250a89252b6a225b0c739096bf6770ee3e4f620f3bbe64c7123",
+    "crates/fireemu/src/import_export.rs": "8bc2f26f9c7b58c42d5102de94b2e54803ccefd6df68fd00f90cd335451c1a56",
     "verification/quint/Cargo.toml": "3292a811eeab2d963d17c302ce0c01e9225c02020be8b52a4bcf83ddeb0099d7",
     "verification/quint/README.md": "8c94c58608b4c1580dcd9a6162235a9828fc030f70b0cc932932978c9f6c22b7",
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
-    "verification/quint/configs/AuthTotp.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/mutations/AuthTotp.json": "6826766b9fe39160b52bfa0e8483664c9e89e2d99d96b36df20a10a076fc9220",
+    "verification/quint/configs/AtomicExportPublication.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
+    "verification/quint/mutations/AtomicExportPublication.json": "1e28ca84475dfe760478889d2d7ce67735b48b29ba3d59f6a823be65bc026e00",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-pilot.sh": "c5d389f864a17516a30c921872b49133fbfd8e41f06dffd698ea859c3cc06151",
-    "verification/quint/specs/AuthTotp.qnt": "2a73e2371828b88035c4f3e84a9b5a10f8482820a6c952a5d7655bf4fcf6fa0e",
-    "verification/quint/src/auth_totp.rs": "af3a3a41ff776b614e46a6980f7198305b7d26d8f518cd62497c4152519e6b79",
+    "verification/quint/specs/AtomicExportPublication.qnt": "855268571ed3966152fdf8e21932b2557cc680c0ee7a8e89d01dfec2d118a1eb",
+    "verification/quint/src/atomic_export_publication.rs": "651beca663124a0155a1cd741cfaea255d982a563880891760719a18d5d8ea38",
     "verification/quint/src/evidence.rs": "206166ece32f6241d35918f447f05203aac72efc280f7da6c6001644de508307",
     "verification/quint/src/lib.rs": "d43ccad88a30467c5a572d21460ad3f492233dfdde54568de665cc14e6d011df",
     "verification/quint/src/main.rs": "daa7c3ace8c42b14e73b2d876d16bf53a25068b923fe9642a1ca843d8d600537",
     "verification/quint/src/model.rs": "ecf78968d13292238f6d0c175443a7d985b84691f07df1bb560639156785f23e",
     "verification/quint/src/process.rs": "1303a4536c64d82f3b5eff44caabf27fd81974cca415185594badc75d48794b4",
-    "verification/quint/tests/auth_totp_connect.rs": "e1874cf4d137d031f4e270d32272d7d9d1f59010f78b576ef8e0562189a33b14",
+    "verification/quint/tests/atomic_export_publication_connect.rs": "2fae3af804f2fceb5e3dce23e6cb80b87dec2232dc01ba2224e1a944c5099613",
     "verification/quint/tests/cli_contract.rs": "6ca66cd92b83b837742bc902cd043eca4b5fc80efebdf56e85d9cb0cbee404ac",
     "verification/quint/tests/evidence_contract.rs": "59621a018f49b5a659a0e3b12a9bc46025b4e66aa107e2e990f91e181cdecf8a",
     "verification/quint/tests/model_registry.rs": "5b45606854388ad3dc4ded732cd7fec986928f7c7c34051020e783dd08ee6a84"
   },
   "invariants": [
     "TypeOK",
-    "NoTotpCodeReuse",
-    "NoSecondFactorWithoutEnrollment",
-    "AcceptedOnlyWithinWindow",
-    "EnrollmentAcceptedBeforeExpiry"
+    "NoPartialPublication",
+    "PublicationRequiresCompletePrivateStage",
+    "PublicationRequiresOwnedStage",
+    "RefusalPreservesPublicArtifact",
+    "RefusalPreservesChangedStage",
+    "PublishedArtifactIsPrivate",
+    "AtomicExportPublication"
   ],
-  "temporalProperties": [
-    "EnrollmentEventuallyFinalizesOrExpires"
-  ],
+  "temporalProperties": [],
   "mutations": [
     {
-      "id": "M-FORMAL-AUTH-REUSE-001",
-      "property": "NoTotpCodeReuse",
+      "id": "M-FORMAL-EXPORT-PARTIAL-001",
+      "property": "NoPartialPublication",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-AUTH-ENROLLMENT-001",
-      "property": "NoSecondFactorWithoutEnrollment",
+      "id": "M-FORMAL-EXPORT-IDENTITY-001",
+      "property": "PublicationRequiresCompletePrivateStage",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-AUTH-LIVENESS-001",
-      "property": "EnrollmentEventuallyFinalizesOrExpires",
-      "outcome": "killed_temporal",
-      "diagnostic": "TLC temporal property violation"
-    },
-    {
-      "id": "M-FORMAL-AUTH-WINDOW-FINALIZE-001",
-      "property": "AcceptedOnlyWithinWindow",
+      "id": "M-FORMAL-EXPORT-REFUSAL-001",
+      "property": "RefusalPreservesPublicArtifact",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-AUTH-WINDOW-VERIFY-001",
-      "property": "AcceptedOnlyWithinWindow",
+      "id": "M-FORMAL-EXPORT-PRIVATE-001",
+      "property": "PublishedArtifactIsPrivate",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-AUTH-EXPIRY-001",
-      "property": "EnrollmentAcceptedBeforeExpiry",
+      "id": "M-FORMAL-EXPORT-ATOMIC-001",
+      "property": "AtomicExportPublication",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-EXPORT-STAGE-IDENTITY-001",
+      "property": "PublicationRequiresOwnedStage",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-EXPORT-STAGE-REFUSAL-001",
+      "property": "RefusalPreservesChangedStage",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
-    "enrollAtTtl",
-    "expireAfterTtl",
-    "verifyAdjacent",
-    "rejectOutsideWindow",
-    "rejectReplay",
-    "rejectWithoutFactor"
+    "publish",
+    "refuse",
+    "replace",
+    "stageReplace"
   ],
   "actions": [
-    "Tick",
-    "StartEnrollment",
-    "FinalizeEnrollment",
-    "ExpireEnrollment",
-    "Verify"
+    "Create",
+    "Write",
+    "Complete",
+    "Swap",
+    "SwapStage",
+    "Refuse",
+    "Publish"
   ],
   "projectionFields": [
-    "factorCount",
-    "pendingCount",
-    "lastAcceptedStep",
-    "lastResult",
-    "secondFactorClaim"
+    "stageState",
+    "stageIdentity",
+    "targetIdentity",
+    "publicArtifact",
+    "stagePrivate",
+    "publicPrivate",
+    "lastResult"
   ],
   "simulation": {
     "seeds": [

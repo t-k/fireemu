@@ -132,7 +132,7 @@ exports.confConditionalLock = onRequest(async (req, res) => {
         throw new Error("conditional lock start time is not a Firestore Timestamp");
       }
       const updatedAt = lock.data().updatedAt;
-      if (!(updatedAt instanceof Timestamp) || updatedAt.toMillis() !== startedAt.toMillis()) {
+      if (!(updatedAt instanceof Timestamp) || !updatedAt.isEqual(startedAt)) {
         throw new Error("conditional lock timestamps do not share one commit time");
       }
       return {

@@ -43,6 +43,55 @@
       "operator": "publish-generation-before-active-version",
       "from": "activeVersion: observable.activeVersion,\n      generation: observable.generation,\n      evaluationVersion: observable.evaluationVersion.set(evaluation, observable.activeVersion),\n      evaluationGeneration: observable.evaluationGeneration.set(evaluation, observable.generation)",
       "to": "activeVersion: observable.activeVersion,\n      generation: observable.generation + 1,\n      evaluationVersion: observable.evaluationVersion.set(evaluation, observable.activeVersion),\n      evaluationGeneration: observable.evaluationGeneration.set(evaluation, observable.generation)"
+    },
+    {
+      "id": "M-FORMAL-RULES-CREATE-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-create-phase-guard",
+      "from": "candidatePhase == \"Absent\",\n    record(\"Create\"",
+      "to": "record(\"Create\""
+    },
+    {
+      "id": "M-FORMAL-RULES-PARSE-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-parse-phase-guard",
+      "from": "candidatePhase == \"Created\",\n    record(\"Parse\"",
+      "to": "record(\"Parse\""
+    },
+    {
+      "id": "M-FORMAL-RULES-COMPILE-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-compile-phase-guard",
+      "from": "candidatePhase == \"Parsed\",\n    record(\"Compile\"",
+      "to": "record(\"Compile\""
+    },
+    {
+      "id": "M-FORMAL-RULES-CHECK-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-check-phase-guard",
+      "from": "candidatePhase == \"Compiled\",\n    record(\"Check\"",
+      "to": "record(\"Check\""
+    },
+    {
+      "id": "M-FORMAL-RULES-REJECT-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-reject-phase-guard",
+      "from": "candidatePhase.in(Set(\"Created\", \"Parsed\", \"Compiled\", \"Checked\")),\n    record(\"Reject\"",
+      "to": "record(\"Reject\""
+    },
+    {
+      "id": "M-FORMAL-RULES-PROGRESS-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-progress-state-guard",
+      "from": "evaluationState.get(evaluation) == \"Running\",\n    record(\"ProgressEvaluation\"",
+      "to": "record(\"ProgressEvaluation\""
+    },
+    {
+      "id": "M-FORMAL-RULES-FINISH-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "operator": "delete-finish-state-guard",
+      "from": "evaluationState.get(evaluation) == \"Running\",\n    record(\"FinishEvaluation\"",
+      "to": "record(\"FinishEvaluation\""
     }
   ]
 }

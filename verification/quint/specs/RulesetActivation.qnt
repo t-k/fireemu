@@ -194,6 +194,25 @@ module RulesetActivation {
   val ActivationRequiresAllChecks =
     (lastAction == "Activate").implies(previousCandidatePhase == "Checked")
 
+  val CandidatePhaseTransitionsAreOrdered = and {
+    (lastAction == "Create").implies(previousCandidatePhase == "Absent"),
+    (lastAction == "Parse").implies(previousCandidatePhase == "Created"),
+    (lastAction == "Compile").implies(previousCandidatePhase == "Parsed"),
+    (lastAction == "Check").implies(previousCandidatePhase == "Compiled"),
+    (lastAction == "Reject").implies(
+      previousCandidatePhase.in(Set("Created", "Parsed", "Compiled", "Checked"))
+    ),
+  }
+
+  val EvaluationTransitionsRequireRunning = EVALUATIONS.forall(evaluation => and {
+    (lastAction == "ProgressEvaluation" and lastEvaluation == evaluation).implies(
+      previousEvaluationState.get(evaluation) == "Running"
+    ),
+    (lastAction == "FinishEvaluation" and lastEvaluation == evaluation).implies(
+      previousEvaluationState.get(evaluation) == "Running"
+    ),
+  })
+
   val FailedCandidateNeverActivates =
     (previousCandidatePhase == "Rejected").implies(and {
       observable.activeVersion == previousObservable.activeVersion,
@@ -220,6 +239,8 @@ module RulesetActivation {
 
   val AtomicRulesetActivation = and {
     ActivationRequiresAllChecks,
+    CandidatePhaseTransitionsAreOrdered,
+    EvaluationTransitionsRequireRunning,
     FailedCandidateNeverActivates,
     EvaluationSnapshotIsImmutable,
     ActiveVersionChangesAtomically,

@@ -66,11 +66,11 @@
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/RulesetActivation.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/mutations/RulesetActivation.json": "09965fb4f9793604d3ff476fec1fd086a7b7b34143883164b38fd75af44a0010",
+    "verification/quint/mutations/RulesetActivation.json": "f0b0dade73ade4ba6cab47007d55c3de15913b8564754083db3b78d7023277b3",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "e77c9a278fd5b17e8c6ecf89a32a2454f7bc64f5bab7f36cf07c6eaf1af1c8cc",
-    "verification/quint/specs/RulesetActivation.qnt": "66c9f84b48b1cc9ffce6c4f9c321c999a1d258d36c0037352293d96ae0224562",
+    "verification/quint/specs/RulesetActivation.qnt": "1db5cf2dce57bdd7ad7f9f52935b6951ca0f376ead53a275f6717ee8517fd354",
     "verification/quint/src/evidence.rs": "2699af66039588f3dd87c85899a6e537aae90d19f6e127d58fbe6b621462577f",
     "verification/quint/src/lib.rs": "4e16c4a8e887c5cd8fb133c1ed0370051ca5d676941ae05bdef3b2152a617ced",
     "verification/quint/src/main.rs": "254e5a5c63ebe730ae23151d8eb509ed48ded061e1fda25680bf0eb298823763",
@@ -124,6 +124,48 @@
     },
     {
       "id": "M-FORMAL-RULES-ATOMIC-001",
+      "property": "AtomicRulesetActivation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-CREATE-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-PARSE-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-COMPILE-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-CHECK-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-REJECT-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-PROGRESS-ORDER-001",
+      "property": "AtomicRulesetActivation",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-FINISH-ORDER-001",
       "property": "AtomicRulesetActivation",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"

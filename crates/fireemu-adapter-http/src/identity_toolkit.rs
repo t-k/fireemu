@@ -1264,7 +1264,7 @@ fn dispatch(
         }
         Handler::Delete => delete_account(store, body, at, false),
         Handler::SendOobCode => send_oob_code(store, body, at, headers),
-        Handler::ResetPassword => reset_password(store, body, at),
+        Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
         Handler::SendVerificationCode => send_verification_code(store, body, at),
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
@@ -3736,7 +3736,12 @@ fn send_oob_code(
 
 /// `accounts:resetPassword`: verifies a `PASSWORD_RESET` code (`verifyPasswordResetCode`)
 /// and, with `newPassword`, consumes it and sets the password (`confirmPasswordReset`).
-fn reset_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn reset_password(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    stateless_refresh_tokens: bool,
+) -> JsonResponse {
     let Some(code) = str_field(body, "oobCode") else {
         return error(400, "MISSING_OOB_CODE");
     };
@@ -3767,9 +3772,13 @@ fn reset_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Js
     if let Err(e) = store.set_password(&uid, new_password) {
         return auth_error(&e);
     }
-    // A reset ends every existing session and verifies the address (the user read the mail).
+    // A reset advances `validSince` and verifies the address (the user read the mail). The
+    // Firebase profile keeps the official emulator's stateless refresh credentials; strict
+    // mode also removes them.
     let _ = store.revoke_tokens(&uid, at);
-    store.revoke_refresh_tokens(&uid);
+    if !stateless_refresh_tokens {
+        store.revoke_refresh_tokens(&uid);
+    }
     if let Some(u) = store.user_mut(&uid) {
         u.email_verified = true;
     }

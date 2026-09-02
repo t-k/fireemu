@@ -109,7 +109,8 @@ fn verify_email(state: &AuthState, local_id: &str) {
 #[test]
 fn password_reset_goes_through_an_oob_code_the_test_can_read() {
     let s = state();
-    sign_up(&s, "a@example.com");
+    let signed_up = sign_up(&s, "a@example.com");
+    let refresh_token = signed_up["refreshToken"].as_str().unwrap().to_owned();
     let (status, body) = post(
         &s,
         &format!("{V1}/accounts:sendOobCode"),
@@ -183,6 +184,44 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
         claims(signed["idToken"].as_str().unwrap())["email_verified"],
         true
     );
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh_token}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+}
+
+#[test]
+fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
+    let s = AuthState {
+        stateless_refresh_tokens: false,
+        ..state()
+    };
+    let signed_up = sign_up(&s, "strict-reset@example.com");
+    let refresh_token = signed_up["refreshToken"].as_str().unwrap().to_owned();
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "strict-reset@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
+    let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap();
+    let (status, reset) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": "newpassword1"}),
+    );
+    assert_eq!(status, 200, "{reset}");
+
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh_token}),
+    );
+    assert_eq!(status, 400, "{refreshed}");
+    assert_eq!(refreshed["error"]["message"], "INVALID_REFRESH_TOKEN");
 }
 
 #[test]

@@ -157,28 +157,22 @@ fn a_pinned_clock_uses_the_per_path_capacity_as_an_explicit_retention_root() {
 }
 
 #[test]
-fn an_active_transaction_temporarily_pins_history_below_the_capacity_floor() {
+fn a_pinned_clock_transaction_cannot_bypass_the_history_capacity() {
     let mut s = FirestoreState::with_history_version_limit(4);
     write_value(&mut s, "docs/hot", "first", t(0));
     let transaction = s.begin_transaction(true, t(0)).unwrap();
-    let original = s
-        .get_in_transaction(&transaction, &path("docs/hot"))
+    s.get_in_transaction(&transaction, &path("docs/hot"))
         .unwrap()
         .unwrap();
 
     for value in 1..=10 {
         write_value(&mut s, "docs/hot", &format!("v{value}"), t(0));
     }
-    assert!(s.retained_versions() > 4, "the active snapshot is exact");
-    assert_eq!(
-        s.get_in_transaction(&transaction, &path("docs/hot"))
-            .unwrap(),
-        Some(original)
-    );
-
-    s.rollback(&transaction).unwrap();
-    write_value(&mut s, "docs/hot", "after-rollback", t(0));
-    assert!(s.retained_versions() <= 4);
+    assert!(s.retained_versions() <= 4, "capacity is a hard bound");
+    assert!(matches!(
+        s.get_in_transaction(&transaction, &path("docs/hot")),
+        Err(FirestoreError::Aborted(_))
+    ));
 }
 
 #[test]

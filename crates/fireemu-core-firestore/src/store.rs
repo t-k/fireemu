@@ -1735,7 +1735,9 @@ impl FirestoreState {
 
     /// The retention floor at `now`: the oldest version any retention root can still reach.
     /// The roots are the one-hour `read_time` window ([`READ_TIME_RETENTION_SECONDS`]) and
-    /// the read version of every transaction that is still usable.
+    /// the read version of every transaction that is still usable. The per-path capacity is
+    /// a hard floor: crossing it invalidates an older transaction instead of retaining
+    /// unbounded history while a suite clock is pinned.
     fn retention_floor(&self, now: LogicalInstant) -> CommitVersion {
         let window = i128::from(READ_TIME_RETENTION_SECONDS) * 1_000_000_000;
         let oldest_read = LogicalInstant::from_nanos(now.as_nanos().saturating_sub(window));
@@ -1743,7 +1745,7 @@ impl FirestoreState {
         if let Some(oldest_transaction) = self.active_transaction_versions.keys().next() {
             floor = floor.min(*oldest_transaction);
         }
-        floor.min(self.version)
+        floor.max(self.capacity_floor).min(self.version)
     }
 
     /// Drops every version that no retention root can reach any more and returns the new
@@ -1830,7 +1832,12 @@ impl FirestoreState {
 
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
         match self.transactions.get(id) {
-            Some(t) if t.state == TransactionState::Active => Ok(t),
+            Some(t)
+                if t.state == TransactionState::Active
+                    && t.read_version >= self.compaction_floor =>
+            {
+                Ok(t)
+            }
             // A finished transaction is reported the way the official emulator reports it:
             // `ABORTED`, which is the code the SDKs retry a transaction on.
             Some(_) => Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into())),

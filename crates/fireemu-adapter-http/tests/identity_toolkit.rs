@@ -160,6 +160,10 @@ fn blocking_auth_runs_before_create_then_before_sign_in() {
     );
 
     assert_eq!(status, 200, "{body}");
+    assert!(
+        body.get("emailVerified").is_none(),
+        "blocking hooks must not change the official signUp response shape: {body}"
+    );
     assert_eq!(
         *events.lock().unwrap(),
         vec![
@@ -282,6 +286,10 @@ fn sign_up_sign_in_lookup_and_refresh() {
         &json!({"email": "a@example.com", "password": "hunter22", "returnSecureToken": true}),
     );
     assert_eq!(status, 200, "{body}");
+    assert!(
+        body.get("emailVerified").is_none(),
+        "the official signUp response omits account verification state: {body}"
+    );
     let id_token = body["idToken"].as_str().unwrap().to_owned();
     assert_eq!(id_token.split('.').count(), 3);
     assert_eq!(body["expiresIn"], "3600");

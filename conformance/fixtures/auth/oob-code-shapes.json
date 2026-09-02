@@ -10,30 +10,18 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 4,
+    "parity": 5,
     "documented-divergence": 0,
-    "debt": 1,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
     {
       "id": "create-the-user",
-      "status": "debt",
-      "oracle": {
+      "status": "parity",
+      "value": {
         "keys": [
           "email",
-          "expiresIn",
-          "idToken",
-          "kind",
-          "localId",
-          "refreshToken"
-        ],
-        "status": 200
-      },
-      "testd": {
-        "keys": [
-          "email",
-          "emailVerified",
           "expiresIn",
           "idToken",
           "kind",

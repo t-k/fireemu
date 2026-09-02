@@ -385,7 +385,11 @@ function describe(name, fn, instrumentation) {
     ...callableAppCheck(instrumentation, fn),
   });
   const ep = fn.__endpoint;
-  const base = { name, entryPoint: name };
+  const base = {
+    name,
+    entryPoint: name,
+    generation: ep?.platform === "gcfv2" ? 2 : 1,
+  };
   if (ep?.omit === true) return { ...base, omitted: true };
   if (ep && ep.platform === "gcfv1") {
     const deployment = platformOptions(ep);
@@ -410,7 +414,7 @@ function describe(name, fn, instrumentation) {
     const region = firstRegion(ep);
     if (region) base.region = region;
     if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
-    if (ep.concurrency) base.concurrency = ep.concurrency;
+    if (ep.concurrency != null) base.concurrency = ep.concurrency;
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.scheduleTrigger) {

@@ -34,9 +34,20 @@ def read_frame():
 
 
 class Echo(http.server.BaseHTTPRequestHandler):
+    hold_condition = threading.Condition()
+    hold_entries = 0
+
     def do_POST(self):  # noqa: N802 - the stdlib spelling
         length = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(length) if length else b""
+        if self.path == "/hold":
+            with self.hold_condition:
+                type(self).hold_entries += 1
+                self.hold_condition.notify_all()
+                self.hold_condition.wait_for(lambda: type(self).hold_entries >= 2, timeout=2)
+            self.send_response(204)
+            self.end_headers()
+            return
         payload = json.dumps(
             {
                 "method": self.command,
@@ -91,6 +102,7 @@ send({
             {"name": "onGone", "trigger": {"type": "auth", "eventType": "providers/firebase.auth/eventTypes/user.delete"}},
             {"name": "withAuth", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.written.withAuthContext", "document": "audited/{id}"}},
             {"name": "echo", "trigger": {"type": "http", "callable": False}},
+            {"name": "hold", "generation": 2, "concurrency": None, "platformOptions": {"availableMemoryMb": 2048}, "trigger": {"type": "http", "callable": False}},
             {"name": "add", "trigger": {"type": "http", "callable": True, "enforceAppCheck": False, "consumeAppCheckToken": "disabled"}},
             {"name": "guarded", "trigger": {"type": "http", "callable": True, "enforceAppCheck": True, "consumeAppCheckToken": consume}},
         ]

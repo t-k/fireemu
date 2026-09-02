@@ -360,7 +360,8 @@ fn functions(state: &UiState) -> UiResponse {
                 "trigger": trigger_json(&f.trigger),
                 "timeoutSeconds": f.timeout_seconds,
                 "retry": f.retry,
-                "concurrency": f.concurrency,
+                "concurrency": f.effective_concurrency(),
+                "configuredConcurrency": f.concurrency,
             })
         })
         .collect();

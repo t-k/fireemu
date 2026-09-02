@@ -72,7 +72,7 @@ exports.confSlow = onRequest({ timeoutSeconds: 1 }, async (_req, res) => {
   res.status(200).send("this answer arrives after the deadline");
 });
 
-exports.confConditionalLock = onRequest({ concurrency: 2 }, async (req, res) => {
+exports.confConditionalLock = onRequest(async (req, res) => {
   const participant = Number(req.body?.participant);
   if (participant !== 0 && participant !== 1) {
     res.status(400).json({ error: "participant must be 0 or 1" });

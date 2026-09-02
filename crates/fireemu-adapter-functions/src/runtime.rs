@@ -1946,9 +1946,15 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<ProxiedResponse, String> {
-        let (timeout, concurrency) = self.manifest.get(&target.function).map_or((60, 1), |f| {
-            (u64::from(f.timeout_seconds), f.concurrency as usize)
-        });
+        let (timeout, function_capacity) =
+            self.manifest
+                .get(&target.function)
+                .map_or((60, self.config.max_running), |function| {
+                    (
+                        u64::from(function.timeout_seconds),
+                        function.http_capacity(self.config.max_running),
+                    )
+                });
         // The fault plan applies to HTTP invocations like to event ones (spec 18): an
         // error answers instead of the handler, a delay moves the clock first, a crash
         // takes the runner down.
@@ -1978,7 +1984,7 @@ impl FunctionsRuntime {
                 .values()
                 .filter(|f| **f == target.function)
                 .count();
-            if inner.running.len() >= self.config.max_running || running_here >= concurrency {
+            if inner.running.len() >= self.config.max_running || running_here >= function_capacity {
                 return Err(format!(
                     "function {} is at its concurrency limit; retry later",
                     target.function
@@ -2158,7 +2164,7 @@ impl FunctionsRuntime {
             {
                 1
             } else {
-                spec.concurrency as usize
+                usize::try_from(spec.effective_concurrency()).unwrap_or(usize::MAX)
             };
             if running_here >= limit {
                 continue;

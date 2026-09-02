@@ -139,9 +139,93 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
         pos: 0,
         expr_depth: 0,
     };
-    let ruleset = p.ruleset()?;
+    let mut ruleset = p.ruleset()?;
     check_expression_tree_depth(&ruleset)?;
+    ruleset.value_dependencies = analyze_value_dependencies(&ruleset);
     Ok(ruleset)
+}
+
+fn root_access(expr: &Expr) -> Option<(&str, Option<&str>)> {
+    match expr.kind() {
+        ExprKind::Ident(name) => Some((name, None)),
+        ExprKind::Member { object, name } => {
+            root_access(object).map(|(root, first)| (root, first.or(Some(name.as_str()))))
+        }
+        ExprKind::Index { object, .. } | ExprKind::Slice { object, .. } => root_access(object),
+        _ => None,
+    }
+}
+
+fn analyze_value_dependencies(ruleset: &Ruleset) -> crate::ast::ValueDependencies {
+    let mut dependencies = crate::ast::ValueDependencies::default();
+    let mut expressions = Vec::new();
+    let mut items = ruleset
+        .services
+        .iter()
+        .flat_map(|service| &service.items)
+        .collect::<Vec<_>>();
+    while let Some(item) = items.pop() {
+        match item {
+            Item::Match(block) => {
+                items.extend(&block.items);
+                expressions.extend(
+                    block
+                        .allows
+                        .iter()
+                        .filter_map(|allow| allow.condition.as_ref()),
+                );
+                expressions.extend(block.path.iter().filter_map(|segment| match segment {
+                    PathSegment::Binding(expr) => Some(expr),
+                    _ => None,
+                }));
+            }
+            Item::Function(function) => {
+                expressions.extend(function.lets.iter().map(|binding| &binding.value));
+                expressions.push(&function.body);
+            }
+        }
+    }
+    let mut pending = expressions
+        .into_iter()
+        .map(|expression| (expression, false))
+        .collect::<Vec<_>>();
+    while let Some((expression, is_access_object)) = pending.pop() {
+        if !is_access_object {
+            match root_access(expression) {
+                Some(("resource", _)) => dependencies.existing_resource = true,
+                Some(("request", Some("resource") | None)) => {
+                    dependencies.request_resource = true;
+                }
+                Some(("request", Some(first)))
+                    if !matches!(first, "auth" | "method" | "path" | "time" | "query") =>
+                {
+                    dependencies.request_resource = true;
+                }
+                _ => {}
+            }
+        }
+        match expression.kind() {
+            ExprKind::Member { object, .. } => pending.push((object, true)),
+            ExprKind::Index { object, index } => {
+                pending.push((object, true));
+                pending.push((index, false));
+            }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => {
+                pending.push((object, true));
+                pending.push((start, false));
+                pending.push((end, false));
+            }
+            _ => pending.extend(
+                expression
+                    .children()
+                    .into_iter()
+                    .map(|child| (child, false)),
+            ),
+        }
+    }
+    dependencies
 }
 
 fn check_expression_tree_depth(ruleset: &Ruleset) -> Result<(), ParseError> {
@@ -475,7 +559,11 @@ impl<'a> Parser<'a> {
         if services.is_empty() {
             return Err(self.error("expected at least one `service` block"));
         }
-        Ok(Ruleset { version, services })
+        Ok(Ruleset {
+            version,
+            services,
+            value_dependencies: crate::ast::ValueDependencies::default(),
+        })
     }
 
     /// Parses items until the closing `}` (consumed).

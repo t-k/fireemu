@@ -20,6 +20,36 @@ pub struct Ruleset {
     pub version: Option<String>,
     /// Services.
     pub services: Vec<Service>,
+    pub(crate) value_dependencies: ValueDependencies,
+}
+
+/// Document-shaped values a compiled ruleset may read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ValueDependencies {
+    pub(crate) existing_resource: bool,
+    pub(crate) request_resource: bool,
+}
+
+impl ValueDependencies {
+    /// Whether an existing Firestore or Storage resource must be converted for evaluation.
+    #[must_use]
+    pub const fn existing_resource(self) -> bool {
+        self.existing_resource
+    }
+
+    /// Whether the incoming resource must be converted for evaluation.
+    #[must_use]
+    pub const fn request_resource(self) -> bool {
+        self.request_resource
+    }
+}
+
+impl Ruleset {
+    /// Returns the document-shaped values any expression in this ruleset may read.
+    #[must_use]
+    pub const fn value_dependencies(&self) -> ValueDependencies {
+        self.value_dependencies
+    }
 }
 
 /// `service <name> { ... }`.

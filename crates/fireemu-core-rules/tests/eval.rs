@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use fireemu_core_rules::eval::{
-    evaluate_request, Decision, DenyReason, Method, RequestContext, RulesService,
+    evaluate_request, evaluate_request_traced_owned, Decision, DenyReason, Method, RequestContext,
+    RulesService,
 };
 use fireemu_core_rules::parse::parse_ruleset;
 use fireemu_core_rules::value::{AuthContext, RulesValue};
@@ -835,6 +836,29 @@ fn dynamic_regex_cache_has_a_request_local_entry_cap() {
     assert_eq!(report.regex.runtime_compiles, 17, "{report:?}");
     assert_eq!(report.regex.cache_hits, 1, "{report:?}");
     assert_eq!(report.regex.peak_cache_entries, 16, "{report:?}");
+}
+
+#[test]
+fn owned_evaluation_projects_scalar_members_without_cloning_large_containers() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /notes/{id} { allow get: if resource.data.a == 1 && resource.data.b == 2 && resource.data.c == 3 && resource.data.d == 4 && resource.data.e == 5; } } }",
+    )
+    .unwrap();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[
+        ("a", RulesValue::Int(1)),
+        ("b", RulesValue::Int(2)),
+        ("c", RulesValue::Int(3)),
+        ("d", RulesValue::Int(4)),
+        ("e", RulesValue::Int(5)),
+        ("unrelated", RulesValue::String("x".repeat(500 * 1024))),
+    ]));
+
+    let (report, coverage) = evaluate_request_traced_owned(&ruleset, request, None);
+
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    assert_eq!(report.projected_member_reads, 5, "{report:?}");
+    assert!(!coverage.is_empty());
 }
 
 #[test]

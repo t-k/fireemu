@@ -180,6 +180,8 @@ pub struct EvaluationReport {
     pub absent_resource_used: bool,
     /// Request-local regular expression compilation and cache observations.
     pub regex: RegexEvaluationDiagnostics,
+    /// Member chains projected directly from shared request roots without cloning containers.
+    pub projected_member_reads: u64,
 }
 
 /// Request-local observations for compiled regular expression reuse.
@@ -318,8 +320,8 @@ impl DocumentAccess for NoDocumentAccess {
 struct Evaluator<'a> {
     /// Current `eval` recursion depth.
     nesting: u32,
-    request: RulesValue,
-    resource: RulesValue,
+    request: Arc<RulesValue>,
+    resource: Arc<RulesValue>,
     /// `get()` / `exists()` provider (`None` = unsupported).
     access: Option<&'a dyn DocumentAccess>,
     /// Documents read so far, keyed by (`getAfter`?, path): a path is charged once per
@@ -328,6 +330,7 @@ struct Evaluator<'a> {
     /// Successful and failed dynamic pattern compilations retained only for this request.
     regex_cache: BTreeMap<String, Result<Arc<crate::regex::Regex>, crate::regex::RegexError>>,
     regex_diagnostics: RegexEvaluationDiagnostics,
+    projected_member_reads: u64,
     doc_reads_max: u64,
     /// `rules_version = '2'`: `**` matches zero or more segments.
     wildcard_zero_or_more: bool,
@@ -364,6 +367,31 @@ pub fn evaluate_request_traced(
     (report, coverage.into_inner())
 }
 
+/// Evaluates an owned request while moving its potentially large document values into the
+/// evaluator instead of cloning them.
+#[must_use]
+pub fn evaluate_request_traced_owned(
+    ruleset: &Ruleset,
+    mut ctx: RequestContext,
+    access: Option<&dyn DocumentAccess>,
+) -> (EvaluationReport, Coverage) {
+    let coverage = core::cell::RefCell::new(Coverage::default());
+    let resource_absent = ctx.resource.is_none();
+    let resource = Arc::new(ctx.resource.take().unwrap_or(RulesValue::Null));
+    let request_resource = ctx.request_resource.take();
+    let request = Arc::new(build_request_with_resource(&ctx, request_resource));
+    let report = evaluate_prepared(
+        ruleset,
+        &ctx,
+        access,
+        Some(&coverage),
+        &request,
+        &resource,
+        resource_absent,
+    );
+    (report, coverage.into_inner())
+}
+
 /// Evaluates a request against a ruleset; `access` serves `get()` / `exists()` within the
 /// Maximum `eval` recursion depth (stack safety; parenthesised nesting is bounded by the
 /// parser, left-nested operator chains are bounded here).
@@ -386,6 +414,30 @@ fn evaluate_with_coverage(
     access: Option<&dyn DocumentAccess>,
     coverage: Option<&core::cell::RefCell<Coverage>>,
 ) -> EvaluationReport {
+    let request = Arc::new(build_request(ctx));
+    let resource_absent = ctx.resource.is_none();
+    let resource = Arc::new(ctx.resource.clone().unwrap_or(RulesValue::Null));
+    evaluate_prepared(
+        ruleset,
+        ctx,
+        access,
+        coverage,
+        &request,
+        &resource,
+        resource_absent,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn evaluate_prepared(
+    ruleset: &Ruleset,
+    ctx: &RequestContext,
+    access: Option<&dyn DocumentAccess>,
+    coverage: Option<&core::cell::RefCell<Coverage>>,
+    request: &Arc<RulesValue>,
+    resource: &Arc<RulesValue>,
+    resource_absent: bool,
+) -> EvaluationReport {
     let mut budget = Budget {
         expressions: 0,
         expression_max: limit_max("RULES-EXPRESSIONS-PER-REQUEST"),
@@ -404,6 +456,7 @@ fn evaluate_with_coverage(
     let mut unsupported: Option<String> = None;
     let mut absent_resource_used = false;
     let mut regex_diagnostics = RegexEvaluationDiagnostics::default();
+    let mut projected_member_reads = 0u64;
     for service in &ruleset.services {
         if service.name != ctx.service.name() {
             continue;
@@ -417,23 +470,22 @@ fn evaluate_with_coverage(
                 scope.functions.push(f);
             }
         }
-        let request_value = build_request(ctx);
-        let resource_value = ctx.resource.clone().unwrap_or(RulesValue::Null);
         let mut ev = Evaluator {
             nesting: 0,
-            request: request_value,
-            resource: resource_value,
+            request: Arc::clone(request),
+            resource: Arc::clone(resource),
             access,
             doc_cache: BTreeMap::new(),
             regex_cache: BTreeMap::new(),
             regex_diagnostics: RegexEvaluationDiagnostics::default(),
+            projected_member_reads: 0,
             doc_reads_max: limit_max(match ctx.service {
                 RulesService::Firestore => "RULES-DOC-ACCESS-SINGLE",
                 // Storage rules may call firestore.get() / exists() twice per request.
                 RulesService::Storage => "STORAGE-RULES-FIRESTORE-ACCESS",
             }),
             wildcard_zero_or_more: ruleset.version.as_deref() == Some("2"),
-            resource_absent: ctx.resource.is_none(),
+            resource_absent,
             absent_resource_used: core::cell::Cell::new(false),
             budget,
             scope,
@@ -452,6 +504,7 @@ fn evaluate_with_coverage(
         regex_diagnostics.peak_cache_entries = regex_diagnostics
             .peak_cache_entries
             .max(ev.regex_diagnostics.peak_cache_entries);
+        projected_member_reads = projected_member_reads.saturating_add(ev.projected_member_reads);
         match outcome {
             Ok(true) => {
                 return EvaluationReport {
@@ -460,6 +513,7 @@ fn evaluate_with_coverage(
                     max_call_depth: budget.max_depth_seen,
                     absent_resource_used,
                     regex: regex_diagnostics,
+                    projected_member_reads,
                 }
             }
             Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
@@ -478,6 +532,7 @@ fn evaluate_with_coverage(
                     max_call_depth: budget.max_depth_seen,
                     absent_resource_used,
                     regex: regex_diagnostics,
+                    projected_member_reads,
                 }
             }
             Err(EvalError::Unsupported(m)) => unsupported = Some(m),
@@ -496,10 +551,18 @@ fn evaluate_with_coverage(
         max_call_depth: budget.max_depth_seen,
         absent_resource_used,
         regex: regex_diagnostics,
+        projected_member_reads,
     }
 }
 
 fn build_request(ctx: &RequestContext) -> RulesValue {
+    build_request_with_resource(ctx, ctx.request_resource.clone())
+}
+
+fn build_request_with_resource(
+    ctx: &RequestContext,
+    request_resource: Option<RulesValue>,
+) -> RulesValue {
     let mut m = BTreeMap::new();
     m.insert(
         "auth".to_owned(),
@@ -533,7 +596,7 @@ fn build_request(ctx: &RequestContext) -> RulesValue {
     // `request.resource` and `request.query` are absent, not null, when the request has no
     // such thing: reading either on a `get` is a missing-member error in the official
     // runtime, and `request.keys()` does not list them (recorded, area `detail`).
-    if let Some(resource) = ctx.request_resource.clone() {
+    if let Some(resource) = request_resource {
         m.insert("resource".to_owned(), resource);
     }
     if let Some(query) = ctx.request_query.clone() {
@@ -791,6 +854,21 @@ fn undetermined(v: &RulesValue) -> bool {
     }
 }
 
+fn member_access_chain<'a>(
+    expression: &'a Expr,
+    members: &mut Vec<(&'a Expr, &'a str)>,
+) -> Option<(&'a Expr, &'a str)> {
+    match expression.kind() {
+        ExprKind::Ident(name) => Some((expression, name)),
+        ExprKind::Member { object, name } => {
+            let root = member_access_chain(object, members)?;
+            members.push((expression, name));
+            Some(root)
+        }
+        _ => None,
+    }
+}
+
 impl<'a> Evaluator<'a> {
     fn lookup(&mut self, name: &str) -> Result<Option<RulesValue>, EvalError> {
         if let Some(index) = self
@@ -802,12 +880,12 @@ impl<'a> Evaluator<'a> {
             return self.resolve_binding(index).map(Some);
         }
         Ok(match name {
-            "request" => Some(self.request.clone()),
+            "request" => Some(self.request.as_ref().clone()),
             "resource" => {
                 if self.resource_absent {
                     self.absent_resource_used.set(true);
                 }
-                Some(self.resource.clone())
+                Some(self.resource.as_ref().clone())
             }
             _ => None,
         })
@@ -1122,8 +1200,72 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    fn record_success(&mut self, expr: &Expr, value: &RulesValue) {
+        self.cause = None;
+        if let Some(coverage) = self.coverage {
+            if let Ok(mut coverage) = coverage.try_borrow_mut() {
+                coverage.record(expr.span, expr.end, ExprValue::of(value));
+            }
+        }
+    }
+
+    fn project_member_chain(&mut self, expr: &Expr) -> Option<Result<RulesValue, EvalError>> {
+        let mut members = Vec::new();
+        let (root_expr, root_name) = member_access_chain(expr, &mut members)?;
+        let root = match root_name {
+            "request" => Arc::clone(&self.request),
+            "resource" if !self.resource_absent => Arc::clone(&self.resource),
+            _ => return None,
+        };
+        let mut values = vec![root.as_ref()];
+        for (_, name) in &members {
+            let RulesValue::Map(map) = values.last().copied()? else {
+                return None;
+            };
+            values.push(map.get(*name)?);
+        }
+        let projected = values.last().copied()?;
+        if matches!(
+            projected,
+            RulesValue::Map(_)
+                | RulesValue::List(_)
+                | RulesValue::Set(_)
+                | RulesValue::PartialMap(_)
+                | RulesValue::PartialList(_)
+                | RulesValue::PartialListAny(_)
+                | RulesValue::OneOf(_)
+                | RulesValue::NotOneOf(_)
+        ) {
+            return None;
+        }
+        let charges = u64::try_from(members.len().saturating_add(1)).unwrap_or(u64::MAX);
+        if self.budget.expressions.saturating_add(charges) > self.budget.expression_max {
+            return None;
+        }
+        for _ in 0..charges {
+            if let Err(error) = self.budget.charge() {
+                return Some(Err(error));
+            }
+        }
+        self.projected_member_reads = self.projected_member_reads.saturating_add(1);
+        self.record_success(root_expr, values[0]);
+        for ((member_expr, _), value) in members
+            .iter()
+            .zip(values.iter().skip(1))
+            .take(members.len().saturating_sub(1))
+        {
+            self.record_success(member_expr, value);
+        }
+        Some(Ok(projected.clone()))
+    }
+
     #[allow(clippy::too_many_lines)]
     fn eval_inner(&mut self, expr: &Expr) -> Result<RulesValue, EvalError> {
+        if matches!(expr.kind(), ExprKind::Member { .. }) {
+            if let Some(result) = self.project_member_chain(expr) {
+                return result;
+            }
+        }
         self.budget.charge()?;
         match expr.kind() {
             ExprKind::Literal(l) => Ok(match l {

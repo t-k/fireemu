@@ -207,9 +207,36 @@ service cloud.firestore {
     return data.matches(".*(\r|\n|\\0|\u0000|\x00)+.*") == false;
   }
 }
+
 "#;
 
     parse_ruleset(source).unwrap();
+}
+
+#[test]
+fn ruleset_records_only_the_document_values_its_expressions_can_read() {
+    let rules = |condition: &str| {
+        parse_ruleset(&format!(
+            "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents {{ match /notes/{{id}} {{ allow get: if {condition}; }} }} }}"
+        ))
+        .unwrap()
+        .value_dependencies()
+    };
+
+    let auth_only = rules("request.auth != null && request.method == 'get'");
+    assert!(!auth_only.existing_resource());
+    assert!(!auth_only.request_resource());
+
+    let existing = rules("resource.data.owner == request.auth.uid");
+    assert!(existing.existing_resource());
+    assert!(!existing.request_resource());
+
+    let incoming = rules("request.resource.data.owner == request.auth.uid");
+    assert!(!incoming.existing_resource());
+    assert!(incoming.request_resource());
+
+    let request_shape = rules("request.keys().hasAll(['resource'])");
+    assert!(request_shape.request_resource());
 }
 
 #[test]

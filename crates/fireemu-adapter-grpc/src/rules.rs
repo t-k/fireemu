@@ -46,7 +46,7 @@ use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::ast::Ruleset;
 use fireemu_core_rules::coverage::{CoverageEntry, RequestTrace, RulesDiagnostics};
 use fireemu_core_rules::eval::{
-    evaluate_request_traced, try_compare, Decision, DenyReason, DocumentAccess, Method,
+    evaluate_request_traced_owned, try_compare, Decision, DenyReason, DocumentAccess, Method,
     RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
 };
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
@@ -705,9 +705,10 @@ impl RulesEnforcer {
                     abstract_path: false,
                     request_query: Some(query_value(query)),
                 };
-                let (report, _) = evaluate_request_traced(ruleset, &ctx, Some(&reader));
+                let resource_absent = ctx.resource.is_none();
+                let (report, _) = evaluate_request_traced_owned(ruleset, ctx, Some(&reader));
                 if !matches!(report.decision, Decision::Allow)
-                    || (ctx.resource.is_none() && report.absent_resource_used)
+                    || (resource_absent && report.absent_resource_used)
                 {
                     return Err(Status::permission_denied("query denied by Security Rules"));
                 }
@@ -739,7 +740,7 @@ impl RulesEnforcer {
                 };
                 decide(
                     ruleset,
-                    &ctx,
+                    ctx,
                     Method::List,
                     &placeholder,
                     &reader,
@@ -868,6 +869,7 @@ fn evaluate_with(
     access: &dyn DocumentAccess,
     diagnostics: Option<&Mutex<RulesDiagnostics>>,
 ) -> Result<(), Status> {
+    let dependencies = ruleset.value_dependencies();
     let ctx = RequestContext {
         service: RulesService::Firestore,
         method,
@@ -876,24 +878,29 @@ fn evaluate_with(
             Principal::User(a) => Some(a.clone()),
             _ => None,
         },
-        resource: resource.map(resource_value),
-        request_resource: request_resource.map(resource_value),
+        resource: resource
+            .filter(|_| dependencies.existing_resource())
+            .map(resource_value),
+        request_resource: request_resource
+            .filter(|_| dependencies.request_resource())
+            .map(resource_value),
         time_unix_nanos: now.as_nanos(),
         abstract_path: false,
         request_query: None,
     };
-    decide(ruleset, &ctx, method, path, access, diagnostics)
+    decide(ruleset, ctx, method, path, access, diagnostics)
 }
 
 fn decide(
     ruleset: &Ruleset,
-    ctx: &RequestContext,
+    ctx: RequestContext,
     method: Method,
     path: &DocumentPath,
     access: &dyn DocumentAccess,
     diagnostics: Option<&Mutex<RulesDiagnostics>>,
 ) -> Result<(), Status> {
-    let (report, coverage) = evaluate_request_traced(ruleset, ctx, Some(access));
+    let uid = ctx.auth.as_ref().map(|auth| auth.uid.clone());
+    let (report, coverage) = evaluate_request_traced_owned(ruleset, ctx, Some(access));
     let denial = match &report.decision {
         Decision::Allow => None,
         Decision::Deny(reason) => Some(format!(
@@ -908,7 +915,6 @@ fn decide(
         let trace = trace_enabled.then(|| {
             let expressions: Vec<CoverageEntry> = coverage.entries().into_iter().cloned().collect();
             let path = path.relative();
-            let uid = ctx.auth.as_ref().map(|a| a.uid.clone());
             let reason = denial.clone().unwrap_or_default();
             (expressions, path, uid, reason)
         });

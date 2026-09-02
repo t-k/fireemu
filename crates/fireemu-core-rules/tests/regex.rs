@@ -49,6 +49,66 @@ fn linear_character_alternative_repeat_uses_constant_native_stack() {
 }
 
 #[test]
+fn multi_character_repeats_use_subject_independent_match_depth() {
+    let result = std::thread::Builder::new()
+        .name("regex-multi-character-repeat".to_owned())
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let slash = Regex::new("^([a-z]+/)*[a-z]+$").unwrap();
+            let captured_slash = Regex::new("^(([a-z]+/))*[a-z]+$").unwrap();
+            let dot = Regex::new(r"^([a-z]+\.)+[a-z]+$").unwrap();
+            let dash = Regex::new("^(?:[a-z]+-)*[a-z]+$").unwrap();
+            for segments in [1, 4, 8, 200] {
+                let slash_path = std::iter::repeat_n("abc", segments)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                assert_eq!(
+                    slash.is_full_match(&slash_path),
+                    Ok(true),
+                    "slash segments={segments}"
+                );
+                assert_eq!(
+                    captured_slash.is_full_match(&slash_path),
+                    Ok(true),
+                    "captured slash segments={segments}"
+                );
+
+                let dotted = std::iter::repeat_n("abc", segments + 1)
+                    .collect::<Vec<_>>()
+                    .join(".");
+                assert_eq!(
+                    dot.is_full_match(&dotted),
+                    Ok(true),
+                    "dot segments={segments}"
+                );
+
+                let dashed = std::iter::repeat_n("abc", segments + 1)
+                    .collect::<Vec<_>>()
+                    .join("-");
+                assert_eq!(
+                    dash.is_full_match(&dashed),
+                    Ok(true),
+                    "dash segments={segments}"
+                );
+            }
+
+            let pathological = Regex::new("^(a+)+$")
+                .unwrap()
+                .is_full_match(&format!("{}b", "a".repeat(60)));
+            assert!(
+                matches!(
+                    pathological,
+                    Ok(false) | Err(RegexRuntimeError::StepBudgetExceeded { .. })
+                ),
+                "subject length must not consume matcher depth: {pathological:?}"
+            );
+        })
+        .expect("spawn small matcher stack")
+        .join();
+    assert!(result.is_ok(), "small-stack matcher thread panicked");
+}
+
+#[test]
 fn fixed_width_alternative_branch_probes_are_step_bounded() {
     let mut branches = (0..80)
         .map(|index| format!("[\\x{{{:x}}}]", 0x100 + index))
@@ -149,20 +209,20 @@ fn replace_all_replaces_every_match_with_a_literal() {
 }
 
 #[test]
-fn pathological_patterns_report_runtime_budget_exhaustion() {
+fn pathological_patterns_report_step_budget_exhaustion_without_spending_subject_depth() {
     let re = Regex::new("(a+)+b").unwrap();
     let error = re.is_full_match(&"a".repeat(18)).unwrap_err();
-    let RegexRuntimeError::DepthBudgetExceeded { current, maximum } = error else {
+    let RegexRuntimeError::StepBudgetExceeded { current, maximum } = error else {
         panic!("unexpected runtime error: {error}");
     };
     assert!(current > maximum);
     assert_eq!(
         error.to_string(),
-        format!("regular expression depth budget exceeded: {current} > {maximum}")
+        format!("regular expression step budget exceeded: {current} > {maximum}")
     );
     assert!(matches!(
         re.replace_all(&"a".repeat(18), "replacement"),
-        Err(RegexRuntimeError::DepthBudgetExceeded { current, maximum })
+        Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
             if current > maximum
     ));
 }
@@ -392,12 +452,12 @@ fn deep_linear_matches_fail_within_a_small_thread_stack() {
                 let matcher = Regex::new("(a|aa)*b").unwrap();
                 assert!(matches!(
                     matcher.is_full_match(&input),
-                    Err(RegexRuntimeError::DepthBudgetExceeded { current, maximum })
+                    Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
                         if current > maximum
                 ));
                 assert!(matches!(
                     matcher.replace_all(&input, "x"),
-                    Err(RegexRuntimeError::DepthBudgetExceeded { current, maximum })
+                    Err(RegexRuntimeError::StepBudgetExceeded { current, maximum })
                         if current > maximum
                 ));
             })

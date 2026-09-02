@@ -1054,7 +1054,7 @@ service cloud.firestore {
 }
 
 #[test]
-fn regex_depth_budget_exhaustion_cannot_be_overridden_by_a_nested_allow() {
+fn regex_backtracking_step_budget_cannot_be_overridden_by_a_nested_allow() {
     let rules = r"
 rules_version = '2';
 service cloud.firestore {
@@ -1077,7 +1077,7 @@ service cloud.firestore {
         matches!(
             report.decision,
             Decision::Deny(DenyReason::BudgetExceeded {
-                limit_id: "FIREEMU-REGEX-DEPTH-PER-MATCH",
+                limit_id: "FIREEMU-REGEX-STEPS-PER-MATCH",
                 current,
                 maximum,
             }) if current > maximum

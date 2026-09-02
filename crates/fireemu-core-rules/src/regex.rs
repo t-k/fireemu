@@ -1195,41 +1195,128 @@ fn match_repeat(
     k: &mut dyn FnMut(usize) -> MatchResult,
 ) -> MatchResult {
     let _depth = enter_match(ctx)?;
-    charge_step(ctx)?;
     if is_deterministic(node, ctx.flags) {
+        charge_step(ctx)?;
         return match_deterministic_repeat(node, min, max, greedy, ctx, pos, count, k);
     }
-    let can_stop = count >= min;
-    let can_more = max.is_none_or(|m| count < m);
-    let try_more = |k: &mut dyn FnMut(usize) -> MatchResult| -> MatchResult {
-        if can_more {
-            match_node(node, ctx, pos, &mut |end| {
-                // An empty iteration would loop forever; require progress.
-                if end > pos {
-                    match_repeat(node, min, max, greedy, ctx, end, count + 1, k)
-                } else {
-                    Ok(false)
+    match_backtracking_repeat(node, min, max, greedy, ctx, pos, count, k)
+}
+
+enum RepeatTask {
+    Explore {
+        pos: usize,
+        count: usize,
+        captures: Captures,
+    },
+    Stop {
+        pos: usize,
+        captures: Captures,
+    },
+}
+
+fn repeat_candidates(
+    node: &Node,
+    ctx: &MatchContext<'_>,
+    pos: usize,
+) -> Result<Vec<(usize, Captures)>, RegexRuntimeError> {
+    let original_captures = ctx.caps.borrow().clone();
+    let mut candidates = Vec::new();
+    let result = match_node(node, ctx, pos, &mut |end| {
+        if end > pos {
+            candidates.push((end, capture_snapshot(ctx)?));
+        }
+        Ok(false)
+    });
+    *ctx.caps.borrow_mut() = original_captures;
+    result?;
+    Ok(candidates)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn match_backtracking_repeat(
+    node: &Node,
+    min: usize,
+    max: Option<usize>,
+    greedy: bool,
+    ctx: &MatchContext<'_>,
+    pos: usize,
+    count: usize,
+    k: &mut dyn FnMut(usize) -> MatchResult,
+) -> MatchResult {
+    let original_captures = ctx.caps.borrow().clone();
+    let mut tasks = vec![RepeatTask::Explore {
+        pos,
+        count,
+        captures: original_captures.clone(),
+    }];
+
+    while let Some(task) = tasks.pop() {
+        match task {
+            RepeatTask::Stop { pos, captures } => {
+                *ctx.caps.borrow_mut() = captures;
+                match k(pos) {
+                    Ok(true) => return Ok(true),
+                    Ok(false) => {}
+                    Err(error) => {
+                        *ctx.caps.borrow_mut() = original_captures;
+                        return Err(error);
+                    }
                 }
-            })
-        } else {
-            Ok(false)
-        }
-    };
-    if greedy {
-        if try_more(k)? {
-            Ok(true)
-        } else if can_stop {
-            k(pos)
-        } else {
-            Ok(false)
-        }
-    } else {
-        if can_stop && k(pos)? {
-            Ok(true)
-        } else {
-            try_more(k)
+            }
+            RepeatTask::Explore {
+                pos,
+                count,
+                captures,
+            } => {
+                ctx.caps.borrow_mut().clone_from(&captures);
+                if let Err(error) = charge_step(ctx) {
+                    *ctx.caps.borrow_mut() = original_captures;
+                    return Err(error);
+                }
+                let can_stop = count >= min;
+                let can_more = max.is_none_or(|maximum| count < maximum);
+
+                if !greedy && can_stop {
+                    match k(pos) {
+                        Ok(true) => return Ok(true),
+                        Ok(false) => ctx.caps.borrow_mut().clone_from(&captures),
+                        Err(error) => {
+                            *ctx.caps.borrow_mut() = original_captures;
+                            return Err(error);
+                        }
+                    }
+                }
+
+                if greedy && can_stop {
+                    tasks.push(RepeatTask::Stop {
+                        pos,
+                        captures: captures.clone(),
+                    });
+                }
+                if !can_more {
+                    continue;
+                }
+
+                let candidates = match repeat_candidates(node, ctx, pos) {
+                    Ok(candidates) => candidates,
+                    Err(error) => {
+                        *ctx.caps.borrow_mut() = original_captures;
+                        return Err(error);
+                    }
+                };
+                tasks.extend(candidates.into_iter().rev().map(|(end, captures)| {
+                    RepeatTask::Explore {
+                        pos: end,
+                        count: count + 1,
+                        captures,
+                    }
+                }));
+            }
         }
     }
+
+    *ctx.caps.borrow_mut() = original_captures;
+    Ok(false)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -345,6 +345,9 @@ service cloud.firestore {
     match /messages/{id} {
       allow create: if request.resource.data.content.matches('^(?:[\\t\\n\\r]|[^\\\\p{Cc}])*$');
     }
+    match /paths/{id} {
+      allow create: if request.resource.data.path.matches('^([a-z]+/)*[a-z]+$');
+    }
   }
 }",
         )
@@ -354,6 +357,17 @@ service cloud.firestore {
     h.client
         .commit(with_bearer(
             commit(vec![set_write("messages/long", &[("content", s(&long))])]),
+            &alice_token,
+        ))
+        .await
+        .unwrap();
+
+    let path = std::iter::repeat_n("abc", 200)
+        .collect::<Vec<_>>()
+        .join("/");
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("paths/long", &[("path", s(&path))])]),
             &alice_token,
         ))
         .await

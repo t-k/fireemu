@@ -1,10 +1,10 @@
 {
   "schemaVersion": 3,
-  "model": "RegexLinearRepeat",
-  "spec": "specs/RegexLinearRepeat.qnt",
-  "main": "RegexLinearRepeatProof",
-  "config": "configs/RegexLinearRepeat.json",
-  "mutationManifest": "mutations/RegexLinearRepeat.json",
+  "model": "RegexEvaluationCache",
+  "spec": "specs/RegexEvaluationCache.qnt",
+  "main": "RegexEvaluationCacheProof",
+  "config": "configs/RegexEvaluationCache.json",
+  "mutationManifest": "mutations/RegexEvaluationCache.json",
   "tools": {
     "quint": "0.32.0",
     "quintConnect": "0.1.2",
@@ -17,16 +17,18 @@
     "backend": "tlc"
   },
   "bounds": {
-    "BranchCount": "3",
-    "DepthMaximum": "2",
-    "StepMaximum": "4",
-    "SubjectLength": "3"
+    "CacheCapacity": "16",
+    "MaxEvaluations": "2",
+    "MaxOperations": "18"
   },
   "boundInputs": [
     ".github/workflows/ci.yml",
     "Cargo.lock",
     "Cargo.toml",
-    "crates/fireemu-core-rules/src/regex.rs",
+    "crates/fireemu-core-rules/src/ast.rs",
+    "crates/fireemu-core-rules/src/eval.rs",
+    "crates/fireemu-core-rules/src/parse.rs",
+    "crates/fireemu-core-rules/tests/eval.rs",
     "verification/quint/Cargo.toml",
     "verification/quint/README.md",
     "verification/quint/apalache.lock.json",
@@ -34,28 +36,31 @@
     "verification/quint/bin/install-apalache",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
-    "verification/quint/configs/RegexLinearRepeat.json",
-    "verification/quint/mutations/RegexLinearRepeat.json",
+    "verification/quint/configs/RegexEvaluationCache.json",
+    "verification/quint/mutations/RegexEvaluationCache.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-verification.sh",
-    "verification/quint/specs/RegexLinearRepeat.qnt",
+    "verification/quint/specs/RegexEvaluationCache.qnt",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
-    "verification/quint/src/regex_linear_repeat.rs",
+    "verification/quint/src/regex_evaluation_cache.rs",
     "verification/quint/tests/cli_contract.rs",
     "verification/quint/tests/evidence_contract.rs",
     "verification/quint/tests/model_registry.rs",
-    "verification/quint/tests/regex_linear_repeat_connect.rs"
+    "verification/quint/tests/regex_evaluation_cache_connect.rs"
   ],
   "digests": {
     ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
     "Cargo.lock": "b9d9003d89e783439407af3eb59207cc649e1e52a8668688ce7fb10dbe61dfb6",
     "Cargo.toml": "244bf68843deadddd11112ae015177de0c5cd0ff58a37beb17d0127d98af6f48",
-    "crates/fireemu-core-rules/src/regex.rs": "d58f693aa1a72ffc748d63e3482351cae0a9d54fb02ba0032a1e189727eceba3",
+    "crates/fireemu-core-rules/src/ast.rs": "8de818d1b4e4d22a5ebfb015f3863f746d5b98bfc8d33c9501bd0e95d23c0c3e",
+    "crates/fireemu-core-rules/src/eval.rs": "7fa0bb8ac782d9752be45312ff67273bf75e2438de0b3f46f24796a6ea441bf3",
+    "crates/fireemu-core-rules/src/parse.rs": "ebcf63731625d6b5237f4a4d1fddfb89ce776d0ce42aa71434b534f61ae2c45c",
+    "crates/fireemu-core-rules/tests/eval.rs": "71e8fcd803e2eb88e529fa69f1aea35dba1c28978d3b9ff93445d8e11909db06",
     "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
     "verification/quint/README.md": "303aaa74bc991b323359bc7f8ae3288125c1799149df6c9dcdb252f78abd592d",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
@@ -63,93 +68,86 @@
     "verification/quint/bin/install-apalache": "6a12dbd4ec229d3b004205251027dbd758b26b3477a4672274e3ad3301373d11",
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
-    "verification/quint/configs/RegexLinearRepeat.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/mutations/RegexLinearRepeat.json": "89a13577673f8966fc166a95efde65f01ecfa1d5f04dbe070347bde9faafbfa9",
+    "verification/quint/configs/RegexEvaluationCache.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
+    "verification/quint/mutations/RegexEvaluationCache.json": "9b109c6b294f8f9a990b08afc68ccfb6b33cb8a634ee4c129716071831659777",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "06e90ef0c047aea908438892e0f496ebb49f9a30b16d2bab29315acfc5dd4ce0",
-    "verification/quint/specs/RegexLinearRepeat.qnt": "1dc9fb4e225944d72faa286f234abb7bc8f9c892972a4d74a5f5d4008e589476",
+    "verification/quint/specs/RegexEvaluationCache.qnt": "40478277996ab3540710a956f0ae4d33c674322d788a3e2db9d0abf9cba425df",
     "verification/quint/src/evidence.rs": "2699af66039588f3dd87c85899a6e537aae90d19f6e127d58fbe6b621462577f",
     "verification/quint/src/lib.rs": "f8b1c06d79797755c9f74d30359efbdfc52136194c2a62c57f325935ef248356",
     "verification/quint/src/main.rs": "254e5a5c63ebe730ae23151d8eb509ed48ded061e1fda25680bf0eb298823763",
     "verification/quint/src/model.rs": "a17b646ad378b199594891f3d3db9dd7a2df7fa85b5754956cdaa559562a7042",
     "verification/quint/src/process.rs": "1657b6af09d982ac32776e64ef84d4db310ed1366cc0097d0c53357c502793ba",
-    "verification/quint/src/regex_linear_repeat.rs": "562aa9f7d4d601ffbce72e7c8b63a33bfa4f935ceb442a3c8b32b54d2fcd07c3",
+    "verification/quint/src/regex_evaluation_cache.rs": "0f653dee6676d82838946962ab02b5a90e3c9437000661f1e1de1d1072738b16",
     "verification/quint/tests/cli_contract.rs": "5ddddd13e7970db75a4c0780082df28fb84e03530b74bdcee679690698775c99",
     "verification/quint/tests/evidence_contract.rs": "dce0d71712d23419937b359c820a47f7241c4023f55df653fe6cf6fdee32b79a",
     "verification/quint/tests/model_registry.rs": "d436d2586cb2cb9d0fe58c049d97e331bdcae31bdab0127e23f2bb49857a0a01",
-    "verification/quint/tests/regex_linear_repeat_connect.rs": "b81cccc6dfcc33b16b9e34458a4cff8e966beb234f490cd8923c6d6bdb1f406a"
+    "verification/quint/tests/regex_evaluation_cache_connect.rs": "3c4e9b5773f7a58ad773ffcfd1805941d31c79b9a04da4fe308b433b95e92428"
   },
   "invariants": [
     "TypeOK",
-    "AtomicProgressDoesNotIncreaseDepth",
-    "MatchedImpliesEveryCharacterAccepted",
-    "ForbiddenCharacterNeverMatches",
-    "WorkIsCharged",
-    "EveryAtomicBranchProbeIsCharged",
-    "ExhaustionStartsOnlyFromRunning",
-    "BudgetExhaustionNeverMatches",
-    "NonAtomicFallsBack",
-    "AtomicConsumeAdvancesOneChargedCharacter",
-    "AtomicProbeMissAdvancesOneChargedProbe",
-    "AtomicRejectIsOneChargedBoundedProbe",
-    "FallbackAdvancesOneChargedFrame",
-    "ExhaustionRequiresABudgetBoundary"
+    "LiteralPatternsDoNotCompileAtRuntime",
+    "RepeatedDynamicPatternCompilesOnce",
+    "DynamicMissCompilesExactlyOnce",
+    "DynamicCacheEntriesAreBounded",
+    "SeparateEvaluationsDoNotShareCache",
+    "PeakCacheEntriesTracksRetainedEntries"
   ],
   "temporalProperties": [],
   "mutations": [
     {
-      "id": "M-FORMAL-RULES-REGEX-LINEAR-001",
-      "property": "AtomicProgressDoesNotIncreaseDepth",
+      "id": "M-FORMAL-RULES-REGEX-CACHE-001",
+      "property": "LiteralPatternsDoNotCompileAtRuntime",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-RULES-REGEX-LINEAR-002",
-      "property": "ForbiddenCharacterNeverMatches",
+      "id": "M-FORMAL-RULES-REGEX-CACHE-002",
+      "property": "RepeatedDynamicPatternCompilesOnce",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-RULES-REGEX-LINEAR-003",
-      "property": "WorkIsCharged",
+      "id": "M-FORMAL-RULES-REGEX-CACHE-003",
+      "property": "DynamicMissCompilesExactlyOnce",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-RULES-REGEX-LINEAR-004",
-      "property": "NonAtomicFallsBack",
+      "id": "M-FORMAL-RULES-REGEX-CACHE-004",
+      "property": "DynamicCacheEntriesAreBounded",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-RULES-REGEX-LINEAR-005",
-      "property": "BudgetExhaustionNeverMatches",
+      "id": "M-FORMAL-RULES-REGEX-CACHE-005",
+      "property": "SeparateEvaluationsDoNotShareCache",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     },
     {
-      "id": "M-FORMAL-RULES-REGEX-LINEAR-006",
-      "property": "EveryAtomicBranchProbeIsCharged",
+      "id": "M-FORMAL-RULES-REGEX-CACHE-006",
+      "property": "SeparateEvaluationsDoNotShareCache",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
-    "atomicFirst",
-    "atomicThird",
-    "forbidden",
-    "nonAtomic",
-    "exhausted"
+    "literal",
+    "dynamicRepeated",
+    "capacity",
+    "separateEvaluations"
   ],
   "actions": [
     "Evaluate"
   ],
   "projectionFields": [
-    "outcome",
-    "workClass",
-    "depthClass",
-    "probeAccounting"
+    "decision",
+    "runtimeCompiles",
+    "cacheHits",
+    "peakCacheEntries",
+    "evaluationIsolation"
   ],
   "simulation": {
     "seeds": [

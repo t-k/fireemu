@@ -562,6 +562,58 @@ const MODELS: &[ModelDescriptor] = &[
         additional_evidence_inputs: &[],
     },
     ModelDescriptor {
+        name: "RegexEvaluationCache",
+        spec: "specs/RegexEvaluationCache.qnt",
+        main: "RegexEvaluationCacheProof",
+        config: "configs/RegexEvaluationCache.json",
+        mutation_manifest: "mutations/RegexEvaluationCache.json",
+        properties: &[
+            invariant("TypeOK"),
+            invariant("LiteralPatternsDoNotCompileAtRuntime"),
+            invariant("RepeatedDynamicPatternCompilesOnce"),
+            invariant("DynamicMissCompilesExactlyOnce"),
+            invariant("DynamicCacheEntriesAreBounded"),
+            invariant("SeparateEvaluationsDoNotShareCache"),
+            invariant("PeakCacheEntriesTracksRetainedEntries"),
+        ],
+        actions: &["Evaluate"],
+        production_sources: &[
+            "crates/fireemu-core-rules/src/ast.rs",
+            "crates/fireemu-core-rules/src/eval.rs",
+            "crates/fireemu-core-rules/src/parse.rs",
+        ],
+        bounds: &[
+            BoundDescriptor {
+                name: "CacheCapacity",
+                value: "16",
+            },
+            BoundDescriptor {
+                name: "MaxOperations",
+                value: "18",
+            },
+            BoundDescriptor {
+                name: "MaxEvaluations",
+                value: "2",
+            },
+        ],
+        scenarios: &[
+            "literal",
+            "dynamicRepeated",
+            "capacity",
+            "separateEvaluations",
+        ],
+        projection_fields: &[
+            "decision",
+            "runtimeCompiles",
+            "cacheHits",
+            "peakCacheEntries",
+            "evaluationIsolation",
+        ],
+        driver: "verification/quint/src/regex_evaluation_cache.rs",
+        connect_test: "verification/quint/tests/regex_evaluation_cache_connect.rs",
+        additional_evidence_inputs: &["crates/fireemu-core-rules/tests/eval.rs"],
+    },
+    ModelDescriptor {
         name: "RegexLinearRepeat",
         spec: "specs/RegexLinearRepeat.qnt",
         main: "RegexLinearRepeatProof",

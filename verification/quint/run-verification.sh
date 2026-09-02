@@ -186,6 +186,7 @@ while [ "$pass" -le "$passes" ]; do
     EventDelivery:event_delivery_connect \
     FirestoreListenRefresh:firestore_listen_refresh_connect \
     RegexAuthorization:regex_authorization_connect \
+    RegexEvaluationCache:regex_evaluation_cache_connect \
     RegexLinearRepeat:regex_linear_repeat_connect \
     RulesetActivation:ruleset_activation_connect \
     SessionEpoch:session_epoch_connect \

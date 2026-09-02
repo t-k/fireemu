@@ -255,7 +255,7 @@ fn fixture(case: &str) -> Result<Fixture> {
         },
         "depthExhausted" => Fixture {
             rules: DEPTH_EXHAUSTED_WITH_NESTED_ALLOW,
-            resource_value: Some("a".repeat(10_000)),
+            resource_value: Some("a".repeat(64)),
         },
         "parentNegated" => Fixture {
             rules: PARENT_NEGATED,
@@ -340,12 +340,14 @@ service cloud.firestore {
 }
 ";
 
+// Adjacent ambiguous groups accumulate continuation frames. A repeated group no longer does
+// because the production matcher deliberately iterates repetition candidates.
 const DEPTH_EXHAUSTED_WITH_NESTED_ALLOW: &str = r"
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /notes/{id} {
-      allow get: if resource.data.value.matches('(a|aa)*b') == false;
+      allow get: if resource.data.value.matches('(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)b') == false;
       match /{rest=**} { allow get: if true; }
     }
   }

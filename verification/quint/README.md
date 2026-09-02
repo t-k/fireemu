@@ -1,6 +1,6 @@
 # Quint formal verification authority
 
-This directory is the repository's formal verification authority. Thirteen bounded Quint models define the checked safety and liveness properties, and Quint Connect replays deterministic and generated traces against the production Rust state machines.
+This directory is the repository's formal verification authority. Fourteen bounded Quint models define the checked safety and liveness properties, and Quint Connect replays deterministic and generated traces against the production Rust state machines.
 
 ## Pinned tools
 
@@ -33,6 +33,7 @@ The registry in `src/model.rs` is the single inventory for these authority model
 - `EventDelivery`
 - `FirestoreListenRefresh`
 - `RegexAuthorization`
+- `RegexEvaluationCache`
 - `RegexLinearRepeat`
 - `RulesetActivation`
 - `SessionEpoch`

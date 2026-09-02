@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "model": "RegexEvaluationCache",
+  "mutations": [
+    {
+      "id": "M-FORMAL-RULES-REGEX-CACHE-001",
+      "property": "LiteralPatternsDoNotCompileAtRuntime",
+      "operator": "compile-a-literal-pattern-at-runtime",
+      "from": "runtimeCompiles' = runtimeCompiles,\n    cacheHits' = cacheHits,\n    peakCacheEntries' = peakCacheEntries,\n    operations' = operations + 1,",
+      "to": "runtimeCompiles' = runtimeCompiles + 1,\n    cacheHits' = cacheHits,\n    peakCacheEntries' = peakCacheEntries,\n    operations' = operations + 1,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-CACHE-002",
+      "property": "RepeatedDynamicPatternCompilesOnce",
+      "operator": "recompile-a-cached-dynamic-pattern",
+      "from": "runtimeCompiles' = runtimeCompiles,\n    cacheHits' = cacheHits + 1,",
+      "to": "runtimeCompiles' = runtimeCompiles + 1,\n    cacheHits' = cacheHits + 1,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-CACHE-003",
+      "property": "DynamicMissCompilesExactlyOnce",
+      "operator": "omit-a-dynamic-miss-compilation",
+      "from": "runtimeCompiles' = runtimeCompiles + 1,\n      cacheHits' = cacheHits,",
+      "to": "runtimeCompiles' = runtimeCompiles,\n      cacheHits' = cacheHits,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-CACHE-004",
+      "property": "DynamicCacheEntriesAreBounded",
+      "operator": "admit-an-entry-beyond-capacity",
+      "from": "val nextEntries = if (admitted) cacheEntries + 1 else cacheEntries",
+      "to": "val nextEntries = cacheEntries + 1"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-CACHE-005",
+      "property": "SeparateEvaluationsDoNotShareCache",
+      "operator": "retain-the-tracked-pattern-across-evaluations",
+      "from": "evaluation' = evaluation + 1,\n    cacheEntries' = 0,\n    trackedPatternCached' = false,\n    runtimeCompiles' = 0,",
+      "to": "evaluation' = evaluation + 1,\n    cacheEntries' = 0,\n    trackedPatternCached' = trackedPatternCached,\n    runtimeCompiles' = 0,"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-CACHE-006",
+      "property": "SeparateEvaluationsDoNotShareCache",
+      "operator": "retain-runtime-compiles-across-evaluations",
+      "from": "evaluation' = evaluation + 1,\n    cacheEntries' = 0,\n    trackedPatternCached' = false,\n    runtimeCompiles' = 0,\n    cacheHits' = 0,",
+      "to": "evaluation' = evaluation + 1,\n    cacheEntries' = 0,\n    trackedPatternCached' = false,\n    runtimeCompiles' = runtimeCompiles,\n    cacheHits' = 0,"
+    }
+  ]
+}

@@ -56,7 +56,7 @@
     ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
     "Cargo.lock": "15e11f752c34b411232a7706a8a58ec40ddb4664cda72fc59476fed24f30a265",
     "Cargo.toml": "58e5be6aa303158de17183219fd293d24c7d261543ef33db2f9bc324cfde8245",
-    "crates/fireemu-adapter-functions/src/runtime.rs": "062162b812627ced87a067d8d2ca9cce28ff93a46426d0b8f6a9fc720ad7857b",
+    "crates/fireemu-adapter-functions/src/runtime.rs": "7c1a3d6c4f0cf44e8085b5120ba4b3cff213ceb97604344320a43357a0ba9d25",
     "crates/fireemu-adapter-http/src/control.rs": "b6fdd87dea30b5064afd7cda3900770322a5fe93c6d7e30b7c3e594d16c7f080",
     "crates/fireemu-core-session/src/idle.rs": "53bd98a30a3d61cf0be88222f4d3700e84cdc46636e885c5f4fb1945532104b8",
     "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",

@@ -59,7 +59,7 @@
     "Cargo.toml": "58e5be6aa303158de17183219fd293d24c7d261543ef33db2f9bc324cfde8245",
     "conformance/fixtures/firestore/transaction-read-set-abort.json": "d04ff10ca155a770c02b5a2c8ee78b21f44a83aa2c206168e01d13998ce53536",
     "conformance/fixtures/functions/concurrent-conditional-lock.json": "5fab49ede191c66808eccb7c3f46fa616e5db23884c6f4f8e8d1fa0640fb2759",
-    "conformance/functions/index.js": "38e067853630f2f115b2e6542e51851a5b1d08e36a67ff1a21389c088854008e",
+    "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",
     "conformance/src/corpus/firestore.mjs": "11d359a57a3c716989845399663a30c2d1c61d3add71fdc3748d6ac53777ea76",
     "conformance/src/corpus/functions.mjs": "b36a9cd6c3df901e573f87cd822f40ce1ca47bafa1b3b385ac1efc7fb93204d6",
     "crates/fireemu-core-firestore/src/store.rs": "9059d5cbba1db385345b75d4631ff41d762e569558448f9a3856c69e5cd651df",

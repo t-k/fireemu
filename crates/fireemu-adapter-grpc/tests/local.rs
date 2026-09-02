@@ -43,6 +43,19 @@ async fn start_with_write_time_and_policy(
     Arc<Mutex<VirtualClock>>,
     tokio::task::JoinHandle<()>,
 ) {
+    let (client, clock, _backend, handle) = start_with_backend_and_policy(wall_clock, policy).await;
+    (client, clock, handle)
+}
+
+async fn start_with_backend_and_policy(
+    wall_clock: bool,
+    policy: IndexValidationPolicy,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    Arc<LocalBackend>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -62,7 +75,7 @@ async fn start_with_write_time_and_policy(
     } else {
         LocalBackend::new(gateway.clone(), clock.clone(), 7)
     });
-    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend.clone()));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(svc)
@@ -75,7 +88,7 @@ async fn start_with_write_time_and_policy(
         .connect()
         .await
         .unwrap();
-    (FirestoreClient::new(channel), clock, handle)
+    (FirestoreClient::new(channel), clock, backend, handle)
 }
 
 async fn start() -> (
@@ -1346,6 +1359,181 @@ async fn read_time_selectors_serve_historical_snapshots() {
     ));
     let docs = collect_docs(&mut client, q).await;
     assert_eq!(docs[0].fields.get("v"), Some(&i(1)));
+    handle.abort();
+}
+
+#[tokio::test]
+async fn every_read_time_surface_refuses_a_capacity_compacted_snapshot() {
+    let (mut client, clock, handle) = start().await;
+    let old = fireemu_adapter_grpc::encode::encode_instant(clock.lock().unwrap().now());
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("capacity/a", &[("v", i(0))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for value in 1..=fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "capacity/a",
+                    &[("v", i(i64::try_from(value).unwrap()))],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    let get = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DOCS}/capacity/a"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::ReadTime(
+                old,
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(get.code(), tonic::Code::FailedPrecondition);
+
+    let batch = client
+        .batch_get_documents(pb::BatchGetDocumentsRequest {
+            database: DB.to_owned(),
+            documents: vec![format!("{DOCS}/capacity/a")],
+            consistency_selector: Some(
+                pb::batch_get_documents_request::ConsistencySelector::ReadTime(old),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(batch.code(), tonic::Code::FailedPrecondition);
+
+    let mut run_query = query("capacity", None);
+    run_query.consistency_selector =
+        Some(pb::run_query_request::ConsistencySelector::ReadTime(old));
+    let query_error = client.run_query(run_query).await.unwrap_err();
+    assert_eq!(query_error.code(), tonic::Code::FailedPrecondition);
+
+    let aggregation_error = client
+        .run_aggregation_query(pb::RunAggregationQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    agg_count("capacity", "count"),
+                ),
+            ),
+            consistency_selector: Some(
+                pb::run_aggregation_query_request::ConsistencySelector::ReadTime(old),
+            ),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(aggregation_error.code(), tonic::Code::FailedPrecondition);
+
+    let list_error = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "capacity".to_owned(),
+            consistency_selector: Some(pb::list_documents_request::ConsistencySelector::ReadTime(
+                old,
+            )),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(list_error.code(), tonic::Code::FailedPrecondition);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn clock_maintenance_compacts_an_idle_database_without_another_commit() {
+    let (mut client, clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("idle/a", &[("v", i(1))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(1_800))
+        .unwrap();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("idle/a", &[("v", i(2))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let parent = fireemu_adapter_grpc::decode::parse_parent(&format!("{DB}/documents")).unwrap();
+    let database = backend.database_handle(&parent).unwrap();
+    assert_eq!(
+        database
+            .with(|state| Ok(state.compaction_floor().value()))
+            .unwrap(),
+        0
+    );
+
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(7_200))
+        .unwrap();
+    backend.compact_all(clock.lock().unwrap().now());
+
+    assert!(
+        database
+            .with(|state| Ok(state.compaction_floor().value()))
+            .unwrap()
+            > 0,
+        "clock maintenance releases history even when no later write arrives"
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn wall_clock_restores_keep_the_time_window_without_the_pinned_clock_cap() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(true, IndexValidationPolicy::Conservative).await;
+    backend.restore_databases(std::collections::BTreeMap::from([(
+        ("demo-app".to_owned(), "(default)".to_owned()),
+        fireemu_core_firestore::store::FirestoreState::new(),
+    )]));
+    for value in 0..=fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH {
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(
+                    "wall/a",
+                    &[("v", i(i64::try_from(value).unwrap()))],
+                )],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    let parent = fireemu_adapter_grpc::decode::parse_parent(&format!("{DB}/documents")).unwrap();
+    let retained = backend
+        .database_handle(&parent)
+        .unwrap()
+        .with(|state| Ok(state.retained_versions()))
+        .unwrap();
+    assert_eq!(
+        retained,
+        fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH + 1,
+        "wall-clock parity keeps every version still inside the documented time window"
+    );
     handle.abort();
 }
 

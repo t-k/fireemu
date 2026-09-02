@@ -660,6 +660,90 @@ impl fireemu_adapter_http::control::ProjectHooks for ProjectLog {
         self.0.lock().unwrap().push(format!("remove {project}"));
         Ok(())
     }
+    fn clock_advanced(&self, _now: LogicalInstant) {
+        self.0.lock().unwrap().push("clock advanced".to_owned());
+    }
+}
+
+#[test]
+fn advancing_the_clock_notifies_store_maintenance_once() {
+    let log = Arc::new(ProjectLog::new());
+    let mut state = state(Arc::new(AtomicUsize::new(0)));
+    state.project_hooks = Some(log.clone());
+
+    let response = handle(
+        &state,
+        "POST",
+        "/v1/sessions/default/clock:advance",
+        &json!({"seconds": 1}),
+    );
+
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(log.entries(), ["clock advanced"]);
+}
+
+#[test]
+fn clock_maintenance_excludes_new_data_requests_until_it_finishes() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    struct BlockingClockHook {
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl fireemu_adapter_http::control::ProjectHooks for BlockingClockHook {
+        fn create(&self, _project: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn reset_scope(&self, _scope: &Scope) -> Result<(), TransitionFailure> {
+            Ok(())
+        }
+        fn remove(&self, _project: &str) -> Result<(), TransitionFailure> {
+            Ok(())
+        }
+        fn clock_advanced(&self, _now: LogicalInstant) {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+        }
+    }
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let mut control = state(Arc::new(AtomicUsize::new(0)));
+    let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+    control.barrier = Some(barrier.clone());
+    control.project_hooks = Some(Arc::new(BlockingClockHook {
+        entered: entered_tx,
+        release: Mutex::new(release_rx),
+    }));
+    let control = Arc::new(control);
+    let moving = {
+        let control = control.clone();
+        std::thread::spawn(move || {
+            handle(
+                &control,
+                "POST",
+                "/v1/sessions/default/clock:advance",
+                &json!({"seconds": 1}),
+            )
+        })
+    };
+    entered_rx.recv().unwrap();
+
+    let (admitted_tx, admitted_rx) = mpsc::channel();
+    let waiting = std::thread::spawn(move || {
+        let _admitted = barrier.admit();
+        admitted_tx.send(()).unwrap();
+    });
+    assert!(matches!(
+        admitted_rx.recv_timeout(Duration::from_millis(100)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+
+    release_tx.send(()).unwrap();
+    assert_eq!(moving.join().unwrap().status, 200);
+    admitted_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    waiting.join().unwrap();
 }
 
 #[test]

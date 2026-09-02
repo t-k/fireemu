@@ -166,6 +166,10 @@ impl ProjectHooks for Projects {
         }
         Ok(())
     }
+
+    fn clock_advanced(&self, now: fireemu_core_types::time::LogicalInstant) {
+        self.backend.compact_all(now);
+    }
 }
 
 #[cfg(test)]

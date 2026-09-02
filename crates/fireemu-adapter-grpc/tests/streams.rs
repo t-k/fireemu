@@ -1168,6 +1168,39 @@ async fn retained_and_compacted_resume_tokens_have_distinct_outcomes() {
     handle.abort();
 }
 
+/// The clock-independent retention root also invalidates an unreachable token explicitly.
+/// A pinned clock can therefore run an arbitrarily fast update loop without retaining every
+/// version or diffing a listener against the wrong historical snapshot.
+#[tokio::test]
+async fn a_pinned_clock_version_cap_resets_a_compacted_resume_token() {
+    let (mut client, handle) = start(false).await;
+    let commit = |value: String| pb::CommitRequest {
+        database: DB.to_owned(),
+        writes: vec![set_write("cap/a", &[("v", s(&value))])],
+        ..Default::default()
+    };
+    client.commit(commit("0".to_owned())).await.unwrap();
+    let old_token = snapshot_token(&mut client, 1, "cap").await;
+
+    for value in 1..=fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH {
+        client.commit(commit(value.to_string())).await.unwrap();
+    }
+
+    let expired = resume_trace(&mut client, 2, "cap", old_token).await;
+    assert_eq!(
+        expired,
+        vec![
+            "ADD[2]",
+            "RESET[2]",
+            "CHANGE a",
+            "CURRENT[2]",
+            "NO_CHANGE[2]",
+            "NO_CHANGE[]"
+        ]
+    );
+    handle.abort();
+}
+
 /// The retention window the wire declares is the one the store compacts against.
 #[test]
 fn the_declared_read_time_window_is_the_stores_retention_window() {

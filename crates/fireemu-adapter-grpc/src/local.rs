@@ -140,6 +140,9 @@ pub struct LocalBackend {
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
+    /// Capacity retention root for databases created by this backend. Pinned-clock runs use
+    /// the bounded default; wall-clock parity runs rely on the one-hour time root alone.
+    history_version_limit: usize,
     /// The database catalog. Locked only to locate, create or retire an entry: an
     /// operation clones the entry's handle and releases this lock before it runs.
     databases: Mutex<BTreeMap<(String, String), Arc<DatabaseEntry>>>,
@@ -395,6 +398,8 @@ impl LocalBackend {
             indexes,
             clock,
             wall_clock_write_time: false,
+            history_version_limit:
+                fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
             databases: Mutex::new(BTreeMap::new()),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
@@ -412,6 +417,18 @@ impl LocalBackend {
     #[must_use]
     pub const fn with_wall_clock_write_time(mut self) -> Self {
         self.wall_clock_write_time = true;
+        self.history_version_limit = usize::MAX;
+        self
+    }
+
+    /// Overrides the per-path history capacity for deterministic tests and embedders.
+    #[must_use]
+    pub const fn with_history_version_limit(mut self, max_versions_per_path: usize) -> Self {
+        self.history_version_limit = if max_versions_per_path == 0 {
+            1
+        } else {
+            max_versions_per_path
+        };
         self
     }
 
@@ -543,6 +560,23 @@ impl LocalBackend {
             .unwrap_or_default()
     }
 
+    /// Compacts every attached database after the shared virtual clock advances.
+    ///
+    /// Handles are collected under the catalog lock and compacted one at a time after that
+    /// lock is released, so an unrelated database never waits behind a catalog-wide critical
+    /// section. A concurrently detached or poisoned database is skipped; requests through it
+    /// already fail independently.
+    pub fn compact_all(&self, now: fireemu_core_types::time::LogicalInstant) {
+        let scope =
+            fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
+        for (_, handle) in self.handles_of(&scope) {
+            let _ = handle.with(|state| {
+                state.compact(now);
+                Ok(())
+            });
+        }
+    }
+
     /// Copies the databases `scope` owns, each under its own lock.
     ///
     /// Cross-database atomicity is the [`AdmissionBarrier`]'s: capture runs under the
@@ -612,7 +646,13 @@ impl LocalBackend {
                     if !touched.contains(k) {
                         touched.push(k.clone());
                     }
-                    dbs.insert(k.clone(), Arc::new(DatabaseEntry::restored(v.clone())));
+                    dbs.insert(
+                        k.clone(),
+                        Arc::new(DatabaseEntry::restored(
+                            v.clone()
+                                .with_retained_version_limit(self.history_version_limit),
+                        )),
+                    );
                 }
             }
         }
@@ -1063,9 +1103,10 @@ impl LocalBackend {
         Ok(DatabaseHandle(
             dbs.entry(database_key(parent))
                 .or_insert_with(|| {
-                    Arc::new(DatabaseEntry::restored(FirestoreState::with_limit_scope(
-                        scope,
-                    )))
+                    Arc::new(DatabaseEntry::restored(
+                        FirestoreState::with_limit_scope(scope)
+                            .with_retained_version_limit(self.history_version_limit),
+                    ))
                 })
                 .clone(),
         ))
@@ -1172,6 +1213,17 @@ impl LocalBackend {
         Ok(at)
     }
 
+    fn retained_read_version(
+        db: &FirestoreState,
+        at: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<CommitVersion, Status> {
+        db.version_at_retained(at).ok_or_else(|| {
+            Status::failed_precondition(
+                "The requested 'read_time' is no longer retained by this database.",
+            )
+        })
+    }
+
     /// Starts the transaction described by `new_transaction` options: read-only unless a
     /// read-write mode is given (Firestore's default for `new_transaction`), at the
     /// `read_time` snapshot when one is requested.
@@ -1234,7 +1286,7 @@ impl LocalBackend {
                     (db.get_at(&path, version).cloned(), Some(version))
                 }
                 (None, Some(at)) => {
-                    let version = db.version_at(at);
+                    let version = Self::retained_read_version(db, at)?;
                     (db.get_at(&path, version).cloned(), Some(version))
                 }
                 (None, None) => (db.get(&path).cloned(), None),
@@ -1324,7 +1376,7 @@ impl LocalBackend {
                         db.transaction_read_version(t)
                             .map_err(|e| status_from_error(&e))?,
                     ),
-                    (None, Some(at)) => Some(db.version_at(at)),
+                    (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
                     (None, None) => None,
                 };
                 // Every document is read from the snapshot first, then the whole batch is
@@ -1678,7 +1730,7 @@ impl LocalBackend {
                     db.transaction_read_version(t)
                         .map_err(|e| status_from_error(&e))?,
                 ),
-                (None, Some(at)) => Some(db.version_at(at)),
+                (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
                 (None, None) => None,
             };
             // Authorized from the query constraints before any data is touched.
@@ -1778,7 +1830,7 @@ impl LocalBackend {
                         db.transaction_read_version(t)
                             .map_err(|e| status_from_error(&e))?,
                     ),
-                    (None, Some(at)) => Some(db.version_at(at)),
+                    (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
                     (None, None) => None,
                 };
                 // The underlying query is authorized from its constraints, like a list.
@@ -1894,7 +1946,7 @@ impl LocalBackend {
                             .map_err(|e| status_from_error(&e))?,
                     )
                 }
-                (None, Some(at)) => Some(db.version_at(at)),
+                (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
                 (None, None) => None,
             };
             guard(

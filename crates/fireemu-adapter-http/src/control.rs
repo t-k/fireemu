@@ -91,6 +91,9 @@ pub trait ProjectHooks: Send + Sync {
     fn reset_scope(&self, scope: &Scope) -> Result<(), TransitionFailure>;
     /// Drop the project's state and forget it.
     fn remove(&self, project: &str) -> Result<(), TransitionFailure>;
+    /// The shared virtual clock moved: release Firestore history that no retention root can
+    /// still observe. The default is a no-op for embedders without a Firestore backend.
+    fn clock_advanced(&self, _now: LogicalInstant) {}
 }
 
 /// One adapter's part of a session snapshot: an opaque copy of its state.
@@ -832,6 +835,23 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
     if let Some(rest) = action.strip_prefix("firestore/text-indexes") {
         return text_index_route(state, session, &project, method, rest, body);
     }
+    if action.starts_with("clock:") {
+        // Moving the shared clock and compacting every Firestore database is one admission
+        // transition. No read, write or listener can enter after the new time is visible but
+        // before all retention floors have advanced.
+        let _exclusive = state.barrier.as_ref().map(|barrier| barrier.exclusive());
+        let response = clock_route(state, session, method, action, body);
+        if response.status == 200 {
+            let now = state.clock.lock().ok().map(|clock| clock.now());
+            if let (Some(hooks), Some(now)) = (&state.project_hooks, now) {
+                hooks.clock_advanced(now);
+            }
+            if let Some(functions) = &state.functions {
+                functions.on_clock_changed();
+            }
+        }
+        return response;
+    }
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if !is_default && (action.starts_with("functions") || action.starts_with("pubsub/topics/")) {
         // The functions runtime (and its fault plan) belongs to the default session.
@@ -851,13 +871,7 @@ fn session_route(state: &ControlState, method: &str, path: &str, body: &Value) -
             _ => error(404, "NOT_FOUND"),
         };
     }
-    let response = clock_route(state, session, method, action, body);
-    if response.status == 200 && action.starts_with("clock:") {
-        if let Some(f) = &state.functions {
-            f.on_clock_changed();
-        }
-    }
-    response
+    clock_route(state, session, method, action, body)
 }
 
 /// `DELETE /v1/sessions/{s}`: wipes the project's state and deregisters the session, or

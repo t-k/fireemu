@@ -103,6 +103,90 @@ fn versions_older_than_every_retention_root_are_compacted() {
     );
 }
 
+#[test]
+fn a_pinned_clock_uses_the_per_path_capacity_as_an_explicit_retention_root() {
+    const LIMIT: usize = 64;
+    let mut s = FirestoreState::with_history_version_limit(LIMIT);
+    let first = s
+        .commit(&[set("docs/hot", &[("v", Value::Integer(0))])], None, t(0))
+        .unwrap();
+
+    for value in 1..100_000 {
+        s.commit(
+            &[set("docs/hot", &[("v", Value::Integer(value))])],
+            None,
+            t(0),
+        )
+        .unwrap();
+    }
+
+    assert!(s.retained_versions() <= LIMIT, "capacity is a hard root");
+    assert!(!s.is_retained(first.version));
+    assert_eq!(s.version_at_retained(first.commit_time), None);
+    assert!(matches!(
+        s.begin_transaction_at(first.commit_time, t(0)),
+        Err(FirestoreError::FailedPrecondition(_))
+    ));
+    assert_eq!(
+        s.get(&path("docs/hot"))
+            .and_then(|document| document.fields.get("v")),
+        Some(&Value::Integer(99_999))
+    );
+}
+
+#[test]
+fn an_active_transaction_temporarily_pins_history_below_the_capacity_floor() {
+    let mut s = FirestoreState::with_history_version_limit(4);
+    write_value(&mut s, "docs/hot", "first", t(0));
+    let transaction = s.begin_transaction(true, t(0)).unwrap();
+    let original = s
+        .get_in_transaction(&transaction, &path("docs/hot"))
+        .unwrap()
+        .unwrap();
+
+    for value in 1..=10 {
+        write_value(&mut s, "docs/hot", &format!("v{value}"), t(0));
+    }
+    assert!(s.retained_versions() > 4, "the active snapshot is exact");
+    assert_eq!(
+        s.get_in_transaction(&transaction, &path("docs/hot"))
+            .unwrap(),
+        Some(original)
+    );
+
+    s.rollback(&transaction).unwrap();
+    write_value(&mut s, "docs/hot", "after-rollback", t(0));
+    assert!(s.retained_versions() <= 4);
+}
+
+#[test]
+fn transaction_capacity_bookkeeping_visits_only_due_deadlines() {
+    let mut s = FirestoreState::new();
+    for _ in 0..8_192 {
+        let transaction = s.begin_transaction(false, t(0)).unwrap();
+        s.rollback(&transaction).unwrap();
+    }
+    for _ in 0..4_096 {
+        s.begin_transaction(false, t(0)).unwrap();
+    }
+
+    let stats = s.transaction_bookkeeping_stats();
+    assert_eq!(stats.active, 4_096);
+    assert_eq!(stats.finished, 8_192);
+    assert_eq!(stats.deadlines, 4_096);
+    assert_eq!(stats.pruned_deadlines, 0);
+    assert!(matches!(
+        s.begin_transaction(false, t(0)),
+        Err(FirestoreError::FailedPrecondition(message))
+            if message == "too many active transactions"
+    ));
+    assert_eq!(
+        s.transaction_bookkeeping_stats().pruned_deadlines,
+        0,
+        "a capacity check does not traverse unrelated transactions"
+    );
+}
+
 /// FS-MVCC-03: the boundary between retained and compacted history is exact, and a read
 /// below it is refused instead of silently answered from another version.
 #[test]
@@ -132,7 +216,7 @@ fn the_retention_boundary_is_exact_and_older_reads_are_refused() {
     // A read-only transaction at a compacted read time fails explicitly.
     let err = s.begin_transaction_at(t(0), t(7_200)).unwrap_err();
     assert!(
-        matches!(&err, FirestoreError::FailedPrecondition(m) if m.contains("3600")),
+        matches!(&err, FirestoreError::FailedPrecondition(m) if m == "read_time is no longer retained by this database"),
         "{err}"
     );
     // ... and one inside the window still works.

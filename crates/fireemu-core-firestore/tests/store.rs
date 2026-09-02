@@ -6,7 +6,7 @@ use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
     CommitVersion, FieldTransform, FirestoreError, FirestoreState, Precondition, TransformKind,
-    Write, WriteOp,
+    Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES, MAX_TRANSACTION_QUERY_RECORDS,
 };
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -445,6 +445,25 @@ fn a_rolled_back_read_write_transaction_can_seed_one_retry() {
 }
 
 #[test]
+fn finished_retry_lineage_expires_at_the_original_total_deadline() {
+    let mut before = FirestoreState::new();
+    let original = before.begin_transaction(false, t(0)).unwrap();
+    before.rollback(&original).unwrap();
+    assert!(before.retry_transaction(&original, t(269)).is_ok());
+
+    for elapsed in [270, 271] {
+        let mut expired = FirestoreState::new();
+        let original = expired.begin_transaction(false, t(0)).unwrap();
+        expired.rollback(&original).unwrap();
+        assert!(matches!(
+            expired.retry_transaction(&original, t(elapsed)),
+            Err(FirestoreError::InvalidArgument(message))
+                if message == "Invalid retry transaction."
+        ));
+    }
+}
+
+#[test]
 fn transaction_snapshot_reads_are_stable() {
     let mut s = FirestoreState::new();
     s.commit(&[set("k/1", &[("v", Value::Integer(1))])], None, t(0))
@@ -625,6 +644,251 @@ fn a_query_phantom_aborts_the_transaction_without_partial_writes() {
     let txn2 = s.begin_transaction(false, t(4)).unwrap();
     assert_eq!(s.run_query_in_transaction(&txn2, &q).unwrap().len(), 1);
     assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(5)).is_ok());
+}
+
+#[test]
+fn transaction_query_records_are_deduplicated_and_overflow_is_retryable() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let base = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("bounded").unwrap(),
+    ));
+    for index in 0..4 {
+        state
+            .commit(
+                &[set(
+                    &format!("bounded/{index}"),
+                    &[("value", Value::Integer(index))],
+                )],
+                None,
+                t(0),
+            )
+            .unwrap();
+    }
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+
+    state.run_query_in_transaction(&transaction, &base).unwrap();
+    let conflict_ledger_bytes = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
+    state.run_query_in_transaction(&transaction, &base).unwrap();
+    assert_eq!(
+        state
+            .transaction_recorded_query_count(&transaction)
+            .unwrap(),
+        1,
+        "identical query snapshots share one conflict record"
+    );
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        conflict_ledger_bytes,
+        "overlapping results retain each observed path only once"
+    );
+
+    for offset in 1..MAX_TRANSACTION_QUERY_RECORDS {
+        let mut query = base.clone();
+        query.offset = u32::try_from(offset).unwrap();
+        state
+            .run_query_in_transaction(&transaction, &query)
+            .unwrap();
+    }
+    let mut overflow = base;
+    overflow.offset = u32::try_from(MAX_TRANSACTION_QUERY_RECORDS).unwrap();
+    assert!(matches!(
+        state.run_query_in_transaction(&transaction, &overflow),
+        Err(FirestoreError::Aborted(message))
+            if message == "transaction recorded too many distinct queries"
+    ));
+    assert!(matches!(
+        state.run_query_in_transaction(&transaction, &overflow),
+        Err(FirestoreError::Aborted(_))
+    ));
+}
+
+#[test]
+fn one_broad_query_cannot_retain_more_than_the_transaction_size_budget() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let payload = "x".repeat(256 * 1024);
+    let documents =
+        usize::try_from(MAX_TRANSACTION_CONFLICT_LEDGER_BYTES / payload.len() as u64).unwrap() + 1;
+    for index in 0..documents {
+        state
+            .commit(
+                &[set(
+                    &format!("large/{index}"),
+                    &[("payload", Value::String(payload.clone()))],
+                )],
+                None,
+                t(0),
+            )
+            .unwrap();
+    }
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("large").unwrap(),
+    ));
+    for _ in 0..32 {
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        assert!(matches!(
+            state.run_query_in_transaction(&transaction, &query),
+            Err(FirestoreError::Aborted(message))
+                if message == "transaction observed data exceeds the retained conflict-detection budget"
+        ));
+        state.abandon_transaction(&transaction);
+    }
+    let bookkeeping = state.transaction_bookkeeping_stats();
+    assert_eq!(bookkeeping.conflict_ledger_bytes, 0);
+    assert_eq!(bookkeeping.active, 0);
+    assert_eq!(bookkeeping.finished, 0);
+    assert_eq!(bookkeeping.deadlines, 0);
+    assert_eq!(bookkeeping.finished_deadlines, 0);
+}
+
+#[test]
+fn large_zero_result_queries_are_charged_to_the_conflict_ledger() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    let scope = QueryScope::collection(None, CollectionId::try_new("empty").unwrap());
+    let payload = "q".repeat(512 * 1024);
+    let mut refused = false;
+    for index in 0..MAX_TRANSACTION_QUERY_RECORDS {
+        let mut query = Query::new(scope.clone());
+        query.filter = Some(FilterExpr::Field {
+            field: FieldPath::parse("value").unwrap(),
+            op: FieldOp::Equal,
+            value: Value::String(format!("{index}{payload}")),
+        });
+        if matches!(
+            state.run_query_in_transaction(&transaction, &query),
+            Err(FirestoreError::Aborted(_))
+        ) {
+            refused = true;
+            break;
+        }
+    }
+    assert!(
+        refused,
+        "query descriptors consume the byte budget before the count cap"
+    );
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        0
+    );
+}
+
+#[test]
+fn nested_tiny_query_values_are_charged_by_retained_heap_size() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let segments: Vec<String> = (0..100).map(|index| format!("field{index}")).collect();
+    let field = FieldPath::from_segments(segments.iter().map(String::as_str)).unwrap();
+    let array = Value::Array(vec![Value::Null; 400_000]);
+    let map = Value::Map(
+        (0..70_000)
+            .map(|index| (format!("key{index}"), Value::Null))
+            .collect(),
+    );
+
+    for value in [array, map] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        let mut query = Query::new(QueryScope::collection(
+            None,
+            CollectionId::try_new("empty").unwrap(),
+        ));
+        query.filter = Some(FilterExpr::Field {
+            field: field.clone(),
+            op: FieldOp::Equal,
+            value,
+        });
+        assert!(matches!(
+            state.run_query_in_transaction(&transaction, &query),
+            Err(FirestoreError::Aborted(_))
+        ));
+        assert_eq!(
+            state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+            0
+        );
+    }
+}
+
+#[test]
+fn maximum_depth_query_scopes_charge_owned_path_allocations() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let relative = (0..100)
+        .flat_map(|index| [format!("collection{index}"), format!("document{index}")])
+        .collect::<Vec<_>>()
+        .join("/");
+    let parent = path(&relative);
+    let serialized_bytes = parent.resource_name().len();
+    let query = Query::new(QueryScope::collection(
+        Some(parent),
+        CollectionId::try_new("empty").unwrap(),
+    ));
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+
+    state
+        .run_query_in_transaction(&transaction, &query)
+        .unwrap();
+
+    assert!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes
+            > u64::try_from(serialized_bytes + 100 * core::mem::size_of::<String>()).unwrap(),
+        "scope accounting includes owned pair and String storage, not only rendered bytes"
+    );
+}
+
+#[test]
+fn aggregate_active_transaction_ledgers_have_a_database_wide_budget() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("empty").unwrap(),
+    ));
+    query.filter = Some(FilterExpr::Field {
+        field: FieldPath::parse("value").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::String("q".repeat(1024 * 1024)),
+    });
+    let mut active = Vec::new();
+    let mut refused = false;
+    for _ in 0..128 {
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        match state.run_query_in_transaction(&transaction, &query) {
+            Ok(_) => active.push(transaction),
+            Err(FirestoreError::Aborted(_)) => {
+                state.abandon_transaction(&transaction);
+                refused = true;
+                break;
+            }
+            Err(error) => panic!("unexpected query failure: {error}"),
+        }
+    }
+    assert!(
+        refused,
+        "aggregate admission refuses before active ledgers grow without bound"
+    );
+    for transaction in active {
+        state.rollback(&transaction).unwrap();
+    }
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        0
+    );
 }
 
 #[test]

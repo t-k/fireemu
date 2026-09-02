@@ -173,7 +173,6 @@ struct Session {
     /// check before enqueue share this lock, so a superseded response cannot win between a
     /// generation check and delivery.
     backchannel_owner: Mutex<BackchannelOwner>,
-    backchannel_attached: AtomicBool,
     /// Data arrived (permit-keeping wakeup) / channel replaced (broadcast wakeup).
     notify: Notify,
     last_seen: Mutex<Instant>,
@@ -225,6 +224,12 @@ impl Session {
         }
         owner.cancel.take();
         true
+    }
+
+    fn backchannel_attached(&self) -> bool {
+        self.backchannel_owner
+            .lock()
+            .is_ok_and(|owner| owner.cancel.is_some())
     }
 
     fn push(&self, payload: &Value) -> Result<u64, ()> {
@@ -453,7 +458,7 @@ impl Hub {
                 .last_seen
                 .lock()
                 .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
-            let live = s.backchannel_attached.load(Ordering::SeqCst);
+            let live = s.backchannel_attached();
             let keep = (!idle || live) && !s.is_closed();
             if !keep {
                 gone.push((sid.clone(), s.clone()));
@@ -664,7 +669,6 @@ impl Hub {
                 generation: 0,
                 cancel: None,
             }),
-            backchannel_attached: AtomicBool::new(false),
             notify: Notify::new(),
             last_seen: Mutex::new(Instant::now()),
             maps: Mutex::new((0, BTreeMap::new())),
@@ -731,7 +735,7 @@ impl Hub {
         if let Err(e) = session_deliver(&session, &form) {
             return error_chunk(&e);
         }
-        let attached = u64::from(session.backchannel_attached.load(Ordering::SeqCst));
+        let attached = u64::from(session.backchannel_attached());
         let text = json!([attached, session.last_aid(), 0]).to_string();
         text_response(200, chunk(&text))
     }
@@ -765,7 +769,6 @@ impl Hub {
         let Ok(generation) = session.replace_backchannel(cancel_tx) else {
             return text_response(500, "session lock poisoned".to_owned());
         };
-        session.backchannel_attached.store(true, Ordering::SeqCst);
         // Wake a previous back channel so it notices it was replaced.
         session.notify.notify_waiters();
         let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, Status>>(64);
@@ -782,7 +785,6 @@ impl Hub {
             )
             .await;
             if session.finish_backchannel(generation) {
-                session.backchannel_attached.store(false, Ordering::SeqCst);
                 session.touch();
             }
             trace(
@@ -1080,7 +1082,6 @@ mod tests {
                 generation: 2,
                 cancel: None,
             }),
-            backchannel_attached: AtomicBool::new(true),
             notify: Notify::new(),
             last_seen: Mutex::new(Instant::now()),
             maps: Mutex::new((0, BTreeMap::new())),
@@ -1122,7 +1123,6 @@ mod tests {
                 generation: 1,
                 cancel: None,
             }),
-            backchannel_attached: AtomicBool::new(true),
             notify: Notify::new(),
             last_seen: Mutex::new(Instant::now()),
             maps: Mutex::new((0, BTreeMap::new())),
@@ -1136,6 +1136,9 @@ mod tests {
 
         let replacement_generation = session.replace_backchannel(replacement_cancel).unwrap();
         assert_eq!(replacement_generation, 2);
+        assert!(session.backchannel_attached());
+        assert!(!session.finish_backchannel(1));
+        assert!(session.backchannel_attached());
         assert!(!commit_backchannel_chunk(
             &session,
             1,
@@ -1156,6 +1159,8 @@ mod tests {
             bytes::Bytes::from_static(b"new")
         );
         assert!(rx.try_recv().is_err());
+        assert!(session.finish_backchannel(replacement_generation));
+        assert!(!session.backchannel_attached());
     }
 }
 

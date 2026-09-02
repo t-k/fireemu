@@ -15,6 +15,8 @@ fireemu is experimental. It is not a replacement for the official Firebase Emula
 
 Node.js 20 or newer is required. For Functions, an explicit `functions.runner` command wins and `FIREEMU_NODE` is an exact executable override. On Unix, automatic selection probes the first Node executable on `PATH` plus installed runtimes under `VOLTA_HOME` before loading user code. This limits automatic execution to normal command resolution and explicitly configured version-manager storage. For a Node 20 or newer request, candidates that can synchronously load an ES module from CommonJS are ranked first; the `firebase.json` runtime major, `package.json` `engines.node`, and stable discovery order then break ties. A loader-capable local fallback may therefore use a different major when the requested candidate lacks that loading capability, and the mismatch is reported. A malformed engine constraint still fails before loading. The runner never evaluates user code under one automatic candidate and retries it under another. On Windows, `FIREEMU_NODE` is used directly when set and otherwise the first `node` on `PATH` is used, matching the previous runner behavior; use `functions.runner` when an exact Windows runtime is required.
 
+The runtime uses at most four async worker threads and 64 blocking worker threads by default. `FIREEMU_WORKER_THREADS` (1 through 64) and `FIREEMU_MAX_BLOCKING_THREADS` (1 through 512) provide explicit overrides for unusually large test workloads.
+
 ```sh
 npm install --save-dev fireemu
 npx fireemu init

@@ -186,6 +186,34 @@ struct Options {
     export_on_exit: Option<PathBuf>,
 }
 
+const DEFAULT_MAX_RUNTIME_WORKERS: usize = 4;
+const DEFAULT_MAX_BLOCKING_THREADS: usize = 64;
+const MAX_RUNTIME_WORKERS: usize = 64;
+const MAX_BLOCKING_THREADS: usize = 512;
+
+fn runtime_thread_counts(
+    available: usize,
+    worker_override: Option<&str>,
+    blocking_override: Option<&str>,
+) -> Result<(usize, usize), String> {
+    let parse = |name: &str, value: &str, maximum: usize| {
+        value
+            .parse::<usize>()
+            .ok()
+            .filter(|count| (1..=maximum).contains(count))
+            .ok_or_else(|| format!("{name} must be an integer from 1 through {maximum}"))
+    };
+    let workers = match worker_override {
+        Some(value) => parse("FIREEMU_WORKER_THREADS", value, MAX_RUNTIME_WORKERS)?,
+        None => available.clamp(1, DEFAULT_MAX_RUNTIME_WORKERS),
+    };
+    let blocking = match blocking_override {
+        Some(value) => parse("FIREEMU_MAX_BLOCKING_THREADS", value, MAX_BLOCKING_THREADS)?,
+        None => DEFAULT_MAX_BLOCKING_THREADS,
+    };
+    Ok((workers, blocking))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -992,6 +1020,7 @@ fn signal_child(pid: u32, signal: &str) {
         let signal = match signal {
             "-INT" => rustix::process::Signal::INT,
             "-TERM" => rustix::process::Signal::TERM,
+            "-KILL" => rustix::process::Signal::KILL,
             _ => return,
         };
         if own_process_group() {
@@ -1843,7 +1872,23 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         cfg.clock_start = logical_system_time(std::time::SystemTime::now());
         Some(AuthWallClock::from_anchor(cfg.clock_start, monotonic_start))
     };
+    let worker_override = std::env::var("FIREEMU_WORKER_THREADS").ok();
+    let blocking_override = std::env::var("FIREEMU_MAX_BLOCKING_THREADS").ok();
+    let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let (workers, blocking) = match runtime_thread_counts(
+        available,
+        worker_override.as_deref(),
+        blocking_override.as_deref(),
+    ) {
+        Ok(counts) => counts,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .max_blocking_threads(blocking)
         .enable_all()
         .build()
     {
@@ -2577,6 +2622,19 @@ mod config_reload_tests {
             logical_system_time(wall_time),
             LogicalInstant::from_nanos(1_800_000_000_123_456_789)
         );
+    }
+
+    #[test]
+    fn runtime_thread_counts_are_bounded_and_explicit_overrides_are_validated() {
+        assert_eq!(runtime_thread_counts(32, None, None).unwrap(), (4, 64));
+        assert_eq!(runtime_thread_counts(2, None, None).unwrap(), (2, 64));
+        assert_eq!(
+            runtime_thread_counts(32, Some("7"), Some("96")).unwrap(),
+            (7, 96)
+        );
+        assert!(runtime_thread_counts(8, Some("0"), None).is_err());
+        assert!(runtime_thread_counts(8, None, Some("513")).is_err());
+        assert!(runtime_thread_counts(8, Some("many"), None).is_err());
     }
 
     #[tokio::test]

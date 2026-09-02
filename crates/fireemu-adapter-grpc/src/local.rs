@@ -225,7 +225,7 @@ pub struct CommitEvent {
     /// Commit time (`None` for a reset).
     pub commit_time: Option<fireemu_core_types::time::LogicalInstant>,
     /// Documents the commit changed (before / after), shared with every subscriber.
-    pub changes: Arc<Vec<DocumentChange>>,
+    pub changes: Arc<[DocumentChange]>,
 }
 
 /// Observable kind of one changed path in a compact broadcast notification.
@@ -832,7 +832,7 @@ impl LocalBackend {
             database: parent.database.as_str().to_owned(),
             version: result.version.value(),
             commit_time: Some(result.commit_time),
-            changes: Arc::new(result.changes.clone()),
+            changes: result.changes.clone(),
         };
         if let Some(sink) = self.change_sink.lock().ok().and_then(|s| s.clone()) {
             sink(&event);

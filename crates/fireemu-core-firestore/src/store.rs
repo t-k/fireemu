@@ -231,7 +231,7 @@ pub struct CommitResult {
     /// Version assigned to the commit.
     pub version: CommitVersion,
     /// Documents that actually changed, in path order (no-op writes are not listed).
-    pub changes: Vec<DocumentChange>,
+    pub changes: Arc<[DocumentChange]>,
 }
 
 /// Aggregation.
@@ -1278,7 +1278,7 @@ impl FirestoreState {
                 commit_time,
                 write_results: Vec::new(),
                 version: self.version,
-                changes: Vec::new(),
+                changes: Arc::from([]),
             });
         }
         self.version = next_version;
@@ -1315,7 +1315,7 @@ impl FirestoreState {
             commit_time,
             write_results: Vec::new(),
             version: next_version,
-            changes,
+            changes: Arc::from(changes),
         })
     }
 
@@ -2036,7 +2036,7 @@ impl FirestoreState {
             commit_time,
             write_results: results,
             version,
-            changes: document_changes,
+            changes: Arc::from(document_changes),
         })
     }
 

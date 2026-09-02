@@ -57,7 +57,7 @@ fn an_import_publishes_every_document_at_one_commit_version() {
     assert_eq!(result.changes.len(), 3);
     assert_eq!(state.current_version().value(), 1);
     assert_eq!(state.documents().len(), 3);
-    for change in &result.changes {
+    for change in result.changes.iter() {
         assert!(
             change.before.is_none(),
             "an import into an empty database creates"

@@ -226,7 +226,18 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../spec/compatibility/contract.json"))
             .expect("the compatibility contract is JSON");
-    for surface_id in ["auth", "functions"] {
+    for (surface_id, claim_id, required_statement_terms) in [
+        (
+            "auth",
+            "AUTH-CLAIM-BLOCKING-FUNCTIONS",
+            ["synchronously", "roll", "sessionclaims"],
+        ),
+        (
+            "functions",
+            "FN-CLAIM-BLOCKING-AUTH",
+            ["served synchronous triggers", "guarded runner endpoint", "invoked by auth"],
+        ),
+    ] {
         let surface = contract["surfaces"]
             .as_array()
             .expect("the contract lists surfaces")
@@ -239,29 +250,37 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
                 .contains("blocking"),
             "the {surface_id} surface still publishes Blocking Functions as a gap"
         );
+        let claim = surface["claims"]
+            .as_array()
+            .expect("an active surface lists claims")
+            .iter()
+            .find(|claim| claim["id"] == claim_id)
+            .unwrap_or_else(|| panic!("the {surface_id} surface lists claim {claim_id}"));
         assert!(
-            surface["claims"]
+            claim["capabilities"]
                 .as_array()
-                .expect("an active surface lists claims")
-                .iter()
-                .any(|claim| {
-                    let has_capability =
-                        claim["capabilities"]
-                            .as_array()
-                            .is_some_and(|capabilities| {
-                                capabilities.iter().any(|capability| {
-                                    capability["id"] == "FN-EVT-1"
-                                        && capability["status"] == "implemented"
-                                })
-                            });
-                    let evidence = text_of(&claim["evidence"]);
-                    has_capability
-                        && evidence
-                            .contains("crates/fireemu-adapter-http/tests/identity_toolkit.rs")
-                        && evidence.contains("crates/fireemu/tests/functions_discovery.rs")
-                }),
-            "the {surface_id} surface has no evidence-backed FN-EVT-1 claim"
+                .is_some_and(|capabilities| capabilities.iter().any(|capability| {
+                    capability["id"] == "FN-EVT-1"
+                        && capability["status"] == "implemented"
+                })),
+            "claim {claim_id} does not publish FN-EVT-1 as implemented"
         );
+        let evidence = text_of(&claim["evidence"]);
+        assert!(
+            evidence.contains("crates/fireemu-adapter-http/tests/identity_toolkit.rs")
+                && evidence.contains("crates/fireemu/tests/functions_discovery.rs"),
+            "claim {claim_id} does not bind both Blocking Functions integration paths"
+        );
+        let statement = claim["statement"]
+            .as_str()
+            .unwrap_or_else(|| panic!("claim {claim_id} has a statement"))
+            .to_ascii_lowercase();
+        for term in required_statement_terms {
+            assert!(
+                statement.contains(term),
+                "claim {claim_id} does not publish the required semantic term {term}"
+            );
+        }
     }
 }
 

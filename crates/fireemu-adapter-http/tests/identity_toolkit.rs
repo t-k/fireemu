@@ -25,15 +25,23 @@ struct UpdatingBlockingHook;
 
 struct ClearingClaimsHook;
 
-struct MalformedBlockingHook;
+struct MalformedBeforeSignInHook;
 
-impl AuthBlockingHook for MalformedBlockingHook {
+impl AuthBlockingHook for MalformedBeforeSignInHook {
     fn invoke(
         &self,
-        _event: BlockingAuthEvent,
+        event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, String> {
-        Ok(json!({"userRecord": []}))
+        Ok(match event {
+            BlockingAuthEvent::BeforeCreate => json!({
+                "userRecord": {
+                    "updateMask": "displayName",
+                    "displayName": "Must not be committed"
+                }
+            }),
+            BlockingAuthEvent::BeforeSignIn => json!({"userRecord": []}),
+        })
     }
 }
 
@@ -174,9 +182,9 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
 }
 
 #[test]
-fn blocking_auth_malformed_response_rolls_back_user_creation() {
+fn blocking_auth_malformed_before_sign_in_rolls_back_user_creation() {
     let mut s = state();
-    s.blocking = Some(Arc::new(MalformedBlockingHook));
+    s.blocking = Some(Arc::new(MalformedBeforeSignInHook));
 
     let (status, body) = post(
         &s,

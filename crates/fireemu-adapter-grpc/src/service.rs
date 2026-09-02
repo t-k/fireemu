@@ -333,6 +333,41 @@ fn with_warnings<T>(mut response: Response<T>, warnings: &[String]) -> Response<
     response
 }
 
+async fn blocking_read<T, F>(
+    local: Arc<LocalBackend>,
+    rules: Option<Arc<RulesEnforcer>>,
+    caller: Caller,
+    operation: F,
+) -> Result<T, Status>
+where
+    T: Send + 'static,
+    F: for<'a> FnOnce(&LocalBackend, crate::rules::ReadGuard<'a>) -> Result<T, Status>
+        + Send
+        + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let barrier = local.barrier();
+        let guard: crate::rules::BoxedReadGuard<'_> = Box::new(move |db, version, check| {
+            same_epoch(&barrier, caller.epoch)?;
+            let inner = crate::rules::read_guard(rules.as_ref(), &caller.principal);
+            inner(db, version, check)
+        });
+        operation(&local, &*guard)
+    })
+    .await
+    .map_err(|error| Status::internal(format!("Firestore blocking task failed: {error}")))?
+}
+
+async fn blocking_local<T, F>(local: Arc<LocalBackend>, operation: F) -> Result<T, Status>
+where
+    T: Send + 'static,
+    F: FnOnce(&LocalBackend) -> Result<T, Status> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || operation(&local))
+        .await
+        .map_err(|error| Status::internal(format!("Firestore blocking task failed: {error}")))?
+}
+
 #[tonic::async_trait]
 impl Firestore for GatewayService {
     async fn get_document(
@@ -358,10 +393,14 @@ impl Firestore for GatewayService {
                 &request.get_ref().parent,
                 "ListDocuments",
             )?;
-            let guard = self.read_guard(&caller);
-            return local
-                .list_documents(request.get_ref(), &*guard)
-                .map(Response::new);
+            let local = local.clone();
+            let rules = self.rules.clone();
+            let request = request.into_inner();
+            return blocking_read(local, rules, caller, move |local, guard| {
+                local.list_documents(&request, guard)
+            })
+            .await
+            .map(Response::new);
         }
         self.client()?.list_documents(request.into_inner()).await
     }
@@ -421,8 +460,13 @@ impl Firestore for GatewayService {
             // An empty batch never reaches the guard: the audience is checked here so a
             // token of another project cannot open a transaction in this one.
             self.check_database_audience(&caller, &request.get_ref().database)?;
-            let guard = self.read_guard(&caller);
-            let outcome = local.batch_get_documents(request.get_ref(), &*guard)?;
+            let local = local.clone();
+            let rules = self.rules.clone();
+            let request = request.into_inner();
+            let outcome = blocking_read(local, rules, caller, move |local, guard| {
+                local.batch_get_documents(&request, guard)
+            })
+            .await?;
             let read_time = Some(crate::encode::encode_instant(outcome.read_time));
             if outcome.items.is_empty() && !outcome.transaction.is_empty() {
                 // An empty batch still has to hand back the new transaction.
@@ -512,8 +556,13 @@ impl Firestore for GatewayService {
         let caller = self.caller(request.metadata(), &request.get_ref().parent, "RunQuery")?;
         let req = request.into_inner();
         if let Some(local) = self.local_backend() {
-            let guard = self.read_guard(&caller);
-            let (responses, warnings) = local.run_query(&req, &*guard)?;
+            let (responses, warnings) = blocking_read(
+                local.clone(),
+                self.rules.clone(),
+                caller,
+                move |local, guard| local.run_query(&req, guard),
+            )
+            .await?;
             let stream: Vec<Result<pb::RunQueryResponse, Status>> =
                 responses.into_iter().map(Ok).collect();
             let boxed: Self::RunQueryStream = Box::pin(tokio_stream::iter(stream));
@@ -576,8 +625,13 @@ impl Firestore for GatewayService {
                 &request.get_ref().parent,
                 "RunAggregationQuery",
             )?;
-            let guard = self.read_guard(&caller);
-            let response = local.run_aggregation_query(request.get_ref(), &*guard)?;
+            let local = local.clone();
+            let rules = self.rules.clone();
+            let request = request.into_inner();
+            let response = blocking_read(local, rules, caller, move |local, guard| {
+                local.run_aggregation_query(&request, guard)
+            })
+            .await?;
             let stream: Vec<Result<pb::RunAggregationQueryResponse, Status>> = vec![Ok(response)];
             return Ok(Response::new(Box::pin(tokio_stream::iter(stream))));
         }
@@ -602,7 +656,11 @@ impl Firestore for GatewayService {
             if let Some(rules) = &self.rules {
                 rules.require_owner(&caller.principal, "PartitionQuery")?;
             }
-            return local.partition_query(request.get_ref()).map(Response::new);
+            let local = local.clone();
+            let request = request.into_inner();
+            return blocking_local(local, move |local| local.partition_query(&request))
+                .await
+                .map(Response::new);
         }
         Err(Status::unimplemented(
             "PartitionQuery is served by the local backend only",
@@ -649,8 +707,10 @@ impl Firestore for GatewayService {
                 // Collection enumeration has no rules equivalent: admin-only under rules.
                 rules.require_owner(&caller.principal, "ListCollectionIds")?;
             }
-            return local
-                .list_collection_ids(request.get_ref())
+            let local = local.clone();
+            let request = request.into_inner();
+            return blocking_local(local, move |local| local.list_collection_ids(&request))
+                .await
                 .map(Response::new);
         }
         self.client()?

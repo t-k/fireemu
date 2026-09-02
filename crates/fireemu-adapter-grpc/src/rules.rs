@@ -254,12 +254,21 @@ pub enum ReadCheck<'a> {
 /// Authorization hook run inside the database critical section of a read: `version` is
 /// the snapshot version served (`None` = latest), so `get()` / `exists()` in the rules see
 /// exactly the state the response is built from.
-pub type ReadGuard<'a> =
-    &'a dyn Fn(&FirestoreState, Option<CommitVersion>, ReadCheck<'_>) -> Result<(), Status>;
+pub type ReadGuard<'a> = &'a dyn for<'check> Fn(
+    &FirestoreState,
+    Option<CommitVersion>,
+    ReadCheck<'check>,
+) -> Result<(), Status>;
 
 /// Owned read guard (see [`read_guard`]).
-pub type BoxedReadGuard<'a> =
-    Box<dyn Fn(&FirestoreState, Option<CommitVersion>, ReadCheck<'_>) -> Result<(), Status> + 'a>;
+pub type BoxedReadGuard<'a> = Box<
+    dyn for<'check> Fn(
+            &FirestoreState,
+            Option<CommitVersion>,
+            ReadCheck<'check>,
+        ) -> Result<(), Status>
+        + 'a,
+>;
 
 /// A read guard that allows everything (no rules configured / owner).
 pub fn allow_all_reads(

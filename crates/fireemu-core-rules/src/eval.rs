@@ -614,16 +614,17 @@ fn walk_items<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
+    let mut allowed = false;
     for item in items {
         if let Item::Match(block) = item {
             match walk_match(block, remaining, ctx, ev, matched_any) {
-                Ok(true) => return Ok(true),
+                Ok(true) => allowed = true,
                 Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
                 Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
             }
         }
     }
-    Ok(false)
+    Ok(allowed)
 }
 
 fn walk_match<'a>(
@@ -672,20 +673,21 @@ fn walk_match<'a>(
         }
         if !matches!(
             result,
-            Ok(true) | Err(EvalError::Budget { .. } | EvalError::Unsupported(_))
+            Err(EvalError::Budget { .. } | EvalError::Unsupported(_))
         ) {
             let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
             result = match (result, nested) {
-                (_, Ok(true)) => Ok(true),
-                (Err(e), Ok(false)) | (Ok(false) | Err(_), Err(e)) => Err(e),
+                (Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))), _)
+                | (_, Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_)))) => Err(e),
+                (Ok(true), _) | (_, Ok(true)) => Ok(true),
+                (Err(e), _) | (_, Err(e)) => Err(e),
                 (Ok(false), Ok(false)) => Ok(false),
-                (Ok(true), r) => r,
             };
         }
         ev.scope.functions.truncate(functions_before);
         ev.scope.bindings.truncate(bindings_before);
         match result {
-            Ok(true) => return Ok(true),
+            Ok(true) => outcome = Ok(true),
             Ok(false) => {}
             Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
             Err(e) => {
@@ -759,25 +761,22 @@ fn evaluate_allows<'a>(
     ctx: &RequestContext,
     ev: &mut Evaluator<'a>,
 ) -> Result<bool, EvalError> {
-    let mut deferred: Option<EvalError> = None;
+    let mut allowed = false;
     for allow in allows {
         if !allow.methods.iter().any(|m| ctx.method.covered_by(*m)) {
             continue;
         }
         let Some(cond) = &allow.condition else {
-            return Ok(true);
+            allowed = true;
+            continue;
         };
         match ev.eval(cond) {
-            Ok(RulesValue::Bool(true)) => return Ok(true),
+            Ok(RulesValue::Bool(true)) => allowed = true,
             Ok(_) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
-            Err(e @ EvalError::Budget { .. }) => return Err(e),
-            Err(e @ EvalError::Unsupported(_)) => deferred = Some(e),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
         }
     }
-    match deferred {
-        Some(e) => Err(e),
-        None => Ok(false),
-    }
+    Ok(allowed)
 }
 
 /// One line of why an expression is undefined, for a trace.

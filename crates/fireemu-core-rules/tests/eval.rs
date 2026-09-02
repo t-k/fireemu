@@ -298,6 +298,26 @@ fn unsupported_sibling_allow_cannot_be_overridden_by_a_later_allow() {
 }
 
 #[test]
+fn an_earlier_allow_cannot_hide_a_later_unsupported_allow() {
+    for src in [
+        "service cloud.firestore { match /databases/{db}/documents { match /a/{x} { allow read: if true; allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true; } } }",
+        "rules_version = '2'; service cloud.firestore { match /databases/{db}/documents { match /a/{x} { allow read: if true; match /{rest=**} { allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true; } } } }",
+        "service cloud.firestore { match /databases/{db}/documents { match /a/{x} { allow read: if true; } match /a/{x} { allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true; } } }",
+    ] {
+        let ruleset = parse_ruleset(src).unwrap();
+        let report = evaluate_request(
+            &ruleset,
+            &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
+        );
+
+        assert!(
+            matches!(report.decision, Decision::Deny(DenyReason::Unsupported(_))),
+            "{report:?}"
+        );
+    }
+}
+
+#[test]
 fn expression_budget_and_call_depth_are_enforced_from_the_catalog() {
     // A chain of 25 function frames exceeds RULES-FUNCTION-CALL-DEPTH (20) at runtime.
     use std::fmt::Write as _;

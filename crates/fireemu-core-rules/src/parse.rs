@@ -85,6 +85,34 @@ struct Parser<'a> {
     expr_depth: u32,
 }
 
+fn compile_literal_pattern(
+    callee: &Expr,
+    args: &[Expr],
+    span: Span,
+) -> Result<Option<std::sync::Arc<crate::regex::Regex>>, ParseError> {
+    let ExprKind::Member { name, .. } = callee.kind() else {
+        return Ok(None);
+    };
+    if !matches!(name.as_str(), "matches" | "replace") {
+        return Ok(None);
+    }
+    let Some(ExprKind::Literal(Literal::Str(pattern))) = args.first().map(Expr::kind) else {
+        return Ok(None);
+    };
+    crate::regex::Regex::new(pattern)
+        .map(std::sync::Arc::new)
+        .map(Some)
+        .map_err(|_| ParseError {
+            message: format!(
+                "Invalid regular expression pattern. Pattern: {}.",
+                crate::regex::escape_diagnostic_text(pattern)
+            ),
+            line: span.line,
+            column: span.column,
+            offset: span.offset,
+        })
+}
+
 /// Parses a complete ruleset.
 pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
     if src.len() > MAX_PARSE_BYTES {
@@ -113,7 +141,6 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
     };
     let ruleset = p.ruleset()?;
     check_expression_tree_depth(&ruleset)?;
-    check_literal_patterns(&ruleset)?;
     Ok(ruleset)
 }
 
@@ -163,64 +190,6 @@ fn check_expression_tree_depth(ruleset: &Ruleset) -> Result<(), ParseError> {
                 .into_iter()
                 .map(|child| (child, depth.saturating_add(1))),
         );
-    }
-    Ok(())
-}
-
-/// The official compiler compiles every literal `matches()` / `replace()` pattern while it
-/// compiles the file, and rejects the file when one of them is not a valid RE2 pattern --
-/// a lookahead, a backreference or an unterminated class never reaches the runtime. This
-/// walk reproduces that, so an unusable pattern is a load failure on both sides.
-fn check_literal_patterns(ruleset: &Ruleset) -> Result<(), ParseError> {
-    // Both walks are worklists rather than recursion: a left-nested `&&` chain is as deep
-    // as it is long, and a recursive visitor would overflow the stack on a source the
-    // parser itself accepts.
-    let mut exprs: Vec<&Expr> = Vec::new();
-    let mut items: Vec<&Item> = ruleset.services.iter().flat_map(|s| &s.items).collect();
-    while let Some(item) = items.pop() {
-        match item {
-            Item::Match(m) => {
-                items.extend(&m.items);
-                exprs.extend(m.allows.iter().filter_map(|a| a.condition.as_ref()));
-                exprs.extend(m.path.iter().filter_map(|s| match s {
-                    PathSegment::Binding(e) => Some(e),
-                    _ => None,
-                }));
-            }
-            Item::Function(f) => {
-                exprs.extend(f.lets.iter().map(|b| &b.value));
-                exprs.push(&f.body);
-            }
-        }
-    }
-    while let Some(e) = exprs.pop() {
-        let span = e.span;
-        match e.kind() {
-            ExprKind::Call { callee, args } => {
-                if let ExprKind::Member { name, .. } = callee.kind() {
-                    if matches!(name.as_str(), "matches" | "replace") {
-                        if let Some(ExprKind::Literal(Literal::Str(pattern))) =
-                            args.first().map(Expr::kind)
-                        {
-                            if crate::regex::Regex::new(pattern).is_err() {
-                                let pattern = crate::regex::escape_diagnostic_text(pattern);
-                                return Err(ParseError {
-                                    message: format!(
-                                        "Invalid regular expression pattern. Pattern: {pattern}."
-                                    ),
-                                    line: span.line,
-                                    column: span.column,
-                                    offset: span.offset,
-                                });
-                            }
-                        }
-                    }
-                }
-                exprs.push(callee);
-                exprs.extend(args);
-            }
-            _ => exprs.extend(e.children()),
-        }
     }
     Ok(())
 }
@@ -929,7 +898,16 @@ impl<'a> Parser<'a> {
                     }
                     self.expect_punct(")")?;
                     let span = e.span;
-                    e = Expr::new(ExprKind::Call { callee: e, args }, span, self.pos);
+                    let compiled_regex = compile_literal_pattern(&e, &args, span)?;
+                    e = Expr::new(
+                        ExprKind::Call {
+                            callee: e,
+                            args,
+                            compiled_regex,
+                        },
+                        span,
+                        self.pos,
+                    );
                 }
                 _ => {
                     self.pos = save;

@@ -1,5 +1,7 @@
 //! Security Rules AST (native subset, spec 13.3).
 
+use std::sync::Arc;
+
 /// Source position (1-based line and column, 0-based byte offset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Span {
@@ -246,7 +248,7 @@ impl Expr {
             ExprKind::Member { object, .. } => vec![object],
             ExprKind::Index { object, index } => vec![object, index],
             ExprKind::Slice { object, start, end } => vec![object, start, end],
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 let mut out = vec![callee];
                 out.extend(args);
                 out
@@ -290,7 +292,7 @@ fn move_children(kind: ExprKind, pending: &mut Vec<Expr>) {
         ExprKind::Member { object, .. } => pending.push(object),
         ExprKind::Index { object, index } => pending.extend([object, index]),
         ExprKind::Slice { object, start, end } => pending.extend([object, start, end]),
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             pending.push(callee);
             pending.extend(args);
         }
@@ -349,6 +351,8 @@ pub enum ExprKind {
         callee: Expr,
         /// Arguments.
         args: Vec<Expr>,
+        /// A literal `matches()` or `replace()` pattern compiled with the ruleset.
+        compiled_regex: Option<Arc<crate::regex::Regex>>,
     },
     /// Unary operation.
     Unary {

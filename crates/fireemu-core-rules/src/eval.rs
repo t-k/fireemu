@@ -17,6 +17,7 @@
 //!   `firestore.get()` / `firestore.exists()` namespace of Storage rules.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use fireemu_core_limits::catalogs::FIREBASE_RULES_2026_08_25;
 use fireemu_core_limits::model::LimitMaximum;
@@ -177,6 +178,19 @@ pub struct EvaluationReport {
     /// evaluation over an empty result set uses this to tell "denied by the rule" from
     /// "undecidable without a document" (spec RULES-LIST-APPROX).
     pub absent_resource_used: bool,
+    /// Request-local regular expression compilation and cache observations.
+    pub regex: RegexEvaluationDiagnostics,
+}
+
+/// Request-local observations for compiled regular expression reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RegexEvaluationDiagnostics {
+    /// Dynamic patterns compiled during this evaluation.
+    pub runtime_compiles: u64,
+    /// Dynamic patterns served from the request-local cache.
+    pub cache_hits: u64,
+    /// Greatest number of dynamic patterns retained at once.
+    pub peak_cache_entries: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +325,9 @@ struct Evaluator<'a> {
     /// Documents read so far, keyed by (`getAfter`?, path): a path is charged once per
     /// request and kind, as in production.
     doc_cache: BTreeMap<(bool, Vec<String>), Option<RulesValue>>,
+    /// Successful and failed dynamic pattern compilations retained only for this request.
+    regex_cache: BTreeMap<String, Result<Arc<crate::regex::Regex>, crate::regex::RegexError>>,
+    regex_diagnostics: RegexEvaluationDiagnostics,
     doc_reads_max: u64,
     /// `rules_version = '2'`: `**` matches zero or more segments.
     wildcard_zero_or_more: bool,
@@ -383,6 +400,7 @@ fn evaluate_with_coverage(
     let mut matched_any = false;
     let mut unsupported: Option<String> = None;
     let mut absent_resource_used = false;
+    let mut regex_diagnostics = RegexEvaluationDiagnostics::default();
     for service in &ruleset.services {
         if service.name != ctx.service.name() {
             continue;
@@ -404,6 +422,8 @@ fn evaluate_with_coverage(
             resource: resource_value,
             access,
             doc_cache: BTreeMap::new(),
+            regex_cache: BTreeMap::new(),
+            regex_diagnostics: RegexEvaluationDiagnostics::default(),
             doc_reads_max: limit_max(match ctx.service {
                 RulesService::Firestore => "RULES-DOC-ACCESS-SINGLE",
                 // Storage rules may call firestore.get() / exists() twice per request.
@@ -420,6 +440,15 @@ fn evaluate_with_coverage(
         let outcome = walk_items(&service.items, &segments, ctx, &mut ev, &mut matched_any);
         absent_resource_used |= ev.absent_resource_used.get();
         budget = ev.budget;
+        regex_diagnostics.runtime_compiles = regex_diagnostics
+            .runtime_compiles
+            .saturating_add(ev.regex_diagnostics.runtime_compiles);
+        regex_diagnostics.cache_hits = regex_diagnostics
+            .cache_hits
+            .saturating_add(ev.regex_diagnostics.cache_hits);
+        regex_diagnostics.peak_cache_entries = regex_diagnostics
+            .peak_cache_entries
+            .max(ev.regex_diagnostics.peak_cache_entries);
         match outcome {
             Ok(true) => {
                 return EvaluationReport {
@@ -427,6 +456,7 @@ fn evaluate_with_coverage(
                     expressions_evaluated: budget.expressions,
                     max_call_depth: budget.max_depth_seen,
                     absent_resource_used,
+                    regex: regex_diagnostics,
                 }
             }
             Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
@@ -444,6 +474,7 @@ fn evaluate_with_coverage(
                     expressions_evaluated: budget.expressions,
                     max_call_depth: budget.max_depth_seen,
                     absent_resource_used,
+                    regex: regex_diagnostics,
                 }
             }
             Err(EvalError::Unsupported(m)) => unsupported = Some(m),
@@ -461,6 +492,7 @@ fn evaluate_with_coverage(
         expressions_evaluated: budget.expressions,
         max_call_depth: budget.max_depth_seen,
         absent_resource_used,
+        regex: regex_diagnostics,
     }
 }
 
@@ -1156,7 +1188,11 @@ impl<'a> Evaluator<'a> {
                 let hi = self.eval(end)?;
                 slice(&obj, &lo, &hi)
             }
-            ExprKind::Call { callee, args } => self.call(callee, args),
+            ExprKind::Call {
+                callee,
+                args,
+                compiled_regex,
+            } => self.call(callee, args, compiled_regex.as_ref()),
             ExprKind::Unary { op, expr } => {
                 let v = self.eval(expr)?;
                 match (op, v) {
@@ -1466,7 +1502,12 @@ impl<'a> Evaluator<'a> {
         })
     }
 
-    fn call(&mut self, callee: &Expr, args: &[Expr]) -> Result<RulesValue, EvalError> {
+    fn call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<RulesValue, EvalError> {
         match callee.kind() {
             ExprKind::Ident(name) => {
                 if let Some(f) = self.function(name) {
@@ -1513,9 +1554,78 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .map(|a| self.eval(a))
                     .collect::<Result<Vec<_>, _>>()?;
-                method_call(&receiver, name, &values)
+                if matches!(receiver, RulesValue::String(_))
+                    && matches!(name.as_str(), "matches" | "replace")
+                {
+                    self.string_regex_call(&receiver, name, &values, compiled_regex)
+                } else {
+                    method_call(&receiver, name, &values)
+                }
             }
             _ => Err(soft("call target is not callable")),
+        }
+    }
+
+    fn regex_for(
+        &mut self,
+        pattern: &str,
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<Arc<crate::regex::Regex>, EvalError> {
+        if let Some(regex) = compiled_regex {
+            return Ok(Arc::clone(regex));
+        }
+        if let Some(cached) = self.regex_cache.get(pattern) {
+            self.regex_diagnostics.cache_hits = self.regex_diagnostics.cache_hits.saturating_add(1);
+            return cached.clone().map_err(|error| {
+                EvalError::Unsupported(crate::regex::escape_diagnostic_text(&error.to_string()))
+            });
+        }
+        self.regex_diagnostics.runtime_compiles =
+            self.regex_diagnostics.runtime_compiles.saturating_add(1);
+        let compiled = crate::regex::Regex::new(pattern).map(Arc::new);
+        const DYNAMIC_REGEX_CACHE_CAPACITY: usize = 16;
+        if self.regex_cache.len() < DYNAMIC_REGEX_CACHE_CAPACITY {
+            self.regex_cache.insert(pattern.to_owned(), compiled.clone());
+            self.regex_diagnostics.peak_cache_entries = self
+                .regex_diagnostics
+                .peak_cache_entries
+                .max(self.regex_cache.len());
+        }
+        compiled.map_err(|error| {
+            EvalError::Unsupported(crate::regex::escape_diagnostic_text(&error.to_string()))
+        })
+    }
+
+    fn string_regex_call(
+        &mut self,
+        receiver: &RulesValue,
+        name: &str,
+        args: &[RulesValue],
+        compiled_regex: Option<&Arc<crate::regex::Regex>>,
+    ) -> Result<RulesValue, EvalError> {
+        let RulesValue::String(subject) = receiver else {
+            unreachable!("the caller checks the receiver type")
+        };
+        match (name, args) {
+            ("matches", [RulesValue::String(pattern)]) => {
+                let regex = self.regex_for(pattern, compiled_regex)?;
+                Ok(RulesValue::Bool(
+                    regex.is_full_match(subject).map_err(regex_runtime_error)?,
+                ))
+            }
+            ("matches", [_]) => Err(soft("matches() expects a string pattern")),
+            ("matches", _) => Err(soft("matches() takes 1 argument(s)")),
+            ("replace", [RulesValue::String(pattern), RulesValue::String(replacement)]) => {
+                let regex = self.regex_for(pattern, compiled_regex)?;
+                Ok(RulesValue::String(
+                    regex
+                        .replace_all(subject, replacement)
+                        .map_err(regex_runtime_error)?,
+                ))
+            }
+            ("replace", [_, _]) => Err(soft("replace() expects a pattern and a replacement")),
+            ("replace", _) => Err(soft("replace() takes 2 argument(s)")),
+            _ => unreachable!("the caller checks the method name"),
         }
     }
 

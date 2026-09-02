@@ -337,7 +337,7 @@ fn describe_path(path: &[PathSegment]) -> String {
 
 fn collect_calls(expr: &Expr, scope: &[usize], from: Option<usize>, out: &mut Vec<CallSite>) {
     match expr.kind() {
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             if let ExprKind::Ident(name) = callee.kind() {
                 out.push(CallSite {
                     callee: name.clone(),

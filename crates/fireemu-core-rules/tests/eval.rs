@@ -757,10 +757,10 @@ service firebase.storage {
             request_query: None,
         }
     };
-    assert!(matches!(
-        evaluate_request(&ruleset, &ctx("cat.png", "image/png")).decision,
-        Decision::Allow
-    ));
+    let allowed = evaluate_request(&ruleset, &ctx("cat.png", "image/png"));
+    assert!(matches!(allowed.decision, Decision::Allow));
+    assert_eq!(allowed.regex.runtime_compiles, 0, "{allowed:?}");
+    assert_eq!(allowed.regex.peak_cache_entries, 0, "{allowed:?}");
     assert!(matches!(
         evaluate_request(&ruleset, &ctx("cat.png", "text/plain")).decision,
         Decision::Deny(_)
@@ -773,6 +773,71 @@ service firebase.storage {
         evaluate_request(&ruleset, &ctx("forbidden.png", "image/png")).decision,
         Decision::Deny(_)
     ));
+}
+
+#[test]
+fn dynamic_regex_patterns_are_compiled_once_per_evaluation() {
+    let ruleset = parse_ruleset(
+        r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if 'aaa'.matches(resource.data.pattern)
+                 && 'aaa'.matches(resource.data.pattern)
+                 && 'aaa'.matches(resource.data.pattern);
+    }
+  }
+}
+
+",
+    )
+    .unwrap();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[(
+        "pattern",
+        RulesValue::String("a+".to_owned()),
+    )]));
+
+    let first = evaluate_request(&ruleset, &request);
+    assert!(matches!(first.decision, Decision::Allow), "{first:?}");
+    assert_eq!(first.regex.runtime_compiles, 1, "{first:?}");
+    assert_eq!(first.regex.cache_hits, 2, "{first:?}");
+    assert_eq!(first.regex.peak_cache_entries, 1, "{first:?}");
+
+    let second = evaluate_request(&ruleset, &request);
+    assert_eq!(second.regex.runtime_compiles, 1, "{second:?}");
+    assert_eq!(second.regex.cache_hits, 2, "{second:?}");
+    assert_eq!(second.regex.peak_cache_entries, 1, "{second:?}");
+}
+
+#[test]
+fn dynamic_regex_cache_has_a_request_local_entry_cap() {
+    let conditions = (0..17)
+        .map(|index| format!("'a'.matches(resource.data.patterns.p{index})"))
+        .chain(["'a'.matches(resource.data.patterns.p0)".to_owned()])
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let ruleset = parse_ruleset(&format!(
+        "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents {{ match /notes/{{id}} {{ allow get: if {conditions}; }} }} }}"
+    ))
+    .unwrap();
+    let patterns = (0..17)
+        .map(|index| {
+            (
+                format!("p{index}"),
+                RulesValue::String(format!("a{{1,{}}}", index + 1)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[("patterns", RulesValue::Map(patterns))]));
+
+    let report = evaluate_request(&ruleset, &request);
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    assert_eq!(report.regex.runtime_compiles, 17, "{report:?}");
+    assert_eq!(report.regex.cache_hits, 1, "{report:?}");
+    assert_eq!(report.regex.peak_cache_entries, 16, "{report:?}");
 }
 
 #[test]

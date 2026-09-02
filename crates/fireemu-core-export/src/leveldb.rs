@@ -90,11 +90,31 @@ use fireemu_core_types::hash::Crc32c;
 /// Appends `records` to a `LevelDB` log file body.
 #[must_use]
 pub fn write_log(records: &[Vec<u8>]) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::new();
+    let mut writer = LogWriter::new();
     for record in records {
-        write_record(&mut out, record);
+        writer.push(record);
     }
-    out
+    writer.finish()
+}
+
+/// Incremental `LevelDB` log encoder used by dataset exporters so encoded records do not
+/// have to be retained beside the final framed output.
+pub(crate) struct LogWriter {
+    out: Vec<u8>,
+}
+
+impl LogWriter {
+    pub(crate) const fn new() -> Self {
+        Self { out: Vec::new() }
+    }
+
+    pub(crate) fn push(&mut self, payload: &[u8]) {
+        write_record(&mut self.out, payload);
+    }
+
+    pub(crate) fn finish(self) -> Vec<u8> {
+        self.out
+    }
 }
 
 fn write_record(out: &mut Vec<u8>, payload: &[u8]) {

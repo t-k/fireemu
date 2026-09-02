@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
 
-use crate::leveldb::{read_log, write_log, LogError};
+use crate::leveldb::{read_log, write_log, LogError, LogWriter};
 use crate::wire::{Reader, WireError, WireType, Writer};
 
 /// The partition every emulator export writes: all namespaces, all kinds.
@@ -368,8 +368,11 @@ pub fn read_output(bytes: &[u8]) -> Result<Vec<ExportDocument>, FirestoreExportE
 /// Encodes an `output-*` file holding `documents`, in the given order.
 #[must_use]
 pub fn write_output(documents: &[ExportDocument]) -> Vec<u8> {
-    let records: Vec<Vec<u8>> = documents.iter().map(write_entity).collect();
-    write_log(&records)
+    let mut writer = LogWriter::new();
+    for document in documents {
+        writer.push(&write_entity(document));
+    }
+    writer.finish()
 }
 
 /// Encodes one document as an `EntityProto` record.

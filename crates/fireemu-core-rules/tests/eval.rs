@@ -913,6 +913,21 @@ fn owned_evaluation_projects_scalar_members_without_cloning_large_containers() {
 }
 
 #[test]
+fn scalar_projection_respects_request_and_resource_parameter_shadowing() {
+    let ruleset = parse_ruleset(
+        "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { function requestAllows(request) { return request.auth.uid == 'shadow'; } function resourceAllows(resource) { return resource.data.ok == true; } match /notes/{id} { allow get: if requestAllows({'auth': {'uid': 'shadow'}}) && resourceAllows({'data': {'ok': true}}); } } }",
+    )
+    .unwrap();
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+    request.resource = Some(doc(&[("ok", RulesValue::Bool(false))]));
+
+    let report = evaluate_request(&ruleset, &request);
+
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    assert_eq!(report.projected_member_reads, 0, "{report:?}");
+}
+
+#[test]
 fn linear_regex_repeats_decide_normally_in_rules() {
     let rules = "rules_version = '2';
 service cloud.firestore {

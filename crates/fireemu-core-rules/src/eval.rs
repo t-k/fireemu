@@ -1200,6 +1200,9 @@ impl<'a> Evaluator<'a> {
     fn project_member_chain(&mut self, expr: &Expr) -> Option<Result<RulesValue, EvalError>> {
         let mut members = Vec::new();
         let (root_expr, root_name) = member_access_chain(expr, &mut members)?;
+        if self.has_binding(root_name) {
+            return None;
+        }
         let root = match root_name {
             "request" => Arc::clone(&self.request),
             "resource" => Arc::clone(&self.resource),

@@ -10,10 +10,15 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::service::GatewayService;
-use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
+    PlanningContext,
+};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+use fireemu_core_types::ids::CollectionId;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
@@ -97,6 +102,72 @@ async fn start() -> (
     tokio::task::JoinHandle<()>,
 ) {
     start_with_write_time(false).await
+}
+
+#[test]
+fn routed_projects_can_use_isolated_index_catalogs() {
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Conservative,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+    let backend = LocalBackend::new(gateway, clock, 7);
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("tasks").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: FieldPath::parse("done").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: FieldPath::parse("owner").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+        ],
+    });
+    backend.replace_project_database_indexes("demo-a", "(default)", indexes);
+    let field = |name: &str| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: name.to_owned(),
+            }),
+            op: sq::field_filter::Operator::Equal as i32,
+            value: Some(i(1)),
+        })),
+    };
+    let query = pb::StructuredQuery {
+        from: vec![sq::CollectionSelector {
+            collection_id: "tasks".to_owned(),
+            all_descendants: false,
+        }],
+        r#where: Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::CompositeFilter(
+                sq::CompositeFilter {
+                    op: sq::composite_filter::Operator::And as i32,
+                    filters: vec![field("owner"), field("done")],
+                },
+            )),
+        }),
+        ..Default::default()
+    };
+    let parent = |project: &str| {
+        fireemu_adapter_grpc::decode::parse_parent(&format!(
+            "projects/{project}/databases/(default)/documents"
+        ))
+        .unwrap()
+    };
+    assert!(backend.accepted_query(&parent("demo-a"), &query).is_ok());
+    let error = backend
+        .accepted_query(&parent("demo-b"), &query)
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
 }
 
 async fn start_with_edition(
@@ -1197,9 +1268,12 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
 #[tokio::test]
 async fn list_documents_pages_by_name_with_opaque_tokens() {
     let (mut client, _clock, handle) = start().await;
-    let writes: Vec<pb::Write> = (0..5i64)
+    let mut writes: Vec<pb::Write> = (0..5i64)
         .map(|n| update_write(&format!("pg/d{n}"), &[("v", i(n))]))
         .collect();
+    writes.extend(
+        (0..5i64).map(|n| update_write(&format!("missing/m{n}/children/leaf"), &[("v", i(n))])),
+    );
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -1233,6 +1307,48 @@ async fn list_documents_pages_by_name_with_opaque_tokens() {
         seen.windows(2).all(|w| w[0] < w[1]),
         "listed by name: {seen:?}"
     );
+    let mut token = String::new();
+    let mut missing = Vec::new();
+    loop {
+        let page = client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: DOCS.to_owned(),
+                collection_id: "missing".to_owned(),
+                page_size: 2,
+                page_token: token,
+                show_missing: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(page
+            .documents
+            .iter()
+            .all(|document| document.fields.is_empty()));
+        missing.extend(page.documents.iter().map(|document| document.name.clone()));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        token = page.next_page_token;
+    }
+    assert_eq!(missing.len(), 5);
+    assert!(missing.windows(2).all(|window| window[0] < window[1]));
+    for (collection_id, show_missing) in [("pg", false), ("missing", true)] {
+        let page = client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: DOCS.to_owned(),
+                collection_id: collection_id.to_owned(),
+                page_size: i32::MAX,
+                show_missing,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(page.documents.len(), 5);
+        assert!(page.next_page_token.is_empty());
+    }
     let err = client
         .list_documents(pb::ListDocumentsRequest {
             parent: DOCS.to_owned(),
@@ -1243,6 +1359,126 @@ async fn list_documents_pages_by_name_with_opaque_tokens() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn ordered_list_pages_continue_across_present_and_missing_rows() {
+    let (mut client, _clock, handle) = start().await;
+    let mut writes = (0..5i64)
+        .map(|value| update_write(&format!("mixed/d{value}"), &[("v", i(value))]))
+        .collect::<Vec<_>>();
+    writes
+        .extend((0..3i64).map(|value| update_write(&format!("mixed/m{value}/children/leaf"), &[])));
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut token = String::new();
+    let mut seen = Vec::new();
+    loop {
+        let page = client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: DOCS.to_owned(),
+                collection_id: "mixed".to_owned(),
+                page_size: 2,
+                page_token: token,
+                order_by: "v desc".to_owned(),
+                show_missing: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        seen.extend(page.documents.iter().map(|document| document.name.clone()));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        token = page.next_page_token;
+    }
+
+    let expected = ["d4", "d3", "d2", "d1", "d0", "m0", "m1", "m2"]
+        .map(|document| format!("{DOCS}/mixed/{document}"));
+    assert_eq!(seen, expected);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn list_document_tokens_bind_result_shape_and_session() {
+    let (mut client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (0..3)
+                .map(|index| update_write(&format!("pg/d{index}"), &[]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let first_token = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "pg".to_owned(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .next_page_token;
+
+    for (show_missing, order_by) in [(true, ""), (false, "__name__ desc")] {
+        let error = client
+            .list_documents(pb::ListDocumentsRequest {
+                parent: DOCS.to_owned(),
+                collection_id: "pg".to_owned(),
+                page_size: 1,
+                page_token: first_token.clone(),
+                show_missing,
+                order_by: order_by.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+    let decoded =
+        String::from_utf8(fireemu_adapter_grpc::rest::json::base64_decode(&first_token).unwrap())
+            .unwrap();
+    let (_, identity) = decoded.split_once('\n').unwrap();
+    let forged = fireemu_adapter_grpc::rest::json::base64_encode(
+        format!("{DOCS}/other/a\n{identity}").as_bytes(),
+    );
+    let error = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "pg".to_owned(),
+            page_size: 1,
+            page_token: forged,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    backend.reset_scope(&Scope::Project("demo-app".to_owned()));
+    let error = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: "pg".to_owned(),
+            page_size: 1,
+            page_token: first_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
     handle.abort();
 }
 

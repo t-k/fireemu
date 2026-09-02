@@ -24,7 +24,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
     Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
-    Precondition, TransactionId, Write, WriteOp,
+    ListedDocument, Precondition, TransactionId, Write, WriteOp,
 };
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
@@ -135,7 +135,7 @@ impl DatabaseHandle {
 pub struct LocalBackend {
     gateway: Gateway,
     /// Reloadable index catalog used for every new query plan.
-    indexes: RwLock<BTreeMap<String, fireemu_core_firestore::index::IndexSet>>,
+    indexes: RwLock<BTreeMap<(Option<String>, String), fireemu_core_firestore::index::IndexSet>>,
     clock: Arc<Mutex<VirtualClock>>,
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
@@ -390,7 +390,7 @@ impl LocalBackend {
     #[must_use]
     pub fn new(gateway: Gateway, clock: Arc<Mutex<VirtualClock>>, seed: u64) -> Self {
         let indexes = RwLock::new(BTreeMap::from([(
-            "(default)".to_owned(),
+            (None, "(default)".to_owned()),
             gateway.indexes.clone(),
         )]));
         Self {
@@ -840,15 +840,20 @@ impl LocalBackend {
         sq: &pb::StructuredQuery,
     ) -> Result<AcceptedQuery, Status> {
         let query = decode_structured_query(parent, sq).map_err(status)?;
-        let mut gateway = self.gateway.clone();
-        gateway.indexes = self
-            .indexes
-            .read()
-            .map_err(|_| lock_poisoned())?
-            .get(parent.database.as_str())
-            .cloned()
-            .unwrap_or_default();
-        gateway.validate_query(&query).map_err(|r| r.to_status())
+        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
+        let empty = fireemu_core_firestore::index::IndexSet::default();
+        let project_key = (
+            Some(parent.project.as_str().to_owned()),
+            parent.database.as_str().to_owned(),
+        );
+        let shared_key = (None, parent.database.as_str().to_owned());
+        let database_indexes = indexes
+            .get(&project_key)
+            .or_else(|| indexes.get(&shared_key))
+            .unwrap_or(&empty);
+        self.gateway
+            .validate_query_with_indexes(&query, database_indexes)
+            .map_err(|rejection| rejection.to_status())
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.
@@ -863,7 +868,19 @@ impl LocalBackend {
         indexes: fireemu_core_firestore::index::IndexSet,
     ) {
         if let Ok(mut current) = self.indexes.write() {
-            current.insert(database.to_owned(), indexes);
+            current.insert((None, database.to_owned()), indexes);
+        }
+    }
+
+    /// Atomically replaces one routed project's database-specific index catalog.
+    pub fn replace_project_database_indexes(
+        &self,
+        project: &str,
+        database: &str,
+        indexes: fireemu_core_firestore::index::IndexSet,
+    ) {
+        if let Ok(mut current) = self.indexes.write() {
+            current.insert((Some(project.to_owned()), database.to_owned()), indexes);
         }
     }
 
@@ -880,11 +897,16 @@ impl LocalBackend {
             |error| {
                 error
                     .into_inner()
-                    .get(database)
+                    .get(&(None, database.to_owned()))
                     .cloned()
                     .unwrap_or_default()
             },
-            |indexes| indexes.get(database).cloned().unwrap_or_default(),
+            |indexes| {
+                indexes
+                    .get(&(None, database.to_owned()))
+                    .cloned()
+                    .unwrap_or_default()
+            },
         )
     }
 
@@ -946,6 +968,12 @@ impl LocalBackend {
             .ok()
             .filter(|n| *n > 0)
             .ok_or_else(|| Status::invalid_argument("partition_count must be positive"))?;
+        let collection_id = query
+            .scope
+            .collection_id()
+            .expect("collection-group checked above")
+            .as_str()
+            .to_owned();
         if req.page_size < 0 {
             return Err(Status::invalid_argument("page_size must not be negative"));
         }
@@ -961,11 +989,7 @@ impl LocalBackend {
             let text = format!(
                 "{}|{}|{}|{:?}|{}|{}",
                 req.parent,
-                query
-                    .scope
-                    .collection_id()
-                    .expect("collection-group checked above")
-                    .as_str(),
+                collection_id,
                 partition_count,
                 read_time.map(fireemu_core_types::time::LogicalInstant::as_nanos),
                 self.epoch(),
@@ -997,7 +1021,7 @@ impl LocalBackend {
             })?;
             (Some(CommitVersion::from_value(v)), i)
         };
-        let (names, version): (Vec<String>, CommitVersion) = self.with_db(&parent, |db| {
+        let (paths, version): (Vec<DocumentPath>, CommitVersion) = self.with_db(&parent, |db| {
             let version = match (token_version, read_time) {
                 (Some(v), _) => v,
                 (None, Some(t)) => db.version_at(t),
@@ -1006,23 +1030,21 @@ impl LocalBackend {
             if version > db.current_version() {
                 return Err(Status::invalid_argument("invalid page_token"));
             }
-            db.run_query(&query, Some(version))
-                .map(|docs| {
-                    (
-                        docs.iter().map(|d| d.path.resource_name()).collect(),
-                        version,
-                    )
-                })
-                .map_err(|e| status_from_error(&e))
+            Ok((
+                db.collection_group_partition_paths_at(
+                    query.scope.parent(),
+                    &collection_id,
+                    version,
+                    partition_count,
+                ),
+                version,
+            ))
         })?;
-        // k cut points split n documents into k + 1 ranges; never more than n - 1 cuts.
-        let cuts = partition_count.min(names.len().saturating_sub(1));
-        let cursors: Vec<pb::Cursor> = (1..=cuts)
-            .map(|i| pb::Cursor {
+        let cursors: Vec<pb::Cursor> = paths
+            .into_iter()
+            .map(|path| pb::Cursor {
                 values: vec![pb::Value {
-                    value_type: Some(pb::value::ValueType::ReferenceValue(
-                        names[names.len() * i / (cuts + 1)].clone(),
-                    )),
+                    value_type: Some(pb::value::ValueType::ReferenceValue(path.resource_name())),
                 }],
                 before: true,
             })
@@ -1901,15 +1923,20 @@ impl LocalBackend {
         };
         // Page tokens carry the resource name of the last document of the previous page
         // (documents are listed by name) and the identity of the listing they continue:
-        // parent, collection, mask, and the snapshot (live, read_time or transaction).
+        // parent, collection, result-shaping options, session generation, and the snapshot
+        // (live, read_time or transaction).
         let identity = format!(
-            "{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}",
             req.parent,
             req.collection_id,
             req.mask
                 .as_ref()
                 .map(|m| m.field_paths.join(","))
                 .unwrap_or_default(),
+            req.order_by,
+            req.show_missing,
+            self.epoch(),
+            self.database_generation(&parent),
             match (&txn, read_at) {
                 (Some(t), _) => format!(
                     "txn:{}",
@@ -1920,6 +1947,21 @@ impl LocalBackend {
             }
         );
         let after = list_page_cursor(&req.page_token, &identity)?;
+        let after_path = after
+            .as_deref()
+            .map(decode_document_name)
+            .transpose()
+            .map_err(status)?;
+        if after_path.as_ref().is_some_and(|path| {
+            path.project() != &parent.project
+                || path.database() != &parent.database
+                || path.parent_document().as_ref() != parent.document.as_ref()
+                || path.collection_id().as_str() != req.collection_id
+        }) {
+            return Err(Status::invalid_argument(
+                "page_token cursor is outside the requested collection",
+            ));
+        }
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
         if req.page_size < 0 {
             return Err(Status::invalid_argument("page_size must not be negative"));
@@ -1936,6 +1978,8 @@ impl LocalBackend {
         };
         let mut proof_query = accepted.query.clone();
         proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
+        let bounded_name_page = txn.is_none() && !ordered;
+        let bounded_ordered_page = txn.is_none() && ordered;
         self.with_db(&parent, |db| {
             let version = match (&txn, read_at) {
                 (Some(t), _) => {
@@ -1959,52 +2003,146 @@ impl LocalBackend {
             )?;
             // Inside a transaction the scan is recorded like a query, so a concurrent
             // change to the collection aborts the commit.
-            let mut docs = match (&txn, ordered) {
-                (Some(t), _) => db
-                    .run_query_in_transaction(t, &accepted.query)
-                    .map_err(|e| status_from_error(&e))?,
-                (None, true) => db
-                    .run_query(&accepted.query, version)
-                    .map_err(|e| status_from_error(&e))?,
-                (None, false) => {
-                    db.list_documents_at(parent.document.as_ref(), &req.collection_id, version)
-                }
-            };
-            let mut documents: Vec<pb::Document> = docs
-                .iter_mut()
-                .map(|d| {
-                    if let Some(mask) = &mask {
-                        d.fields = project_fields(&d.fields, mask);
-                    }
-                    encode_document(d)
-                })
-                .collect();
-            if req.show_missing {
-                // A path that holds no document but has descendants is listed by name
-                // alone, as the backend lists it. Under an explicit order the missing
-                // parents (which have no fields to order on) follow the ordered documents.
-                let missing = db.list_missing_parents_at(
+            let mut documents = if bounded_name_page && req.show_missing {
+                db.list_documents_with_missing_page_at(
                     parent.document.as_ref(),
                     &req.collection_id,
                     version,
-                );
-                documents.extend(missing.iter().map(|path| pb::Document {
-                    name: path.resource_name(),
-                    ..Default::default()
-                }));
-                if !ordered {
-                    documents.sort_by(|a, b| a.name.cmp(&b.name));
-                }
-            }
-            if let Some(after) = &after {
-                if ordered {
-                    // The page continues after the named document at its position in the
-                    // ordered result; a document that left the result restarts the page.
-                    if let Some(position) = documents.iter().position(|d| d.name == *after) {
-                        documents.drain(..=position);
+                    after_path.as_ref(),
+                    page_size,
+                )
+                .0
+                .into_iter()
+                .map(|entry| match entry {
+                    ListedDocument::Present(mut document) => {
+                        if let Some(mask) = &mask {
+                            document.fields = project_fields(&document.fields, mask);
+                        }
+                        encode_document(&document)
                     }
-                } else {
-                    documents.retain(|d| d.name > *after);
+                    ListedDocument::Missing(path) => pb::Document {
+                        name: path.resource_name(),
+                        ..Default::default()
+                    },
+                })
+                .collect()
+            } else if bounded_ordered_page {
+                let mut page_query = accepted.query.clone();
+                page_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
+                let cursor = after_path
+                    .as_ref()
+                    .map(|path| db.cursor_after_document(&accepted.query, version, path))
+                    .transpose()
+                    .map_err(|e| status_from_error(&e))?
+                    .flatten();
+                let cursor_matches_document = cursor.is_some();
+                page_query.start_at = cursor;
+                let mut docs = db
+                    .run_query(&page_query, version)
+                    .map_err(|e| status_from_error(&e))?;
+                let mut documents = docs
+                    .iter_mut()
+                    .map(|document| {
+                        if let Some(mask) = &mask {
+                            document.fields = project_fields(&document.fields, mask);
+                        }
+                        encode_document(document)
+                    })
+                    .collect::<Vec<_>>();
+                if req.show_missing {
+                    let mut missing = Vec::new();
+                    let mut continued_missing_suffix = false;
+                    if !cursor_matches_document {
+                        if let Some(after_path) = after_path.as_ref() {
+                            let (cursor_is_missing, page) = db.list_missing_parents_page_at(
+                                parent.document.as_ref(),
+                                &req.collection_id,
+                                version,
+                                Some(after_path),
+                                page_size,
+                            );
+                            if cursor_is_missing {
+                                continued_missing_suffix = true;
+                                documents.clear();
+                                missing = page;
+                            }
+                        }
+                    }
+                    if !continued_missing_suffix && documents.len() < page_size {
+                        missing = db
+                            .list_missing_parents_page_at(
+                                parent.document.as_ref(),
+                                &req.collection_id,
+                                version,
+                                None,
+                                page_size - documents.len(),
+                            )
+                            .1;
+                    }
+                    documents.extend(missing.iter().map(|path| pb::Document {
+                        name: path.resource_name(),
+                        ..Default::default()
+                    }));
+                }
+                documents
+            } else {
+                let mut docs = match (&txn, ordered) {
+                    (Some(t), _) => db
+                        .run_query_in_transaction(t, &accepted.query)
+                        .map_err(|e| status_from_error(&e))?,
+                    (None, true) => db
+                        .run_query(&accepted.query, version)
+                        .map_err(|e| status_from_error(&e))?,
+                    (None, false) if bounded_name_page => db.list_documents_page_at(
+                        parent.document.as_ref(),
+                        &req.collection_id,
+                        version,
+                        after_path.as_ref(),
+                        page_size,
+                    ),
+                    (None, false) => {
+                        db.list_documents_at(parent.document.as_ref(), &req.collection_id, version)
+                    }
+                };
+                let mut documents: Vec<pb::Document> = docs
+                    .iter_mut()
+                    .map(|d| {
+                        if let Some(mask) = &mask {
+                            d.fields = project_fields(&d.fields, mask);
+                        }
+                        encode_document(d)
+                    })
+                    .collect();
+                if req.show_missing {
+                    // A path that holds no document but has descendants is listed by name
+                    // alone, as the backend lists it. Under an explicit order the missing
+                    // parents (which have no fields to order on) follow the ordered documents.
+                    let missing = db.list_missing_parents_at(
+                        parent.document.as_ref(),
+                        &req.collection_id,
+                        version,
+                    );
+                    documents.extend(missing.iter().map(|path| pb::Document {
+                        name: path.resource_name(),
+                        ..Default::default()
+                    }));
+                    if !ordered {
+                        documents.sort_by(|a, b| a.name.cmp(&b.name));
+                    }
+                }
+                documents
+            };
+            if !bounded_name_page && !bounded_ordered_page {
+                if let Some(after) = &after {
+                    if ordered {
+                        // The page continues after the named document at its position in the
+                        // ordered result; a document that left the result restarts the page.
+                        if let Some(position) = documents.iter().position(|d| d.name == *after) {
+                            documents.drain(..=position);
+                        }
+                    } else {
+                        documents.retain(|d| d.name > *after);
+                    }
                 }
             }
             // A full page carries a token whether or not anything follows, as the backend
@@ -2324,7 +2462,7 @@ fn list_page_cursor(page_token: &str, identity: &str) -> Result<Option<String>, 
     let (name, token_identity) = token.split_once('\n').ok_or_else(malformed)?;
     if token_identity != identity {
         return Err(Status::invalid_argument(
-            "page_token was issued for a different listing (parent, collection, mask or snapshot)",
+            "page_token was issued for a different listing",
         ));
     }
     decode_document_name(name).map_err(|_| malformed())?;

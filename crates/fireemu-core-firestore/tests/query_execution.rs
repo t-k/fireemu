@@ -14,7 +14,7 @@ use fireemu_core_firestore::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
 use fireemu_core_firestore::store::{
-    get_field, Aggregation, Document, FirestoreState, Write, WriteOp,
+    get_field, Aggregation, Document, FirestoreState, ListedDocument, Write, WriteOp,
 };
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
@@ -182,8 +182,15 @@ fn reference_run(corpus: &[Document], query: &Query) -> Vec<Document> {
                         .as_ref()
                         .is_none_or(|p| doc.path.pairs()[..parent_len] == *p.pairs())
             }
-            QueryScope::CollectionGroup { collection_id, .. } => {
+            QueryScope::CollectionGroup {
+                parent,
+                collection_id,
+            } => {
                 doc.path.collection_id() == collection_id
+                    && parent.as_ref().is_none_or(|p| {
+                        doc.path.pairs().len() > parent_len
+                            && doc.path.pairs()[..parent_len] == *p.pairs()
+                    })
             }
             QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|p| {
                 doc.path.pairs().len() > parent_len && doc.path.pairs()[..parent_len] == *p.pairs()
@@ -455,6 +462,14 @@ fn set(p: &str, fields: BTreeMap<String, Value>) -> Write {
     }
 }
 
+fn delete(p: &str) -> Write {
+    Write {
+        op: WriteOp::Delete { path: path(p) },
+        precondition: None,
+        transforms: vec![],
+    }
+}
+
 /// A database whose documents cover ties, missing fields and every value kind, plus the
 /// same documents as a flat corpus for the reference executor.
 fn corpus(g: &mut Gen) -> (FirestoreState, Vec<Document>) {
@@ -637,10 +652,394 @@ fn a_finite_limit_bounds_candidates_and_only_selected_documents_are_cloned() {
     assert_eq!(stats.matched, 1);
     assert_eq!(stats.cloned_documents, 1);
 
-    // Without a limit the caller asked for the whole result, so every match is returned.
     let (docs, stats) = db.run_query_with_stats(&base, None).unwrap();
     assert_eq!(docs.len(), 500);
     assert_eq!(stats.cloned_documents, 500);
+}
+
+#[test]
+fn collection_scope_and_name_limit_visit_only_the_requested_rows() {
+    let mut db = FirestoreState::new();
+    let now = LogicalInstant::from_unix_seconds(1_788_000_000);
+    let mut writes = Vec::new();
+    for collection_index in 0..100 {
+        for document_index in 0..100 {
+            writes.push(set(
+                &format!("unrelated{collection_index}/d{document_index:03}"),
+                BTreeMap::new(),
+            ));
+        }
+    }
+    for document_index in 0..10 {
+        writes.push(set(
+            &format!("target/d{document_index:03}"),
+            BTreeMap::new(),
+        ));
+    }
+    for parent_index in 0..100 {
+        for document_index in 0..10 {
+            writes.push(set(
+                &format!("parents/p{parent_index:03}/tasks/d{document_index:03}"),
+                BTreeMap::new(),
+            ));
+        }
+    }
+    for document_index in 0..10 {
+        writes.push(set(
+            &format!("parents/selected/tasks/d{document_index:03}"),
+            BTreeMap::new(),
+        ));
+    }
+    for parent_index in 0..20 {
+        writes.push(set(
+            &format!("missing/m{parent_index:03}/children/leaf"),
+            BTreeMap::new(),
+        ));
+    }
+    for descendant_index in 0..500 {
+        writes.push(set(
+            &format!("missing/m000/branches/b{descendant_index:03}/leaves/x"),
+            BTreeMap::new(),
+        ));
+    }
+    writes.push(set("missing/m002", BTreeMap::new()));
+    for batch in writes.chunks(500) {
+        db.commit(batch, None, now).unwrap();
+    }
+    let mut query = Query::new(QueryScope::collection(None, collection("target")));
+    query.limit = Some(10);
+    let (documents, stats) = db.run_query_with_stats(&query, None).unwrap();
+    assert_eq!(documents.len(), 10);
+    assert_eq!(
+        stats.scanned, 10,
+        "unrelated collections must not be visited"
+    );
+    assert_eq!(stats.matched, 10);
+
+    let (page, page_stats) = db.list_documents_page_at_with_stats(None, "target", None, None, 10);
+    assert_eq!(page.len(), 10);
+    assert_eq!(page_stats.scanned, 10);
+    assert_eq!(page_stats.matched, 10);
+    assert_eq!(page_stats.cloned_documents, 10);
+
+    let mut nested = Query::new(QueryScope::collection(
+        Some(path("parents/selected")),
+        collection("tasks"),
+    ));
+    nested.limit = Some(10);
+    let (documents, nested_stats) = db.run_query_with_stats(&nested, None).unwrap();
+    assert_eq!(documents.len(), 10);
+    assert_eq!(
+        nested_stats.scanned, 10,
+        "the same collection ID below other parents must not be visited"
+    );
+    let (missing_page, missing_stats) =
+        db.list_documents_with_missing_page_at(None, "missing", None, None, 5);
+    assert_eq!(missing_page.len(), 5);
+    assert!(matches!(missing_page[0], ListedDocument::Missing(_)));
+    assert!(matches!(missing_page[1], ListedDocument::Missing(_)));
+    assert!(matches!(missing_page[2], ListedDocument::Present(_)));
+    assert!(matches!(missing_page[3], ListedDocument::Missing(_)));
+    assert!(matches!(missing_page[4], ListedDocument::Missing(_)));
+    assert_eq!(missing_stats.scanned, 5);
+    assert_eq!(missing_stats.matched, 5);
+    assert_eq!(missing_stats.cloned_documents, 1);
+
+    let (oversized_page, oversized_stats) =
+        db.list_documents_page_at_with_stats(None, "target", None, None, usize::MAX);
+    assert_eq!(oversized_page.len(), 10);
+    assert_eq!(oversized_stats.cloned_documents, 10);
+    let (oversized_missing_page, _) =
+        db.list_documents_with_missing_page_at(None, "missing", None, None, usize::MAX);
+    assert_eq!(oversized_missing_page.len(), 20);
+    let (single_missing, single_missing_stats) =
+        db.list_documents_with_missing_page_at(None, "missing", None, None, 1);
+    assert_eq!(single_missing.len(), 1);
+    assert_eq!(single_missing_stats.scanned, 1);
+    assert_eq!(single_missing_stats.peak_candidates, 1);
+}
+
+#[test]
+fn descendant_scopes_visit_only_the_requested_parent_prefix() {
+    let mut db = FirestoreState::new();
+    let now = LogicalInstant::from_unix_seconds(1_788_000_000);
+    let mut writes = Vec::new();
+    for parent_index in 0..100 {
+        for document_index in 0..10 {
+            writes.push(set(
+                &format!("parents/p{parent_index:03}/tasks/d{document_index:03}"),
+                BTreeMap::new(),
+            ));
+        }
+    }
+    for document_index in 0..10 {
+        writes.push(set(
+            &format!("parents/selected/tasks/d{document_index:03}"),
+            BTreeMap::new(),
+        ));
+    }
+    for batch in writes.chunks(500) {
+        db.commit(batch, None, now).unwrap();
+    }
+
+    let mut scoped_group = Query::new(QueryScope::collection_group_under(
+        Some(path("parents/selected")),
+        collection("tasks"),
+    ));
+    scoped_group.limit = Some(10);
+    let (documents, stats) = db.run_query_with_stats(&scoped_group, None).unwrap();
+    assert_eq!(documents.len(), 10);
+    assert_eq!(stats.scanned, 10);
+
+    let mut kindless = Query::new(QueryScope::kindless_all_descendants(Some(path(
+        "parents/selected",
+    ))));
+    kindless.limit = Some(10);
+    let (documents, stats) = db.run_query_with_stats(&kindless, None).unwrap();
+    assert_eq!(documents.len(), 10);
+    assert_eq!(stats.scanned, 10);
+
+    let (page, stats) = db.list_documents_with_missing_page_at(
+        Some(&path("parents/selected")),
+        "tasks",
+        None,
+        None,
+        1,
+    );
+    assert_eq!(stats.matched, 1);
+    assert!(matches!(
+        &page[0],
+        ListedDocument::Present(document)
+            if document.path == path("parents/selected/tasks/d000")
+    ));
+
+    let group_query = Query::new(QueryScope::collection_group(collection("tasks")));
+    let group_documents = db.run_query(&group_query, None).unwrap();
+    let cuts = db.collection_group_partition_paths_at(None, "tasks", db.current_version(), 3);
+    assert_eq!(cuts.len(), 3);
+    assert_eq!(cuts[0], group_documents[group_documents.len() / 4].path);
+    assert_eq!(cuts[1], group_documents[group_documents.len() * 2 / 4].path);
+    assert_eq!(cuts[2], group_documents[group_documents.len() * 3 / 4].path);
+}
+
+#[test]
+fn ordered_page_cursor_is_derived_only_from_a_matching_result() {
+    let mut db = FirestoreState::new();
+    let fields = |number| BTreeMap::from([("n".to_owned(), Value::Integer(number))]);
+    db.commit(
+        &[
+            set("target/a", fields(1)),
+            set("target/b", fields(2)),
+            set("target/c", fields(3)),
+            set("target/no-order-field", BTreeMap::new()),
+            set("other/b", fields(2)),
+        ],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+    let mut query = Query::new(QueryScope::collection(None, collection("target")));
+    query.filter = Some(FilterExpr::Field {
+        field: fp("n"),
+        op: FieldOp::GreaterThan,
+        value: Value::Integer(1),
+    });
+    query.order_by = vec![OrderClause {
+        field: fp("n"),
+        direction: Direction::Ascending,
+    }];
+
+    let cursor = db
+        .cursor_after_document(&query, None, &path("target/b"))
+        .unwrap()
+        .expect("matching document yields a cursor");
+    let mut page_query = query.clone();
+    page_query.start_at = Some(cursor);
+    page_query.limit = Some(1);
+    assert_eq!(
+        db.run_query(&page_query, None).unwrap()[0].path,
+        path("target/c")
+    );
+    assert_eq!(
+        db.cursor_after_document(&query, None, &path("target/a"))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        db.cursor_after_document(&query, None, &path("other/b"))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        db.cursor_after_document(&query, None, &path("target/no-order-field"))
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn missing_parent_suffix_is_bounded_and_validates_its_cursor() {
+    let mut db = FirestoreState::new();
+    let writes = (0..100)
+        .map(|index| {
+            set(
+                &format!("missing/m{index:03}/children/leaf"),
+                BTreeMap::new(),
+            )
+        })
+        .collect::<Vec<_>>();
+    db.commit(&writes, None, LogicalInstant::UNIX_EPOCH)
+        .unwrap();
+    db.commit(
+        &[set("roots/r/missing/n000/children/leaf", BTreeMap::new())],
+        None,
+        LogicalInstant::UNIX_EPOCH,
+    )
+    .unwrap();
+
+    let (cursor_is_missing, page) =
+        db.list_missing_parents_page_at(None, "missing", None, Some(&path("missing/m050")), 1);
+    assert!(cursor_is_missing);
+    assert_eq!(page, vec![path("missing/m051")]);
+
+    let (cursor_is_missing, page) =
+        db.list_missing_parents_page_at(None, "missing", None, Some(&path("missing/absent")), 1);
+    assert!(!cursor_is_missing);
+    assert_eq!(page, vec![path("missing/m000")]);
+
+    let (_, page) =
+        db.list_missing_parents_page_at(Some(&path("roots/r")), "missing", None, None, 1);
+    assert_eq!(page, vec![path("roots/r/missing/n000")]);
+}
+
+#[test]
+fn latest_name_pages_skip_retained_tombstones() {
+    let mut state = FirestoreState::new();
+    let now = LogicalInstant::from_unix_seconds(1_788_000_000);
+    let mut writes = Vec::new();
+    for index in 0..1_000 {
+        writes.push(set(&format!("churn/d{index:04}"), BTreeMap::new()));
+        writes.push(set(
+            &format!("parents/p{index:04}/children/leaf"),
+            BTreeMap::new(),
+        ));
+    }
+    for batch in writes.chunks(500) {
+        state.commit(batch, None, now).unwrap();
+    }
+    let mut deletes = Vec::new();
+    for index in 0..1_000 {
+        deletes.push(delete(&format!("churn/d{index:04}")));
+        deletes.push(delete(&format!("parents/p{index:04}/children/leaf")));
+    }
+    for batch in deletes.chunks(500) {
+        state.commit(batch, None, now).unwrap();
+    }
+    state
+        .commit(
+            &[
+                set("churn/zzzz", BTreeMap::new()),
+                set("parents/zzzz/children/leaf", BTreeMap::new()),
+            ],
+            None,
+            now,
+        )
+        .unwrap();
+
+    let (documents, direct_stats) =
+        state.list_documents_page_at_with_stats(None, "churn", None, None, 1);
+    assert_eq!(documents.len(), 1);
+    assert_eq!(direct_stats.scanned, 1);
+    let (documents, missing_stats) =
+        state.list_documents_with_missing_page_at(None, "parents", None, None, 1);
+    assert_eq!(documents.len(), 1);
+    assert_eq!(missing_stats.scanned, 1);
+    assert_eq!(missing_stats.visibility_checks, 0);
+    let mut kindless = Query::new(QueryScope::kindless_all_descendants(None));
+    kindless.limit = Some(1);
+    let (documents, kindless_stats) = state.run_query_with_stats(&kindless, None).unwrap();
+    assert_eq!(documents.len(), 1);
+    assert_eq!(kindless_stats.scanned, 1);
+}
+
+fn scoped_performance_state(total: usize, collection_count: usize) -> FirestoreState {
+    let mut state = FirestoreState::new();
+    let now = LogicalInstant::from_unix_seconds(1_788_000_000);
+    for batch_start in (0..total).step_by(500) {
+        let batch_end = (batch_start + 500).min(total);
+        let writes = (batch_start..batch_end)
+            .map(|index| {
+                set(
+                    &format!("unrelated{}/d{index:07}", index % collection_count.max(1)),
+                    BTreeMap::new(),
+                )
+            })
+            .collect::<Vec<_>>();
+        state.commit(&writes, None, now).unwrap();
+    }
+    state
+        .commit(
+            &(0..10)
+                .map(|index| set(&format!("target/d{index:02}"), BTreeMap::new()))
+                .collect::<Vec<_>>(),
+            None,
+            now,
+        )
+        .unwrap();
+    state
+}
+
+#[test]
+#[ignore = "large release-mode acceptance check"]
+fn one_million_unrelated_documents_do_not_widen_a_collection_scan() {
+    let state = scoped_performance_state(1_000_000, 1_000);
+    let mut query = Query::new(QueryScope::collection(None, collection("target")));
+    query.limit = Some(10);
+
+    let (documents, query_stats) = state.run_query_with_stats(&query, None).unwrap();
+    assert_eq!(documents.len(), 10);
+    assert_eq!(query_stats.scanned, 10);
+    let (documents, list_stats) =
+        state.list_documents_page_at_with_stats(None, "target", None, None, 10);
+    assert_eq!(documents.len(), 10);
+    assert_eq!(list_stats.scanned, 10);
+    assert_eq!(list_stats.cloned_documents, 10);
+}
+
+#[test]
+#[ignore = "large release-mode acceptance check"]
+fn bounded_name_reads_at_two_hundred_thousand_documents_stay_within_twice_the_baseline() {
+    fn measure(state: &FirestoreState) -> std::time::Duration {
+        let mut query = Query::new(QueryScope::collection(None, collection("unrelated0")));
+        query.limit = Some(10);
+        (0..5)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                for _ in 0..200 {
+                    std::hint::black_box(state.run_query(&query, None).unwrap());
+                    std::hint::black_box(state.list_documents_page_at(
+                        None,
+                        "unrelated0",
+                        None,
+                        None,
+                        10,
+                    ));
+                }
+                started.elapsed()
+            })
+            .min()
+            .expect("at least one benchmark sample")
+    }
+
+    let baseline = scoped_performance_state(5_000, 1);
+    let large = scoped_performance_state(200_000, 1);
+    let baseline_elapsed = measure(&baseline);
+    let large_elapsed = measure(&large);
+    println!("bounded query plus listing: 5k={baseline_elapsed:?}, 200k={large_elapsed:?}");
+    assert!(
+        large_elapsed <= baseline_elapsed.saturating_mul(2),
+        "200k={large_elapsed:?} must stay within 2x of 5k={baseline_elapsed:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------

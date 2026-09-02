@@ -104,6 +104,28 @@ fn versions_older_than_every_retention_root_are_compacted() {
 }
 
 #[test]
+fn compacted_tombstones_are_removed_from_scope_indexes() {
+    let mut state = FirestoreState::new();
+    state.commit(&[set("gone/item", &[])], None, t(0)).unwrap();
+    state.commit(&[delete("gone/item")], None, t(1)).unwrap();
+    state
+        .commit(
+            &[set("other/clock", &[])],
+            None,
+            t(READ_TIME_RETENTION_SECONDS + 2),
+        )
+        .unwrap();
+
+    let (documents, query_stats) =
+        state.list_documents_page_at_with_stats(None, "gone", None, None, 1);
+    assert!(documents.is_empty());
+    assert_eq!(
+        query_stats.scanned, 0,
+        "no stale scope-index entry is retained"
+    );
+}
+
+#[test]
 fn a_pinned_clock_uses_the_per_path_capacity_as_an_explicit_retention_root() {
     const LIMIT: usize = 64;
     let mut s = FirestoreState::with_history_version_limit(LIMIT);

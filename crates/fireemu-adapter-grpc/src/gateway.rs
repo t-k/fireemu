@@ -111,6 +111,15 @@ pub struct Gateway {
 impl Gateway {
     /// Runs every strict check on a decoded query.
     pub fn validate_query(&self, query: &Query) -> Result<AcceptedQuery, Rejection> {
+        self.validate_query_with_indexes(query, &self.indexes)
+    }
+
+    /// Runs every strict check with a borrowed database-specific index catalog.
+    pub fn validate_query_with_indexes(
+        &self,
+        query: &Query,
+        indexes: &IndexSet,
+    ) -> Result<AcceptedQuery, Rejection> {
         let canonical = query
             .canonicalize()
             .map_err(|e| Rejection::InvalidQuery(e.to_string()))?;
@@ -139,7 +148,7 @@ impl Gateway {
                 );
             }
         }
-        let decision = decide(&canonical, &self.indexes, &self.ctx);
+        let decision = decide(&canonical, indexes, &self.ctx);
         match &decision {
             IndexDecision::UseIndex { .. } | IndexDecision::KindlessScan => {}
             IndexDecision::AssumedIndex { requirement } => {

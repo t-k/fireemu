@@ -1868,6 +1868,10 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
     )
 }
 
+fn blocking_auth_project_matches(runtime_project: &str, request_project: &str) -> bool {
+    runtime_project == request_project
+}
+
 impl BlockingAuthBridge {
     fn invoke_for_namespace(
         &self,
@@ -1876,7 +1880,7 @@ impl BlockingAuthBridge {
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Option<serde_json::Value>, String> {
-        if project != self.0.project() {
+        if !blocking_auth_project_matches(self.0.project(), project) {
             return Ok(None);
         }
         let Some(target) = self.0.blocking_auth_target(event) else {
@@ -2113,6 +2117,11 @@ mod tests {
             super::blocking_auth_resource_name("demo-app", Some("customer")),
             "projects/demo-app/tenants/customer"
         );
+        assert!(super::blocking_auth_project_matches("demo-app", "demo-app"));
+        assert!(!super::blocking_auth_project_matches(
+            "demo-app",
+            "demo-worker"
+        ));
     }
 
     fn installed_node(version: &str, require_module: bool) -> NodeInstallation {

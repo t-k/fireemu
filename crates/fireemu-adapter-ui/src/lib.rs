@@ -212,24 +212,7 @@ impl UiResponse {
 /// Percent-decoding (`+` stays a plus; the UI encodes spaces as `%20`).
 #[must_use]
 pub fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Some(b) = s
-                .get(i + 1..i + 3)
-                .and_then(|h| u8::from_str_radix(h, 16).ok())
-            {
-                out.push(b);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Literal)
 }
 
 /// Whether `s` contains a NUL or another control character (refused at the boundary).
@@ -372,4 +355,13 @@ pub async fn handle(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
         };
     }
     UiResponse::error(404, "NOT_FOUND")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ui_percent_decoding_preserves_plus_and_malformed_escapes() {
+        assert_eq!(super::percent_decode("a+b%20c"), "a+b c");
+        assert_eq!(super::percent_decode("%+f%2G"), "%+f%2G");
+    }
 }

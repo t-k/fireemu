@@ -1886,7 +1886,12 @@ fn select_store(
     // Keys are declared from [A-Za-z0-9._-], but a client may still percent-encode them.
     let api_key = query
         .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("key=")))
-        .map(percent_decode);
+        .map(|value| {
+            fireemu_core_types::codec::percent_decode(
+                value,
+                fireemu_core_types::codec::PlusMode::Space,
+            )
+        });
     if let Some(key) = api_key.as_deref() {
         let project = state
             .tenancy
@@ -1981,36 +1986,6 @@ fn custom_token_uid(body: &Value) -> Option<String> {
             JsonValue::Int(value) => Some(value.to_string()),
             _ => None,
         })
-}
-
-/// `%XX` sequences and `+` decoded (invalid sequences are kept as they are).
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let digit = |b: u8| (b as char).to_digit(16);
-                if let (Some(hi), Some(lo)) = (digit(bytes[i + 1]), digit(bytes[i + 2])) {
-                    out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'?'));
-                    i += 3;
-                } else {
-                    out.push(b'%');
-                    i += 1;
-                }
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `accounts:signUp`: a password user when an email or a password is present (both are then

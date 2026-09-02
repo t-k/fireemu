@@ -1240,7 +1240,11 @@ fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
     );
     assert_eq!(looked["users"][0]["validSince"], "1788005001");
     assert_eq!(looked["users"][0]["displayName"], "numeric-applied");
+}
 
+#[test]
+fn admin_numeric_valid_since_accepts_the_i64_boundaries() {
+    let s = state();
     assert_eq!(
         admin(
             &s,

@@ -2357,6 +2357,8 @@ pub enum RoutedStoreInstall {
     RegisteredConflict,
     /// The fixed routed-project capacity has been reached.
     Capacity,
+    /// The candidate aliases another namespace or carries different namespace metadata.
+    InvalidStore,
 }
 
 /// Result of resolving a project-less compatibility request from an existing user ID.
@@ -2495,6 +2497,22 @@ impl AuthRegistry {
         if let Some(existing) = projects.routed.get(project) {
             return RoutedStoreInstall::Existing(existing.clone());
         }
+        if Arc::ptr_eq(&store, &self.default)
+            || projects
+                .registered
+                .values()
+                .chain(projects.routed.values())
+                .any(|existing| Arc::ptr_eq(existing, &store))
+        {
+            return RoutedStoreInstall::InvalidStore;
+        }
+        let Ok(candidate) = store.lock() else {
+            return RoutedStoreInstall::InvalidStore;
+        };
+        if candidate.project_id() != project || candidate.tenant_id().is_some() {
+            return RoutedStoreInstall::InvalidStore;
+        }
+        drop(candidate);
         if projects.routed.len() >= MAX_ROUTED_AUTH_PROJECTS {
             return RoutedStoreInstall::Capacity;
         }
@@ -2544,6 +2562,14 @@ impl AuthRegistry {
             .chain(projects.routed.values())
             .cloned()
             .collect::<Vec<_>>();
+        for (index, store) in stores.iter().enumerate() {
+            if stores[..index]
+                .iter()
+                .any(|previous| Arc::ptr_eq(previous, store))
+            {
+                return CompatibilityUserStoreMatch::Unavailable;
+            }
+        }
         let mut guards = Vec::with_capacity(stores.len());
         for store in &stores {
             let Ok(guard) = store.lock() else {
@@ -3043,6 +3069,18 @@ mod compatibility_routing_tests {
             );
             std::thread::yield_now();
         }
+        loop {
+            match alpha.try_lock() {
+                Err(TryLockError::WouldBlock) => break,
+                Err(TryLockError::Poisoned(_)) => panic!("alpha store was poisoned"),
+                Ok(guard) => drop(guard),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "lookup did not retain the earlier routed-store lock"
+            );
+            std::thread::yield_now();
+        }
 
         let (created_tx, created_rx) = mpsc::sync_channel(1);
         let creator_store = alpha.clone();
@@ -3073,6 +3111,42 @@ mod compatibility_routing_tests {
         assert!(matches!(
             selected,
             CompatibilityUserStoreMatch::Unique(store) if Arc::ptr_eq(&store, &beta)
+        ));
+    }
+
+    #[test]
+    fn routed_store_installation_rejects_mutex_aliases_before_lookup() {
+        let default = store("demo-app", 1);
+        let registry = Arc::new(AuthRegistry::new("demo-app", default.clone()));
+        assert!(matches!(
+            registry.install_routed("worker-default-alias", default),
+            RoutedStoreInstall::InvalidStore
+        ));
+
+        let shared = store("worker-alpha", 2);
+        assert!(matches!(
+            registry.install_routed("worker-alpha", shared.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-beta", shared),
+            RoutedStoreInstall::InvalidStore
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-gamma", store("different-project", 3)),
+            RoutedStoreInstall::InvalidStore
+        ));
+
+        let lookup_registry = registry.clone();
+        let (result_tx, result_rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            result_tx
+                .send(lookup_registry.compatibility_store_for_unique_user("missing"))
+                .unwrap();
+        });
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            CompatibilityUserStoreMatch::NotFound
         ));
     }
 }

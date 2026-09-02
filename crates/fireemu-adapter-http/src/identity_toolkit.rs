@@ -1077,6 +1077,7 @@ pub fn handle_with(
                     return error(400, "INVALID_PROJECT_ID");
                 }
                 RoutedStoreInstall::Capacity => return error(429, "RESOURCE_EXHAUSTED"),
+                RoutedStoreInstall::InvalidStore => return error(500, "INTERNAL"),
             }
         }
         return if response.status == 200 {

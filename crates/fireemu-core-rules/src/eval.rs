@@ -797,7 +797,7 @@ impl<'a> Evaluator<'a> {
                 Ok(value)
             }
             BindingState::Resolved { result, cause } => {
-                self.cause = cause.clone();
+                self.cause.clone_from(&cause);
                 self.scope.bindings[index].state = BindingState::Resolved {
                     result: result.clone(),
                     cause,

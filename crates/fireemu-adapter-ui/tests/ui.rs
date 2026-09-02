@@ -133,6 +133,8 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         auth: Arc::new(AuthState {
             store: auth_store,
             clock,
+            wall_clock: None,
+            totp_extension_enabled: false,
             barrier: None,
             events: None,
             blocking: None,

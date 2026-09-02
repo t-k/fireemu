@@ -19,6 +19,7 @@ const HEARTBEAT: Duration = Duration::from_secs(15);
 /// How often the log stream looks at the runner (real time; the logs are a real-time
 /// side channel of a child process, not session state).
 const LOG_POLL: Duration = Duration::from_millis(250);
+const LOG_TRUNCATION_MARKER: &str = "[fireemu] earlier function logs were truncated";
 
 fn event(name: &str, data: &Value) -> Bytes {
     Bytes::from(format!("event: {name}\ndata: {data}\n\n"))
@@ -174,6 +175,17 @@ fn invocation_json(r: &fireemu_adapter_functions::runtime::SequencedRecord) -> V
     })
 }
 
+fn initial_function_logs(
+    runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime,
+) -> (Vec<String>, Option<u64>) {
+    let snapshot = runtime.runner().logs_since(None);
+    let mut lines = snapshot.lines;
+    if snapshot.truncated {
+        lines.insert(0, LOG_TRUNCATION_MARKER.to_owned());
+    }
+    (lines, Some(snapshot.next_seq))
+}
+
 /// `GET functions/logs`: `log` events with runner lines (stderr and `log` frames), and
 /// `invocation` events for every recorded outcome, as they appear; `snapshot` first with
 /// what exists already.
@@ -197,15 +209,7 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
     let (tx, rx) = mpsc::channel::<Bytes>(CHANNEL_DEPTH);
     tokio::spawn(async move {
         let _slot = slot;
-        let log_snapshot = runtime.runner().logs_since(None);
-        let mut log_cursor = Some(log_snapshot.next_seq);
-        let mut lines = log_snapshot.lines;
-        if log_snapshot.truncated {
-            lines.insert(
-                0,
-                "[fireemu] earlier function logs were truncated".to_owned(),
-            );
-        }
+        let (lines, mut log_cursor) = initial_function_logs(&runtime);
         let snapshot = runtime.history_since(None);
         let mut cursor = snapshot.cursor;
         if tx
@@ -234,10 +238,7 @@ pub fn functions_logs(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
             if log_slice.truncated {
                 sent_something = true;
                 if tx
-                    .send(event(
-                        "log",
-                        &json!({"line": "[fireemu] earlier function logs were truncated"}),
-                    ))
+                    .send(event("log", &json!({"line": LOG_TRUNCATION_MARKER})))
                     .await
                     .is_err()
                 {

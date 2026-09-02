@@ -981,15 +981,29 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::proce
 /// reaped, but its group may still hold a background job): to its process group when it
 /// leads one, else to it.
 fn signal_child(pid: u32, signal: &str) {
-    let target = if own_process_group() {
-        format!("-{pid}")
-    } else {
-        pid.to_string()
-    };
-    let _ = std::process::Command::new("kill")
-        .args([signal, "--", &target])
-        .stderr(std::process::Stdio::null())
-        .status();
+    #[cfg(unix)]
+    {
+        let Ok(pid) = i32::try_from(pid) else {
+            return;
+        };
+        let Some(pid) = rustix::process::Pid::from_raw(pid) else {
+            return;
+        };
+        let signal = match signal {
+            "-INT" => rustix::process::Signal::INT,
+            "-TERM" => rustix::process::Signal::TERM,
+            _ => return,
+        };
+        if own_process_group() {
+            let _ = rustix::process::kill_process_group(pid, signal);
+        } else {
+            let _ = rustix::process::kill_process(pid, signal);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signal);
+    }
 }
 
 /// Waits for the command when there is one; never resolves otherwise.

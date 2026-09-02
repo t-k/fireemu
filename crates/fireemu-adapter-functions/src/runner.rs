@@ -588,6 +588,19 @@ impl Runner {
     }
 }
 
+/// Kills the process group the runner leads (`process_group(0)`: its id is the runner's
+/// pid), taking the subprocesses of handlers with it.
+#[cfg(unix)]
+fn kill_process_group(pid: Option<u32>) {
+    let Some(pid) = pid.and_then(|pid| i32::try_from(pid).ok()) else {
+        return;
+    };
+    let Some(pid) = rustix::process::Pid::from_raw(pid) else {
+        return;
+    };
+    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LogBuffer, LOG_CAPACITY};
@@ -617,7 +630,7 @@ mod tests {
     fn stale_log_cursor_returns_retained_lines_with_a_truncation_marker() {
         let mut logs = LogBuffer::default();
         assert!(!logs.since(None).truncated);
-        for index in 0..LOG_CAPACITY + 1 {
+        for index in 0..=LOG_CAPACITY {
             logs.push(format!("line-{index}"));
         }
 
@@ -627,19 +640,4 @@ mod tests {
         assert_eq!(delta.lines.first().map(String::as_str), Some("line-1"));
         assert_eq!(delta.next_seq, (LOG_CAPACITY + 1) as u64);
     }
-}
-
-/// Kills the process group the runner leads (`process_group(0)`: its id is the runner's
-/// pid), taking the subprocesses of handlers with it. Best effort, through `kill(1)` (the
-/// core forbids unsafe code, so no direct `killpg`).
-#[cfg(unix)]
-fn kill_process_group(pid: Option<u32>) {
-    let Some(pid) = pid else {
-        return;
-    };
-    let _ = std::process::Command::new("kill")
-        .args(["-KILL", "--", &format!("-{pid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }

@@ -204,7 +204,6 @@ impl Locator {
             }
             let mut file = options.open(&temporary)?;
             file.write_all(body.as_bytes())?;
-            file.sync_all()?;
             std::fs::rename(&temporary, &path)
         })();
         match result {
@@ -248,15 +247,29 @@ fn existing_pid(path: &std::path::Path) -> Option<u32> {
 /// The `pid` of a locator file whose process still exists.
 fn existing_live_pid(path: &std::path::Path) -> Option<u32> {
     let pid = existing_pid(path)?;
-    // `kill -0` reports existence without signalling; a permission error still means alive.
-    let alive = std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    alive.then_some(pid)
+    process_is_alive(pid).then_some(pid)
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    let Some(pid) = rustix::process::Pid::from_raw(pid) else {
+        return false;
+    };
+    match rustix::process::test_kill_process(pid) {
+        Ok(()) | Err(rustix::io::Errno::PERM) => true,
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
 }
 
 /// A JSON response with the upstream two-space indentation.
@@ -536,7 +549,11 @@ async fn run_export(
             )
         }
     };
-    let Some(path) = parsed.get("path").and_then(Value::as_str) else {
+    let Some(path) = parsed
+        .get("path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+    else {
         return json_response(
             StatusCode::BAD_REQUEST,
             &json!({"message": "the export request has no \"path\""}),
@@ -546,12 +563,20 @@ async fn run_export(
     let initiated_by = parsed
         .get("initiatedBy")
         .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    match runner.export(std::path::Path::new(path), initiated_by) {
-        Ok(()) => json_response(StatusCode::OK, &json!({"message": "OK"}), origin),
-        Err(message) => json_response(
+        .unwrap_or("unknown")
+        .to_owned();
+    let runner = Arc::clone(runner);
+    let result = tokio::task::spawn_blocking(move || runner.export(&path, &initiated_by)).await;
+    match result {
+        Ok(Ok(())) => json_response(StatusCode::OK, &json!({"message": "OK"}), origin),
+        Ok(Err(message)) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &json!({ "message": message }),
+            origin,
+        ),
+        Err(error) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &json!({ "message": format!("the export worker failed: {error}") }),
             origin,
         ),
     }
@@ -676,5 +701,12 @@ mod tests {
             Locator::path_for("").file_name().unwrap(),
             "hub-demo-no-project.json"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn liveness_check_does_not_depend_on_an_external_command() {
+        assert!(process_is_alive(std::process::id()));
+        assert!(!process_is_alive(0));
     }
 }

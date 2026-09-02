@@ -30,6 +30,9 @@ chrono = "0.4"
 [target.'cfg(windows)'.dependencies]
 process-wrap = { version = "8.2.1", default-features = false, features = ["job-object", "kill-on-drop", "tokio1"] }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [lints]
 workspace = true
 

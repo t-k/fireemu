@@ -365,7 +365,13 @@ const concurrentConditionalLock = {
         );
         const [lock, actions] = await Promise.all([lockRef.get(), actionsRef.get()]);
         return {
-          responses: responses.toSorted((left, right) => left.status - right.status),
+          responses: responses
+            .map((response) =>
+              response.body?.acquired === true
+                ? { status: response.status, body: { acquired: true } }
+                : response,
+            )
+            .toSorted((left, right) => left.status - right.status),
           finalLocked: lock.data().locked,
           protectedActions: actions.data().count,
         };

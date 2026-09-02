@@ -30,11 +30,7 @@
         "responses": [
           {
             "body": {
-              "acquired": true,
-              "attempts": 1,
-              "observations": [
-                false
-              ]
+              "acquired": true
             },
             "status": 200
           },

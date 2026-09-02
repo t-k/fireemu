@@ -1915,20 +1915,6 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 )
             })
         });
-        if let Some(task) = auth_key {
-            let signer = task.await.map_err(|e| format!("session RSA key: {e}"))??;
-            if !quiet {
-                println!(
-                    "  id tokens:        RS256 (kid {})   JWKS: http://{}/.well-known/jwks.json",
-                    signer.kid(),
-                    cfg.http_addr
-                );
-                println!("  note: the Firebase Admin SDK verifies only unsigned tokens while FIREBASE_AUTH_EMULATOR_HOST is set; keep auth.idTokenSigning = \"unsigned-emulator\" when the Admin SDK calls verifyIdToken");
-            }
-            if let Ok(mut store) = auth_store.lock() {
-                store.set_signer(signer);
-            }
-        }
         let app_check_signer = match app_check_key {
             Some(task) => Some(task.await.map_err(|e| format!("App Check RSA key: {e}"))??),
             None => None,
@@ -2054,6 +2040,23 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ),
             None => None,
         };
+        // Auth signing is independent of rules, listener binding and Functions discovery.
+        // Await it only after those startup tasks have had the whole key-generation window
+        // to make progress; no Auth listener is served until the tasks below are spawned.
+        if let Some(task) = auth_key {
+            let signer = task.await.map_err(|e| format!("session RSA key: {e}"))??;
+            if !quiet {
+                println!(
+                    "  id tokens:        RS256 (kid {})   JWKS: http://{}/.well-known/jwks.json",
+                    signer.kid(),
+                    cfg.http_addr
+                );
+                println!("  note: the Firebase Admin SDK verifies only unsigned tokens while FIREBASE_AUTH_EMULATOR_HOST is set; keep auth.idTokenSigning = \"unsigned-emulator\" when the Admin SDK calls verifyIdToken");
+            }
+            if let Ok(mut store) = auth_store.lock() {
+                store.set_signer(signer);
+            }
+        }
         // The Pub/Sub broker: real topic/subscription state served over gRPC. Its seed is the
         // daemon seed with a fixed tag so its message and ack ids never coincide with another
         // subsystem's stream. A published message also reaches subscribed Cloud Functions

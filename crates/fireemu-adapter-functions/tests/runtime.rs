@@ -113,7 +113,20 @@ async fn start_with_policies_and_manifest(
 
 #[tokio::test]
 async fn omitted_second_generation_concurrency_admits_two_http_requests() {
-    let (runtime, _clock) = start().await;
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let hold = manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "hold")
+                .unwrap();
+            hold.platform_options.available_memory_mb = Some(512);
+            hold.platform_options.max_instances = Some(1);
+        },
+    )
+    .await;
     let target = runtime
         .http_target("demo-app", "us-central1", "hold")
         .unwrap();

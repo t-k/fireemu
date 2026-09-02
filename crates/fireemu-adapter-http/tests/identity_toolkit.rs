@@ -25,6 +25,18 @@ struct UpdatingBlockingHook;
 
 struct ClearingClaimsHook;
 
+struct MalformedBlockingHook;
+
+impl AuthBlockingHook for MalformedBlockingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, String> {
+        Ok(json!({"userRecord": []}))
+    }
+}
+
 impl AuthBlockingHook for ClearingClaimsHook {
     fn invoke(
         &self,
@@ -158,6 +170,30 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
         .lock()
         .unwrap()
         .user_by_email("blocked@example.com")
+        .is_none());
+}
+
+#[test]
+fn blocking_auth_malformed_response_rolls_back_user_creation() {
+    let mut s = state();
+    s.blocking = Some(Arc::new(MalformedBlockingHook));
+
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "malformed@example.com", "password": "hunter22"}),
+    );
+
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_ERROR_RESPONSE : ((Response userRecord must be an object.))"
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("malformed@example.com")
         .is_none());
 }
 

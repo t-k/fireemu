@@ -151,7 +151,6 @@ fn root_access(expr: &Expr) -> Option<(&str, Option<&str>)> {
         ExprKind::Member { object, name } => {
             root_access(object).map(|(root, first)| (root, first.or(Some(name.as_str()))))
         }
-        ExprKind::Index { object, .. } | ExprKind::Slice { object, .. } => root_access(object),
         _ => None,
     }
 }
@@ -193,7 +192,7 @@ fn analyze_value_dependencies(ruleset: &Ruleset) -> crate::ast::ValueDependencie
         if !is_access_object {
             match root_access(expression) {
                 Some(("resource", _)) => dependencies.existing_resource = true,
-                Some(("request", Some("resource") | None)) => {
+                Some(("request", None)) => {
                     dependencies.request_resource = true;
                 }
                 Some(("request", Some(first)))
@@ -206,17 +205,6 @@ fn analyze_value_dependencies(ruleset: &Ruleset) -> crate::ast::ValueDependencie
         }
         match expression.kind() {
             ExprKind::Member { object, .. } => pending.push((object, true)),
-            ExprKind::Index { object, index } => {
-                pending.push((object, true));
-                pending.push((index, false));
-            }
-            ExprKind::Slice {
-                object, start, end, ..
-            } => {
-                pending.push((object, true));
-                pending.push((start, false));
-                pending.push((end, false));
-            }
             _ => pending.extend(
                 expression
                     .children()

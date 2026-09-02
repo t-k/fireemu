@@ -1214,7 +1214,7 @@ impl<'a> Evaluator<'a> {
         let (root_expr, root_name) = member_access_chain(expr, &mut members)?;
         let root = match root_name {
             "request" => Arc::clone(&self.request),
-            "resource" if !self.resource_absent => Arc::clone(&self.resource),
+            "resource" => Arc::clone(&self.resource),
             _ => return None,
         };
         let mut values = vec![root.as_ref()];
@@ -1239,9 +1239,6 @@ impl<'a> Evaluator<'a> {
             return None;
         }
         let charges = u64::try_from(members.len().saturating_add(1)).unwrap_or(u64::MAX);
-        if self.budget.expressions.saturating_add(charges) > self.budget.expression_max {
-            return None;
-        }
         for _ in 0..charges {
             if let Err(error) = self.budget.charge() {
                 return Some(Err(error));

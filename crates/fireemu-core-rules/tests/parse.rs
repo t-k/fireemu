@@ -237,6 +237,17 @@ fn ruleset_records_only_the_document_values_its_expressions_can_read() {
 
     let request_shape = rules("request.keys().hasAll(['resource'])");
     assert!(request_shape.request_resource());
+
+    let bare_request = rules("request != null");
+    assert!(bare_request.request_resource());
+
+    let indexed = rules("request['resource'].data.owner == 'alice'");
+    assert!(indexed.request_resource());
+    let dependency_in_index = rules("request.auth.token[resource.data.claim] == true");
+    assert!(dependency_in_index.existing_resource());
+    let dependency_in_slice =
+        rules("request.auth.token.roles[resource.data.lo:resource.data.hi] == []");
+    assert!(dependency_in_slice.existing_resource());
 }
 
 #[test]

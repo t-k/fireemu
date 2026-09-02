@@ -859,6 +859,27 @@ fn owned_evaluation_projects_scalar_members_without_cloning_large_containers() {
     assert!(matches!(report.decision, Decision::Allow), "{report:?}");
     assert_eq!(report.projected_member_reads, 5, "{report:?}");
     assert!(!coverage.is_empty());
+
+    let incoming_ruleset = parse_ruleset(
+        "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /notes/{id} { allow create: if request.resource.data.a == 1 && request.resource.data.b == 2; } } }",
+    )
+    .unwrap();
+    let mut incoming = ctx(
+        Method::Create,
+        "/databases/(default)/documents/notes/n2",
+        None,
+    );
+    incoming.request_resource = Some(doc(&[
+        ("a", RulesValue::Int(1)),
+        ("b", RulesValue::Int(2)),
+        ("unrelated", RulesValue::String("x".repeat(500 * 1024))),
+    ]));
+    let (incoming_report, _) = evaluate_request_traced_owned(&incoming_ruleset, incoming, None);
+    assert!(
+        matches!(incoming_report.decision, Decision::Allow),
+        "{incoming_report:?}"
+    );
+    assert_eq!(incoming_report.projected_member_reads, 2);
 }
 
 #[test]

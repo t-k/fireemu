@@ -96,6 +96,37 @@ fn rejected_tenant_creation_does_not_consume_the_next_generated_id() {
 }
 
 #[test]
+fn generated_tenant_ids_skip_existing_implicit_namespaces_without_overwriting_them() {
+    let default = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = AuthRegistry::new("demo-app", default);
+    let first = "fireemu-00000000000000000001";
+    registry.ensure_tenant("demo-app", first).unwrap();
+
+    let created = registry
+        .create_tenant(
+            "demo-app",
+            TenantMetadata {
+                disable_auth: true,
+                ..TenantMetadata::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(created, "fireemu-00000000000000000002");
+    let implicit = registry.tenant_metadata("demo-app", first).unwrap();
+    assert!(implicit.allow_password_signup);
+    assert!(implicit.enable_email_link_signin);
+    assert!(implicit.enable_anonymous_user);
+    assert!(!implicit.disable_auth);
+    assert!(
+        registry
+            .tenant_metadata("demo-app", &created)
+            .unwrap()
+            .disable_auth
+    );
+}
+
+#[test]
 fn concurrent_tenant_patches_compose_without_reverting_security_fields() {
     let default = Arc::new(Mutex::new(store("demo-app", 1)));
     let registry = Arc::new(AuthRegistry::new("demo-app", default));

@@ -2658,6 +2658,15 @@ impl AuthSnapshot {
 type SharedAuthStore = Arc<Mutex<AuthStore>>;
 type TenantKey = (String, String);
 
+enum TenantPublication {
+    Published(SharedAuthStore),
+    Existing {
+        store: SharedAuthStore,
+        unpublished_metadata: TenantMetadata,
+    },
+    Unavailable,
+}
+
 /// Maximum compatibility-routed Auth project namespaces retained by one daemon.
 pub const MAX_ROUTED_AUTH_PROJECTS: usize = 1_024;
 
@@ -3033,20 +3042,29 @@ impl AuthRegistry {
         key: TenantKey,
         store: Arc<Mutex<AuthStore>>,
         metadata: TenantMetadata,
-        select_existing: bool,
-    ) -> Option<Arc<Mutex<AuthStore>>> {
+    ) -> TenantPublication {
         // Tenant authentication reads stores before metadata, so lifecycle writes retain both
         // locks in that same order and never expose a namespace without its final policy.
-        let mut tenants = self.tenants.lock().ok()?;
-        let mut tenant_metadata = self.tenant_metadata.lock().ok()?;
+        let Ok(mut tenants) = self.tenants.lock() else {
+            return TenantPublication::Unavailable;
+        };
+        let Ok(mut tenant_metadata) = self.tenant_metadata.lock() else {
+            return TenantPublication::Unavailable;
+        };
         if let Some(existing) = tenants.get(&key) {
-            return (select_existing && tenant_metadata.contains_key(&key))
-                .then(|| existing.clone());
+            return if tenant_metadata.contains_key(&key) {
+                TenantPublication::Existing {
+                    store: existing.clone(),
+                    unpublished_metadata: metadata,
+                }
+            } else {
+                TenantPublication::Unavailable
+            };
         }
         tenant_metadata.insert(key.clone(), metadata);
         tenants.insert(key, store.clone());
         self.membership_generation.fetch_add(1, Ordering::Release);
-        Some(store)
+        TenantPublication::Published(store)
     }
 
     /// Per-namespace gate used while a blocking function runs without the store lock.
@@ -3077,7 +3095,7 @@ impl AuthRegistry {
             return Some(store);
         }
         let store = self.build_tenant_store(project, tenant)?;
-        self.publish_tenant(
+        match self.publish_tenant(
             key,
             store,
             TenantMetadata {
@@ -3086,18 +3104,33 @@ impl AuthRegistry {
                 enable_anonymous_user: true,
                 ..TenantMetadata::default()
             },
-            true,
-        )
+        ) {
+            TenantPublication::Published(store)
+            | TenantPublication::Existing {
+                store,
+                unpublished_metadata: _,
+            } => Some(store),
+            TenantPublication::Unavailable => None,
+        }
     }
 
     /// Creates an explicitly configured tenant and returns its generated ID.
     pub fn create_tenant(&self, project: &str, metadata: TenantMetadata) -> Option<String> {
         self.store_for(project)?;
-        let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
-        let tenant = format!("fireemu-{sequence:020}");
-        let store = self.build_tenant_store(project, &tenant)?;
-        self.publish_tenant((project.to_owned(), tenant.clone()), store, metadata, false)?;
-        Some(tenant)
+        let mut metadata = metadata;
+        loop {
+            let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
+            let tenant = format!("fireemu-{sequence:020}");
+            let store = self.build_tenant_store(project, &tenant)?;
+            match self.publish_tenant((project.to_owned(), tenant.clone()), store, metadata) {
+                TenantPublication::Published(_) => return Some(tenant),
+                TenantPublication::Existing {
+                    unpublished_metadata,
+                    ..
+                } => metadata = unpublished_metadata,
+                TenantPublication::Unavailable => return None,
+            }
+        }
     }
 
     /// Tenant metadata when the tenant exists.

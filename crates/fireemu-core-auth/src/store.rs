@@ -573,16 +573,21 @@ pub struct AuthStore {
     /// lookup instead of a full-store collection and sort for every page.
     by_sequence: BTreeMap<u64, LocalId>,
     counter: u64,
-    refresh_tokens: BTreeMap<String, RefreshSession>,
+    /// Refresh sessions are copy-on-write so speculative blocking-function stores and session
+    /// snapshots share the unchanged registry in O(1).
+    refresh_tokens: Arc<BTreeMap<String, RefreshSession>>,
+    /// Refresh-token values owned by each user. Revocation and deletion touch one user's
+    /// sessions instead of scanning every live session.
+    tokens_by_user: Arc<BTreeMap<LocalId, BTreeSet<String>>>,
     next_id_override: Option<String>,
     next_sequence: u64,
     signer: Option<Arc<dyn crate::jwt::IdTokenSigner>>,
-    oob_codes: BTreeMap<String, OobCode>,
-    verification_codes: BTreeMap<String, VerificationCode>,
+    oob_codes: Arc<BTreeMap<String, OobCode>>,
+    verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Which user owns each outstanding pending sign-in (`mfaPendingCredential`), so a
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
-    pending_sign_in_owners: BTreeMap<String, LocalId>,
+    pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
     /// Users that currently own a pending enrollment or sign-in. Credential sweeping only
     /// visits this bounded subset instead of cloning or scanning every account.
     pending_user_ids: BTreeSet<LocalId>,
@@ -673,13 +678,14 @@ impl AuthStore {
             local_ids_for_federated: BTreeMap::new(),
             by_sequence: BTreeMap::new(),
             counter: 0,
-            refresh_tokens: BTreeMap::new(),
+            refresh_tokens: Arc::new(BTreeMap::new()),
+            tokens_by_user: Arc::new(BTreeMap::new()),
             next_id_override: None,
             next_sequence: 0,
             signer: None,
-            oob_codes: BTreeMap::new(),
-            verification_codes: BTreeMap::new(),
-            pending_sign_in_owners: BTreeMap::new(),
+            oob_codes: Arc::new(BTreeMap::new()),
+            verification_codes: Arc::new(BTreeMap::new()),
+            pending_sign_in_owners: Arc::new(BTreeMap::new()),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
@@ -832,10 +838,10 @@ impl AuthStore {
             Self::remove_index_owner(&mut self.local_ids_for_federated, &identity_key, &key);
         }
         self.by_sequence.remove(&user.sequence);
-        self.refresh_tokens.retain(|_, s| s.uid != key);
-        self.pending_sign_in_owners.retain(|_, owner| *owner != key);
+        self.remove_refresh_tokens_for(&key);
+        Arc::make_mut(&mut self.pending_sign_in_owners).retain(|_, owner| *owner != key);
         self.pending_user_ids.remove(&key);
-        self.verification_codes.retain(|_, c| match &c.purpose {
+        Arc::make_mut(&mut self.verification_codes).retain(|_, c| match &c.purpose {
             VerificationPurpose::SignIn => true,
             VerificationPurpose::Enrollment { uid }
             | VerificationPurpose::MfaSignIn { uid, .. } => *uid != key,
@@ -852,10 +858,11 @@ impl AuthStore {
         self.local_ids_for_phone.clear();
         self.local_ids_for_federated.clear();
         self.by_sequence.clear();
-        self.refresh_tokens.clear();
-        self.oob_codes.clear();
-        self.verification_codes.clear();
-        self.pending_sign_in_owners.clear();
+        self.refresh_tokens = Arc::new(BTreeMap::new());
+        self.tokens_by_user = Arc::new(BTreeMap::new());
+        self.oob_codes = Arc::new(BTreeMap::new());
+        self.verification_codes = Arc::new(BTreeMap::new());
+        self.pending_sign_in_owners = Arc::new(BTreeMap::new());
         self.pending_user_ids.clear();
     }
 
@@ -870,10 +877,22 @@ impl AuthStore {
     /// bounded under abandoned flows (`AUTH-TRANSIENT-01`, `-02`). It depends on `now` and on
     /// the order of operations only.
     pub fn sweep_transient_credentials(&mut self, now: LogicalInstant) {
-        self.oob_codes
-            .retain(|_, c| !Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now));
-        self.verification_codes
-            .retain(|_, c| !Self::expired(c.created_at, SMS_CODE_TTL_SECONDS, now));
+        if self
+            .oob_codes
+            .values()
+            .any(|code| Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now))
+        {
+            Arc::make_mut(&mut self.oob_codes)
+                .retain(|_, code| !Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now));
+        }
+        if self
+            .verification_codes
+            .values()
+            .any(|code| Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now))
+        {
+            Arc::make_mut(&mut self.verification_codes)
+                .retain(|_, code| !Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now));
+        }
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
         let enrollment_grace = self.policy.enrollment_session_ttl;
         let candidates: Vec<LocalId> = self.pending_user_ids.iter().cloned().collect();
@@ -882,7 +901,7 @@ impl AuthStore {
             if let Some(user) = self.users.get_mut(&uid) {
                 let user = Arc::make_mut(user);
                 for dropped in user.mfa.sweep(now, sign_in_ttl, enrollment_grace) {
-                    self.pending_sign_in_owners.remove(&dropped);
+                    Arc::make_mut(&mut self.pending_sign_in_owners).remove(&dropped);
                 }
                 remains_pending = user.mfa.pending_count() != 0;
             }
@@ -891,11 +910,22 @@ impl AuthStore {
             }
         }
         // A phone code for a pending sign-in that no longer exists can never be finalized.
-        let owners = &self.pending_sign_in_owners;
-        self.verification_codes.retain(|_, c| match &c.purpose {
-            VerificationPurpose::MfaSignIn { pending, .. } => owners.contains_key(&pending.0),
-            VerificationPurpose::SignIn | VerificationPurpose::Enrollment { .. } => true,
-        });
+        let has_orphan = self
+            .verification_codes
+            .values()
+            .any(|code| match &code.purpose {
+                VerificationPurpose::MfaSignIn { pending, .. } => {
+                    !self.pending_sign_in_owners.contains_key(&pending.0)
+                }
+                VerificationPurpose::SignIn | VerificationPurpose::Enrollment { .. } => false,
+            });
+        if has_orphan {
+            let owners = &self.pending_sign_in_owners;
+            Arc::make_mut(&mut self.verification_codes).retain(|_, code| match &code.purpose {
+                VerificationPurpose::MfaSignIn { pending, .. } => owners.contains_key(&pending.0),
+                VerificationPurpose::SignIn | VerificationPurpose::Enrollment { .. } => true,
+            });
+        }
     }
 
     /// Outstanding pending second-factor sign-ins across every user (bounded state).
@@ -1200,9 +1230,20 @@ impl AuthStore {
         let refresh = (self.refresh_tokens.len() as u64).saturating_mul(96);
         let oob = (self.oob_codes.len() as u64).saturating_mul(96);
         let verification = (self.verification_codes.len() as u64).saturating_mul(96);
+        let refresh_owners = self
+            .tokens_by_user
+            .iter()
+            .fold(0_u64, |total, (uid, tokens)| {
+                let owner = 64_u64.saturating_add(uid.as_str().len() as u64);
+                let entries = tokens.iter().fold(0_u64, |bytes, token| {
+                    bytes.saturating_add(48_u64.saturating_add(token.len() as u64))
+                });
+                total.saturating_add(owner).saturating_add(entries)
+            });
         refresh
             .saturating_add(oob)
             .saturating_add(verification)
+            .saturating_add(refresh_owners)
             .saturating_add((self.pending_sign_in_owners.len() as u64).saturating_mul(64))
     }
 
@@ -1221,6 +1262,26 @@ impl AuthStore {
                     .map(|_| user_record_bytes(rec))
             })
             .fold(0u64, u64::saturating_add)
+    }
+
+    /// Number of copy-on-write transient registries this store shares with `other`.
+    ///
+    /// The five registries are refresh sessions, their per-user index, email action codes,
+    /// phone verification codes, and pending-sign-in owners. A speculative Auth operation
+    /// that only issues a refresh session must leave the other three allocations shared.
+    #[must_use]
+    pub fn transient_registries_shared_with(&self, other: &Self) -> usize {
+        usize::from(Arc::ptr_eq(&self.refresh_tokens, &other.refresh_tokens))
+            + usize::from(Arc::ptr_eq(&self.tokens_by_user, &other.tokens_by_user))
+            + usize::from(Arc::ptr_eq(&self.oob_codes, &other.oob_codes))
+            + usize::from(Arc::ptr_eq(
+                &self.verification_codes,
+                &other.verification_codes,
+            ))
+            + usize::from(Arc::ptr_eq(
+                &self.pending_sign_in_owners,
+                &other.pending_sign_in_owners,
+            ))
     }
 
     /// Creates a user.
@@ -1312,7 +1373,7 @@ impl AuthStore {
             return Err(AuthError::TooManyOutstandingCodes);
         }
         let code = self.next_id("oob-");
-        self.oob_codes.insert(
+        Arc::make_mut(&mut self.oob_codes).insert(
             code.clone(),
             OobCode {
                 code: code.clone(),
@@ -1360,10 +1421,12 @@ impl AuthStore {
             .get(code)
             .is_some_and(|c| Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now))
         {
-            self.oob_codes.remove(code);
+            Arc::make_mut(&mut self.oob_codes).remove(code);
             return Err(AuthError::InvalidOobCode);
         }
-        self.oob_codes.remove(code).ok_or(AuthError::InvalidOobCode)
+        Arc::make_mut(&mut self.oob_codes)
+            .remove(code)
+            .ok_or(AuthError::InvalidOobCode)
     }
 
     fn expired(created_at: LogicalInstant, ttl_seconds: i64, now: LogicalInstant) -> bool {
@@ -1394,7 +1457,7 @@ impl AuthStore {
             created_at: now,
             sequence: self.counter,
         };
-        self.verification_codes.insert(session_info, entry.clone());
+        Arc::make_mut(&mut self.verification_codes).insert(session_info, entry.clone());
         Ok(entry)
     }
 
@@ -1441,7 +1504,7 @@ impl AuthStore {
 
     /// Consumes a phone verification session.
     pub fn consume_phone_code(&mut self, session_info: &str) {
-        self.verification_codes.remove(session_info);
+        Arc::make_mut(&mut self.verification_codes).remove(session_info);
     }
 
     /// Signs in with a verified phone number: the user owning it, or a new phone user.
@@ -1833,7 +1896,7 @@ impl AuthStore {
         if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
-        self.pending_sign_in_owners.remove(&pending.0);
+        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
         if user.mfa.pending_count() == 0 {
             self.pending_user_ids.remove(uid);
         }
@@ -1869,7 +1932,17 @@ impl AuthStore {
 
     /// Removes every refresh token of `uid` (password change, explicit revocation).
     pub fn revoke_refresh_tokens(&mut self, uid: &LocalId) {
-        self.refresh_tokens.retain(|_, s| s.uid != *uid);
+        self.remove_refresh_tokens_for(uid);
+    }
+
+    fn remove_refresh_tokens_for(&mut self, uid: &LocalId) {
+        let Some(tokens) = Arc::make_mut(&mut self.tokens_by_user).remove(uid) else {
+            return;
+        };
+        let sessions = Arc::make_mut(&mut self.refresh_tokens);
+        for token in tokens {
+            sessions.remove(&token);
+        }
     }
 
     /// Sets a password credential.
@@ -1999,7 +2072,7 @@ impl AuthStore {
             return Err(AuthError::UserNotFound);
         }
         let token = self.next_id("rt-");
-        self.refresh_tokens.insert(
+        Arc::make_mut(&mut self.refresh_tokens).insert(
             token.clone(),
             RefreshSession {
                 uid: uid.clone(),
@@ -2009,6 +2082,10 @@ impl AuthStore {
                 second_factor,
             },
         );
+        Arc::make_mut(&mut self.tokens_by_user)
+            .entry(uid.clone())
+            .or_default()
+            .insert(token.clone());
         Ok(token)
     }
 
@@ -2034,7 +2111,14 @@ impl AuthStore {
             return Err(AuthError::InvalidRefreshToken);
         }
         let committed = self.issue_refresh_session(uid, now, provider, claims, second_factor)?;
-        self.refresh_tokens.remove(provisional_token);
+        Arc::make_mut(&mut self.refresh_tokens).remove(provisional_token);
+        let owners = Arc::make_mut(&mut self.tokens_by_user);
+        if let Some(tokens) = owners.get_mut(uid) {
+            tokens.remove(provisional_token);
+            if tokens.is_empty() {
+                owners.remove(uid);
+            }
+        }
         Ok(committed)
     }
 
@@ -2292,8 +2376,7 @@ impl AuthStore {
         user.mfa
             .pending_sign_ins_mut()
             .insert(pending_id.clone(), PendingSignIn { started_at: now });
-        self.pending_sign_in_owners
-            .insert(pending_id.clone(), uid.clone());
+        Arc::make_mut(&mut self.pending_sign_in_owners).insert(pending_id.clone(), uid.clone());
         self.pending_user_ids.insert(uid.clone());
         Ok(PendingSignInId(pending_id))
     }
@@ -2326,7 +2409,7 @@ impl AuthStore {
         if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
             return Err(MfaError::PendingSignInUnknown);
         }
-        self.pending_sign_in_owners.remove(&pending.0);
+        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
         if user.mfa.pending_count() == 0 {
             self.pending_user_ids.remove(uid);
         }

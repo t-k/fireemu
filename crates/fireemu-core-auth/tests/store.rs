@@ -376,7 +376,58 @@ fn replacing_a_refresh_session_invalidates_the_provisional_token() {
         s.redeem_refresh_token(&provisional),
         Err(AuthError::InvalidRefreshToken)
     );
-    assert_eq!(s.redeem_refresh_token(&committed), Ok(uid));
+    assert_eq!(s.redeem_refresh_token(&committed), Ok(uid.clone()));
+    s.revoke_refresh_tokens(&uid);
+    assert_eq!(
+        s.redeem_refresh_token(&committed),
+        Err(AuthError::InvalidRefreshToken)
+    );
+}
+
+#[test]
+fn refresh_ownership_index_removes_all_and_only_the_target_users_sessions() {
+    use fireemu_core_auth::store::AuthSnapshot;
+
+    let mut live = store();
+    let a = live
+        .create_user(NewUser::email("indexed-a@example.com"), t0())
+        .unwrap();
+    let b = live
+        .create_user(NewUser::email("indexed-b@example.com"), t0())
+        .unwrap();
+    let a_tokens = (0..3)
+        .map(|_| live.issue_refresh_token(&a, t(1)).unwrap())
+        .collect::<Vec<_>>();
+    let b_tokens = (0..3)
+        .map(|_| live.issue_refresh_token(&b, t(1)).unwrap())
+        .collect::<Vec<_>>();
+    let snapshot = AuthSnapshot::capture(&live);
+
+    let mut candidate = live.clone();
+    candidate.revoke_refresh_tokens(&a);
+    for token in &a_tokens {
+        assert_eq!(
+            candidate.redeem_refresh_token(token),
+            Err(AuthError::InvalidRefreshToken)
+        );
+        assert_eq!(live.redeem_refresh_token(token), Ok(a.clone()));
+    }
+    for token in &b_tokens {
+        assert_eq!(candidate.redeem_refresh_token(token), Ok(b.clone()));
+    }
+
+    let mut restored = store();
+    snapshot.restore_into(&mut restored);
+    restored.delete_user_by_id(a.as_str()).unwrap();
+    for token in &a_tokens {
+        assert_eq!(
+            restored.redeem_refresh_token(token),
+            Err(AuthError::InvalidRefreshToken)
+        );
+    }
+    for token in &b_tokens {
+        assert_eq!(restored.redeem_refresh_token(token), Ok(b.clone()));
+    }
 }
 
 fn federated(

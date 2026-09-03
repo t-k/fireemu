@@ -274,3 +274,33 @@ fn a_snapshot_keeps_the_lifecycle_and_refresh_tokens_are_never_swept() {
     restored.sweep_transient_credentials(after(10 * 365 * 24 * 3600));
     assert_eq!(restored.redeem_refresh_token(&refresh), Ok(uid));
 }
+
+#[test]
+fn speculative_clones_share_every_unchanged_transient_registry() {
+    let mut live = store();
+    let uid = live
+        .create_user(NewUser::email("many-sessions@example.com"), t0())
+        .unwrap();
+    for _ in 0..50_000 {
+        live.issue_refresh_token(&uid, t0()).unwrap();
+    }
+
+    let untouched = live.clone();
+    assert_eq!(untouched.transient_registries_shared_with(&live), 5);
+
+    let mut swept = live.clone();
+    swept.sweep_transient_credentials(t0());
+    assert_eq!(
+        swept.transient_registries_shared_with(&live),
+        5,
+        "a no-op sweep must not copy any transient registry"
+    );
+
+    let mut candidate = live.clone();
+    candidate.issue_refresh_token(&uid, after(1)).unwrap();
+    assert_eq!(
+        candidate.transient_registries_shared_with(&live),
+        3,
+        "issuing a refresh session detaches only the session map and its ownership index"
+    );
+}

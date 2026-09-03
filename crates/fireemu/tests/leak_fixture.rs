@@ -46,6 +46,7 @@ fn fixture_child_keeps_captured_stdout() {
         // Inheriting means holding the pipe nextest captured this test's output with.
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
+        .process_group(0)
         .spawn()
         .expect("the fixture child must start");
     record_child(child.id());
@@ -64,6 +65,7 @@ fn fixture_child_redirects_output() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .expect("the fixture child must start");
     record_child(child.id());
@@ -82,6 +84,8 @@ fn record_child(pid: u32) {
 struct NestedRun {
     pgid: i32,
     pidfile: PathBuf,
+    stdout_file: PathBuf,
+    stderr_file: PathBuf,
     output: Output,
     cleaned: bool,
 }
@@ -96,7 +100,15 @@ impl NestedRun {
             "fireemu-leak-{test_name}-{}.pid",
             std::process::id()
         ));
-        let _ = std::fs::remove_file(&pidfile);
+        let stdout_file = pidfile.with_extension("stdout");
+        let stderr_file = pidfile.with_extension("stderr");
+        for path in [&pidfile, &stdout_file, &stderr_file] {
+            let _ = std::fs::remove_file(path);
+        }
+        let stdout = std::fs::File::create(&stdout_file)
+            .expect("the nested nextest stdout file must be created");
+        let stderr = std::fs::File::create(&stderr_file)
+            .expect("the nested nextest stderr file must be created");
         let mut command = Command::new(env!("CARGO"));
         command
             .current_dir(workspace_root())
@@ -116,8 +128,11 @@ impl NestedRun {
             ])
             .env(PIDFILE_VAR, &pidfile)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // Files reach EOF independently of an intentional child holding nextest's
+            // captured test handles. Piped output would make `wait_with_output` wait for the
+            // very leak this driver must clean up.
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             // Its own group: the fixture children inherit it, so cleanup is one signal.
             .process_group(0);
         for inherited in [
@@ -129,14 +144,19 @@ impl NestedRun {
         ] {
             command.env_remove(inherited);
         }
-        let child = command.spawn().expect("the nested nextest run must start");
+        let mut child = command.spawn().expect("the nested nextest run must start");
         let pgid = i32::try_from(child.id()).expect("pid fits in i32");
-        let output = child
-            .wait_with_output()
-            .expect("the nested nextest run must finish");
+        let status = child.wait().expect("the nested nextest run must finish");
+        let output = Output {
+            status,
+            stdout: std::fs::read(&stdout_file).expect("the nested stdout must be readable"),
+            stderr: std::fs::read(&stderr_file).expect("the nested stderr must be readable"),
+        };
         Some(Self {
             pgid,
             pidfile,
+            stdout_file,
+            stderr_file,
             output,
             cleaned: false,
         })
@@ -160,24 +180,22 @@ impl NestedRun {
     /// Terminates and reaps the nested run. Idempotent; also runs from `Drop`.
     ///
     /// Two groups matter: the one this driver created for `cargo nextest` itself, and the one
-    /// nextest put the fixture's test process (and therefore its children) into. Never the
-    /// group of the test doing the cleaning.
+    /// each fixture explicitly created for its child. Never the group of the test doing the
+    /// cleaning.
     fn cleanup(&mut self) {
         if self.cleaned {
             return;
         }
         self.cleaned = true;
-        census::kill_process_group(self.pgid);
+        let cleanup_grace = Duration::from_millis(250);
+        census::kill_process_group_with_grace(self.pgid, cleanup_grace);
         if let Some(pid) = self.fixture_child() {
-            let own = census::own_process_group();
-            if let Some(entry) = census::find(pid) {
-                if Some(entry.pgid) != own {
-                    census::kill_process_group(entry.pgid);
-                }
-            }
+            census::kill_process_group_with_grace(pid, cleanup_grace);
             census::kill_pid(pid);
         }
-        let _ = std::fs::remove_file(&self.pidfile);
+        for path in [&self.pidfile, &self.stdout_file, &self.stderr_file] {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -236,9 +254,10 @@ fn nested_run_fails_when_a_child_keeps_captured_stdout() {
         "the leaked child survived cleanup\n{}",
         census::table(&census::find(child).into_iter().collect::<Vec<_>>())
     );
-    census::assert_no_owned_descendants(
+    census::assert_process_group_empty(
+        run.pgid,
         "nested_run_fails_when_a_child_keeps_captured_stdout",
-        Duration::from_secs(5),
+        Duration::from_secs(1),
     );
 }
 
@@ -279,8 +298,9 @@ fn the_census_sees_a_child_that_redirected_its_output() {
         !census::alive(child),
         "the surviving child was not reaped by the cleanup guard"
     );
-    census::assert_no_owned_descendants(
+    census::assert_process_group_empty(
+        run.pgid,
         "the_census_sees_a_child_that_redirected_its_output",
-        Duration::from_secs(5),
+        Duration::from_secs(1),
     );
 }

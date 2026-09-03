@@ -122,9 +122,11 @@ pub fn wait_for_no_descendants(pid: i32, timeout: Duration) -> Vec<Proc> {
 pub fn wait_for_empty_process_group(pgid: i32, timeout: Duration) -> Vec<Proc> {
     let deadline = Instant::now() + timeout;
     loop {
-        let survivors = process_group(pgid);
-        if survivors.is_empty() || Instant::now() >= deadline {
-            return survivors;
+        if !process_group_alive(pgid) {
+            return Vec::new();
+        }
+        if Instant::now() >= deadline {
+            return process_group(pgid);
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -177,20 +179,34 @@ pub fn assert_process_group_empty(pgid: i32, context: &str, grace: Duration) {
 /// Killing the group (rather than a single PID) is what catches the shells, daemons and
 /// background jobs a command leaves behind.
 pub fn kill_process_group(pgid: i32) {
+    kill_process_group_with_grace(pgid, Duration::from_secs(2));
+}
+
+/// Terminates a whole process group using a caller-selected per-signal grace interval.
+pub fn kill_process_group_with_grace(pgid: i32, grace: Duration) {
     for signal in ["-TERM", "-KILL"] {
         let _ = Command::new("kill")
             .args([signal, &format!("-{pgid}")])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
-            if process_group(pgid).is_empty() {
+            if !process_group_alive(pgid) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
     }
+}
+
+fn process_group_alive(pgid: i32) -> bool {
+    Command::new("kill")
+        .args(["-0", &format!("-{pgid}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Kills `pid` unconditionally; used to clean up a fixture's recorded child.

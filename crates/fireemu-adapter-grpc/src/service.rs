@@ -813,7 +813,9 @@ struct Caller {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use fireemu_core_firestore::index::{IndexSet, PlanningContext};
     use fireemu_core_firestore::store::FirestoreState;
@@ -822,6 +824,39 @@ mod tests {
     use fireemu_core_types::time::LogicalInstant;
 
     use super::*;
+
+    fn test_backend() -> Arc<LocalBackend> {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: fireemu_core_firestore::index::IndexValidationPolicy::Conservative,
+            },
+            indexes: IndexSet::default(),
+        };
+        Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ))
+    }
+
+    fn query_request() -> pb::RunQueryRequest {
+        pb::RunQueryRequest {
+            parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![pb::structured_query::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn guards_refuse_a_caller_from_before_a_reset() {
@@ -855,5 +890,62 @@ mod tests {
                 .code(),
             tonic::Code::Unavailable
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn saturated_blocking_queries_leave_runtime_and_other_databases_responsive() {
+        const QUERIES: usize = 4;
+        let backend = test_backend();
+        let epoch = backend.barrier().epoch();
+        let mut entered = Vec::new();
+        let mut releases = Vec::new();
+        let mut tasks = Vec::new();
+        for _ in 0..QUERIES {
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            entered.push(entered_rx);
+            releases.push(release_tx);
+            let local = backend.clone();
+            tasks.push(tokio::spawn(blocking_read(
+                local,
+                None,
+                Caller {
+                    principal: Principal::Owner,
+                    epoch,
+                },
+                move |local, guard| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    local.run_query(&query_request(), guard).map(|_| ())
+                },
+            )));
+        }
+        for receiver in entered {
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+
+        tokio::time::timeout(Duration::from_millis(100), tokio::task::yield_now())
+            .await
+            .expect("the async runtime remains responsive");
+        let other_database = backend.clone();
+        tokio::time::timeout(Duration::from_millis(100), async move {
+            other_database.get_document_snapshot(
+                &pb::GetDocumentRequest {
+                    name: "projects/demo-app/databases/other/documents/items/missing".to_owned(),
+                    ..Default::default()
+                },
+                &crate::rules::allow_all_reads,
+            )
+        })
+        .await
+        .expect("another database answers within the normal latency bound")
+        .expect("a missing document still has a valid snapshot");
+
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
     }
 }

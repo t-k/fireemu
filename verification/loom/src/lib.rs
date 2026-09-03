@@ -7,7 +7,7 @@
 //! Run with:
 //!
 //! ```text
-//! RUSTFLAGS="--cfg loom" cargo test -p fireemu-verification-loom --release
+//! scripts/cargo-session --session concurrency --mode loom -- cargo test -p fireemu-verification-loom --release
 //! ```
 //!
 //! Loom is a dev-time dependency only and is never linked into the release binary.

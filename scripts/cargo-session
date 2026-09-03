@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/cargo-session --session <name> [--mode normal|loom] [--print-target-dir] [-- <command> [args...]]
+EOF
+  exit 2
+}
+
+session=
+mode=normal
+print_target=false
+
+while (($#)); do
+  case "$1" in
+    --session)
+      (($# >= 2)) || usage
+      session=$2
+      shift 2
+      ;;
+    --mode)
+      (($# >= 2)) || usage
+      mode=$2
+      shift 2
+      ;;
+    --print-target-dir)
+      print_target=true
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+[[ "$session" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || {
+  printf 'cargo-session: invalid session name: %s\n' "$session" >&2
+  exit 2
+}
+
+case "$mode" in
+  normal | loom) ;;
+  *)
+    printf 'cargo-session: invalid mode: %s\n' "$mode" >&2
+    exit 2
+    ;;
+esac
+
+if [[ ${CARGO_TARGET_DIR+x} ]]; then
+  printf 'cargo-session: CARGO_TARGET_DIR is already set; unset it before using this wrapper\n' >&2
+  exit 2
+fi
+
+repo_root=$(git rev-parse --show-toplevel)
+target_dir="$repo_root/target/agent/$session/$mode"
+
+if [[ "$print_target" == true ]]; then
+  printf '%s\n' "$target_dir"
+fi
+
+if (($# == 0)); then
+  [[ "$print_target" == true ]] && exit 0
+  usage
+fi
+
+export CARGO_TARGET_DIR=$target_dir
+if [[ "$mode" == loom ]]; then
+  if [[ -n ${RUSTFLAGS-} ]]; then
+    export RUSTFLAGS="$RUSTFLAGS --cfg loom"
+  else
+    export RUSTFLAGS='--cfg loom'
+  fi
+fi
+
+exec "$@"

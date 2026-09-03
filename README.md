@@ -180,6 +180,8 @@ fireemu is under active development and has not reached a stable compatibility p
 
 Bug reports that include the Firebase product, SDK version, fireemu profile, and a minimal reproduction are especially useful. When reporting a compatibility problem, note whether the reference behavior came from production Firebase or the official emulator; they do not always behave the same way.
 
+Contributor build and test commands are documented in the [development guide](docs/development.md).
+
 ## License
 
 fireemu is licensed under the [Apache License 2.0](LICENSE). Third-party notices are listed in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).

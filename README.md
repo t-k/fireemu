@@ -28,7 +28,7 @@ npx fireemu exec -- npm test
 
 The recommended `strict` profile enables additional validation, including checks intended to expose some failures that the official emulator does not report. Choose the `firebase` profile when matching the pinned official emulator is more important.
 
-If `firebase.json` exists, `init` references it instead of copying its settings. Rules, indexes, Functions codebases, and emulator ports are loaded from that file each time fireemu starts.
+If `firebase.json` exists, `init` references it instead of copying its settings. Rules, indexes, Functions codebases, and emulator ports are loaded from that file each time fireemu starts. `firebase-tools@15.28.2` does not impose a Functions codebase-count limit, but fireemu applies a documented local safety budget of 32 simultaneously selected codebases because each starts a Node runner; `--only functions:<codebase>` selects one from a larger project.
 
 For CI or scripted setup, use the non-interactive form:
 

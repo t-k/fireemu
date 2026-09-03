@@ -292,7 +292,14 @@ fn firebase_json_problems(cfg: &Value) -> Vec<String> {
 
     // 2. Every codebase needs a source, has a bounded Firebase name, and is declared once.
     let mut codebases: BTreeSet<String> = BTreeSet::new();
-    for entry in entries(cfg.get("functions")) {
+    let functions = entries(cfg.get("functions"));
+    if functions.len() > 32 {
+        problems.push(format!(
+            "functions declares {} codebases, exceeding fireemu's local safety budget of 32",
+            functions.len()
+        ));
+    }
+    for entry in functions {
         let Some(obj) = entry.as_object() else {
             problems.push("functions entries must be objects".to_owned());
             continue;

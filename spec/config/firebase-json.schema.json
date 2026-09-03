@@ -20,10 +20,10 @@
       ]
     },
     "functions": {
-      "description": "One codebase, or an array of them. fireemu loads every declared codebase with one runner each; --only functions:<codebase> narrows the run to one.",
+      "description": "One codebase, or an array of them. fireemu loads every selected codebase with one runner each and applies a local safety budget of 32 concurrent runners; --only functions:<codebase> narrows the run to one. firebase-tools 15.28.2 does not impose this local count limit.",
       "oneOf": [
         { "$ref": "#/$defs/functionsEntry" },
-        { "type": "array", "items": { "$ref": "#/$defs/functionsEntry" }, "minItems": 1 }
+        { "type": "array", "items": { "$ref": "#/$defs/functionsEntry" }, "minItems": 1, "maxItems": 32 }
       ]
     },
     "emulators": {

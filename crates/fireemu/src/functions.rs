@@ -1446,6 +1446,7 @@ pub async fn start(
     if codebases.is_empty() {
         return Err("functions.source is not configured".to_owned());
     }
+    validate_functions_codebase_budget(&codebases)?;
     if codebases.len() > 1 && cfg.functions_manifest.is_some() {
         return Err(format!(
             "functions.manifest replaces discovery for one codebase, and this run loads {} \
@@ -1529,6 +1530,17 @@ pub async fn start(
         callable_trusted_protocol,
     );
     Ok(runtime)
+}
+
+fn validate_functions_codebase_budget(codebases: &[FunctionsCodebase]) -> Result<(), String> {
+    if codebases.len() > crate::config::MAX_SELECTED_FUNCTIONS_CODEBASES {
+        return Err(format!(
+            "{} selected Functions codebases exceed fireemu's local safety budget of {}; use --only functions:<codebase> to start one runner",
+            codebases.len(),
+            crate::config::MAX_SELECTED_FUNCTIONS_CODEBASES
+        ));
+    }
+    Ok(())
 }
 
 /// Starts one codebase's runner, reads its environment and validates what it discovered.
@@ -2437,14 +2449,30 @@ mod tests {
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
         functions_source_stamp, hash_source_stamp_entry, node_engine_matches, package_node_engine,
         parse_node_version, provision_function_pubsub_resources, select_node_installation,
-        snapshot_functions_source, update_watch_hash, NodeInstallation, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        snapshot_functions_source, update_watch_hash, validate_functions_codebase_budget,
+        NodeInstallation, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
     use serde_json::json;
+
+    #[test]
+    fn runtime_refuses_too_many_codebases_before_starting_runners() {
+        let codebases = (0..33)
+            .map(|index| crate::config::FunctionsCodebase {
+                codebase: format!("codebase-{index}"),
+                source: format!("/must-not-be-opened/codebase-{index}"),
+                runtime: None,
+                ignore: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let error = validate_functions_codebase_budget(&codebases).unwrap_err();
+        assert!(error.contains("33 selected Functions codebases"), "{error}");
+        assert!(error.contains("local safety budget of 32"), "{error}");
+    }
 
     #[test]
     fn blocking_auth_user_uses_the_functions_sdk_record_shape() {

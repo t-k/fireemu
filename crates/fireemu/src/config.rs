@@ -647,6 +647,14 @@ pub struct FunctionsCodebase {
     pub ignore: Vec<String>,
 }
 
+/// Maximum number of Node runner processes fireemu starts for one invocation.
+///
+/// `firebase-tools@15.28.2` does not impose a Functions codebase-count limit. This is a
+/// fireemu-local safety budget: selecting one codebase with `--only functions:<codebase>` keeps
+/// large Firebase projects usable without allowing an untrusted configuration to exhaust local
+/// process and memory limits.
+pub const MAX_SELECTED_FUNCTIONS_CODEBASES: usize = 32;
+
 /// What applying a `firebase.json` produced besides the effective configuration: the
 /// notices to print once, in file order. Anything fireemu cannot honour is either an error
 /// (a selected product it does not serve) or exactly one of these lines; nothing is silent.
@@ -1072,6 +1080,12 @@ impl RuntimeConfig {
                 .clone()],
             None => self.functions_codebases.clone(),
         };
+        if chosen.len() > MAX_SELECTED_FUNCTIONS_CODEBASES {
+            return Err(ConfigError(format!(
+                "firebase.json has {} selected Functions codebases, exceeding fireemu's local safety budget of {MAX_SELECTED_FUNCTIONS_CODEBASES}; use --only functions:<codebase> to start one runner",
+                chosen.len()
+            )));
+        }
         for c in &chosen {
             check_codebase_runtime(c)?;
         }
@@ -2581,6 +2595,48 @@ mod tests {
             .unwrap_err()
             .0;
         assert!(message.contains("nodejs-latest"), "{message}");
+    }
+
+    #[test]
+    fn functions_codebase_budget_applies_to_the_selected_runners() {
+        let entries = (0..33)
+            .map(|index| {
+                json!({
+                    "source": format!("functions/codebase-{index}"),
+                    "codebase": format!("codebase-{index}")
+                })
+            })
+            .collect::<Vec<_>>();
+        let base = std::path::Path::new("/proj");
+
+        let mut at_limit = RuntimeConfig::default();
+        at_limit
+            .apply_firebase_json(
+                &json!({"functions": &entries[..32]}),
+                base,
+                &Selection::default(),
+            )
+            .expect("the local runner budget includes its exact boundary");
+        assert_eq!(at_limit.functions_to_load().len(), 32);
+
+        let mut over_limit = RuntimeConfig::default();
+        let error = over_limit
+            .apply_firebase_json(&json!({"functions": &entries}), base, &Selection::default())
+            .unwrap_err()
+            .0;
+        assert!(error.contains("33 selected Functions codebases"), "{error}");
+        assert!(error.contains("local safety budget of 32"), "{error}");
+
+        let mut selected = RuntimeConfig::default();
+        selected
+            .apply_firebase_json(
+                &json!({"functions": &entries}),
+                base,
+                &Selection::parse("functions:codebase-32").unwrap(),
+            )
+            .expect("--only starts one runner even when the file declares more codebases");
+        assert_eq!(selected.functions_to_load().len(), 1);
+        assert_eq!(selected.functions_to_load()[0].codebase, "codebase-32");
     }
 
     #[test]

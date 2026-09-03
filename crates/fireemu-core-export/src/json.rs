@@ -162,23 +162,11 @@ fn write_float(value: f64) -> String {
 }
 
 fn write_string(out: &mut String, value: &str) {
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+    fireemu_core_types::codec::write_json_string(
+        out,
+        value,
+        fireemu_core_types::codec::JsonControlEscape::Short,
+    );
 }
 
 #[cfg(test)]

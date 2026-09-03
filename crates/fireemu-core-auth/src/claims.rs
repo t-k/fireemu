@@ -53,21 +53,11 @@ impl ClaimValue {
 
 /// Writes `s` as a JSON string literal.
 pub fn write_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+    fireemu_core_types::codec::write_json_string(
+        out,
+        s,
+        fireemu_core_types::codec::JsonControlEscape::Unicode,
+    );
 }
 
 impl ClaimValue {

@@ -117,19 +117,10 @@ impl AppCheckClaims {
 /// Minimal RFC 8259 string escaping for the claim values the issuer controls.
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                use core::fmt::Write as _;
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
+    fireemu_core_types::codec::json_escape_into(
+        &mut out,
+        text,
+        fireemu_core_types::codec::JsonControlEscape::Unicode,
+    );
     out
 }

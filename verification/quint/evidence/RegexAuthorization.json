@@ -52,9 +52,9 @@
     "verification/quint/tests/regex_authorization_connect.rs"
   ],
   "digests": {
-    ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
+    ".github/workflows/ci.yml": "562a3c57ca99acde5e49675bb47e01bc802c3532cc43597a0c58472f761cc5be",
     "Cargo.lock": "7a3ca041f11d5b80b76585b14ab3df40d9930f81b48042602a066bd374bd7f95",
-    "Cargo.toml": "af72737999b69807b6686c18cb86d376e70dae497d35cd6e7844f9488ad72240",
+    "Cargo.toml": "a437b8a8a3fa51eb6ce646a36766c528402eda90cabe839e27fbd7a3c87f8999",
     "crates/fireemu-core-rules/src/eval.rs": "50f3ffd912a5d1a4cc25c39c7928a501b0e4813456dd90abe08866386aecaad6",
     "crates/fireemu-core-rules/src/parse.rs": "ebcf63731625d6b5237f4a4d1fddfb89ce776d0ce42aa71434b534f61ae2c45c",
     "crates/fireemu-core-rules/src/regex.rs": "d58f693aa1a72ffc748d63e3482351cae0a9d54fb02ba0032a1e189727eceba3",

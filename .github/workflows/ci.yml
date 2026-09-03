@@ -21,6 +21,9 @@ jobs:
           components: rustfmt, clippy
       - name: the pinned toolchain is the one in use
         run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pr
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny

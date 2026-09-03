@@ -63,6 +63,25 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 
+# Development builds keep only line tables for workspace crates and no debuginfo for
+# dependencies: backtraces and panics still name the file and line in our own code, while the
+# object files and the 120-odd test binaries the workspace links shrink by most of their size.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Full debuginfo everywhere, for a debugger session that has to step into dependencies. It is
+# a separate profile (`cargo test --profile debugging`) so that switching to it and back never
+# invalidates the `dev` artifacts.
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+[profile.debugging.package."*"]
+debug = true
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

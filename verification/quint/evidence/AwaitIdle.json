@@ -53,9 +53,9 @@
     "verification/quint/tests/model_registry.rs"
   ],
   "digests": {
-    ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
+    ".github/workflows/ci.yml": "562a3c57ca99acde5e49675bb47e01bc802c3532cc43597a0c58472f761cc5be",
     "Cargo.lock": "7a3ca041f11d5b80b76585b14ab3df40d9930f81b48042602a066bd374bd7f95",
-    "Cargo.toml": "af72737999b69807b6686c18cb86d376e70dae497d35cd6e7844f9488ad72240",
+    "Cargo.toml": "a437b8a8a3fa51eb6ce646a36766c528402eda90cabe839e27fbd7a3c87f8999",
     "crates/fireemu-adapter-functions/src/runtime.rs": "24b8690abf4fbb51daa561e688cec43b18c5dbf4ec70a9470e89e6a32140b9f7",
     "crates/fireemu-adapter-http/src/control.rs": "7eed0cd24f54b06d44a268bcc4230b1ea36e71939ba10123c4957569b58dd629",
     "crates/fireemu-core-session/src/idle.rs": "53bd98a30a3d61cf0be88222f4d3700e84cdc46636e885c5f4fb1945532104b8",

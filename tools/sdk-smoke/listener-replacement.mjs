@@ -10,6 +10,9 @@ import {
   waitForPendingWrites,
   where,
 } from "firebase/firestore";
+import { deferred, requireNode20 } from "./listener-runtime-compat.mjs";
+
+requireNode20();
 
 const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(":");
 const app = initializeApp({ projectId: process.env.GOOGLE_CLOUD_PROJECT ?? "demo-app" });
@@ -31,17 +34,14 @@ const bounded = async (promise, label) => {
 const item = doc(db, "listener-replacement/item");
 await setDoc(item, { group: "one", revision: 0 });
 await waitForPendingWrites(db);
-const replacementQuery = query(
-  collection(db, "listener-replacement"),
-  where("group", "==", "one"),
-);
+const replacementQuery = query(collection(db, "listener-replacement"), where("group", "==", "one"));
 
 const firstValues = [];
-const firstInitial = Promise.withResolvers();
+const firstInitial = deferred();
 let unsubscribeFirst = () => {};
 const replacementValues = [];
-const replacementInitial = Promise.withResolvers();
-const replacementUpdate = Promise.withResolvers();
+const replacementInitial = deferred();
+const replacementUpdate = deferred();
 let unsubscribeReplacement = () => {};
 try {
   unsubscribeFirst = onSnapshot(

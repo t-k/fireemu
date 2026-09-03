@@ -1,8 +1,8 @@
 {
   "name": "fireemu-sdk-smoke",
   "private": true,
-  "type": "module",
   "description": "Runs the real firebase-admin SDK against a running fireemu (manual / CI smoke).",
+  "type": "module",
   "scripts": {
     "smoke": "node smoke.mjs",
     "smoke:client": "node client.mjs",
@@ -17,16 +17,20 @@
     "smoke:recursive-delete": "node recursive-delete.mjs",
     "smoke:firestore-contention": "node firestore-contention.mjs",
     "smoke:server-timestamp-query": "node server-timestamp-transaction-query.mjs",
-    "smoke:listener-replacement": "node listener-replacement.mjs"
+    "smoke:listener-replacement": "node listener-replacement.mjs",
+    "test:listener-runtime": "node --test listener-runtime-compat.test.mjs"
   },
   "dependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "@google-cloud/pubsub": "^4",
     "firebase": "^12",
     "firebase-admin": "14.3.0",
-    "firebase-functions": ">=6 <8",
-    "@firebase/rules-unit-testing": "5.0.2",
-    "@google-cloud/pubsub": "^4"
+    "firebase-functions": ">=6 <8"
   },
   "overrides": {
     "uuid": "11.1.1"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

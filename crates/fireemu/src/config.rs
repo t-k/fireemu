@@ -875,7 +875,7 @@ impl RuntimeConfig {
                     })
                 })
                 .transpose()?
-                .unwrap_or_else(|| "(default)".to_owned());
+                .unwrap_or_else(|| fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned());
             if seen.contains(&database) {
                 return Err(ConfigError(format!(
                     "firebase.json: firestore declares the database {database} twice"
@@ -893,7 +893,7 @@ impl RuntimeConfig {
                     .map(|value| file(value, &format!("{path}.indexes")))
                     .transpose()?,
             };
-            if database == "(default)" {
+            if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
                 self.rules_file.clone_from(&files.rules);
                 self.index_file.clone_from(&files.indexes);
             }
@@ -2386,7 +2386,9 @@ mod tests {
             .unwrap();
         assert_eq!(cfg.rules_file.as_deref(), Some("/proj/firestore.rules"));
         assert_eq!(
-            cfg.firestore_databases["(default)"].rules.as_deref(),
+            cfg.firestore_databases[fireemu_core_types::ids::DatabaseId::DEFAULT]
+                .rules
+                .as_deref(),
             Some("/proj/firestore.rules")
         );
         assert_eq!(
@@ -2422,7 +2424,7 @@ mod tests {
         let report = cfg
             .apply_firebase_json(
                 &json!({"firestore": [
-                    {"database": "(default)", "rules": "default.rules"},
+                    {"database": fireemu_core_types::ids::DatabaseId::DEFAULT, "rules": "default.rules"},
                     {"database": "staging", "rules": "staging.rules", "indexes": "staging.indexes.json"}
                 ]}),
                 base,

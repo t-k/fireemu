@@ -74,7 +74,7 @@ fn manifests_match_firestore_and_storage_triggers() {
                 "onTodo",
                 Trigger::Firestore {
                     event: DocumentEvent::Created,
-                    database: "(default)".into(),
+                    database: fireemu_core_types::ids::DatabaseId::DEFAULT.into(),
                     document: PathPattern::parse("todos/{id}").unwrap(),
                     with_auth_context: false,
                 },
@@ -83,7 +83,7 @@ fn manifests_match_firestore_and_storage_triggers() {
                 "onAny",
                 Trigger::Firestore {
                     event: DocumentEvent::Written,
-                    database: "(default)".into(),
+                    database: fireemu_core_types::ids::DatabaseId::DEFAULT.into(),
                     document: PathPattern::parse("{path=**}").unwrap(),
                     with_auth_context: false,
                 },
@@ -106,7 +106,11 @@ fn manifests_match_firestore_and_storage_triggers() {
         ignored: Vec::new(),
     };
     m.validate().unwrap();
-    let created = m.firestore_matches("(default)", "todos/t1", DocumentEvent::Created);
+    let created = m.firestore_matches(
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
+        "todos/t1",
+        DocumentEvent::Created,
+    );
     assert_eq!(
         created
             .iter()
@@ -115,7 +119,11 @@ fn manifests_match_firestore_and_storage_triggers() {
         ["onTodo", "onAny"]
     );
     assert_eq!(created[0].params["id"], "t1");
-    let deleted = m.firestore_matches("(default)", "todos/t1", DocumentEvent::Deleted);
+    let deleted = m.firestore_matches(
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
+        "todos/t1",
+        DocumentEvent::Deleted,
+    );
     assert_eq!(deleted.len(), 1, "created triggers do not fire on delete");
     assert!(m
         .firestore_matches("other-db", "todos/t1", DocumentEvent::Created)

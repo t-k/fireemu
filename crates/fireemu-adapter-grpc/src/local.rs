@@ -29,7 +29,7 @@ use fireemu_core_firestore::store::{
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{Clock, DeterministicRng, SplitMix64};
-use fireemu_core_types::ids::{CollectionId, DocumentId};
+use fireemu_core_types::ids::{CollectionId, DatabaseId, DocumentId};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
@@ -440,7 +440,7 @@ impl LocalBackend {
     #[must_use]
     pub fn new(gateway: Gateway, clock: Arc<Mutex<VirtualClock>>, seed: u64) -> Self {
         let indexes = RwLock::new(BTreeMap::from([(
-            (None, "(default)".to_owned()),
+            (None, DatabaseId::DEFAULT.to_owned()),
             gateway.indexes.clone(),
         )]));
         Self {
@@ -936,7 +936,7 @@ impl LocalBackend {
 
     /// Atomically replaces the index catalog used by subsequent query plans.
     pub fn replace_indexes(&self, indexes: fireemu_core_firestore::index::IndexSet) {
-        self.replace_database_indexes("(default)", indexes);
+        self.replace_database_indexes(DatabaseId::DEFAULT, indexes);
     }
 
     /// Atomically replaces one database's index catalog.
@@ -965,7 +965,7 @@ impl LocalBackend {
     /// Returns a snapshot of the index catalog currently used for query planning.
     #[must_use]
     pub fn indexes(&self) -> fireemu_core_firestore::index::IndexSet {
-        self.indexes_for_database("(default)")
+        self.indexes_for_database(DatabaseId::DEFAULT)
     }
 
     /// Returns one database's current query-planning index catalog.

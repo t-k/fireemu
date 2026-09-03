@@ -2,6 +2,7 @@
 //! by the runtime shell from the document / object it already encodes for the APIs).
 
 use crate::manifest::{AuthEvent, DocumentEvent, ObjectEvent};
+use fireemu_core_types::ids::DatabaseId;
 
 /// `CloudEvents` context attributes (spec version 1.0) with the extensions the Firebase SDKs
 /// read (`document`, `database`, `namespace`, `project`, `location`, `bucket`).
@@ -33,7 +34,7 @@ pub fn firestore_attributes(
         extensions: vec![
             ("project".into(), project.to_owned()),
             ("database".into(), database.to_owned()),
-            ("namespace".into(), "(default)".into()),
+            ("namespace".into(), DatabaseId::DEFAULT.into()),
             ("document".into(), document_path.to_owned()),
             ("location".into(), location.to_owned()),
         ],

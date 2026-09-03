@@ -36,9 +36,9 @@ fn project_id_without_demo_prefix_is_valid_but_flagged() {
 
 #[test]
 fn database_id_accepts_default_and_named() {
-    assert_eq!(DatabaseId::default_database().as_str(), "(default)");
+    assert_eq!(DatabaseId::default_database().as_str(), DatabaseId::DEFAULT);
     assert_eq!(
-        DatabaseId::try_new("(default)").unwrap(),
+        DatabaseId::try_new(DatabaseId::DEFAULT).unwrap(),
         DatabaseId::default_database()
     );
     assert!(DatabaseId::try_new("tenant-a").is_ok());

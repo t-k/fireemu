@@ -1259,7 +1259,8 @@ mod refresh_tests {
 
     fn path(relative: &str) -> DocumentPath {
         crate::encode::decode_document_name(&format!(
-            "projects/demo-app/databases/(default)/documents/{relative}"
+            "projects/demo-app/databases/{}/documents/{relative}",
+            fireemu_core_types::ids::DatabaseId::DEFAULT,
         ))
         .unwrap()
     }
@@ -1279,7 +1280,7 @@ mod refresh_tests {
     fn notification(version: u64, relative: &str) -> CommitNotification {
         CommitNotification {
             project: "demo-app".to_owned(),
-            database: "(default)".to_owned(),
+            database: fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
             version,
             reset: false,
             changes: Arc::from([CommitPathChange {
@@ -1393,7 +1394,10 @@ mod refresh_tests {
     fn restored_snapshot(value: &str) -> FirestoreSnapshot {
         FirestoreSnapshot {
             databases: BTreeMap::from([(
-                ("demo-app".to_owned(), "(default)".to_owned()),
+                (
+                    "demo-app".to_owned(),
+                    fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+                ),
                 state_with_value(value),
             )]),
             ids: None,

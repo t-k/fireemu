@@ -427,7 +427,7 @@ mod retained_bytes_tests {
         catalog
             .add(
                 "demo-app",
-                "(default)",
+                fireemu_core_types::ids::DatabaseId::DEFAULT,
                 TextIndexDefinition {
                     id: "search-index".repeat(8),
                     collection_id: CollectionId::try_new("articles").expect("collection"),

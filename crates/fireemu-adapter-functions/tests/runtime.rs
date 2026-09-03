@@ -44,7 +44,7 @@ fn commit(changes: Vec<DocumentChange>) -> CommitEvent {
     CommitEvent {
         actor: fireemu_adapter_grpc::local::Actor::system(),
         project: "demo-app".into(),
-        database: "(default)".into(),
+        database: fireemu_core_types::ids::DatabaseId::DEFAULT.into(),
         version: 1,
         commit_time: Some(START),
         changes: Arc::from(changes),
@@ -571,7 +571,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     let e = firestore_event(
         "e1",
         "demo-app",
-        "(default)",
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
         "nam5",
         "todos/t1",
         DocumentEvent::Updated,
@@ -587,7 +587,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     );
     assert_eq!(e["subject"], "documents/todos/t1");
     assert_eq!(e["document"], "todos/t1");
-    assert_eq!(e["database"], "(default)");
+    assert_eq!(e["database"], fireemu_core_types::ids::DatabaseId::DEFAULT);
     assert_eq!(e["datacontenttype"], "application/json");
     assert_eq!(e["data"]["value"]["fields"]["v"]["integerValue"], "2");
     assert_eq!(e["data"]["oldValue"]["fields"]["v"]["integerValue"], "1");
@@ -595,7 +595,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     let created = firestore_event(
         "e2",
         "demo-app",
-        "(default)",
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
         "nam5",
         "todos/t1",
         DocumentEvent::Created,
@@ -824,7 +824,7 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     let plain = firestore_event(
         "f1",
         "demo-app",
-        "(default)",
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
         "nam5",
         "audited/x",
         DocumentEvent::Created,
@@ -838,7 +838,7 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     let with = firestore_event(
         "f2",
         "demo-app",
-        "(default)",
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
         "nam5",
         "audited/x",
         DocumentEvent::Created,

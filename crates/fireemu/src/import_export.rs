@@ -76,7 +76,7 @@ pub const COMPATIBLE_CLI_VERSION: &str = "15.28.2";
 pub const COMPATIBLE_FIRESTORE_VERSION: &str = "1.22.0";
 
 /// The default database, which the official Firestore section carries.
-const DEFAULT_DATABASE: &str = "(default)";
+const DEFAULT_DATABASE: &str = DatabaseId::DEFAULT;
 
 const IMPORT_MANIFEST_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
 const IMPORT_AUTH_FILE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;

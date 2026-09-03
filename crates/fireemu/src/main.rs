@@ -1315,7 +1315,7 @@ fn start_firestore_config_reload_supervisors(
 ) {
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.rules {
-            let slot = if database == "(default)" {
+            let slot = if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
                 Some(rules)
             } else {
                 database_rules.get(database)
@@ -1340,7 +1340,11 @@ fn start_firestore_config_reload_supervisors(
     }
     if cfg.firestore_databases.is_empty() {
         if let Some(path) = &cfg.index_file {
-            start_index_reload_supervisor(path.clone(), "(default)".to_owned(), backend);
+            start_index_reload_supervisor(
+                path.clone(),
+                fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+                backend,
+            );
         }
     }
 }
@@ -1362,8 +1366,10 @@ fn storage_state(
     let parent = fireemu_adapter_grpc::decode::Parent {
         project: fireemu_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
             .map_err(|e| format!("project id: {e}"))?,
-        database: fireemu_core_types::ids::DatabaseId::try_new("(default)")
-            .map_err(|e| format!("database id: {e}"))?,
+        database: fireemu_core_types::ids::DatabaseId::try_new(
+            fireemu_core_types::ids::DatabaseId::DEFAULT,
+        )
+        .map_err(|e| format!("database id: {e}"))?,
         document: None,
     };
     Ok(Arc::new(fireemu_adapter_http::storage::StorageState {
@@ -1767,7 +1773,7 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     }
     if cfg.rules_enforced {
         for (database, files) in &cfg.firestore_databases {
-            if database == "(default)" {
+            if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
                 continue;
             }
             if let Some(path) = &files.rules {
@@ -1949,7 +1955,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 .with_wall_clock_write_time()
         });
         for (database, files) in &cfg.firestore_databases {
-            if database != "(default)" {
+            if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
                     backend.replace_database_indexes(database, control::load_indexes(path)?);
                 }
@@ -2004,7 +2010,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
-            if database == "(default)" {
+            if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
                 continue;
             }
             let loaded = match &files.rules {

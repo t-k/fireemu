@@ -1218,7 +1218,13 @@ async fn project_restore_replays_a_same_version_document_with_new_fields() {
         )
         .unwrap();
     let snapshot = FirestoreSnapshot {
-        databases: BTreeMap::from([(("demo-app".to_owned(), "(default)".to_owned()), restored)]),
+        databases: BTreeMap::from([(
+            (
+                "demo-app".to_owned(),
+                fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+            ),
+            restored,
+        )]),
         ids: None,
     };
     BACKEND.with(|backend| {

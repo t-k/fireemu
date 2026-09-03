@@ -631,7 +631,9 @@ impl RulesEnforcer {
             .rules_for_database(
                 items
                     .first()
-                    .map_or("(default)", |(path, _)| path.database().as_str()),
+                    .map_or(fireemu_core_types::ids::DatabaseId::DEFAULT, |(path, _)| {
+                        path.database().as_str()
+                    }),
             )
             .snapshot()
             .map_err(Status::internal)?;

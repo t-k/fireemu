@@ -24,6 +24,7 @@
 //! every recognized section, and the caller decides what a Realtime Database or SQL Connect
 //! section means for the run (`fireemu` refuses the run rather than importing part of it).
 
+use fireemu_core_types::ids::DatabaseId;
 use fireemu_core_types::json::{parse, JsonValue};
 
 use crate::json::Json;
@@ -265,7 +266,7 @@ impl ExportMetadata {
                             ))
                         })?
                         .to_owned();
-                    if database.is_empty() || database == "(default)" {
+                    if database.is_empty() || database == DatabaseId::DEFAULT {
                         return Err(MetadataError(format!(
                             "the {EXTENSION_KEY} section names the database {database:?}, which belongs in the official firestore section"
                         )));
@@ -386,6 +387,7 @@ fn parse_section(product: Product, value: &JsonValue) -> Result<Section, Metadat
 #[cfg(test)]
 mod tests {
     use super::{ExportMetadata, Product, Section};
+    use fireemu_core_types::ids::DatabaseId;
 
     /// The manifest of the recorded official fixture, verbatim.
     const OFFICIAL: &str = r#"{
@@ -524,8 +526,11 @@ mod tests {
 
     #[test]
     fn an_extension_that_names_the_default_database_is_refused() {
-        let text = r#"{"version":"1","fireemu":{"version":"0.1.0","firestoreDatabases":[{"database":"(default)","path":"x"}]}}"#;
-        assert!(ExportMetadata::parse(text).is_err());
+        let text = format!(
+            r#"{{"version":"1","fireemu":{{"version":"0.1.0","firestoreDatabases":[{{"database":"{}","path":"x"}}]}}}}"#,
+            DatabaseId::DEFAULT
+        );
+        assert!(ExportMetadata::parse(&text).is_err());
         let empty = r#"{"version":"1","fireemu":{"firestoreDatabases":[{"path":"x"}]}}"#;
         assert!(ExportMetadata::parse(empty).is_err());
         assert!(ExportMetadata::parse(r#"{"version":"1","fireemu":[]}"#).is_err());

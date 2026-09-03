@@ -23,6 +23,7 @@ use fireemu_core_functions::manifest::{
     TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_REGION, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::pattern::PathPattern;
+use fireemu_core_types::ids::DatabaseId;
 use serde_json::{json, Value};
 
 /// The manifest spells task-queue durations in (fractional) seconds and the runtime keeps
@@ -265,7 +266,7 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
             }
             Trigger::Firestore {
                 event,
-                database: s(trigger, "database").unwrap_or_else(|| "(default)".to_owned()),
+                database: s(trigger, "database").unwrap_or_else(|| DatabaseId::DEFAULT.to_owned()),
                 document,
                 with_auth_context: event_type.ends_with(".withAuthContext"),
             }

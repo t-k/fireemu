@@ -132,7 +132,11 @@ fn routed_projects_can_use_isolated_index_catalogs() {
             },
         ],
     });
-    backend.replace_project_database_indexes("demo-a", "(default)", indexes);
+    backend.replace_project_database_indexes(
+        "demo-a",
+        fireemu_core_types::ids::DatabaseId::DEFAULT,
+        indexes,
+    );
     let field = |name: &str| sq::Filter {
         filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
             field: Some(sq::FieldReference {
@@ -1800,7 +1804,10 @@ async fn wall_clock_restores_keep_the_time_window_without_the_pinned_clock_cap()
     let (mut client, _clock, backend, handle) =
         start_with_backend_and_policy(true, IndexValidationPolicy::Conservative).await;
     backend.restore_databases(std::collections::BTreeMap::from([(
-        ("demo-app".to_owned(), "(default)".to_owned()),
+        (
+            "demo-app".to_owned(),
+            fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+        ),
         fireemu_core_firestore::store::FirestoreState::new(),
     )]));
     for value in 0..=fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH {

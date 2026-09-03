@@ -36,6 +36,8 @@ fn state() -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -196,6 +198,8 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
 fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     let s = AuthState {
         stateless_refresh_tokens: false,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         ..state()
     };
     let signed_up = sign_up(&s, "strict-reset@example.com");

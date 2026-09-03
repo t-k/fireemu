@@ -2206,6 +2206,14 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Firebase,
             stateless_refresh_tokens: cfg.profile
                 == crate::config::CompatibilityProfile::Firebase,
+            fake_custom_token_expiry: match cfg.profile {
+                crate::config::CompatibilityProfile::Firebase => {
+                    fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore
+                }
+                crate::config::CompatibilityProfile::Strict => {
+                    fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject
+                }
+            },
             tenancy: Some(tenancy.clone()),
             app_check: app_check.clone(),
             app_check_policy: auth_policy,

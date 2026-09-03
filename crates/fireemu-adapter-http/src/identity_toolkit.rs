@@ -353,6 +353,15 @@ pub(crate) fn blocking_auth_overload_response() -> JsonResponse {
     error(failure.identity_status(), &failure.client_message())
 }
 
+/// Profile-specific expiry behavior for unsigned fake custom tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FakeCustomTokenExpiry {
+    /// Match the Firebase Auth Emulator, which ignores `exp` on fake custom tokens.
+    Ignore,
+    /// Retain production-like expiry validation for strict local tests.
+    Reject,
+}
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
@@ -387,6 +396,8 @@ pub struct AuthState {
     /// Whether refresh tokens keep the official emulator's stateless lifecycle. The strict
     /// profile may revoke them to model the production security boundary more closely.
     pub stateless_refresh_tokens: bool,
+    /// Expiry policy for unsigned fake custom tokens.
+    pub fake_custom_token_expiry: FakeCustomTokenExpiry,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
     pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
@@ -1610,6 +1621,7 @@ fn privilege_check(
 struct DispatchOptions {
     totp_extension_enabled: bool,
     stateless_refresh_tokens: bool,
+    fake_custom_token_expiry: FakeCustomTokenExpiry,
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -1617,6 +1629,7 @@ impl From<&AuthState> for DispatchOptions {
         Self {
             totp_extension_enabled: state.totp_extension_enabled,
             stateless_refresh_tokens: state.stateless_refresh_tokens,
+            fake_custom_token_expiry: state.fake_custom_token_expiry,
         }
     }
 }
@@ -1651,7 +1664,12 @@ fn dispatch(
         }
         Handler::SignUp => sign_up(store, body, at, None),
         Handler::SignInWithPassword => sign_in_with_password(store, body, at),
-        Handler::SignInWithCustomToken => sign_in_with_custom_token(store, body, at),
+        Handler::SignInWithCustomToken => sign_in_with_custom_token(
+            store,
+            body,
+            at,
+            options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
+        ),
         Handler::Lookup => lookup(store, body, at, false),
         Handler::Update | Handler::AdminUpdate => {
             update(store, body, at, options.stateless_refresh_tokens)
@@ -2241,6 +2259,7 @@ fn sign_in_with_custom_token(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
+    reject_expired: bool,
 ) -> JsonResponse {
     let Some(token) = str_field(body, "token").filter(|t| !t.is_empty()) else {
         return error(400, "MISSING_CUSTOM_TOKEN");
@@ -2280,10 +2299,11 @@ fn sign_in_with_custom_token(
     };
     let uid = uid.as_str();
     let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if payload
-        .get("exp")
-        .and_then(JsonValue::as_i64)
-        .is_some_and(|exp| now_secs >= exp)
+    if reject_expired
+        && payload
+            .get("exp")
+            .and_then(JsonValue::as_i64)
+            .is_some_and(|exp| now_secs >= exp)
     {
         return error(400, "TOKEN_EXPIRED");
     }

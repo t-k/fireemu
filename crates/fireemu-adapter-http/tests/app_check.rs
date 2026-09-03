@@ -116,6 +116,8 @@ fn auth_state(app_check: Option<Arc<AppCheckState>>) -> Arc<AuthState> {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check_policy: None,
         tenancy: None,
         app_check,

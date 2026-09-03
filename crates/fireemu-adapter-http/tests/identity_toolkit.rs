@@ -278,6 +278,8 @@ fn state() -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -294,6 +296,8 @@ fn state_with_totp_extension() -> AuthState {
 fn strict_state() -> AuthState {
     AuthState {
         stateless_refresh_tokens: false,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         ..state()
     }
 }
@@ -2162,9 +2166,7 @@ fn admin_numeric_valid_since_accepts_the_i64_boundaries() {
 
 fn custom_token(uid: &str, claims: &Value, exp: i64) -> String {
     use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
-    use fireemu_core_auth::jwt::base64url_encode;
-    let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
-    let payload = json!({
+    custom_token_from_payload(&json!({
         "aud": CUSTOM_TOKEN_AUDIENCE,
         "iss": "firebase-auth-emulator@example.com",
         "sub": "firebase-auth-emulator@example.com",
@@ -2172,7 +2174,12 @@ fn custom_token(uid: &str, claims: &Value, exp: i64) -> String {
         "claims": claims,
         "iat": exp - 3600,
         "exp": exp,
-    });
+    }))
+}
+
+fn custom_token_from_payload(payload: &Value) -> String {
+    use fireemu_core_auth::jwt::base64url_encode;
+    let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
     let payload = base64url_encode(payload.to_string().as_bytes());
     format!("{header}.{payload}.")
 }
@@ -2212,7 +2219,8 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     let decoded =
         fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
     assert!(decoded.payload.get("role").is_none());
-    // Reserved claims, wrong audience and expired tokens are rejected.
+    // Reserved claims and a wrong audience are rejected. The Firebase Auth Emulator accepts
+    // expired fake custom tokens; strict profile retains expiry validation.
     let reserved = custom_token("custom-2", &json!({"sub": "x"}), now_secs + 3600);
     assert_eq!(
         post(
@@ -2231,7 +2239,8 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
             &json!({"token": expired})
         )
         .0,
-        400
+        200,
+        "the Firebase Auth Emulator accepts expired fake custom tokens"
     );
     assert_eq!(
         post(
@@ -2246,7 +2255,7 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         &s,
         "POST",
         &format!("{ADMIN}/accounts:lookup"),
-        &json!({"localId": ["custom-2", "custom-3"]}),
+        &json!({"localId": ["custom-2"]}),
     );
     assert_eq!(
         looked.get("users").map(|u| u.as_array().map(Vec::len)),
@@ -2304,6 +2313,8 @@ fn a_before_create_only_hook_is_not_called_for_before_sign_in_after_success() {
 
 #[test]
 fn legacy_v3_custom_token_exchange_matches_v1() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+
     let s = state();
     let now_secs = 1_788_004_860;
     let token = custom_token("legacy-custom", &json!({"role": "tester"}), now_secs + 3600);
@@ -2324,18 +2335,57 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
     );
 
     let expired = custom_token("legacy-expired", &json!({}), now_secs - 1);
-    let (status, _) = post(
+    let (status, body) = post(
         &s,
         "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
         &json!({"token": expired}),
     );
-    assert_eq!(status, 400);
-    assert!(s
-        .store
-        .lock()
-        .unwrap()
-        .user_by_id("legacy-expired")
-        .is_none());
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["localId"], "legacy-expired");
+
+    for invalid in [
+        "not-a-token".to_owned(),
+        custom_token_from_payload(&json!({
+            "aud": "another-audience",
+            "uid": "wrong-audience",
+        })),
+    ] {
+        let (status, body) = post(
+            &s,
+            "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
+            &json!({"token": invalid}),
+        );
+        assert_eq!(status, 400, "{body}");
+    }
+
+    let other_issuer = custom_token_from_payload(&json!({
+        "aud": CUSTOM_TOKEN_AUDIENCE,
+        "iss": "firebase-adminsdk@other-project.iam.gserviceaccount.com",
+        "sub": "firebase-adminsdk@other-project.iam.gserviceaccount.com",
+        "uid": "legacy-other-issuer",
+        "iat": now_secs,
+        "exp": now_secs + 3600,
+    }));
+    let (status, body) = post(
+        &s,
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
+        &json!({"token": other_issuer}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["localId"], "legacy-other-issuer");
+}
+
+#[test]
+fn strict_profile_rejects_an_expired_custom_token() {
+    let s = strict_state();
+    let expired = custom_token("strict-expired", &json!({}), 1_788_004_859);
+    let (status, body) = post(
+        &s,
+        "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
+        &json!({"token": expired}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "TOKEN_EXPIRED");
 }
 
 #[test]

@@ -91,6 +91,8 @@ fn auth_jwks_uses_the_signers_precomputed_structured_key() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -155,6 +157,8 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -345,6 +349,8 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -418,6 +424,8 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,
         tenancy: None,

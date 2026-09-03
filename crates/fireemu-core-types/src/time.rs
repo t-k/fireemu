@@ -142,6 +142,51 @@ impl fmt::Display for LogicalInstant {
     }
 }
 
+/// Days since 1970-01-01 for a proleptic Gregorian civil date.
+#[must_use]
+pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    let month_prime = (month + 9) % 12;
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// Proleptic Gregorian `(year, month, day)` for a day count since 1970-01-01.
+#[must_use]
+pub fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let (year, month, day) = civil_from_days_wide(i128::from(days));
+    (
+        i64::try_from(year).unwrap_or(if year.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }),
+        i64::try_from(month).unwrap_or(1),
+        i64::try_from(day).unwrap_or(1),
+    )
+}
+
+fn civil_from_days_wide(days: i128) -> (i128, i128, i128) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    };
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
 /// Error returned when an instant cannot be represented as RFC 3339.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeFormatError {
@@ -329,7 +374,7 @@ mod rfc3339 {
             });
         }
 
-        let days = days_from_civil(i64::from(year), month, day);
+        let days = super::days_from_civil(i64::from(year), i64::from(month), i64::from(day));
         let local_secs = days * SECS_PER_DAY
             + i64::from(hour) * 3_600
             + i64::from(minute) * 60
@@ -343,7 +388,7 @@ mod rfc3339 {
         let nanos = instant.0.rem_euclid(NANOS_PER_SEC);
         let days = secs.div_euclid(i128::from(SECS_PER_DAY));
         let sod = secs.rem_euclid(i128::from(SECS_PER_DAY));
-        let (year, month, day) = civil_from_days(days);
+        let (year, month, day) = super::civil_from_days_wide(days);
         if !(0..=9_999).contains(&year) {
             return Err(TimeFormatError { year });
         }
@@ -371,45 +416,16 @@ mod rfc3339 {
         }
     }
 
-    /// Howard Hinnant's `days_from_civil`: days since 1970-01-01 for a proleptic Gregorian date.
-    fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-        let y = if m <= 2 { y - 1 } else { y };
-        let era = y.div_euclid(400);
-        let yoe = y.rem_euclid(400);
-        let m = i64::from(m);
-        let d = i64::from(d);
-        let mp = (m + 9) % 12;
-        let doy = (153 * mp + 2) / 5 + d - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        era * 146_097 + doe - 719_468
-    }
-
-    /// Inverse of `days_from_civil`.
-    fn civil_from_days(z: i128) -> (i128, i128, i128) {
-        let z = z + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z.rem_euclid(146_097);
-        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-        let y = yoe + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = doy - (153 * mp + 2) / 5 + 1;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 };
-        (if m <= 2 { y + 1 } else { y }, m, d)
-    }
-
     #[cfg(test)]
     mod tests {
-        use super::*;
-
         #[test]
         fn civil_round_trip_over_wide_range() {
             for days in (-800_000..800_000).step_by(37) {
-                let (y, m, d) = civil_from_days(days);
-                let back = days_from_civil(
+                let (y, m, d) = super::super::civil_from_days_wide(days);
+                let back = super::super::days_from_civil(
                     i64::try_from(y).unwrap(),
-                    u32::try_from(m).unwrap(),
-                    u32::try_from(d).unwrap(),
+                    i64::try_from(m).unwrap(),
+                    i64::try_from(d).unwrap(),
                 );
                 assert_eq!(i128::from(back), days);
             }

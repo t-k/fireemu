@@ -57,7 +57,7 @@ use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::ImportedObject;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{civil_from_days, LogicalInstant};
 use fireemu_export_publication::PublicationStage;
 
 use crate::config::Selection;
@@ -1324,17 +1324,6 @@ fn rfc3339_instant(text: Option<&str>) -> Option<LogicalInstant> {
     text.and_then(|text| LogicalInstant::parse_rfc3339(text).ok())
 }
 
-/// Days since the Unix epoch (Howard Hinnant's civil-from-days, inverted).
-#[cfg(test)]
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
 /// `2026-08-30T15:58:33.194Z` from a logical instant.
 fn rfc3339_text(at: LogicalInstant) -> String {
     let nanos = at.as_nanos();
@@ -1351,19 +1340,6 @@ fn rfc3339_text(at: LogicalInstant) -> String {
         (rest % 3_600) / 60,
         rest % 60
     )
-}
-
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2229,12 +2205,12 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::{
-        civil_from_days, days_from_civil, decode_base32, decode_base64,
-        enforce_storage_object_count, imported_instant, may_overwrite, read_inside_budgeted,
-        read_inside_limited, rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
+        civil_from_days, decode_base32, decode_base64, enforce_storage_object_count,
+        imported_instant, may_overwrite, read_inside_budgeted, read_inside_limited,
+        rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
         IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
-    use fireemu_core_types::time::LogicalInstant;
+    use fireemu_core_types::time::{days_from_civil, LogicalInstant};
     use fireemu_export_publication::PublicationStage;
 
     #[cfg(unix)]

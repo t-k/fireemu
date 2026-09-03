@@ -208,6 +208,75 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
 }
 
 #[test]
+fn blocking_auth_with_fifty_thousand_sessions_copies_only_changed_registries() {
+    let store = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(43),
+        TotpPolicy::default(),
+    )));
+    let mut state = AuthState {
+        store: Arc::clone(&store),
+        clock: Arc::new(Mutex::new(VirtualClock::new(START))),
+        wall_clock: None,
+        totp_extension_enabled: false,
+        barrier: None,
+        events: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
+        control_token: None,
+        registry: None,
+        allow_routed_projects: false,
+        stateless_refresh_tokens: true,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        app_check: None,
+        app_check_policy: None,
+        tenancy: None,
+    };
+    let created = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=k",
+        &json!({"email": "cow@example.com", "password": "password1"}),
+    );
+    assert_eq!(created.status, 200, "{}", created.body);
+    let before = {
+        let mut store = store.lock().unwrap();
+        let uid = store
+            .user_by_email("cow@example.com")
+            .unwrap()
+            .local_id
+            .clone();
+        for _ in 0..50_000 {
+            store.issue_refresh_token(&uid, START).unwrap();
+        }
+        store.clone()
+    };
+    state.blocking = Some(Arc::new(PassthroughBlockingHook));
+
+    let signed_in = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=k",
+        &json!({
+            "email": "cow@example.com",
+            "password": "password1",
+            "returnSecureToken": true,
+        }),
+    );
+
+    assert_eq!(signed_in.status, 200, "{}", signed_in.body);
+    assert_eq!(
+        store
+            .lock()
+            .unwrap()
+            .transient_registries_shared_with(&before),
+        3,
+        "the blocking request may detach only refresh sessions and their owner index"
+    );
+}
+
+#[test]
 fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
     let signer = RsaSigner::from_seed(7).unwrap();
     assert_eq!(signer.alg(), "RS256");

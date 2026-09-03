@@ -33,3 +33,7 @@ subtle = "2"
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "auth_signing_parallel"
+harness = false

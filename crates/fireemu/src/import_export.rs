@@ -1461,8 +1461,9 @@ fn export_firestore(
         create_private_dir(&partition_dir)
             .map_err(|e| ArtifactError::new("firestore", &partition_dir, e))?;
 
-        let output = write_output(documents);
         let output_path = partition_dir.join(OUTPUT_FILE);
+        let output = write_output(documents)
+            .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?;
         write_private_file(&output_path, &output)
             .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
 

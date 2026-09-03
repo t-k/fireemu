@@ -27,14 +27,10 @@ fn document(levels: usize) -> ExportDocument {
 
 #[test]
 fn values_nested_to_the_firestore_limit_decode_and_deeper_ones_are_refused() {
-    let ok = write_output(&[document(MAX_VALUE_DEPTH)]);
+    let ok = write_output(&[document(MAX_VALUE_DEPTH)]).expect("the limit itself encodes");
     assert_eq!(read_output(&ok).expect("the limit itself decodes").len(), 1);
-    let too_deep = write_output(&[document(MAX_VALUE_DEPTH + 1)]);
-    let err = read_output(&too_deep).expect_err("one level past the limit is refused");
+    let err = write_output(&[document(MAX_VALUE_DEPTH + 1)])
+        .expect_err("one level past the limit is refused before recursive encoding");
     assert!(err.to_string().contains("nested more than"), "{err}");
-    // The decoder stops at the bound, so how deep the file really goes no longer matters
-    // (the writer is not the attack surface: it serializes values Firestore's own nesting
-    // limit already bounds, so a deeper document is only ever produced here by hand).
-    let deeper = write_output(&[document(MAX_VALUE_DEPTH + 40)]);
-    assert!(read_output(&deeper).is_err());
+    assert!(write_output(&[document(MAX_VALUE_DEPTH + 40)]).is_err());
 }

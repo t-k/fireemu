@@ -329,7 +329,8 @@ fn every_document_the_official_emulator_wrote_survives_a_fireemu_re_encode() {
     // recorded corpus deliberately holds one.
     for dir in ["official-multiproduct", "official-firestore-values"] {
         for document in documents(dir) {
-            let re_encoded = fireemu_core_export::firestore::write_entity(&document);
+            let re_encoded = fireemu_core_export::firestore::write_entity(&document)
+                .expect("the official document re-encodes");
             let decoded = fireemu_core_export::firestore::read_entity(&re_encoded)
                 .expect("the re-encoded entity decodes");
             assert_eq!(
@@ -345,7 +346,7 @@ fn every_document_the_official_emulator_wrote_survives_a_fireemu_re_encode() {
 #[test]
 fn a_written_output_file_is_read_back_by_the_reader_that_reads_the_official_one() {
     let docs = documents("official-multiproduct");
-    let written = write_output(&docs);
+    let written = write_output(&docs).expect("the output encodes");
     assert_eq!(
         format!("{:?}", read_output(&written).expect("it decodes")),
         format!("{docs:?}")

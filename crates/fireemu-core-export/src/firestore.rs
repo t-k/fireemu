@@ -366,18 +366,25 @@ pub fn read_output(bytes: &[u8]) -> Result<Vec<ExportDocument>, FirestoreExportE
 }
 
 /// Encodes an `output-*` file holding `documents`, in the given order.
-#[must_use]
-pub fn write_output(documents: &[ExportDocument]) -> Vec<u8> {
+pub fn write_output(documents: &[ExportDocument]) -> Result<Vec<u8>, FirestoreExportError> {
     let mut writer = LogWriter::new();
     for document in documents {
-        writer.push(&write_entity(document));
+        writer.push(&write_entity(document)?);
     }
-    writer.finish()
+    Ok(writer.finish())
 }
 
 /// Encodes one document as an `EntityProto` record.
-#[must_use]
-pub fn write_entity(document: &ExportDocument) -> Vec<u8> {
+pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExportError> {
+    if document
+        .fields
+        .values()
+        .any(|value| value.nesting_depth() as usize > MAX_VALUE_DEPTH)
+    {
+        return shape(format!(
+            "an exported value is nested more than {MAX_VALUE_DEPTH} levels deep, which no Firestore document can be"
+        ));
+    }
     let mut w = Writer::new();
     w.write_message(ENTITY_KEY, |key| {
         key.write_string(REFERENCE_APP, &format!("{APP_PREFIX}{}", document.project));
@@ -408,7 +415,7 @@ pub fn write_entity(document: &ExportDocument) -> Vec<u8> {
     w.write_message(ENTITY_GROUP, |group| {
         write_path(group, &document.path[..document.path.len().min(1)]);
     });
-    w.finish()
+    Ok(w.finish())
 }
 
 fn write_path(w: &mut Writer, path: &[(String, String)]) {
@@ -877,7 +884,7 @@ mod tests {
 
     fn round_trip(value: Value) -> Value {
         let doc = document(field("f", value));
-        let encoded = write_entity(&doc);
+        let encoded = write_entity(&doc).expect("the entity encodes");
         let decoded = read_entity(&encoded).expect("the entity decodes");
         assert_eq!(decoded.project, "demo-export");
         assert_eq!(decoded.path, doc.path);
@@ -993,7 +1000,8 @@ mod tests {
     #[test]
     fn a_document_with_no_fields_round_trips() {
         let doc = document(BTreeMap::new());
-        let decoded = read_entity(&write_entity(&doc)).expect("the entity decodes");
+        let encoded = write_entity(&doc).expect("the entity encodes");
+        let decoded = read_entity(&encoded).expect("the entity decodes");
         assert_eq!(decoded, doc);
     }
 
@@ -1009,7 +1017,8 @@ mod tests {
             ],
             fields: field("leaf", Value::Boolean(true)),
         };
-        assert_eq!(read_entity(&write_entity(&doc)).expect("decodes"), doc);
+        let encoded = write_entity(&doc).expect("the entity encodes");
+        assert_eq!(read_entity(&encoded).expect("decodes"), doc);
     }
 
     #[test]
@@ -1021,7 +1030,7 @@ mod tests {
                 fields: field("i", Value::Integer(i)),
             })
             .collect();
-        let bytes = write_output(&docs);
+        let bytes = write_output(&docs).expect("the output encodes");
         assert_eq!(read_output(&bytes).expect("the output decodes"), docs);
     }
 
@@ -1032,14 +1041,14 @@ mod tests {
             path: Vec::new(),
             fields: BTreeMap::new(),
         };
-        let bytes = write_entity(&doc);
+        let bytes = write_entity(&doc).expect("the entity encodes");
         assert!(read_entity(&bytes).is_err());
     }
 
     #[test]
     fn a_truncated_entity_is_refused() {
         let doc = document(field("f", Value::String("x".repeat(40))));
-        let mut bytes = write_entity(&doc);
+        let mut bytes = write_entity(&doc).expect("the entity encodes");
         bytes.truncate(bytes.len() - 5);
         assert!(read_entity(&bytes).is_err());
     }

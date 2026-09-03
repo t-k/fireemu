@@ -164,50 +164,13 @@ fn update_watch_hash(hash: u64, byte: u8) -> u64 {
     hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
 }
 
-fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, String> {
-    fn visit(root: &Path, path: &Path, ignores: &[String], hash: &mut u64) -> Result<(), String> {
-        let mut entries = std::fs::read_dir(path)
-            .map_err(|e| format!("watch {}: {e}", path.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("watch {}: {e}", path.display()))?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let child = entry.path();
-            let relative = child.strip_prefix(root).unwrap_or(&child);
-            if ignored_reload_path(relative, ignores) {
-                continue;
-            }
-            let kind = entry
-                .file_type()
-                .map_err(|e| format!("watch {}: {e}", child.display()))?;
-            if kind.is_dir() {
-                visit(root, &child, ignores, hash)?;
-            } else if kind.is_file() {
-                for byte in relative.to_string_lossy().bytes().chain([0]) {
-                    *hash = update_watch_hash(*hash, byte);
-                }
-                let bytes =
-                    std::fs::read(&child).map_err(|e| format!("watch {}: {e}", child.display()))?;
-                for byte in bytes {
-                    *hash = update_watch_hash(*hash, byte);
-                }
-            } else if kind.is_symlink() {
-                return Err(format!(
-                    "watch {}: symbolic links outside node_modules are not supported",
-                    child.display()
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    visit(root, root, ignores, &mut hash)?;
-    Ok(hash)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FunctionsSourceStamp(u64);
+struct FunctionsSourceStamp {
+    change_guard: u64,
+    content_signature: u64,
+    tracked_files: u64,
+    tracked_bytes: u64,
+}
 
 fn hash_source_stamp_entry(
     mut hash: u64,
@@ -239,7 +202,7 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
         root: &Path,
         directory: &Path,
         ignores: &[String],
-        hash: &mut u64,
+        stamp: &mut FunctionsSourceStamp,
     ) -> Result<(), String> {
         let mut entries = std::fs::read_dir(directory)
             .map_err(|error| format!("watch {}: {error}", directory.display()))?
@@ -256,7 +219,7 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
                 .file_type()
                 .map_err(|error| format!("watch {}: {error}", child.display()))?;
             if kind.is_dir() {
-                visit(root, &child, ignores, hash)?;
+                visit(root, &child, ignores, stamp)?;
             } else if kind.is_file() {
                 let metadata = entry
                     .metadata()
@@ -275,8 +238,8 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
                 };
                 #[cfg(not(unix))]
                 let (changed_seconds, changed_nanos) = (0, 0);
-                *hash = hash_source_stamp_entry(
-                    *hash,
+                stamp.change_guard = hash_source_stamp_entry(
+                    stamp.change_guard,
                     relative.to_string_lossy().as_bytes(),
                     metadata.len(),
                     modified,
@@ -284,6 +247,14 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
                     changed_nanos,
                     &bytes,
                 );
+                for byte in relative.to_string_lossy().bytes().chain([0]) {
+                    stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
+                }
+                for byte in &bytes {
+                    stamp.content_signature = update_watch_hash(stamp.content_signature, *byte);
+                }
+                stamp.tracked_files = stamp.tracked_files.saturating_add(1);
+                stamp.tracked_bytes = stamp.tracked_bytes.saturating_add(metadata.len());
             } else if kind.is_symlink() {
                 return Err(format!(
                     "watch {}: symbolic links outside node_modules are not supported",
@@ -294,9 +265,14 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
         Ok(())
     }
 
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    visit(root, root, ignores, &mut hash)?;
-    Ok(FunctionsSourceStamp(hash))
+    let mut stamp = FunctionsSourceStamp {
+        change_guard: 0xcbf2_9ce4_8422_2325,
+        content_signature: 0xcbf2_9ce4_8422_2325,
+        tracked_files: 0,
+        tracked_bytes: 0,
+    };
+    visit(root, root, ignores, &mut stamp)?;
+    Ok(stamp)
 }
 
 async fn functions_source_stamp_off_thread(
@@ -306,17 +282,6 @@ async fn functions_source_stamp_off_thread(
     let root = root.to_owned();
     let ignores = ignores.to_owned();
     tokio::task::spawn_blocking(move || functions_source_stamp(&root, &ignores))
-        .await
-        .map_err(|error| format!("watch worker failed: {error}"))?
-}
-
-async fn functions_source_signature_off_thread(
-    root: &Path,
-    ignores: &[String],
-) -> Result<u64, String> {
-    let root = root.to_owned();
-    let ignores = ignores.to_owned();
-    tokio::task::spawn_blocking(move || functions_source_signature(&root, &ignores))
         .await
         .map_err(|error| format!("watch worker failed: {error}"))?
 }
@@ -474,7 +439,6 @@ async fn supervise_codebase_reloads(
 ) {
     let root = PathBuf::from(&codebase.source);
     let mut observed_stamp = functions_source_stamp(&root, &codebase.ignore).ok();
-    let mut observed_signature = functions_source_signature(&root, &codebase.ignore).ok();
     loop {
         tokio::time::sleep(Duration::from_millis(750)).await;
         let Some(runtime) = weak_runtime.upgrade() else {
@@ -500,17 +464,8 @@ async fn supervise_codebase_reloads(
         if stable_stamp != next_stamp {
             continue;
         }
-        let stable = match functions_source_signature_off_thread(&root, &codebase.ignore).await {
-            Ok(signature) => signature,
-            Err(reason) => {
-                eprintln!(
-                    "warning: functions[{}] reload scan failed: {reason}",
-                    codebase.codebase
-                );
-                continue;
-            }
-        };
-        if observed_signature == Some(stable) {
+        let stable = stable_stamp.content_signature;
+        if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable) {
             observed_stamp = Some(stable_stamp);
             continue;
         }
@@ -524,16 +479,17 @@ async fn supervise_codebase_reloads(
                 continue;
             }
         };
-        let (snapshot_signature, current_signature) = tokio::join!(
-            functions_source_signature_off_thread(&snapshot, &codebase.ignore),
-            functions_source_signature_off_thread(&root, &codebase.ignore),
+        let (snapshot_stamp, current_stamp) = tokio::join!(
+            functions_source_stamp_off_thread(&snapshot, &codebase.ignore),
+            functions_source_stamp_off_thread(&root, &codebase.ignore),
         );
-        if snapshot_signature.as_ref() != Ok(&stable) || current_signature.as_ref() != Ok(&stable) {
+        if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+            || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+        {
             remove_snapshot_off_thread(snapshot).await;
             continue;
         }
         observed_stamp = Some(stable_stamp);
-        observed_signature = Some(stable);
         let mut staged = codebase.clone();
         staged.source = snapshot.to_string_lossy().into_owned();
         match start_codebase(&cfg, &staged, &hosts, &secret, callable_trusted_protocol).await {
@@ -2438,10 +2394,9 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_signature, functions_source_stamp, hash_source_stamp_entry,
-        node_engine_matches, package_node_engine, parse_node_version,
-        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        update_watch_hash, NodeInstallation, BLOCKING_AUTH_DEADLINE,
+        functions_source_stamp, hash_source_stamp_entry, node_engine_matches, package_node_engine,
+        parse_node_version, provision_function_pubsub_resources, select_node_installation,
+        snapshot_functions_source, update_watch_hash, NodeInstallation, BLOCKING_AUTH_DEADLINE,
         MAX_BLOCKING_AUTH_RESPONSE_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
@@ -2835,24 +2790,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("lib")).unwrap();
         std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::create_dir_all(root.join("generated")).unwrap();
         std::fs::write(root.join("lib/index.js"), "export const value = 1;").unwrap();
         std::fs::write(root.join(".env"), "VALUE=one\n").unwrap();
         std::fs::write(root.join("node_modules/pkg/index.js"), "ignored").unwrap();
-        let first = functions_source_signature(&root, &[]).unwrap();
-        let first_stamp = functions_source_stamp(&root, &[]).unwrap();
+        std::fs::write(root.join("generated/bundle.js"), "ignored output").unwrap();
+        let ignores = vec!["generated".to_owned()];
+        let first_stamp = functions_source_stamp(&root, &ignores).unwrap();
+        let first = first_stamp.content_signature;
+        assert_eq!(first_stamp.tracked_files, 2);
+        assert_eq!(
+            first_stamp.tracked_bytes,
+            u64::try_from("export const value = 1;".len() + "VALUE=one\n".len()).unwrap()
+        );
 
         std::fs::write(root.join("node_modules/pkg/index.js"), "still ignored").unwrap();
-        assert_eq!(functions_source_signature(&root, &[]).unwrap(), first);
-        assert_eq!(functions_source_stamp(&root, &[]).unwrap(), first_stamp);
-        // Same-size rewrites must invalidate the cheap stamp even when a tool restores mtime.
-        // POSIX change time supplies that signal; non-POSIX builds hash content in the stamp.
+        std::fs::write(root.join("generated/bundle.js"), "still ignored output").unwrap();
+        assert_eq!(
+            functions_source_stamp(&root, &ignores).unwrap(),
+            first_stamp
+        );
+        // The stamp hashes content on every platform, so metadata aliasing cannot hide a
+        // same-size rewrite.
         std::fs::write(root.join("lib/index.js"), "export const value = 2;").unwrap();
-        let build_changed = functions_source_signature(&root, &[]).unwrap();
+        let build_changed = functions_source_stamp(&root, &ignores)
+            .unwrap()
+            .content_signature;
         assert_ne!(build_changed, first);
-        assert_ne!(functions_source_stamp(&root, &[]).unwrap(), first_stamp);
+        assert_ne!(
+            functions_source_stamp(&root, &ignores).unwrap(),
+            first_stamp
+        );
         std::fs::write(root.join(".env"), "VALUE=two\n").unwrap();
         assert_ne!(
-            functions_source_signature(&root, &[]).unwrap(),
+            functions_source_stamp(&root, &ignores)
+                .unwrap()
+                .content_signature,
             build_changed
         );
 
@@ -2884,6 +2857,37 @@ mod tests {
     }
 
     #[test]
+    fn source_stamp_reads_real_same_size_rewrites_with_restored_mtime() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-real-metadata-alias-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("index.js");
+        std::fs::write(&source, b"before").unwrap();
+        let original = std::fs::metadata(&source).unwrap();
+        let original_mtime = original.modified().unwrap();
+        let first = functions_source_stamp(&root, &[]).unwrap();
+
+        std::fs::write(&source, b"after!").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original_mtime))
+            .unwrap();
+        let rewritten = std::fs::metadata(&source).unwrap();
+        assert_eq!(rewritten.len(), original.len());
+        assert_eq!(rewritten.modified().unwrap(), original_mtime);
+
+        let second = functions_source_stamp(&root, &[]).unwrap();
+        assert_ne!(second.content_signature, first.content_signature);
+        assert_ne!(second, first);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn reload_snapshot_keeps_one_exact_source_generation() {
         let root = std::env::temp_dir().join(format!(
             "fireemu-functions-snapshot-test-{}",
@@ -2894,7 +2898,9 @@ mod tests {
         std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
         std::fs::write(root.join("lib/index.js"), "export const value = 'before';").unwrap();
         std::fs::write(root.join("node_modules/pkg/index.js"), "dependency").unwrap();
-        let expected = functions_source_signature(&root, &[]).unwrap();
+        let expected = functions_source_stamp(&root, &[])
+            .unwrap()
+            .content_signature;
 
         let snapshot = snapshot_functions_source(&root, &[]).unwrap();
         #[cfg(unix)]
@@ -2906,15 +2912,24 @@ mod tests {
             );
         }
         assert_eq!(
-            functions_source_signature(&snapshot, &[]).unwrap(),
+            functions_source_stamp(&snapshot, &[])
+                .unwrap()
+                .content_signature,
             expected
         );
         std::fs::write(root.join("lib/index.js"), "export const value = 'after';").unwrap();
         assert_eq!(
-            functions_source_signature(&snapshot, &[]).unwrap(),
+            functions_source_stamp(&snapshot, &[])
+                .unwrap()
+                .content_signature,
             expected
         );
-        assert_ne!(functions_source_signature(&root, &[]).unwrap(), expected);
+        assert_ne!(
+            functions_source_stamp(&root, &[])
+                .unwrap()
+                .content_signature,
+            expected
+        );
 
         std::fs::remove_dir_all(snapshot).unwrap();
         assert!(root.join("node_modules/pkg/index.js").is_file());

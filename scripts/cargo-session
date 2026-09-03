@@ -70,7 +70,14 @@ fi
 
 export CARGO_TARGET_DIR=$target_dir
 if [[ "$mode" == loom ]]; then
-  if [[ -n ${RUSTFLAGS-} ]]; then
+  if [[ ${CARGO_ENCODED_RUSTFLAGS+x} ]]; then
+    encoded_separator=$'\x1f'
+    if [[ -n $CARGO_ENCODED_RUSTFLAGS ]]; then
+      export CARGO_ENCODED_RUSTFLAGS="${CARGO_ENCODED_RUSTFLAGS}${encoded_separator}--cfg${encoded_separator}loom"
+    else
+      export CARGO_ENCODED_RUSTFLAGS="--cfg${encoded_separator}loom"
+    fi
+  elif [[ -n ${RUSTFLAGS-} ]]; then
     export RUSTFLAGS="$RUSTFLAGS --cfg loom"
   else
     export RUSTFLAGS='--cfg loom'

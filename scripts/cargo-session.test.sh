@@ -36,6 +36,29 @@ normal_env=$($wrapper --session alpha --mode normal -- sh -c 'printf "%s|%s" "$C
 loom_env=$(RUSTFLAGS='-D warnings' "$wrapper" --session alpha --mode loom -- sh -c 'printf "%s|%s" "$CARGO_TARGET_DIR" "$RUSTFLAGS"')
 [[ "$loom_env" == "$loom|-D warnings --cfg loom" ]] || fail "loom environment was not isolated: $loom_env"
 
+owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-cargo-session-test.XXXXXX")
+trap 'rm -rf -- "$owned_temp"' EXIT
+mkdir "$owned_temp/src"
+cat >"$owned_temp/Cargo.toml" <<'EOF'
+[package]
+name = "cargo-session-contract"
+version = "0.0.0"
+edition = "2021"
+[workspace]
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(inherited_encoded)', 'cfg(loom)'] }
+EOF
+cat >"$owned_temp/src/lib.rs" <<'EOF'
+#[cfg(not(inherited_encoded))]
+compile_error!("the inherited encoded rustflag was lost");
+#[cfg(not(loom))]
+compile_error!("the loom cfg was lost");
+EOF
+encoded_rustflags=$(printf '%s\037%s' '--cfg' 'inherited_encoded')
+CARGO_ENCODED_RUSTFLAGS=$encoded_rustflags "$wrapper" \
+  --session cargo-session-contract --mode loom -- \
+  cargo check --quiet --offline --manifest-path "$owned_temp/Cargo.toml"
+
 set +e
 "$wrapper" --session alpha -- sh -c 'exit 37'
 status=$?

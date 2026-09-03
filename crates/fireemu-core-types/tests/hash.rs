@@ -2,6 +2,7 @@
 
 use fireemu_core_types::hash::{
     base64_standard, base64_url_safe, crc32c, hex_lower, hex_upper, md5, sha256, Crc32c, Md5,
+    Sha256,
 };
 
 fn patterned_bytes(len: usize) -> Vec<u8> {
@@ -38,18 +39,33 @@ fn incremental_digests_equal_one_shot_digests_across_chunk_boundaries() {
     let bytes = patterned_bytes(3 * 1024 * 1024);
     let mut md5_state = Md5::new();
     let mut crc32c_state = Crc32c::new();
+    let mut sha256_state = Sha256::new();
     for chunk in bytes.chunks(997) {
         md5_state.update(chunk);
         crc32c_state.update(chunk);
+        sha256_state.update(chunk);
     }
 
     assert_eq!(md5_state.finalize(), md5(&bytes));
     assert_eq!(crc32c_state.finalize(), crc32c(&bytes));
+    assert_eq!(sha256_state.finalize(), sha256(&bytes));
 
     let mut short_updates = Md5::new();
     short_updates.update(b"abcde");
     short_updates.update(b"fgh");
     assert_eq!(short_updates.finalize(), md5(b"abcdefgh"));
+}
+
+#[test]
+fn incremental_sha256_matches_one_shot_at_padding_boundaries() {
+    for len in [0, 55, 56, 63, 64, 65] {
+        let bytes = patterned_bytes(len);
+        let mut digest = Sha256::new();
+        for chunk in bytes.chunks(7) {
+            digest.update(chunk);
+        }
+        assert_eq!(digest.finalize(), sha256(&bytes), "SHA-256 length {len}");
+    }
 }
 
 #[test]

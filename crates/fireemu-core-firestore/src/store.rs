@@ -18,9 +18,9 @@ use fireemu_core_limits::evaluate::{
 };
 use fireemu_core_limits::model::LimitMaximum;
 use fireemu_core_limits::plan::FirestorePlanProfile;
+use fireemu_core_types::hash::Sha256;
 use fireemu_core_types::ids::{CollectionId, DocumentId};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
-use sha2::{Digest, Sha256};
 
 use crate::field_path::FieldPath;
 use crate::limits;
@@ -705,22 +705,22 @@ impl QueryObserver {
         self.rows = self.rows.saturating_add(1);
         for segment in document.path.resource_name_segments() {
             self.digest.update(
-                u64::try_from(segment.len())
+                &u64::try_from(segment.len())
                     .unwrap_or(u64::MAX)
                     .to_be_bytes(),
             );
             self.digest.update(segment.as_bytes());
         }
-        self.digest.update(document.version.value().to_be_bytes());
+        self.digest.update(&document.version.value().to_be_bytes());
     }
 
-    fn finish(mut self) -> QueryObservation {
+    fn finish(self) -> QueryObservation {
         let mut framed = Sha256::new();
-        framed.update(self.rows.to_be_bytes());
-        framed.update(self.digest.finalize_reset());
+        framed.update(&self.rows.to_be_bytes());
+        framed.update(&self.digest.finalize());
         QueryObservation {
             rows: self.rows,
-            digest: framed.finalize().into(),
+            digest: framed.finalize(),
         }
     }
 }

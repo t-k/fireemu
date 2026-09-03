@@ -710,7 +710,6 @@ dependencies = [
  "fireemu-core-limits",
  "fireemu-core-types",
  "proptest",
- "sha2",
 ]
 
 [[package]]

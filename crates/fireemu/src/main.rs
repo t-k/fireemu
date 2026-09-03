@@ -12,7 +12,7 @@
 //!          [--only auth,firestore,storage,functions,pubsub,appcheck]
 //!          [--firestore-port 8080] [--http-port 9099] [--storage-port 9199]
 //!          [--functions-port 5001] [--functions <dir>] [--ui-port 4000] [--hub-port 4400]
-//!          [--inspect-functions [port]] [--log-verbosity quiet|info|debug]
+//!          [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug]
 //!          [--import <dir>] [--export-on-exit [dir]]
 //! ```
 //!
@@ -70,10 +70,10 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|info|debug] [--import <dir>] [--export-on-exit [dir]]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
+    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
     ExitCode::from(2)
 }
 
@@ -159,7 +159,7 @@ enum Verbosity {
 impl Verbosity {
     fn parse(text: &str) -> Option<Self> {
         match text.to_ascii_lowercase().as_str() {
-            "quiet" => Some(Self::Quiet),
+            "quiet" | "silent" => Some(Self::Quiet),
             "info" => Some(Self::Info),
             "debug" => Some(Self::Debug),
             _ => None,
@@ -252,7 +252,7 @@ fn main() -> ExitCode {
             }
             Err(e) => fail(&e),
         },
-        Some("up" | "emulators:start") => match parse_options(&args[1..]) {
+        Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
             Ok(options) => run(options, None),
             Err(e) => fail(&e),
         },
@@ -267,7 +267,7 @@ fn main() -> ExitCode {
         Some("doctor") => doctor::run(),
         // The manifest describes the behaviour of one profile, so the command takes the same
         // options the daemon does and reports the profile they resolve to.
-        Some("capabilities") => match parse_options(&args[1..]) {
+        Some("capabilities") => match parse_options(&args[1..], OptionContext::Start) {
             Ok(options) => {
                 println!(
                     "{}",
@@ -427,7 +427,7 @@ fn parse_exec(args: &[String]) -> Result<(Options, ExecPlan), CliError> {
     if command.is_empty() {
         return Err(CliError::usage("exec needs a command after --"));
     }
-    let options = parse_options(&args[..split])?;
+    let options = parse_options(&args[..split], OptionContext::Exec)?;
     Ok((options, ExecPlan { command }))
 }
 
@@ -468,6 +468,8 @@ struct RawOptions {
     pubsub_port: Option<u16>,
     hub_port: Option<u16>,
     ui_port: Option<u16>,
+    /// The official `emulators:exec --ui` opt-in.
+    ui: bool,
     logging_port: Option<u16>,
     functions_source: Option<String>,
     inspect_functions: Option<u16>,
@@ -491,8 +493,14 @@ enum ExportOnExit {
 /// The Node inspector port `--inspect-functions` defaults to, as in the official CLI.
 const DEFAULT_INSPECT_PORT: u16 = 9229;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OptionContext {
+    Start,
+    Exec,
+}
+
 #[allow(clippy::too_many_lines)]
-fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
+fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptions, CliError> {
     let mut raw = RawOptions::default();
     let mut i = 0;
     while i < args.len() {
@@ -555,6 +563,10 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
                 raw.ui_port = Some(port_arg(args, i, "--ui-port")?);
                 i += 2;
             }
+            "--ui" if context == OptionContext::Exec => {
+                raw.ui = true;
+                i += 1;
+            }
             "--hub-port" => {
                 raw.hub_port = Some(port_arg(args, i, "--hub-port")?);
                 i += 2;
@@ -589,7 +601,7 @@ fn parse_raw_options(args: &[String]) -> Result<RawOptions, CliError> {
                     .ok_or_else(|| CliError::usage("--log-verbosity needs a value"))?;
                 raw.verbosity = Verbosity::parse(value).ok_or_else(|| {
                     CliError::usage(format!(
-                        "--log-verbosity {value:?} is not one of quiet, info, debug"
+                        "--log-verbosity {value:?} is not one of quiet, silent, info, debug"
                     ))
                 })?;
                 i += 2;
@@ -699,8 +711,8 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
 }
 
-fn parse_options(args: &[String]) -> Result<Options, CliError> {
-    let raw = parse_raw_options(args)?;
+fn parse_options(args: &[String], context: OptionContext) -> Result<Options, CliError> {
+    let raw = parse_raw_options(args, context)?;
     let only = raw.only.clone().unwrap_or_default();
     // `--config` carries either the canonical configuration or a firebase.json.
     let (mut cfg, firebase_from_config) = match &raw.config_path {
@@ -754,6 +766,11 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
         cfg.functions_loaded.clear();
     }
     apply_port_overrides(&mut cfg, &raw);
+    // The official `emulators:exec` does not start the UI unless `--ui` is present. An
+    // explicit fireemu `--ui-port` remains a stronger local override, including port zero.
+    if context == OptionContext::Exec && raw.ui_port.is_none() {
+        cfg.ui_enabled = raw.ui;
+    }
     if let Some(dir) = raw.functions_source {
         // `--functions <dir>` names exactly one codebase, whatever `firebase.json` declares.
         cfg.functions_source = Some(dir);
@@ -762,10 +779,10 @@ fn parse_options(args: &[String]) -> Result<Options, CliError> {
     if let Some(port) = raw.inspect_functions {
         apply_inspect_functions(&mut cfg, port)?;
     }
-    // The UI listener is configured through its own module, and only when a port was asked
-    // for: without one it keeps its best-effort default, where a busy 4000 disables the UI
-    // instead of failing the run.
-    if cfg.ui_addr_explicit {
+    // The UI listener is configured through its own module when a port was asked for or when
+    // exec must apply its official opt-in default. Start otherwise keeps the best-effort
+    // default, where a busy 4000 disables the UI instead of failing the run.
+    if cfg.ui_addr_explicit || context == OptionContext::Exec {
         ui::set_port(if cfg.ui_enabled {
             cfg.ui_addr
                 .rsplit_once(':')

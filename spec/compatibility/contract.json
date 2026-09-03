@@ -1577,7 +1577,7 @@
       "officialDefaultPort": null,
       "officialTraits": [],
       "state": "claimed",
-      "decision": "Active supported surface: the orchestration behaviour of firebase-tools 15.28.2 (configuration schema, service selection, environment export, command names, exit codes, and the import / export artifacts) is reproduced for the served products; the --ui flag remains open.",
+      "decision": "Active supported surface: the orchestration behaviour of firebase-tools 15.28.2 (configuration schema, service selection, environment export, command names, exit codes, the exec-only --ui opt-in, and the import / export artifacts) is reproduced for the served products; remaining gaps are listed explicitly.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/schema/firebase-config.json"
@@ -1588,7 +1588,7 @@
       ],
       "notes": [],
       "gaps": [
-        "--ui",
+        "fireemu requires the exec child command after -- instead of accepting the official CLI's one positional shell script string",
         "per-database Firestore rules and per-target Storage rules are reported, not loaded",
         "an export carries the Firestore, Auth and Storage sections only: Realtime Database and SQL Connect are deferred products and their sections are refused rather than written"
       ],

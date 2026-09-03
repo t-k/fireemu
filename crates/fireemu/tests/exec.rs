@@ -511,6 +511,65 @@ fn an_unselected_service_binds_no_listener_at_all() {
 }
 
 #[test]
+fn the_emulator_ui_is_opt_in_for_exec_and_stops_with_the_command() {
+    for (label, ui_flag, ui_port_flag, expected) in [
+        ("default", false, false, "closed"),
+        ("ui-flag", true, false, "open"),
+        ("explicit-fireemu-port", false, true, "open"),
+    ] {
+        let ui_port = free_port();
+        let dir = scratch(&format!("ui-{label}"));
+        let config = dir.join("fireemu.json");
+        std::fs::write(
+            &config,
+            format!(
+                r#"{{
+  "schemaVersion": 1,
+  "daemon": {{
+    "firestorePort": 0,
+    "httpPort": 0,
+    "storagePort": 0,
+    "hubPort": 0,
+    "uiPort": {ui_port},
+    "loggingPort": 0
+  }}
+}}"#
+            ),
+        )
+        .unwrap();
+        let probe = dir.join("probe.txt");
+        let script = format!(
+            "(exec 3<>/dev/tcp/127.0.0.1/{ui_port}) 2>/dev/null && echo open > {} || echo closed > {}",
+            probe.display(),
+            probe.display()
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+        command.args(["exec", "--config", config.to_str().unwrap()]);
+        if ui_flag {
+            command.arg("--ui");
+        }
+        if ui_port_flag {
+            command.arg("--ui-port").arg(ui_port.to_string());
+        }
+        let output = command
+            .args(["--", "bash", "-c", &script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read_to_string(&probe).unwrap().trim(), expected);
+        assert!(
+            refused(&format!("127.0.0.1:{ui_port}")),
+            "{label}: the UI listener survived exec"
+        );
+    }
+}
+
+#[test]
 fn every_selection_exports_exactly_the_canonical_variables_of_its_services() {
     // The official `firebase emulators:exec` names, and only those: no
     // FIREBASE_DATABASE_EMULATOR_HOST (fireemu serves no Realtime Database) and no

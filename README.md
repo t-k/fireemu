@@ -91,7 +91,7 @@ npx fireemu exec -- npm test
 npx fireemu exec -- npx vitest run
 ```
 
-`exec` returns the child command's exit status and forwards SIGINT and SIGTERM. It also exports the emulator host variables used by Firebase SDKs.
+`exec` returns the child command's exit status and forwards SIGINT and SIGTERM. It also exports the emulator host variables used by Firebase SDKs. Like the official command, it starts without the Emulator UI unless `--ui` is present. The fireemu-specific `--ui-port <port>` remains an explicit UI override, and port `0` disables it.
 
 The official CLI spellings are available as aliases:
 

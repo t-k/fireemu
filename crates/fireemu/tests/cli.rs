@@ -435,7 +435,12 @@ fn a_bad_import_or_export_target_fails_before_anything_starts() {
 
 #[test]
 fn log_verbosity_decides_whether_the_banner_is_printed() {
-    for (level, banner) in [("quiet", false), ("info", true), ("DEBUG", true)] {
+    for (level, banner) in [
+        ("quiet", false),
+        ("SILENT", false),
+        ("info", true),
+        ("DEBUG", true),
+    ] {
         let out = exec_with(&["--log-verbosity", level], &["true"]);
         assert!(out.status.success(), "{level}: {}", stderr(&out));
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -451,7 +456,14 @@ fn log_verbosity_decides_whether_the_banner_is_printed() {
     // An unknown level is a usage error, not a silent fallback.
     let out = exec_with(&["--log-verbosity", "loud"], &["true"]);
     assert_eq!(out.status.code(), Some(2));
-    assert!(stderr(&out).contains("quiet, info, debug"));
+    assert!(stderr(&out).contains("quiet, silent, info, debug"));
+}
+
+#[test]
+fn ui_is_an_exec_only_official_flag() {
+    let out = run(&["up", "--ui"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("unknown argument --ui"));
 }
 
 #[test]

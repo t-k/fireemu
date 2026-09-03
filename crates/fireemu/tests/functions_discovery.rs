@@ -40,6 +40,10 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn exec(source: &Path, config: Option<&Path>) -> Output {
+    exec_command(source, config, &["true"])
+}
+
+fn exec_command(source: &Path, config: Option<&Path>, command: &[&str]) -> Output {
     let mut args: Vec<String> = vec!["exec".into()];
     for a in [
         "--firestore-port",
@@ -66,7 +70,7 @@ fn exec(source: &Path, config: Option<&Path>) -> Output {
     args.push("--functions".into());
     args.push(source.display().to_string());
     args.push("--".into());
-    args.push("true".into());
+    args.extend(command.iter().map(|argument| (*argument).to_owned()));
     Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args(&args)
         .stdin(Stdio::null())
@@ -174,6 +178,72 @@ fn blocking_identity_exports_are_discovered_as_served_triggers() {
     assert_eq!(out.status.code(), Some(0), "{err}");
     assert!(!err.contains("function ignored"), "{err}");
     assert!(!err.contains("blocking identity event"), "{err}");
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn a_disconnected_never_settling_handler_is_destroyed_with_its_runner() {
+    let script = r#"
+set -eu
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+pid_url="http://$FIREEMU_FUNCTIONS_HOST/$GOOGLE_CLOUD_PROJECT/us-central1/fxPid"
+signup_url="http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key"
+before=$(curl -fsS "$pid_url")
+if curl -sS --max-time 0.2 -o /dev/null \
+  -H 'content-type: application/json' \
+  -d '{"email":"disconnected@example.test","password":"hunter22"}' \
+  "$signup_url"; then
+  echo 'the never-settling request unexpectedly completed' >&2
+  exit 1
+else
+  test "$?" = 28
+fi
+status=$(curl -sS --max-time 2 -o "$scratch/response.json" -w '%{http_code}' \
+  -H 'content-type: application/json' \
+  -d '{"email":"overloaded@example.test","password":"hunter22"}' \
+  "$signup_url")
+printf 'blocking-status=%s blocking-body=' "$status"
+cat "$scratch/response.json"
+printf '\n'
+test "$status" = 503
+grep -q 'BLOCKING_FUNCTION_ERROR_RESPONSE' "$scratch/response.json"
+after=""
+attempt=0
+while [ "$attempt" -lt 100 ]; do
+  attempt=$((attempt + 1))
+  after=$(curl -fsS "$pid_url" 2>/dev/null || true)
+  if [ -n "$after" ] && [ "$after" != "$before" ]; then
+    break
+  fi
+  sleep 0.1
+done
+printf 'runner-before=%s\nrunner-after=%s\n' "$before" "$after"
+test -n "$after"
+test "$after" != "$before"
+"#;
+    let source = fixture("blocking-auth-never-settles");
+    let config = source.join("fireemu.json");
+    let out = exec_command(&source, Some(&config), &["sh", "-c", script]);
+    let err = stderr(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout was:\n{stdout}\nstderr:\n{err}"
+    );
+    let pids = stdout
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("runner-before=")
+                .or_else(|| line.strip_prefix("runner-after="))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(pids.len(), 2, "stdout was:\n{stdout}\nstderr:\n{err}");
+    assert_ne!(
+        pids[0], pids[1],
+        "the disconnected SDK Promise survived in the original runner"
+    );
 }
 
 #[tokio::test]

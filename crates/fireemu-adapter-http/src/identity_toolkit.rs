@@ -268,8 +268,22 @@ impl BlockingFunctionFailure {
 
 /// Synchronous bridge invoked before an Auth create or sign-in commit.
 pub trait AuthBlockingHook: Send + Sync {
-    /// Runs one before-create or before-sign-in function. An error rejects and rolls back the
-    /// Auth request; the value is the validated blocking response for future field updates.
+    /// Maximum number of Auth requests that may occupy the synchronous bridge, including
+    /// requests waiting for another mutation in the same namespace. The HTTP adapter applies
+    /// its own hard ceiling before scheduling blocking work.
+    fn request_concurrency_limit(&self) -> usize {
+        64
+    }
+
+    /// Whether this bridge has a function for `event`. In-process hooks default to both
+    /// supported events; runtime-backed bridges override this from their discovered manifest.
+    fn handles(&self, _event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+        true
+    }
+
+    /// Runs one before-create or before-sign-in function. Implementations must return within a
+    /// finite deadline. An error rejects and rolls back the Auth request; the value is the
+    /// validated blocking response for future field updates.
     fn invoke(
         &self,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
@@ -289,6 +303,54 @@ pub trait AuthBlockingHook: Send + Sync {
     ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke(event, user).map(Some)
     }
+}
+
+fn handler_may_invoke_blocking_auth(
+    blocking: &dyn AuthBlockingHook,
+    handler: routes::Handler,
+) -> bool {
+    use fireemu_core_functions::manifest::BlockingAuthEvent::{BeforeCreate, BeforeSignIn};
+    let may_create = matches!(
+        handler,
+        routes::Handler::SignUp
+            | routes::Handler::SignInWithCustomToken
+            | routes::Handler::SignInWithEmailLink
+            | routes::Handler::SignInWithPhoneNumber
+            | routes::Handler::SignInWithIdp
+    );
+    let may_sign_in = matches!(
+        handler,
+        routes::Handler::SignUp
+            | routes::Handler::SignInWithPassword
+            | routes::Handler::SignInWithCustomToken
+            | routes::Handler::SignInWithEmailLink
+            | routes::Handler::SignInWithPhoneNumber
+            | routes::Handler::SignInWithIdp
+            | routes::Handler::MfaSignInFinalize
+    );
+    (may_create && blocking.handles(BeforeCreate))
+        || (may_sign_in && blocking.handles(BeforeSignIn))
+}
+
+pub(crate) fn request_may_invoke_blocking_auth(
+    blocking: Option<&dyn AuthBlockingHook>,
+    method: &str,
+    path: &str,
+) -> bool {
+    let Some(blocking) = blocking else {
+        return false;
+    };
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    matches!(
+        routes::resolve(method, path),
+        routes::Resolution::Matched { route, .. }
+            if handler_may_invoke_blocking_auth(blocking, route.handler)
+    )
+}
+
+pub(crate) fn blocking_auth_overload_response() -> JsonResponse {
+    let failure = BlockingFunctionFailure::unhandled();
+    error(failure.identity_status(), &failure.client_message())
 }
 
 /// Shared Auth state behind the REST surface.
@@ -1003,7 +1065,10 @@ fn dispatch_with_blocking_hook(
     let mut blocking_responses = Vec::new();
     if response.status == 200 {
         if let Some(uid) = uid {
-            if is_new {
+            if is_new
+                && blocking
+                    .handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate)
+            {
                 let value = {
                     let user = candidate
                         .user(&uid)
@@ -1035,7 +1100,10 @@ fn dispatch_with_blocking_hook(
                     ));
                 }
             }
-            if signed_in {
+            if signed_in
+                && blocking
+                    .handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn)
+            {
                 let value = {
                     let user = candidate
                         .user(&uid)
@@ -1266,14 +1334,19 @@ pub fn handle_with(
     // Serialize the first request for an unregistered compatibility namespace. The gate is
     // acquired before choosing a store, so two concurrent creates cannot both publish a
     // different authoritative store for the same project.
-    let routed_gate = routed_project.and_then(|project| {
-        state.registry.as_ref().and_then(|registry| {
-            registry
-                .store_for(project)
-                .is_none()
-                .then(|| registry.operation_gate(project, None))
-        })
-    });
+    let routed_gate = if let Some(project) = routed_project {
+        match state.registry.as_ref() {
+            Some(registry) if registry.store_for(project).is_none() => {
+                let Some(gate) = registry.operation_gate(project, None) else {
+                    return error(500, "INTERNAL");
+                };
+                Some(gate)
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     let _routed_operation = match routed_gate.as_ref() {
         Some(gate) => match gate.lock() {
             Ok(operation) => Some(operation),
@@ -1304,20 +1377,32 @@ pub fn handle_with(
             Err(response) => return response,
         }
     };
-    let operation_gate = if state.blocking.is_some()
-        && matches!(
-            resolution,
-            routes::Resolution::Matched { route, .. }
-                if route.class == routes::RouteClass::EndUser
-        ) {
+    let (store_project, store_tenant) = {
         let Ok(store) = store_arc.lock() else {
             return error(500, "INTERNAL");
         };
-        let gate = state.registry.as_ref().map_or_else(
-            || state.operation_gate.clone(),
-            |registry| registry.operation_gate(store.project_id(), store.tenant_id()),
-        );
-        drop(store);
+        (
+            store.project_id().to_owned(),
+            store.tenant_id().map(str::to_owned),
+        )
+    };
+    let operation_gate = if state.blocking.as_deref().is_some_and(|blocking| {
+        matches!(
+            resolution,
+            routes::Resolution::Matched { route, .. }
+                if handler_may_invoke_blocking_auth(blocking, route.handler)
+        )
+    }) {
+        let gate = match state.registry.as_ref() {
+            Some(registry) => {
+                let Some(gate) = registry.operation_gate(&store_project, store_tenant.as_deref())
+                else {
+                    return error(500, "INTERNAL");
+                };
+                gate
+            }
+            None => state.operation_gate.clone(),
+        };
         Some(gate)
     } else {
         None
@@ -1329,6 +1414,12 @@ pub fn handle_with(
         },
         None => None,
     };
+    let tenant_metadata = store_tenant.as_deref().and_then(|tenant| {
+        state
+            .registry
+            .as_ref()
+            .and_then(|registry| registry.tenant_metadata(&store_project, tenant))
+    });
     // The functions runtime belongs to the default session: only its users' lifecycle
     // events reach the Auth triggers.
     let default_store = Arc::ptr_eq(&store_arc, &state.store);
@@ -1395,8 +1486,10 @@ pub fn handle_with(
     if tenant.is_some() && store.tenant_id() != tenant {
         return error(404, "TENANT_NOT_FOUND");
     }
-    if route.class == routes::RouteClass::EndUser {
-        if let Some(denial) = tenant_policy_denial(state, route.handler, &store, body) {
+    if route.class == routes::RouteClass::EndUser && store_tenant.is_some() {
+        if let Some(denial) =
+            tenant_policy_denial_with_metadata(route.handler, tenant_metadata.as_ref(), body)
+        {
             return denial;
         }
     }
@@ -1450,10 +1543,14 @@ pub fn handle_with(
         return sign_response_tokens(response, signer.as_deref());
     }
     let signer = store.signer_arc();
-    let response = if let Some(blocking) = &state.blocking {
+    let response = if let Some(blocking) = state
+        .blocking
+        .as_deref()
+        .filter(|blocking| handler_may_invoke_blocking_auth(*blocking, route.handler))
+    {
         dispatch_with_blocking_hook(
             state,
-            blocking.as_ref(),
+            blocking,
             route.handler,
             &store_arc,
             store,
@@ -1873,20 +1970,6 @@ fn tenant_management(
         }
         _ => error(500, "INTERNAL"),
     }
-}
-
-fn tenant_policy_denial(
-    state: &AuthState,
-    handler: routes::Handler,
-    store: &AuthStore,
-    body: &Value,
-) -> Option<JsonResponse> {
-    let tenant = store.tenant_id()?;
-    let metadata = state
-        .registry
-        .as_ref()
-        .and_then(|registry| registry.tenant_metadata(store.project_id(), tenant));
-    tenant_policy_denial_with_metadata(handler, metadata.as_ref(), body)
 }
 
 fn tenant_policy_denial_with_metadata(
@@ -5007,6 +5090,48 @@ fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> V
 mod tests {
     use super::*;
 
+    struct AllBlockingHooks;
+    struct BeforeCreateOnlyHook;
+    struct NoBlockingHooks;
+
+    impl AuthBlockingHook for AllBlockingHooks {
+        fn invoke(
+            &self,
+            _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+            _user: &fireemu_core_auth::store::UserRecord,
+        ) -> Result<Value, BlockingFunctionFailure> {
+            unreachable!("the route classifier never invokes a hook")
+        }
+    }
+
+    impl AuthBlockingHook for NoBlockingHooks {
+        fn handles(&self, _event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+            false
+        }
+
+        fn invoke(
+            &self,
+            _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+            _user: &fireemu_core_auth::store::UserRecord,
+        ) -> Result<Value, BlockingFunctionFailure> {
+            unreachable!("a bridge without matching exports is never invoked")
+        }
+    }
+
+    impl AuthBlockingHook for BeforeCreateOnlyHook {
+        fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+            event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate
+        }
+
+        fn invoke(
+            &self,
+            _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+            _user: &fireemu_core_auth::store::UserRecord,
+        ) -> Result<Value, BlockingFunctionFailure> {
+            unreachable!("the route classifier never invokes a hook")
+        }
+    }
+
     #[test]
     fn blocking_function_codes_match_the_functions_sdk_and_identity_statuses() {
         for (code, name, function_status) in [
@@ -5069,6 +5194,57 @@ mod tests {
             None
         );
         assert_eq!(BlockingFunctionCode::from_canonical_name("OK"), None);
+    }
+
+    #[test]
+    fn the_blocking_auth_lane_covers_only_routes_that_can_reach_a_configured_hook() {
+        let blocking = AllBlockingHooks;
+        for (method, path, expected) in [
+            (
+                "POST",
+                "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+                true,
+            ),
+            (
+                "POST",
+                "/identitytoolkit.googleapis.com/v1/accounts:lookup?key=fake",
+                false,
+            ),
+            (
+                "POST",
+                "/identitytoolkit.googleapis.com/v1/projects/demo-app/accounts:lookup",
+                false,
+            ),
+            ("GET", "/", false),
+            ("POST", "/emulator/v1/projects/demo-app/accounts", false),
+            (
+                "GET",
+                "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+                false,
+            ),
+            ("POST", "/unknown", false),
+        ] {
+            assert_eq!(
+                request_may_invoke_blocking_auth(Some(&blocking), method, path),
+                expected,
+                "{method} {path}"
+            );
+        }
+        assert!(!request_may_invoke_blocking_auth(
+            Some(&NoBlockingHooks),
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+        ));
+        assert!(request_may_invoke_blocking_auth(
+            Some(&BeforeCreateOnlyHook),
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
+        ));
+        assert!(!request_may_invoke_blocking_auth(
+            Some(&BeforeCreateOnlyHook),
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+        ));
     }
 
     #[test]

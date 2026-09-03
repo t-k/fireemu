@@ -1,5 +1,6 @@
 //! Identity Toolkit flows through the pure handlers, plus one socket-level smoke test.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
@@ -40,6 +41,83 @@ type BlockingNamespaceCall = (String, Option<String>, BlockingAuthEvent);
 
 struct NamespaceRecordingHook {
     calls: Arc<Mutex<Vec<BlockingNamespaceCall>>>,
+}
+
+struct DelayedBlockingHook {
+    entered: AtomicUsize,
+    active: AtomicUsize,
+    limit: usize,
+    release: AtomicBool,
+}
+
+struct BeforeCreateOnlyRejectingHook;
+
+struct BeforeCreateOnlySuccessfulHook(Arc<Mutex<Vec<BlockingAuthEvent>>>);
+
+struct DelayedHookRelease(Arc<DelayedBlockingHook>);
+
+impl Drop for DelayedHookRelease {
+    fn drop(&mut self) {
+        self.0.release.store(true, Ordering::SeqCst);
+    }
+}
+
+impl AuthBlockingHook for DelayedBlockingHook {
+    fn request_concurrency_limit(&self) -> usize {
+        self.limit
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        if active > self.limit {
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            return Err(BlockingFunctionFailure::unhandled());
+        }
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        while !self.release.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(json!({}))
+    }
+}
+
+impl AuthBlockingHook for BeforeCreateOnlyRejectingHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeCreate
+    }
+
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        assert_eq!(event, BlockingAuthEvent::BeforeCreate);
+        Err(BlockingFunctionFailure::from_function(
+            BlockingFunctionCode::PermissionDenied,
+            "new identities are disabled",
+        )
+        .unwrap())
+    }
+}
+
+impl AuthBlockingHook for BeforeCreateOnlySuccessfulHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeCreate
+    }
+
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        self.0.lock().unwrap().push(event);
+        Ok(json!({}))
+    }
 }
 
 impl AuthBlockingHook for NamespaceRecordingHook {
@@ -998,6 +1076,228 @@ async fn auth_root_is_a_bounded_readiness_route() {
     server.abort();
 }
 
+#[test]
+#[allow(clippy::too_many_lines)]
+fn delayed_blocking_auth_requests_do_not_exhaust_tokio_workers() {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    fn request(addr: SocketAddr, request: &str, timeout: Duration) -> std::io::Result<String> {
+        let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+        stream.write_all(request.as_bytes())?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        Ok(response)
+    }
+
+    fn signup_request(email: &str) -> String {
+        let body = json!({"email": email, "password": "hunter22"}).to_string();
+        format!(
+            "POST {V1}/accounts:signUp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hook = Arc::new(DelayedBlockingHook {
+        entered: AtomicUsize::new(0),
+        active: AtomicUsize::new(0),
+        limit: 2,
+        release: AtomicBool::new(false),
+    });
+    let _release = DelayedHookRelease(hook.clone());
+    let mut auth = state();
+    auth.blocking = Some(hook.clone());
+    let store = auth.store.clone();
+    let server = runtime.spawn(fireemu_adapter_http::server::serve(
+        listener,
+        Arc::new(auth),
+    ));
+
+    let first = std::thread::spawn(move || {
+        request(
+            addr,
+            &signup_request("first@example.test"),
+            Duration::from_secs(2),
+        )
+    });
+    let entered_deadline = Instant::now() + Duration::from_secs(1);
+    while hook.entered.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < entered_deadline,
+            "the first request did not enter the blocking hook"
+        );
+        std::thread::yield_now();
+    }
+
+    let (written_tx, written_rx) = std::sync::mpsc::sync_channel(1);
+    let second = std::thread::spawn(move || {
+        let request = signup_request("second@example.test");
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        written_tx.send(()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).map(|_| response)
+    });
+    written_rx.recv().unwrap();
+    std::thread::sleep(Duration::from_millis(25));
+
+    let overloaded = request(
+        addr,
+        &signup_request("overloaded@example.test"),
+        Duration::from_millis(100),
+    );
+
+    let readiness = request(
+        addr,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        Duration::from_millis(100),
+    );
+    let lookup = request(
+        addr,
+        &format!(
+            "POST {V1}/accounts:lookup HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        ),
+        Duration::from_millis(100),
+    );
+
+    hook.release.store(true, Ordering::SeqCst);
+    let first = first.join().unwrap().unwrap();
+    let second = second.join().unwrap().unwrap();
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+
+    let readiness = readiness.expect("readiness must remain responsive during blocking hooks");
+    assert!(readiness.starts_with("HTTP/1.1 200"), "{readiness}");
+    let lookup = lookup.expect("non-hooking Auth routes must remain responsive");
+    assert!(lookup.starts_with("HTTP/1.1 400"), "{lookup}");
+    let overloaded = overloaded.expect("surplus Blocking Auth work must fail immediately");
+    assert!(overloaded.starts_with("HTTP/1.1 503"), "{overloaded}");
+    assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+    assert!(second.starts_with("HTTP/1.1 200"), "{second}");
+    let store = store.lock().unwrap();
+    assert!(store.user_by_email("first@example.test").is_some());
+    assert!(store.user_by_email("second@example.test").is_some());
+}
+
+#[test]
+fn a_disconnected_blocking_request_retains_its_ingress_slot_until_the_hook_finishes() {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    fn request(addr: SocketAddr, request: &str) -> std::io::Result<String> {
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))?;
+        stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+        stream.write_all(request.as_bytes())?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        Ok(response)
+    }
+
+    fn signup_request(email: &str) -> String {
+        let body = json!({"email": email, "password": "hunter22"}).to_string();
+        format!(
+            "POST {V1}/accounts:signUp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hook = Arc::new(DelayedBlockingHook {
+        entered: AtomicUsize::new(0),
+        active: AtomicUsize::new(0),
+        limit: 1,
+        release: AtomicBool::new(false),
+    });
+    let _release = DelayedHookRelease(hook.clone());
+    let mut auth = state();
+    auth.blocking = Some(hook.clone());
+    let store = auth.store.clone();
+    let server = runtime.spawn(fireemu_adapter_http::server::serve(
+        listener,
+        Arc::new(auth),
+    ));
+
+    let mut abandoned = TcpStream::connect_timeout(&addr, Duration::from_secs(1)).unwrap();
+    abandoned
+        .write_all(signup_request("disconnected@example.test").as_bytes())
+        .unwrap();
+    let entered_deadline = Instant::now() + Duration::from_secs(1);
+    while hook.entered.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < entered_deadline,
+            "the disconnected request did not enter the blocking hook"
+        );
+        std::thread::yield_now();
+    }
+    drop(abandoned);
+
+    let overloaded = request(addr, &signup_request("overloaded@example.test")).unwrap();
+    assert!(overloaded.starts_with("HTTP/1.1 503"), "{overloaded}");
+    assert!(store
+        .lock()
+        .unwrap()
+        .user_by_email("overloaded@example.test")
+        .is_none());
+
+    hook.release.store(true, Ordering::SeqCst);
+    let completion_deadline = Instant::now() + Duration::from_secs(1);
+    while hook.active.load(Ordering::SeqCst) != 0 {
+        assert!(
+            Instant::now() < completion_deadline,
+            "the disconnected hook did not release its slot"
+        );
+        std::thread::yield_now();
+    }
+    let admitted = loop {
+        let response = request(addr, &signup_request("readmitted@example.test")).unwrap();
+        if response.starts_with("HTTP/1.1 200") {
+            break response;
+        }
+        assert!(
+            Instant::now() < completion_deadline,
+            "the disconnected request did not release its ingress slot: {response}"
+        );
+        std::thread::yield_now();
+    };
+    assert!(admitted.starts_with("HTTP/1.1 200"), "{admitted}");
+    assert!(store
+        .lock()
+        .unwrap()
+        .user_by_email("readmitted@example.test")
+        .is_some());
+
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+}
+
 // ------------------------------------------------------------------------------------------
 // Admin SDK (project-scoped) routes
 // ------------------------------------------------------------------------------------------
@@ -1209,6 +1509,34 @@ fn blocking_auth_rechecks_tenant_disablement_and_deletion_before_commit() {
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], expected);
     }
+}
+
+#[test]
+fn a_poisoned_tenant_operation_gate_fails_closed_before_authentication() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut state = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    let gate = registry
+        .operation_gate("demo-app", Some("customer"))
+        .unwrap();
+    let poison = gate.clone();
+    let _ = std::thread::spawn(move || {
+        let _guard = poison.lock().unwrap();
+        panic!("poison the tenant operation gate");
+    })
+    .join();
+    state.registry = Some(registry);
+    state.blocking = Some(Arc::new(UpdatingBlockingHook));
+
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "customer", "email": "blocked@example.test", "password": "hunter22"}),
+    );
+
+    assert_eq!(status, 500, "{body}");
 }
 
 #[test]
@@ -1925,6 +2253,53 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
         None,
         "rejected tokens create nobody"
     );
+}
+
+#[test]
+fn a_before_create_only_hook_rejects_a_new_custom_token_identity() {
+    let mut state = state();
+    state.blocking = Some(Arc::new(BeforeCreateOnlyRejectingHook));
+    let token = custom_token("blocked-custom", &json!({}), 1_788_008_460);
+
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token, "returnSecureToken": true}),
+    );
+
+    assert_eq!(status, 400, "{body}");
+    assert!(state
+        .store
+        .lock()
+        .unwrap()
+        .user_by_id("blocked-custom")
+        .is_none());
+}
+
+#[test]
+fn a_before_create_only_hook_is_not_called_for_before_sign_in_after_success() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut state = state();
+    state.blocking = Some(Arc::new(BeforeCreateOnlySuccessfulHook(events.clone())));
+    let token = custom_token("one-hook", &json!({}), 1_788_008_460);
+
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token, "returnSecureToken": true}),
+    );
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(*events.lock().unwrap(), [BlockingAuthEvent::BeforeCreate]);
+
+    events.lock().unwrap().clear();
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": token, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(events.lock().unwrap().is_empty());
 }
 
 #[test]

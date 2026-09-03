@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "functions": {
+    "maxGlobalConcurrency": 1
+  }
+}

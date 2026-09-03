@@ -3069,20 +3069,16 @@ impl AuthRegistry {
 
     /// Per-namespace gate used while a blocking function runs without the store lock.
     #[must_use]
-    pub fn operation_gate(&self, project: &str, tenant: Option<&str>) -> Arc<Mutex<()>> {
+    pub fn operation_gate(&self, project: &str, tenant: Option<&str>) -> Option<Arc<Mutex<()>>> {
         let key = (project.to_owned(), tenant.unwrap_or_default().to_owned());
-        self.operation_gates.lock().map_or_else(
-            |_| Arc::new(Mutex::new(())),
-            |mut gates| {
-                gates.retain(|_, gate| gate.strong_count() > 0);
-                if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
-                    return gate;
-                }
-                let gate = Arc::new(Mutex::new(()));
-                gates.insert(key, Arc::downgrade(&gate));
-                gate
-            },
-        )
+        let mut gates = self.operation_gates.lock().ok()?;
+        gates.retain(|_, gate| gate.strong_count() > 0);
+        if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
+            return Some(gate);
+        }
+        let gate = Arc::new(Mutex::new(()));
+        gates.insert(key, Arc::downgrade(&gate));
+        Some(gate)
     }
 
     /// Returns a tenant store, creating its isolated namespace on first use.
@@ -3973,6 +3969,45 @@ mod compatibility_routing_tests {
                 TotpPolicy::default(),
             )
         ));
+    }
+
+    #[test]
+    fn a_poisoned_operation_gate_registry_never_returns_an_unshared_gate() {
+        let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+        let poison = registry.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.operation_gates.lock().unwrap();
+            panic!("poison operation gate registry");
+        })
+        .join()
+        .is_err());
+
+        assert!(registry.operation_gate("demo-app", None).is_none());
+    }
+
+    #[test]
+    fn operation_gates_are_shared_by_namespace_and_prune_inactive_entries() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let default = registry.operation_gate("demo-app", None).unwrap();
+        let same_default = registry.operation_gate("demo-app", None).unwrap();
+        let tenant = registry
+            .operation_gate("demo-app", Some("customer"))
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&default, &same_default));
+        assert!(!Arc::ptr_eq(&default, &tenant));
+        drop(default);
+        drop(same_default);
+        let worker = registry.operation_gate("worker-alpha", None).unwrap();
+
+        let gates = registry.operation_gates.lock().unwrap();
+        assert_eq!(gates.len(), 2);
+        assert!(!gates.contains_key(&("demo-app".to_owned(), String::new())));
+        assert!(gates.contains_key(&("demo-app".to_owned(), "customer".to_owned())));
+        assert!(gates.contains_key(&("worker-alpha".to_owned(), String::new())));
+        drop(gates);
+        drop(tenant);
+        drop(worker);
     }
 
     #[test]

@@ -61,7 +61,7 @@ pub struct HttpTarget {
 }
 
 /// Internal loopback target for an Identity Platform blocking function.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct BlockingAuthTarget {
     /// Exported function name.
     pub function: String,
@@ -71,6 +71,9 @@ pub struct BlockingAuthTarget {
     pub addr: String,
     /// Per-runner proxy secret.
     pub secret: String,
+    runner: Arc<Runner>,
+    revision: u64,
+    owner: usize,
 }
 
 /// Static runtime configuration.
@@ -383,6 +386,7 @@ struct CodebaseGeneration {
     runner: Arc<Runner>,
     spawn: Option<SpawnSpec>,
     cleanup_dir: Option<Arc<CleanupDir>>,
+    blocking_restart_ticket: Option<Arc<()>>,
 }
 
 /// One atomic view of the generation a restart is replacing. Keeping the runner, spawn
@@ -593,6 +597,7 @@ impl FunctionsRuntime {
                         runner: c.runner,
                         spawn: c.spawn,
                         cleanup_dir: CodebaseGeneration::cleanup(c.cleanup_dir),
+                        blocking_restart_ticket: None,
                     }),
                 })
                 .collect(),
@@ -637,6 +642,12 @@ impl FunctionsRuntime {
     #[must_use]
     pub fn project(&self) -> &str {
         &self.config.project
+    }
+
+    /// Configured process-wide Functions concurrency budget.
+    #[must_use]
+    pub fn max_global_concurrency(&self) -> usize {
+        self.config.max_running
     }
 
     /// The current runner of the first codebase.
@@ -714,6 +725,7 @@ impl FunctionsRuntime {
                     runner: spec.runner,
                     spawn: spec.spawn,
                     cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
+                    blocking_restart_ticket: None,
                 },
             )
         };
@@ -1560,8 +1572,10 @@ impl FunctionsRuntime {
             // earlier reset cannot slip in between the bump and the kill. Every codebase's
             // runner goes: a handler still running in any of them must not write into the
             // reset session.
-            for index in 0..self.codebases.len() {
-                self.runner_at(index).kill_now();
+            for codebase in &self.codebases {
+                let mut current = codebase.generation_mut();
+                current.blocking_restart_ticket = None;
+                current.runner.kill_now();
             }
             inner.outbox.discard_stale(epoch);
             inner.payloads.clear();
@@ -1627,7 +1641,6 @@ impl FunctionsRuntime {
             // Retain the immutable source until this spawn either installs or is rejected as
             // stale. A concurrent reload can otherwise drop its last live owner mid-import.
             let _source_generation = source_generation;
-            let _retired_runner = retired_runner;
             match Runner::spawn_spec(&spawn).await {
                 Ok(runner) => {
                     // A later reset supersedes this restart: its own replacement is
@@ -1637,8 +1650,11 @@ impl FunctionsRuntime {
                     let installed = match runtime.inner.lock() {
                         Ok(inner) if Some(inner.epoch) == generation => {
                             let mut current = runtime.codebases[index].generation_mut();
-                            if current.revision == codebase_revision {
+                            if current.revision == codebase_revision
+                                && Arc::ptr_eq(&current.runner, &retired_runner)
+                            {
                                 let old = std::mem::replace(&mut current.runner, Arc::new(runner));
+                                current.blocking_restart_ticket = None;
                                 drop(current);
                                 old.kill_now();
                                 true
@@ -1657,6 +1673,58 @@ impl FunctionsRuntime {
                     }
                 }
                 Err(e) => eprintln!("[functions] runner restart failed: {e}"),
+            }
+        });
+    }
+
+    fn spawn_blocking_auth_restart(
+        self: &Arc<Self>,
+        index: usize,
+        ticket: Arc<()>,
+        respawn: RespawnGeneration,
+    ) {
+        let RespawnGeneration {
+            spawn,
+            cleanup_dir: source_generation,
+            ..
+        } = respawn;
+        let Some(spawn) = spawn else {
+            return;
+        };
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            let _source_generation = source_generation;
+            match Runner::spawn_spec(&spawn).await {
+                Ok(runner) => {
+                    let installed = if let Ok(_inner) = runtime.inner.lock() {
+                        let mut current = runtime.codebases[index].generation_mut();
+                        if current
+                            .blocking_restart_ticket
+                            .as_ref()
+                            .is_some_and(|active| Arc::ptr_eq(active, &ticket))
+                        {
+                            let old = std::mem::replace(&mut current.runner, Arc::new(runner));
+                            current.blocking_restart_ticket = None;
+                            drop(current);
+                            old.kill_now();
+                            true
+                        } else {
+                            runner.kill_now();
+                            false
+                        }
+                    } else {
+                        runner.kill_now();
+                        false
+                    };
+                    if installed {
+                        runtime.wake.notify_one();
+                    }
+                }
+                Err(error) => {
+                    // The matching ticket deliberately remains set: admission stays fail closed
+                    // until an explicit reset or a successful source reload replaces it.
+                    eprintln!("[functions] Blocking Auth runner restart failed: {error}");
+                }
             }
         });
     }
@@ -1919,22 +1987,124 @@ impl FunctionsRuntime {
         })
     }
 
-    /// The blocking function registered for `event`, when one was discovered.
+    /// Whether the immutable manifest contains a Blocking Auth function for `event`.
     #[must_use]
-    pub fn blocking_auth_target(
+    pub fn handles_blocking_auth(
         &self,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
-    ) -> Option<BlockingAuthTarget> {
-        let function = self.manifest.functions.iter().find(|function| {
+    ) -> bool {
+        self.manifest.functions.iter().any(|function| {
             matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
-        })?;
-        let port = self.runner_for(&function.name).hello().http_port?;
-        Some(BlockingAuthTarget {
-            function: function.name.clone(),
-            region: function.region.clone(),
+        })
+    }
+
+    /// Atomically selects a ready Blocking Auth runner generation and reserves one slot in the
+    /// same process-wide budget used by HTTP, scheduled and background Functions work.
+    pub fn try_admit_blocking_auth(
+        self: &Arc<Self>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> Result<Option<(BlockingAuthTarget, BlockingAuthAdmission)>, String> {
+        let Some(spec) = self.manifest.functions.iter().find(|function| {
+            matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
+        }) else {
+            return Ok(None);
+        };
+        let function = spec.name.as_str();
+        let function_capacity = spec.http_capacity(self.config.max_running);
+        let Some(owner) = self.owner.get(function).copied() else {
+            return Err(format!(
+                "Blocking Auth function {function:?} has no codebase owner"
+            ));
+        };
+        let Ok(mut inner) = self.inner.lock() else {
+            return Err("runtime poisoned".into());
+        };
+        let Some(codebase) = self.codebases.get(owner) else {
+            return Err(format!(
+                "Blocking Auth function {function:?} has no codebase"
+            ));
+        };
+        let current = codebase.generation();
+        if current.blocking_restart_ticket.is_some() || !current.runner.is_alive() {
+            return Err(format!(
+                "Blocking Auth function {function} is unavailable while its runner restarts"
+            ));
+        }
+        let Some(port) = current.runner.hello().http_port else {
+            return Err(format!(
+                "Blocking Auth function {function} has no HTTP runner"
+            ));
+        };
+        let running_here = inner
+            .running
+            .values()
+            .filter(|candidate| candidate.as_str() == function)
+            .count();
+        if inner.running.len() >= self.config.max_running || running_here >= function_capacity {
+            return Err(format!(
+                "function {function} is at its concurrency limit; retry later"
+            ));
+        }
+        inner.next_event = inner.next_event.saturating_add(1);
+        let key = format!("blocking-auth-{}", inner.next_event);
+        inner.running.insert(key.clone(), function.to_owned());
+        let target = BlockingAuthTarget {
+            function: function.to_owned(),
+            region: spec.region.clone(),
             addr: format!("127.0.0.1:{port}"),
             secret: self.config.runner_secret.clone(),
-        })
+            runner: current.runner.clone(),
+            revision: current.revision,
+            owner,
+        };
+        drop(current);
+        drop(inner);
+        Ok(Some((
+            target,
+            BlockingAuthAdmission {
+                runtime: self.clone(),
+                key,
+            },
+        )))
+    }
+
+    /// Claims one restart for the exact failed runner generation. Later failures from that
+    /// generation observe the in-progress ticket and cannot spawn another process.
+    pub fn restart_runner_after_blocking_failure(
+        self: &Arc<Self>,
+        target: &BlockingAuthTarget,
+    ) -> bool {
+        let Ok(inner) = self.inner.lock() else {
+            return false;
+        };
+        let Some(codebase) = self.codebases.get(target.owner) else {
+            return false;
+        };
+        let mut current = codebase.generation_mut();
+        if current.revision != target.revision
+            || !Arc::ptr_eq(&current.runner, &target.runner)
+            || current.blocking_restart_ticket.is_some()
+        {
+            return false;
+        }
+        let Some(spawn) = current.spawn.clone() else {
+            return false;
+        };
+        // Pointer identity makes the claim immune to ABA across reset and hot reload: a later
+        // generation can never recreate this exact ticket value.
+        let ticket = Arc::new(());
+        current.blocking_restart_ticket = Some(ticket.clone());
+        let respawn = RespawnGeneration {
+            runner: current.runner.clone(),
+            spawn: Some(spawn),
+            revision: current.revision,
+            cleanup_dir: current.cleanup_dir.clone(),
+        };
+        drop(current);
+        drop(inner);
+        respawn.runner.kill_now();
+        self.spawn_blocking_auth_restart(target.owner, ticket, respawn);
+        true
     }
 
     /// Proxies one HTTP request to the runner, counting it as running work.
@@ -2435,6 +2605,19 @@ fn http_status(code: &str) -> u16 {
 struct Admission<'a> {
     runtime: &'a FunctionsRuntime,
     key: String,
+}
+
+/// Releases a Blocking Auth slot on every completion path, including unwind and transport
+/// failure. The bridge owns this value for the entire synchronous runner exchange.
+pub struct BlockingAuthAdmission {
+    runtime: Arc<FunctionsRuntime>,
+    key: String,
+}
+
+impl Drop for BlockingAuthAdmission {
+    fn drop(&mut self) {
+        self.runtime.release(&self.key);
+    }
 }
 
 impl Drop for Admission<'_> {

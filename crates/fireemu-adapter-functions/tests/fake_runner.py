@@ -40,6 +40,8 @@ class Echo(http.server.BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - the stdlib spelling
         length = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(length) if length else b""
+        if self.path.endswith("/beforeCreate"):
+            time.sleep(int(os.environ.get("FIREEMU_FAKE_BLOCKING_HANG_MS", "0")) / 1000)
         if self.path == "/hold":
             with self.hold_condition:
                 type(self).hold_entries += 1

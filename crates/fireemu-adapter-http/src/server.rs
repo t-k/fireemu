@@ -10,17 +10,20 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use tokio::sync::{oneshot, Semaphore};
 
 use crate::control::{self, ControlState};
 use crate::identity_toolkit::{handle_with, AuthState, RequestHeaders};
 
 /// Maximum accepted request body (spec 33.3 input budget).
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
+const MAX_BLOCKING_AUTH_TASKS: usize = 64;
 
 #[allow(clippy::too_many_lines)]
 async fn respond(
     state: Arc<AuthState>,
     control: Option<Arc<ControlState>>,
+    blocking_auth_slots: Option<Arc<Semaphore>>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().as_str().to_owned();
@@ -187,6 +190,52 @@ async fn respond(
                         Some(c) if control::is_control_path(&path) => {
                             control::handle_with(c, &method, &path, &headers, &json)
                         }
+                        _ if crate::identity_toolkit::request_may_invoke_blocking_auth(
+                            state.blocking.as_deref(),
+                            &method,
+                            &path,
+                        ) =>
+                        {
+                            let permit = blocking_auth_slots
+                                .as_ref()
+                                .and_then(|slots| slots.clone().try_acquire_owned().ok());
+                            let Some(permit) = permit else {
+                                let refusal =
+                                    crate::identity_toolkit::blocking_auth_overload_response();
+                                return Ok(finish(
+                                    refusal.status,
+                                    &refusal.body,
+                                    origin.as_deref(),
+                                    false,
+                                ));
+                            };
+                            let dispatch_state = state.clone();
+                            let dispatch_method = method.clone();
+                            let dispatch_path = path.clone();
+                            let runtime_handle = tokio::runtime::Handle::current();
+                            let (result_tx, result_rx) = oneshot::channel();
+                            let spawned = std::thread::Builder::new()
+                                .name("fireemu-blocking-auth".to_owned())
+                                .spawn(move || {
+                                    let _permit = permit;
+                                    let _runtime_context = runtime_handle.enter();
+                                    let result = handle_with(
+                                        &dispatch_state,
+                                        &dispatch_method,
+                                        &dispatch_path,
+                                        &headers,
+                                        &json,
+                                    );
+                                    let _ = result_tx.send(result);
+                                });
+                            if spawned.is_err() {
+                                crate::identity_toolkit::blocking_auth_overload_response()
+                            } else {
+                                result_rx.await.unwrap_or_else(|_| {
+                                    crate::identity_toolkit::blocking_auth_overload_response()
+                                })
+                            }
+                        }
                         _ => handle_with(&state, &method, &path, &headers, &json),
                     };
                     (r.status, r.body)
@@ -293,13 +342,28 @@ async fn serve_inner(
     state: Arc<AuthState>,
     control: Option<Arc<ControlState>>,
 ) -> std::io::Result<()> {
+    let blocking_auth_slots = state.blocking.as_ref().map(|blocking| {
+        Arc::new(Semaphore::new(
+            blocking
+                .request_concurrency_limit()
+                .clamp(1, MAX_BLOCKING_AUTH_TASKS),
+        ))
+    });
     loop {
         let (stream, _) = listener.accept().await?;
         let state = state.clone();
         let control = control.clone();
+        let blocking_auth_slots = blocking_auth_slots.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
-            let svc = service_fn(move |req| respond(state.clone(), control.clone(), req));
+            let svc = service_fn(move |req| {
+                respond(
+                    state.clone(),
+                    control.clone(),
+                    blocking_auth_slots.clone(),
+                    req,
+                )
+            });
             // Connection errors are per-client; the accept loop keeps running.
             let _ = http1::Builder::new().serve_connection(io, svc).await;
         });

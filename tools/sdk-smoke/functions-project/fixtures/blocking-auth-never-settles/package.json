@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-blocking-auth-never-settles",
+  "private": true,
+  "main": "index.js",
+  "description": "Blocking Identity Platform timeout and runner replacement fixture."
+}

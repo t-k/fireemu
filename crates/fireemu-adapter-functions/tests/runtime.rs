@@ -13,6 +13,7 @@ use fireemu_adapter_grpc::local::CommitEvent;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
 use fireemu_core_firestore::value::Value as FsValue;
+use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
@@ -77,6 +78,16 @@ async fn start_with_policies_and_manifest(
     catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy,
     configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
 ) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with_runtime_options(overlap, catch_up, 4, true, configure).await
+}
+
+async fn start_with_runtime_options(
+    overlap: fireemu_adapter_functions::runtime::OverlapPolicy,
+    catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy,
+    max_running: usize,
+    respawnable: bool,
+    configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -95,7 +106,7 @@ async fn start_with_policies_and_manifest(
             default_bucket: "demo-app.appspot.com".into(),
             location: "nam5".into(),
             session: SessionId::new(7),
-            max_running: 4,
+            max_running,
             retry_attempts: 4,
             max_catch_up_runs: 1000,
             runner_secret: "s".into(),
@@ -105,7 +116,7 @@ async fn start_with_policies_and_manifest(
         },
         clock.clone(),
         Arc::new(runner),
-        Some(spec),
+        respawnable.then_some(spec),
     );
     tokio::spawn(runtime.clone().dispatch_loop());
     (runtime, clock)
@@ -138,6 +149,264 @@ async fn omitted_second_generation_concurrency_admits_two_http_requests() {
     assert_eq!(first.unwrap().status, 204);
     assert_eq!(second.unwrap().status, 204);
     runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn blocking_auth_admission_shares_the_global_functions_budget() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "beforeCreate",
+                "generation": 2,
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }, {
+                "name": "limitedBeforeSignIn",
+                "generation": 2,
+                "concurrency": 1,
+                "platformOptions": {"maxInstances": 1},
+                "trigger": {"type": "blockingAuth", "eventType": "beforeSignIn"}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+    let mut admissions = Vec::new();
+    for _ in 0..4 {
+        let (_, admission) = runtime
+            .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+            .unwrap()
+            .unwrap();
+        admissions.push(admission);
+    }
+    assert!(runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .is_err());
+
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    let refusal = runtime
+        .invoke_http(&target, "POST", "/", &[], &[])
+        .await
+        .unwrap_err();
+    assert!(refusal.contains("concurrency limit"), "{refusal}");
+
+    admissions.pop();
+    let (_, replacement) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(replacement);
+    drop(admissions);
+    let (_, limited) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeSignIn)
+        .unwrap()
+        .unwrap();
+    assert!(runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeSignIn)
+        .is_err());
+    drop(limited);
+    assert!(runtime.is_idle());
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn an_http_invocation_can_exhaust_the_shared_blocking_auth_budget() {
+    let (runtime, _clock) = start_with_runtime_options(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        1,
+        true,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "beforeCreate",
+                "generation": 2,
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let invoking = {
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            runtime
+                .invoke_http(&target, "POST", "/hold", &[], &[])
+                .await
+        })
+    };
+    for _ in 0..100 {
+        if !runtime.is_idle() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !runtime.is_idle(),
+        "the HTTP invocation did not reserve its slot"
+    );
+    assert!(runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .is_err());
+    assert_eq!(invoking.await.unwrap().unwrap().status, 204);
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stuck_blocking_auth_invocation_recycles_its_runner() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "beforeCreate",
+                "generation": 2,
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+    let retired = runtime.runner();
+    let (target, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+    assert!(runtime.restart_runner_after_blocking_failure(&target));
+    assert!(!runtime.restart_runner_after_blocking_failure(&target));
+    assert!(runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .is_err());
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let replacement = runtime.runner();
+        if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {
+            assert!(
+                !runtime.restart_runner_after_blocking_failure(&target),
+                "a retired target must not restart the live replacement"
+            );
+            replacement.shutdown().await;
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the stuck runner was not replaced"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn a_non_respawnable_blocking_runner_is_not_killed_after_transport_failure() {
+    let (runtime, _clock) = start_with_runtime_options(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        1,
+        false,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "beforeCreate",
+                "generation": 2,
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+    let runner = runtime.runner();
+    let (target, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+
+    assert!(!runtime.restart_runner_after_blocking_failure(&target));
+    assert!(runner.is_alive());
+    assert!(Arc::ptr_eq(&runner, &runtime.runner()));
+    runner.kill_now();
+    assert!(
+        runtime
+            .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+            .is_err(),
+        "a dead runner without a restart ticket must fail closed"
+    );
+    runner.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let fast = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let mut slow = fast.clone();
+    slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
+    let initial = Runner::spawn_spec(&fast).await.unwrap();
+    let mut manifest = parse_manifest(initial.hello().manifest.as_ref().unwrap()).unwrap();
+    let mut blocking = parse_manifest(&json!({"functions": [{
+        "name": "beforeCreate",
+        "generation": 2,
+        "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+    }]}))
+    .unwrap();
+    manifest.functions.append(&mut blocking.functions);
+    let runtime = FunctionsRuntime::new(
+        manifest.clone(),
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: SessionId::new(7),
+            max_running: 1,
+            retry_attempts: 1,
+            max_catch_up_runs: 1,
+            runner_secret: "s".into(),
+            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: None,
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        Arc::new(initial),
+        Some(slow),
+    );
+    let (target, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+    assert!(runtime.restart_runner_after_blocking_failure(&target));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let replacement = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
+    let expected = replacement.clone();
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest,
+            runner: replacement,
+            spawn: Some(fast),
+            cleanup_dir: None,
+        })
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(Arc::ptr_eq(&runtime.runner(), &expected));
+    assert!(expected.is_alive());
+    expected.shutdown().await;
 }
 
 #[tokio::test]

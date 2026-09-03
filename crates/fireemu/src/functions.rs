@@ -2021,7 +2021,10 @@ pub fn auth_sink(
 }
 
 /// Identity Platform's synchronous bridge to before-create and before-sign-in functions.
-pub struct BlockingAuthBridge(pub Arc<FunctionsRuntime>);
+pub struct BlockingAuthBridge {
+    runtime: Arc<FunctionsRuntime>,
+    deadline: Duration,
+}
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
 const MAX_BLOCKING_AUTH_RESPONSE_BYTES: u64 = 64 * 1024;
@@ -2176,6 +2179,20 @@ fn blocking_auth_response_failure(
 }
 
 impl BlockingAuthBridge {
+    /// Builds the production bridge with Identity Platform's seven-second deadline.
+    #[must_use]
+    pub fn new(runtime: Arc<FunctionsRuntime>) -> Self {
+        Self {
+            runtime,
+            deadline: BLOCKING_AUTH_DEADLINE,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_deadline(runtime: Arc<FunctionsRuntime>, deadline: Duration) -> Self {
+        Self { runtime, deadline }
+    }
+
     fn invoke_for_namespace(
         &self,
         project: &str,
@@ -2186,7 +2203,7 @@ impl BlockingAuthBridge {
         Option<serde_json::Value>,
         fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
     > {
-        with_blocking_auth_project(self.0.project(), project, || {
+        with_blocking_auth_project(self.runtime.project(), project, || {
             self.invoke_matching_namespace(project, tenant, event, user)
         })
     }
@@ -2203,7 +2220,11 @@ impl BlockingAuthBridge {
     > {
         use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
 
-        let Some(target) = self.0.blocking_auth_target(event) else {
+        let admitted = self
+            .runtime
+            .try_admit_blocking_auth(event)
+            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        let Some((target, _admission)) = admitted else {
             return Ok(None);
         };
         let user_json = blocking_auth_user_json(user, tenant);
@@ -2212,10 +2233,10 @@ impl BlockingAuthBridge {
             "data": {
                 "user": user_json,
                 "context": {
-                    "eventId": format!("fireemu-blocking-{}", self.0.trigger_generation()),
+                    "eventId": format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
                     "eventType": event.as_str(),
                     "resource": {"service": "identitytoolkit.googleapis.com", "name": resource_name},
-                    "timestamp": fireemu_core_types::time::LogicalInstant::to_rfc3339(self.0.now()).unwrap_or_default(),
+                    "timestamp": fireemu_core_types::time::LogicalInstant::to_rfc3339(self.runtime.now()).unwrap_or_default(),
                     "params": {},
                 }
             }
@@ -2223,30 +2244,42 @@ impl BlockingAuthBridge {
         .to_string();
         let path = format!(
             "/{}/{}/{}",
-            self.0.project(),
+            self.runtime.project(),
             target.region,
             target.function
         );
-        let deadline = Instant::now() + BLOCKING_AUTH_DEADLINE;
-        let address = target
-            .addr
-            .parse()
-            .map_err(|_| BlockingFunctionFailure::unhandled())?;
-        let mut stream = TcpStream::connect_timeout(&address, blocking_auth_remaining(deadline)?)
-            .map_err(|error| blocking_auth_io_failure(&error))?;
-        let request = format!(
-            "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-            target.addr,
-            target.secret,
-            body.len(),
-            body
-        );
-        blocking_auth_write_request(&mut stream, request.as_bytes(), deadline)?;
-        let response = blocking_auth_read_response(&mut stream, deadline)?;
-        let response = fireemu_adapter_functions::http::parse_response(&response, "POST")
-            .map_err(|_| BlockingFunctionFailure::unhandled())?;
-        let value: serde_json::Value = serde_json::from_slice(&response.body)
-            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        let deadline = Instant::now() + self.deadline;
+        let exchange = (|| {
+            let address = target
+                .addr
+                .parse()
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            let mut stream =
+                TcpStream::connect_timeout(&address, blocking_auth_remaining(deadline)?)
+                    .map_err(|error| blocking_auth_io_failure(&error))?;
+            let request = format!(
+                "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nX-Fireemu-Runner-Secret: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                target.addr,
+                target.secret,
+                body.len(),
+                body
+            );
+            blocking_auth_write_request(&mut stream, request.as_bytes(), deadline)?;
+            let response = blocking_auth_read_response(&mut stream, deadline)?;
+            fireemu_adapter_functions::http::parse_response(&response, "POST")
+                .map_err(|_| BlockingFunctionFailure::unhandled())
+        })();
+        let response = match exchange {
+            Ok(response) => response,
+            Err(failure) => {
+                self.runtime.restart_runner_after_blocking_failure(&target);
+                return Err(failure);
+            }
+        };
+        let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&response.body) else {
+            self.runtime.restart_runner_after_blocking_failure(&target);
+            return Err(BlockingFunctionFailure::unhandled());
+        };
         if response.status != 200 {
             return Err(blocking_auth_response_failure(response.status, &value));
         }
@@ -2258,13 +2291,21 @@ impl BlockingAuthBridge {
 }
 
 impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBridge {
+    fn request_concurrency_limit(&self) -> usize {
+        self.runtime.max_global_concurrency()
+    }
+
+    fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+        self.runtime.handles_blocking_auth(event)
+    }
+
     fn invoke(
         &self,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
         user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<serde_json::Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
     {
-        self.invoke_for_namespace(self.0.project(), None, event, user)
+        self.invoke_for_namespace(self.runtime.project(), None, event, user)
             .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
     }
 
@@ -2517,6 +2558,103 @@ mod tests {
                 503,
                 "status={status}, value={value}"
             );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_timed_out_blocking_handler_releases_admission_and_recycles_its_runner() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+        use std::sync::Mutex;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spec = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: vec![(
+                "FIREEMU_FAKE_BLOCKING_HANG_MS".to_owned(),
+                "5000".to_owned(),
+            )],
+            hello_timeout: Duration::from_secs(5),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let mut blocking = parse_manifest(&json!({"functions": [{
+            "name": "beforeCreate",
+            "generation": 2,
+            "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+        }]}))
+        .unwrap();
+        manifest.functions.append(&mut blocking.functions);
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 1,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            Arc::new(runner),
+            Some(spec),
+        );
+        let retired = runtime.runner();
+        let bridge =
+            super::BlockingAuthBridge::with_deadline(runtime.clone(), Duration::from_millis(75));
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+
+        let failure = tokio::task::spawn_blocking(move || {
+            fireemu_adapter_http::identity_toolkit::AuthBlockingHook::invoke(
+                &bridge,
+                BlockingAuthEvent::BeforeCreate,
+                &user,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(failure.identity_status(), 503);
+        assert!(runtime
+            .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+            .is_err());
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let replacement = runtime.runner();
+            if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {
+                let (_, admission) = runtime
+                    .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+                    .unwrap()
+                    .unwrap();
+                drop(admission);
+                replacement.shutdown().await;
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the timed-out Blocking Auth runner was not replaced"
+            );
+            tokio::task::yield_now().await;
         }
     }
 

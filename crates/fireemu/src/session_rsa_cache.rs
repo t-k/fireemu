@@ -460,6 +460,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    #[ignore = "release-only warm-start performance gate"]
+    fn a_warm_cache_adds_less_than_five_milliseconds_to_startup() {
+        let root = scratch("warm-performance");
+        let first = load_or_generate_at(&root, 0x5eed).unwrap();
+        assert!(!first.hit);
+        let mut samples = (0..21)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let cached = load_or_generate_at(&root, 0x5eed).unwrap();
+                assert!(cached.hit);
+                std::hint::black_box(cached.signer);
+                started.elapsed()
+            })
+            .collect::<Vec<_>>();
+        samples.sort_unstable();
+        let median = samples[samples.len() / 2];
+        eprintln!("warm session RSA cache median: {median:?}");
+        assert!(
+            median < std::time::Duration::from_millis(5),
+            "warm session RSA cache added {median:?}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn scratch_cache_bases_are_owner_only() {

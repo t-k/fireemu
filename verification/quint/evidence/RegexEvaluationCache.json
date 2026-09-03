@@ -55,8 +55,8 @@
   ],
   "digests": {
     ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
-    "Cargo.lock": "c129a7a741ff6d1206ed9bcddf8c4dbb29102e0928918807664abbddb57565bc",
-    "Cargo.toml": "244bf68843deadddd11112ae015177de0c5cd0ff58a37beb17d0127d98af6f48",
+    "Cargo.lock": "a023c9c5357e988be0c5b758102907ac7b323862a6b25cd5c0e3663d779a1bb5",
+    "Cargo.toml": "af72737999b69807b6686c18cb86d376e70dae497d35cd6e7844f9488ad72240",
     "crates/fireemu-core-rules/src/ast.rs": "8de818d1b4e4d22a5ebfb015f3863f746d5b98bfc8d33c9501bd0e95d23c0c3e",
     "crates/fireemu-core-rules/src/eval.rs": "50f3ffd912a5d1a4cc25c39c7928a501b0e4813456dd90abe08866386aecaad6",
     "crates/fireemu-core-rules/src/parse.rs": "ebcf63731625d6b5237f4a4d1fddfb89ce776d0ce42aa71434b534f61ae2c45c",

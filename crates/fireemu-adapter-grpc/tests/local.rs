@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
+use fireemu_adapter_grpc::rules::ReadCheck;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{
@@ -29,6 +30,14 @@ use tokio_stream::StreamExt;
 
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
+
+fn deny_read(
+    _: &fireemu_core_firestore::store::FirestoreState,
+    _: Option<fireemu_core_firestore::store::CommitVersion>,
+    _: ReadCheck<'_>,
+) -> Result<(), tonic::Status> {
+    Err(tonic::Status::permission_denied("denied by test"))
+}
 
 async fn start_with_write_time(
     wall_clock: bool,
@@ -1272,6 +1281,73 @@ async fn new_transaction_queries_and_aggregations_read_the_snapshot() {
     let only = stream.next().await.unwrap().unwrap();
     assert!(!only.transaction.is_empty());
     assert!(only.result.is_none());
+    handle.abort();
+}
+
+#[tokio::test]
+async fn refused_new_transaction_is_abandoned_for_every_shared_selector_surface() {
+    let (_client, _clock, backend, handle) =
+        start_with_backend_and_policy(false, IndexValidationPolicy::Conservative).await;
+    let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
+    let assert_no_transaction = || {
+        let stats = backend
+            .database_handle(&parent)
+            .unwrap()
+            .with(|db| Ok(db.transaction_bookkeeping_stats()))
+            .unwrap();
+        assert_eq!(stats.active, 0);
+        assert_eq!(stats.finished, 0);
+    };
+
+    let batch_error = backend
+        .batch_get_documents(
+            &pb::BatchGetDocumentsRequest {
+                database: DB.to_owned(),
+                documents: vec![format!("{DOCS}/denied/batch")],
+                consistency_selector: Some(
+                    pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                        pb::TransactionOptions::default(),
+                    ),
+                ),
+                ..Default::default()
+            },
+            &deny_read,
+        )
+        .unwrap_err();
+    assert_eq!(batch_error.code(), tonic::Code::PermissionDenied);
+    assert_no_transaction();
+
+    let mut query_request = query("denied", None);
+    query_request.consistency_selector =
+        Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+            pb::TransactionOptions::default(),
+        ));
+    let query_error = backend.run_query(&query_request, &deny_read).unwrap_err();
+    assert_eq!(query_error.code(), tonic::Code::PermissionDenied);
+    assert_no_transaction();
+
+    let aggregation_error = backend
+        .run_aggregation_query(
+            &pb::RunAggregationQueryRequest {
+                parent: DOCS.to_owned(),
+                query_type: Some(
+                    pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                        agg_count("denied", "n"),
+                    ),
+                ),
+                consistency_selector: Some(
+                    pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                        pb::TransactionOptions::default(),
+                    ),
+                ),
+                ..Default::default()
+            },
+            &deny_read,
+        )
+        .unwrap_err();
+    assert_eq!(aggregation_error.code(), tonic::Code::PermissionDenied);
+    assert_no_transaction();
+
     handle.abort();
 }
 

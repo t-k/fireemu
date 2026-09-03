@@ -422,6 +422,50 @@ pub struct DocumentSnapshot {
     pub mask: Option<Vec<FieldPath>>,
 }
 
+/// Consistency selector normalized from the three generated Firestore request enums.
+#[derive(Clone, Copy)]
+enum SnapshotSelector<'a> {
+    Transaction(&'a [u8]),
+    NewTransaction(&'a pb::TransactionOptions),
+    ReadTime(fireemu_core_types::time::LogicalInstant),
+    Latest,
+}
+
+/// Snapshot chosen for one read operation. A non-empty report is the token for a transaction
+/// created by this operation and therefore must be abandoned if the operation is refused.
+struct SelectedSnapshot {
+    transaction: Option<TransactionId>,
+    report: Vec<u8>,
+    read_at: Option<fireemu_core_types::time::LogicalInstant>,
+}
+
+impl SelectedSnapshot {
+    fn version(&self, db: &FirestoreState) -> Result<Option<CommitVersion>, Status> {
+        match (&self.transaction, self.read_at) {
+            (Some(transaction), _) => db
+                .transaction_read_version(transaction)
+                .map(Some)
+                .map_err(|error| status_from_error(&error)),
+            (None, Some(read_at)) => LocalBackend::retained_read_version(db, read_at).map(Some),
+            (None, None) => Ok(None),
+        }
+    }
+
+    fn read_time(
+        &self,
+        db: &FirestoreState,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<fireemu_core_types::time::LogicalInstant, Status> {
+        match (&self.transaction, self.read_at) {
+            (Some(transaction), _) => db
+                .transaction_read_time(transaction)
+                .map_err(|error| status_from_error(&error)),
+            (None, Some(read_at)) => Ok(read_at),
+            (None, None) => Ok(db.read_time(now)),
+        }
+    }
+}
+
 impl DocumentSnapshot {
     /// Wire form (`NOT_FOUND` when missing).
     pub fn into_response(self) -> Result<pb::Document, Status> {
@@ -1370,6 +1414,66 @@ impl LocalBackend {
         .map_err(|e| status_from_error(&e))
     }
 
+    fn select_snapshot(
+        parent: &Parent,
+        db: &mut FirestoreState,
+        selector: SnapshotSelector<'_>,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<SelectedSnapshot, Status> {
+        match selector {
+            SnapshotSelector::Transaction(bytes) => {
+                let transaction = Self::required_txn(parent, bytes)?;
+                db.touch_transaction(&transaction, now)
+                    .map_err(|error| status_from_error(&error))?;
+                Ok(SelectedSnapshot {
+                    transaction: Some(transaction),
+                    report: Vec::new(),
+                    read_at: None,
+                })
+            }
+            SnapshotSelector::NewTransaction(options) => {
+                let transaction = Self::new_transaction(parent, db, options, now)?;
+                let report = Self::token(parent, &transaction);
+                Ok(SelectedSnapshot {
+                    transaction: Some(transaction),
+                    report,
+                    read_at: None,
+                })
+            }
+            SnapshotSelector::ReadTime(read_at) => Ok(SelectedSnapshot {
+                transaction: None,
+                report: Vec::new(),
+                read_at: Some(read_at),
+            }),
+            SnapshotSelector::Latest => Ok(SelectedSnapshot {
+                transaction: None,
+                report: Vec::new(),
+                read_at: None,
+            }),
+        }
+    }
+
+    /// Runs one consistency-selected read and forgets a transaction minted for a response the
+    /// client never receives. Existing transaction selectors are never abandoned here.
+    fn with_selected_snapshot<T>(
+        &self,
+        parent: &Parent,
+        selector: SnapshotSelector<'_>,
+        now: fireemu_core_types::time::LogicalInstant,
+        run: impl FnOnce(&mut FirestoreState, &SelectedSnapshot) -> Result<T, Status>,
+    ) -> Result<T, Status> {
+        self.with_db(parent, |db| {
+            let selected = Self::select_snapshot(parent, db, selector, now)?;
+            let outcome = run(db, &selected);
+            if outcome.is_err() && !selected.report.is_empty() {
+                if let Some(transaction) = &selected.transaction {
+                    db.abandon_transaction(transaction);
+                }
+            }
+            outcome
+        })
+    }
+
     /// `GetDocument` as a snapshot, authorized by `guard` inside the critical section that
     /// reads it (then [`DocumentSnapshot::into_response`]).
     pub fn get_document_snapshot(
@@ -1454,90 +1558,55 @@ impl LocalBackend {
             .iter()
             .map(|name| Self::check_database(&parent, name))
             .collect::<Result<Vec<_>, _>>()?;
-        let read_at = match &req.consistency_selector {
+        let selector = match &req.consistency_selector {
+            Some(pb::batch_get_documents_request::ConsistencySelector::Transaction(bytes)) => {
+                SnapshotSelector::Transaction(bytes)
+            }
+            Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(options)) => {
+                SnapshotSelector::NewTransaction(options)
+            }
             Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(ts)) => {
-                Some(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
             }
-            _ => None,
+            None => SnapshotSelector::Latest,
         };
-        self.with_db(&parent, |db| {
-            let (txn, report) = match &req.consistency_selector {
-                Some(pb::batch_get_documents_request::ConsistencySelector::Transaction(t)) => {
-                    let t = Self::required_txn(&parent, t)?;
-                    db.touch_transaction(&t, now)
-                        .map_err(|e| status_from_error(&e))?;
-                    (Some(t), Vec::new())
-                }
-                Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
-                    opts,
-                )) => {
-                    let id = Self::new_transaction(&parent, db, opts, now)?;
-                    let bytes = Self::token(&parent, &id);
-                    (Some(id), bytes)
-                }
-                Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(_)) | None => {
-                    (None, Vec::new())
-                }
-            };
-            let run = |db: &mut FirestoreState| -> Result<BatchGetOutcome, Status> {
-                let read_time = match (&txn, read_at) {
-                    (Some(t), _) => db
-                        .transaction_read_time(t)
-                        .map_err(|e| status_from_error(&e))?,
-                    (None, Some(at)) => at,
-                    (None, None) => db.read_time(now),
-                };
-                let version = match (&txn, read_at) {
-                    (Some(t), _) => Some(
-                        db.transaction_read_version(t)
-                            .map_err(|e| status_from_error(&e))?,
-                    ),
-                    (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
-                    (None, None) => None,
-                };
-                // Every document is read from the snapshot first, then the whole batch is
-                // authorized, and only then do the reads join the transaction's read set.
-                let reads: Vec<(DocumentPath, Option<Document>)> = paths
-                    .iter()
-                    .map(|path| {
-                        let doc = match version {
-                            Some(v) => db.get_at(path, v).cloned(),
-                            None => db.get(path).cloned(),
-                        };
-                        (path.clone(), doc)
-                    })
-                    .collect();
-                guard(db, version, ReadCheck::Documents(&reads))?;
-                if let Some(t) = &txn {
-                    for (path, doc) in &reads {
-                        db.record_transaction_read(t, path, doc.as_ref())
-                            .map_err(|e| status_from_error(&e))?;
-                    }
-                }
-                let items = req
-                    .documents
-                    .iter()
-                    .zip(reads)
-                    .map(|(name, (_, doc))| match doc {
-                        Some(d) => BatchGetItem::Found(d),
-                        None => BatchGetItem::Missing(name.clone()),
-                    })
-                    .collect();
-                Ok(BatchGetOutcome {
-                    items,
-                    transaction: report.clone(),
-                    read_time,
-                    mask: mask.clone(),
+        self.with_selected_snapshot(&parent, selector, now, |db, selected| {
+            let read_time = selected.read_time(db, now)?;
+            let version = selected.version(db)?;
+            // Every document is read from the snapshot first, then the whole batch is
+            // authorized, and only then do the reads join the transaction's read set.
+            let reads: Vec<(DocumentPath, Option<Document>)> = paths
+                .iter()
+                .map(|path| {
+                    let doc = match version {
+                        Some(v) => db.get_at(path, v).cloned(),
+                        None => db.get(path).cloned(),
+                    };
+                    (path.clone(), doc)
                 })
-            };
-            let outcome = run(db);
-            if outcome.is_err() && !report.is_empty() {
-                // A refused read must not leave a transaction the client never learned of.
-                if let Some(id) = &txn {
-                    db.abandon_transaction(id);
+                .collect();
+            guard(db, version, ReadCheck::Documents(&reads))?;
+            if let Some(t) = &selected.transaction {
+                for (path, doc) in &reads {
+                    db.record_transaction_read(t, path, doc.as_ref())
+                        .map_err(|e| status_from_error(&e))?;
                 }
             }
-            outcome
+            let items = req
+                .documents
+                .iter()
+                .zip(reads)
+                .map(|(name, (_, doc))| match doc {
+                    Some(d) => BatchGetItem::Found(d),
+                    None => BatchGetItem::Missing(name.clone()),
+                })
+                .collect();
+            Ok(BatchGetOutcome {
+                items,
+                transaction: selected.report.clone(),
+                read_time,
+                mask: mask.clone(),
+            })
         })
     }
 
@@ -1817,38 +1886,20 @@ impl LocalBackend {
         };
         let accepted = self.accepted_query(&parent, sq)?;
         let now = self.write_time();
-        let read_at = match &req.consistency_selector {
-            Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
-                Some(Self::read_time_selector(ts, now)?)
+        let selector = match &req.consistency_selector {
+            Some(pb::run_query_request::ConsistencySelector::Transaction(bytes)) => {
+                SnapshotSelector::Transaction(bytes)
             }
-            _ => None,
+            Some(pb::run_query_request::ConsistencySelector::NewTransaction(options)) => {
+                SnapshotSelector::NewTransaction(options)
+            }
+            Some(pb::run_query_request::ConsistencySelector::ReadTime(ts)) => {
+                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
+            }
+            None => SnapshotSelector::Latest,
         };
-        self.with_db(&parent, |db| {
-            let (txn, report) = match &req.consistency_selector {
-                Some(pb::run_query_request::ConsistencySelector::Transaction(t)) => {
-                    let t = Self::required_txn(&parent, t)?;
-                    db.touch_transaction(&t, now)
-                        .map_err(|e| status_from_error(&e))?;
-                    (Some(t), Vec::new())
-                }
-                Some(pb::run_query_request::ConsistencySelector::NewTransaction(opts)) => {
-                    let id = Self::new_transaction(&parent, db, opts, now)?;
-                    let bytes = Self::token(&parent, &id);
-                    (Some(id), bytes)
-                }
-                Some(pb::run_query_request::ConsistencySelector::ReadTime(_)) | None => {
-                    (None, Vec::new())
-                }
-            };
-            let run = |db: &mut FirestoreState| -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-            let version = match (&txn, read_at) {
-                (Some(t), _) => Some(
-                    db.transaction_read_version(t)
-                        .map_err(|e| status_from_error(&e))?,
-                ),
-                (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
-                (None, None) => None,
-            };
+        self.with_selected_snapshot(&parent, selector, now, |db, selected| {
+            let version = selected.version(db)?;
             // Authorized from the query constraints before any data is touched.
             guard(
                 db,
@@ -1858,7 +1909,7 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
-            let (docs, stats) = match &txn {
+            let (docs, stats) = match &selected.transaction {
                 Some(t) => db
                     .run_query_in_transaction_with_stats(t, &accepted.query)
                     .map_err(|e| status_from_error(&e))?,
@@ -1866,28 +1917,14 @@ impl LocalBackend {
                     .run_query_with_stats(&accepted.query, version)
                     .map_err(|e| status_from_error(&e))?,
             };
-            let read_time = Some(encode_instant(match (&txn, read_at) {
-                (Some(t), _) => db
-                    .transaction_read_time(t)
-                    .map_err(|e| status_from_error(&e))?,
-                (None, Some(at)) => at,
-                (None, None) => db.read_time(now),
-            }));
+            let read_time = Some(encode_instant(selected.read_time(db, now)?));
             // The rows the offset skipped, reported on the first result as the backend does.
             let skipped = i32::try_from(u64::from(accepted.query.offset).min(stats.matched))
                 .unwrap_or(i32::MAX);
             Ok((
-                query_responses(&docs, read_time, &report, skipped),
+                query_responses(&docs, read_time, &selected.report, skipped),
                 accepted.warnings.clone(),
             ))
-            };
-            let outcome = run(db);
-            if outcome.is_err() && !report.is_empty() {
-                if let Some(id) = &txn {
-                    db.abandon_transaction(id);
-                }
-            }
-            outcome
         })
     }
 
@@ -1916,82 +1953,49 @@ impl LocalBackend {
         let accepted = self.accepted_query(&parent, sq)?;
         let (aliases, aggregations) = decode_aggregations(saq)?;
         let now = self.write_time();
-        let read_at = match &req.consistency_selector {
+        let selector = match &req.consistency_selector {
+            Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(bytes)) => {
+                SnapshotSelector::Transaction(bytes)
+            }
+            Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                options,
+            )) => SnapshotSelector::NewTransaction(options),
             Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(ts)) => {
-                Some(Self::read_time_selector(ts, now)?)
+                SnapshotSelector::ReadTime(Self::read_time_selector(ts, now)?)
             }
-            _ => None,
+            None => SnapshotSelector::Latest,
         };
-        self.with_db(&parent, |db| {
-            let (txn, report) = match &req.consistency_selector {
-                Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(t)) => {
-                    let t = Self::required_txn(&parent, t)?;
-                    db.touch_transaction(&t, now)
-                        .map_err(|e| status_from_error(&e))?;
-                    (Some(t), Vec::new())
-                }
-                Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
-                    opts,
-                )) => {
-                    let id = Self::new_transaction(&parent, db, opts, now)?;
-                    let bytes = Self::token(&parent, &id);
-                    (Some(id), bytes)
-                }
-                Some(pb::run_aggregation_query_request::ConsistencySelector::ReadTime(_))
-                | None => (None, Vec::new()),
-            };
-            let run = |db: &mut FirestoreState| -> Result<pb::RunAggregationQueryResponse, Status> {
-                let version = match (&txn, read_at) {
-                    (Some(t), _) => Some(
-                        db.transaction_read_version(t)
-                            .map_err(|e| status_from_error(&e))?,
-                    ),
-                    (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
-                    (None, None) => None,
-                };
-                // The underlying query is authorized from its constraints, like a list.
-                guard(
-                    db,
-                    version,
-                    ReadCheck::Query {
-                        parent: &parent,
-                        query: &accepted.query,
-                    },
-                )?;
-                // Inside a transaction the aggregation is computed at the snapshot and the query
-                // is recorded so that later changes abort the commit.
-                if let Some(t) = &txn {
-                    db.run_query_in_transaction(t, &accepted.query)
-                        .map_err(|e| status_from_error(&e))?;
-                }
-                let read_time = match (&txn, read_at) {
-                    (Some(t), _) => db
-                        .transaction_read_time(t)
-                        .map_err(|e| status_from_error(&e))?,
-                    (None, Some(at)) => at,
-                    (None, None) => db.read_time(now),
-                };
-                let values = db
-                    .run_aggregation(&accepted.query, &aggregations, version)
+        self.with_selected_snapshot(&parent, selector, now, |db, selected| {
+            let version = selected.version(db)?;
+            // The underlying query is authorized from its constraints, like a list.
+            guard(
+                db,
+                version,
+                ReadCheck::Query {
+                    parent: &parent,
+                    query: &accepted.query,
+                },
+            )?;
+            // Inside a transaction the aggregation is computed at the snapshot and the query
+            // is recorded so that later changes abort the commit.
+            if let Some(t) = &selected.transaction {
+                db.run_query_in_transaction(t, &accepted.query)
                     .map_err(|e| status_from_error(&e))?;
-                let aggregate_fields: HashMap<String, pb::Value> = aliases
-                    .into_iter()
-                    .zip(values.iter().map(encode_value))
-                    .collect();
-                Ok(pb::RunAggregationQueryResponse {
-                    result: Some(pb::AggregationResult { aggregate_fields }),
-                    transaction: report.clone(),
-                    read_time: Some(encode_instant(read_time)),
-                    explain_metrics: None,
-                })
-            };
-            let outcome = run(db);
-            if outcome.is_err() && !report.is_empty() {
-                if let Some(id) = &txn {
-                    db.abandon_transaction(id);
-                }
             }
-            outcome
+            let read_time = selected.read_time(db, now)?;
+            let values = db
+                .run_aggregation(&accepted.query, &aggregations, version)
+                .map_err(|e| status_from_error(&e))?;
+            let aggregate_fields: HashMap<String, pb::Value> = aliases
+                .into_iter()
+                .zip(values.iter().map(encode_value))
+                .collect();
+            Ok(pb::RunAggregationQueryResponse {
+                result: Some(pb::AggregationResult { aggregate_fields }),
+                transaction: selected.report.clone(),
+                read_time: Some(encode_instant(read_time)),
+                explain_metrics: None,
+            })
         })
     }
 

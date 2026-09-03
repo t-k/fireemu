@@ -1,21 +1,144 @@
 //! RS256 session signing: token tokens verify, forgeries and unsigned tokens do not, and
 //! the JWKS endpoint publishes the key.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
-use fireemu_adapter_http::identity_toolkit::{handle, AuthState, JWKS_PATHS};
+use fireemu_adapter_http::identity_toolkit::{
+    handle, handle_with, AuthBlockingHook, AuthState, BlockingFunctionFailure, RequestHeaders,
+    JWKS_PATHS, OWNER_CREDENTIAL,
+};
 use fireemu_adapter_http::signing::{AppCheckKeySource, AppCheckRsaSigner, RsaSigner};
 use fireemu_core_auth::jwt::{
     decode_token, encode_unsigned, encode_with, verify_id_token, IdTokenSigner, JwtError,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
+use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::json;
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+struct LockCheckingSigner {
+    store: Weak<Mutex<AuthStore>>,
+    calls: AtomicUsize,
+}
+
+struct PassthroughBlockingHook;
+
+impl AuthBlockingHook for PassthroughBlockingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<serde_json::Value, BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+}
+
+impl IdTokenSigner for LockCheckingSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+
+    fn kid(&self) -> &'static str {
+        "outside-lock"
+    }
+
+    fn sign(&self, _signing_input: &[u8]) -> Vec<u8> {
+        let store = self.store.upgrade().expect("the store is alive");
+        assert!(
+            store.try_lock().is_ok(),
+            "RSA signing ran while the AuthStore mutex was held"
+        );
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        vec![1, 2, 3]
+    }
+
+    fn verify(&self, _signing_input: &[u8], signature: &[u8]) -> bool {
+        signature == [1, 2, 3]
+    }
+
+    fn public_jwk_json(&self) -> String {
+        r#"{"kty":"RSA","kid":"outside-lock"}"#.to_owned()
+    }
+}
+
+#[test]
+fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
+    let store = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(41),
+        TotpPolicy::default(),
+    )));
+    let signer = Arc::new(LockCheckingSigner {
+        store: Arc::downgrade(&store),
+        calls: AtomicUsize::new(0),
+    });
+    store.lock().unwrap().set_signer(signer.clone());
+    let mut state = AuthState {
+        store,
+        clock: Arc::new(Mutex::new(VirtualClock::new(START))),
+        wall_clock: None,
+        totp_extension_enabled: false,
+        barrier: None,
+        events: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
+        control_token: None,
+        registry: None,
+        allow_routed_projects: false,
+        stateless_refresh_tokens: true,
+        app_check: None,
+        app_check_policy: None,
+        tenancy: None,
+    };
+
+    let response = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=k",
+        &json!({"email": "outside-lock@example.com", "password": "password1"}),
+    );
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
+
+    let refresh = response.body["refreshToken"].as_str().unwrap();
+    let refreshed = handle(
+        &state,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 3);
+
+    let cookie = handle_with(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie",
+        &RequestHeaders {
+            authorization: Some(OWNER_CREDENTIAL.to_owned()),
+            ..RequestHeaders::default()
+        },
+        &json!({"idToken": response.body["idToken"], "validDuration": "3600"}),
+    );
+    assert_eq!(cookie.status, 200, "{}", cookie.body);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 4);
+
+    state.blocking = Some(Arc::new(PassthroughBlockingHook));
+    let blocked = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=k",
+        &json!({"email": "outside-lock-blocking@example.com", "password": "password1"}),
+    );
+    assert_eq!(blocked.status, 200, "{}", blocked.body);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 5);
+}
 
 #[test]
 fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
@@ -155,6 +278,17 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
     assert!(!token.ends_with('.'), "token");
     let store = state.store.lock().unwrap();
     assert!(verify_id_token(&token, &store, START).is_ok());
+    let uid = store
+        .user_by_id(r.body["localId"].as_str().unwrap())
+        .unwrap()
+        .local_id
+        .clone();
+    let claims = store.id_token_claims(&uid, None, START).unwrap();
+    assert_eq!(
+        token,
+        encode_with(&claims, Some(signer.as_ref())),
+        "moving signing outside the mutex must not change token bytes"
+    );
     drop(store);
     // Lookup accepts it; a forged unsigned token with the same claims does not.
     let ok = handle(

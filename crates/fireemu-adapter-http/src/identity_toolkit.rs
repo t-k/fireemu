@@ -22,7 +22,7 @@ use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, Serv
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
-use fireemu_core_auth::jwt::{encode_with, JwtError};
+use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
 use fireemu_core_auth::mfa::MfaError;
 use fireemu_core_auth::store::{
     AuthError, AuthStore, FederatedIdentity, LocalId, NewUser, OobRequestType, PendingSignInId,
@@ -372,6 +372,53 @@ fn error(status: u16, message: &str) -> JsonResponse {
     }
 }
 
+/// Replaces the unsigned internal form of successful response tokens with their configured
+/// RS256 form. Callers invoke this only after releasing the Auth store mutex, so the private-key
+/// operation never serializes unrelated Auth requests.
+fn sign_response_tokens(
+    mut response: JsonResponse,
+    signer: Option<&dyn fireemu_core_auth::jwt::IdTokenSigner>,
+) -> JsonResponse {
+    let Some(signer) = signer else {
+        return response;
+    };
+    if response.status != 200 {
+        return response;
+    }
+    let Some(object) = response.body.as_object_mut() else {
+        return response;
+    };
+    for field in ["idToken", "id_token", "access_token", "sessionCookie"] {
+        let Some(Value::String(token)) = object.get_mut(field) else {
+            continue;
+        };
+        let mut parts = token.split('.');
+        let Some(header) = parts.next() else {
+            return error(500, "INTERNAL");
+        };
+        let Some(payload) = parts.next() else {
+            return error(500, "INTERNAL");
+        };
+        if parts.next() != Some("") || parts.next().is_some() {
+            return error(500, "INTERNAL");
+        }
+        if base64url_decode(header).as_deref() != Ok(br#"{"alg":"none","typ":"JWT"}"#) {
+            return error(500, "INTERNAL");
+        }
+        let Ok(payload) = base64url_decode(payload) else {
+            return error(500, "INTERNAL");
+        };
+        if !serde_json::from_slice::<Value>(&payload).is_ok_and(|value| value.is_object()) {
+            return error(500, "INTERNAL");
+        }
+        let Ok(payload) = std::str::from_utf8(&payload) else {
+            return error(500, "INTERNAL");
+        };
+        *token = encode_payload_with(payload, Some(signer));
+    }
+    response
+}
+
 /// The envelope of a path the official emulator does not serve (measured:
 /// `auth/identity-toolkit-error-shapes#unknown-method`). It carries `status` and no `domain`,
 /// unlike the `BadRequestError` shape every 400 uses.
@@ -530,7 +577,7 @@ fn issue_tokens_replacing(
     }
     .map_err(|e| auth_error(&e))?;
     Ok(json!({
-        "idToken": encode_with(&claims, store.signer()),
+        "idToken": encode_with(&claims, None),
         "refreshToken": refresh,
         "expiresIn": "3600",
         "localId": uid.as_str(),
@@ -1077,9 +1124,6 @@ fn dispatch_with_blocking_hook(
             let signed_in = is_authentication
                 && (committed_response.body.get("idToken").is_some()
                     || committed_response.body.get("id_token").is_some());
-            let mut issued_session = signed_in
-                .then(|| verify_session(&committed, &committed_response.body, at).ok())
-                .flatten();
             let provisional_refresh = signed_in
                 .then(|| {
                     committed_response
@@ -1089,6 +1133,26 @@ fn dispatch_with_blocking_hook(
                         .map(str::to_owned)
                 })
                 .flatten();
+            let mut issued_session = if signed_in {
+                let Some(provisional) = provisional_refresh.as_deref() else {
+                    return error(500, "INTERNAL");
+                };
+                let session = match committed.refresh_session(provisional) {
+                    Ok(session) => session.clone(),
+                    Err(_) => return error(500, "INTERNAL"),
+                };
+                let Ok(claims) = committed.id_token_claims_for_session(&session, at) else {
+                    return error(500, "INTERNAL");
+                };
+                Some(Session {
+                    uid: session.uid,
+                    provider: claims.firebase.sign_in_provider,
+                    second_factor: session.second_factor,
+                    extra_claims: claims.custom,
+                })
+            } else {
+                None
+            };
             let persisted_claim_names: Vec<String> = committed
                 .user(&uid)
                 .map(|user| user.custom_claims.entries().keys().cloned().collect())
@@ -1346,6 +1410,7 @@ pub fn handle_with(
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
     if route.class != routes::RouteClass::EndUser {
+        let signer = store.signer_arc();
         let response = dispatch(
             route.handler,
             &mut store,
@@ -1380,7 +1445,7 @@ pub fn handle_with(
                 RoutedStoreInstall::InvalidStore => return error(500, "INTERNAL"),
             }
         }
-        return if response.status == 200 {
+        let response = if response.status == 200 {
             JsonResponse {
                 status: 200,
                 body: without_nulls(response.body),
@@ -1388,7 +1453,9 @@ pub fn handle_with(
         } else {
             response
         };
+        return sign_response_tokens(response, signer.as_deref());
     }
+    let signer = store.signer_arc();
     let response = if let Some(blocking) = &state.blocking {
         dispatch_with_blocking_hook(
             state,
@@ -1402,7 +1469,7 @@ pub fn handle_with(
             at,
         )
     } else {
-        dispatch(
+        let response = dispatch(
             route.handler,
             &mut store,
             query,
@@ -1410,16 +1477,19 @@ pub fn handle_with(
             headers,
             at,
             state.into(),
-        )
+        );
+        drop(store);
+        response
     };
-    if response.status == 200 {
+    let response = if response.status == 200 {
         JsonResponse {
             status: 200,
             body: without_nulls(response.body),
         }
     } else {
         response
-    }
+    };
+    sign_response_tokens(response, signer.as_deref())
 }
 
 /// The credential and project checks of a route class.
@@ -3181,7 +3251,7 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
         "https://session.firebase.google.com/{}",
         store.project_id()
     ));
-    let cookie = fireemu_core_auth::jwt::encode_payload_with(&payload.to_string(), store.signer());
+    let cookie = fireemu_core_auth::jwt::encode_payload_with(&payload.to_string(), None);
     JsonResponse {
         status: 200,
         body: json!({"sessionCookie": cookie}),
@@ -3753,7 +3823,7 @@ fn refresh(
     };
     match store.id_token_claims_for_session(&session, at) {
         Ok(claims) => {
-            let id_token = encode_with(&claims, store.signer());
+            let id_token = encode_with(&claims, None);
             JsonResponse {
                 status: 200,
                 body: json!({

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_http::identity_toolkit::{
     handle, AuthBlockingHook, AuthState, BlockingFunctionCode, BlockingFunctionFailure,
 };
+use fireemu_adapter_http::signing::RsaSigner;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -435,6 +436,8 @@ fn blocking_auth_runs_before_create_then_before_sign_in() {
 #[test]
 fn blocking_auth_applies_user_and_session_claim_updates_before_issuing_tokens() {
     let mut s = state();
+    let signer = RsaSigner::from_seed(44).unwrap();
+    s.store.lock().unwrap().set_signer(signer.clone());
     s.blocking = Some(Arc::new(UpdatingBlockingHook));
 
     let (status, body) = post(
@@ -445,9 +448,12 @@ fn blocking_auth_applies_user_and_session_claim_updates_before_issuing_tokens() 
 
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["displayName"], "Created by hook");
-    let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
-        .unwrap()
-        .payload;
+    let claims = fireemu_core_auth::jwt::decode_token(
+        body["idToken"].as_str().unwrap(),
+        Some(signer.as_ref()),
+    )
+    .unwrap()
+    .payload;
     assert_eq!(
         claims
             .get("name")
@@ -479,10 +485,12 @@ fn blocking_auth_applies_user_and_session_claim_updates_before_issuing_tokens() 
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(status, 200, "{refreshed}");
-    let refreshed_claims =
-        fireemu_core_auth::jwt::decode_unsigned(refreshed["id_token"].as_str().unwrap())
-            .unwrap()
-            .payload;
+    let refreshed_claims = fireemu_core_auth::jwt::decode_token(
+        refreshed["id_token"].as_str().unwrap(),
+        Some(signer.as_ref()),
+    )
+    .unwrap()
+    .payload;
     assert_eq!(
         refreshed_claims
             .get("risk")

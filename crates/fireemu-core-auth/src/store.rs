@@ -1,6 +1,7 @@
 //! In-memory user store with TOTP enrollment / sign-in and ID token claim construction.
 
 use core::fmt;
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -37,6 +38,12 @@ impl LocalId {
 impl fmt::Display for LocalId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl Borrow<str> for LocalId {
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -563,6 +570,10 @@ pub struct AuthStore {
     /// has one active lookup target, matching the official emulator's `email -> localId`
     /// index: the most recently created or updated account wins.
     local_id_for_email: BTreeMap<String, LocalId>,
+    /// Every account owning an email, including inactive duplicates. Membership checks never
+    /// scan the user map; the separate active lookup retains official-emulator overwrite and
+    /// delete semantics.
+    local_ids_for_email: BTreeMap<String, BTreeSet<LocalId>>,
     /// Phone owners in canonical local-ID order. Imported artifacts may contain duplicates,
     /// so the first owner preserves the previous `BTreeMap` scan result.
     local_ids_for_phone: BTreeMap<String, BTreeSet<LocalId>>,
@@ -674,6 +685,7 @@ impl AuthStore {
             policy,
             users: BTreeMap::new(),
             local_id_for_email: BTreeMap::new(),
+            local_ids_for_email: BTreeMap::new(),
             local_ids_for_phone: BTreeMap::new(),
             local_ids_for_federated: BTreeMap::new(),
             by_sequence: BTreeMap::new(),
@@ -754,10 +766,46 @@ impl AuthStore {
     /// Looks up a user by its ID text.
     #[must_use]
     pub fn user_by_id(&self, uid: &str) -> Option<&UserRecord> {
-        self.users
-            .iter()
-            .find(|(k, _)| k.as_str() == uid)
-            .map(|(_, u)| u.as_ref())
+        self.users.get(uid).map(Arc::as_ref)
+    }
+
+    fn email_owned_by_other(&self, email: &str, uid: Option<&LocalId>) -> bool {
+        self.local_ids_for_email
+            .get(email)
+            .is_some_and(|owners| owners.iter().any(|owner| Some(owner) != uid))
+    }
+
+    fn add_email_owner(&mut self, email: String, uid: &LocalId) {
+        self.local_ids_for_email
+            .entry(email.clone())
+            .or_default()
+            .insert(uid.clone());
+        self.local_id_for_email.insert(email, uid.clone());
+    }
+
+    /// Mirrors the official emulator's `updateUserByLocalId`: every successful user update,
+    /// including one that does not change the email field, makes that duplicate the active
+    /// target of an email lookup.
+    fn activate_email_owner(&mut self, uid: &LocalId) {
+        if let Some(email) = self.users.get(uid).and_then(|user| user.email.clone()) {
+            self.local_id_for_email.insert(email, uid.clone());
+        }
+    }
+
+    fn remove_email_owner(&mut self, email: &str, uid: &LocalId) {
+        if let Some(owners) = self.local_ids_for_email.get_mut(email) {
+            owners.remove(uid);
+        }
+        if self
+            .local_ids_for_email
+            .get(email)
+            .is_some_and(BTreeSet::is_empty)
+        {
+            self.local_ids_for_email.remove(email);
+        }
+        // The official Auth Emulator deletes the single active email index entry whenever
+        // any duplicate owner is removed; it does not restore another owner automatically.
+        self.local_id_for_email.remove(email);
     }
 
     fn next_id(&mut self, prefix: &str) -> String {
@@ -841,7 +889,7 @@ impl AuthStore {
         let key = LocalId(uid.to_owned());
         let user = self.users.remove(&key).ok_or(AuthError::UserNotFound)?;
         if let Some(email) = &user.email {
-            self.local_id_for_email.remove(email);
+            self.remove_email_owner(email, &key);
         }
         if let Some(phone) = &user.phone_number {
             Self::remove_index_owner(&mut self.local_ids_for_phone, phone, &key);
@@ -868,6 +916,7 @@ impl AuthStore {
     pub fn clear(&mut self) {
         self.users.clear();
         self.local_id_for_email.clear();
+        self.local_ids_for_email.clear();
         self.local_ids_for_phone.clear();
         self.local_ids_for_federated.clear();
         self.by_sequence.clear();
@@ -957,6 +1006,7 @@ impl AuthStore {
     pub fn record_sign_in(&mut self, uid: &LocalId, now: LogicalInstant) {
         if let Some(u) = self.users.get_mut(uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
+            self.activate_email_owner(uid);
         }
     }
 
@@ -1009,12 +1059,7 @@ impl AuthStore {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(ImportUserError::Account(AuthError::InvalidEmail));
             }
-            if !self.config.allow_duplicate_emails
-                && self
-                    .users
-                    .values()
-                    .any(|u| u.email.as_deref() == Some(email))
-            {
+            if !self.config.allow_duplicate_emails && self.email_owned_by_other(email, None) {
                 return Err(ImportUserError::Account(AuthError::EmailExists));
             }
         }
@@ -1082,7 +1127,7 @@ impl AuthStore {
         );
         self.by_sequence.insert(sequence, local_id.clone());
         if let Some(email) = email {
-            self.local_id_for_email.insert(email, local_id.clone());
+            self.add_email_owner(email, &local_id);
         }
         if let Some(phone) = phone {
             self.local_ids_for_phone
@@ -1135,11 +1180,7 @@ impl AuthStore {
         if !email.contains('@') || email.chars().any(char::is_control) {
             return Err(AuthError::InvalidEmail);
         }
-        if self
-            .users
-            .values()
-            .any(|u| u.local_id != *uid && u.email.as_deref() == Some(email))
-        {
+        if self.email_owned_by_other(email, Some(uid)) {
             return Err(AuthError::EmailExists);
         }
         let user = self
@@ -1147,11 +1188,11 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        if let Some(old) = user.email.replace(email.to_owned()) {
-            self.local_id_for_email.remove(&old);
+        let old = user.email.replace(email.to_owned());
+        if let Some(old) = old {
+            self.remove_email_owner(&old, uid);
         }
-        self.local_id_for_email
-            .insert(email.to_owned(), uid.clone());
+        self.add_email_owner(email.to_owned(), uid);
         Ok(())
     }
 
@@ -1201,6 +1242,7 @@ impl AuthStore {
                 .or_default()
                 .insert(uid.clone());
         }
+        self.activate_email_owner(uid);
         Ok(())
     }
 
@@ -1222,6 +1264,32 @@ impl AuthStore {
     #[must_use]
     pub fn all_user_ids(&self) -> Vec<LocalId> {
         self.users.keys().cloned().collect()
+    }
+
+    /// A bounded page in canonical local-ID order without collecting or sorting the store.
+    #[must_use]
+    pub fn users_by_local_id_page(
+        &self,
+        offset: usize,
+        limit: usize,
+        descending: bool,
+    ) -> Vec<&UserRecord> {
+        if descending {
+            self.users
+                .values()
+                .rev()
+                .skip(offset)
+                .take(limit)
+                .map(Arc::as_ref)
+                .collect()
+        } else {
+            self.users
+                .values()
+                .skip(offset)
+                .take(limit)
+                .map(Arc::as_ref)
+                .collect()
+        }
     }
 
     /// Number of users without allocating an ID list.
@@ -1323,12 +1391,7 @@ impl AuthStore {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(AuthError::InvalidEmail);
             }
-            if enforce_unique_email
-                && self
-                    .users
-                    .values()
-                    .any(|u| u.email.as_deref() == Some(email.as_str()))
-            {
+            if enforce_unique_email && self.email_owned_by_other(email, None) {
                 return Err(AuthError::EmailExists);
             }
         }
@@ -1368,7 +1431,7 @@ impl AuthStore {
             password: None,
         }));
         if let Some(email) = email {
-            self.local_id_for_email.insert(email, local_id.clone());
+            self.add_email_owner(email, &local_id);
         }
         self.by_sequence.insert(sequence, local_id.clone());
         self.created_users.push(local_id.clone());
@@ -1646,6 +1709,7 @@ impl AuthStore {
             .entry(identity_key)
             .or_default()
             .insert(uid.clone());
+        self.activate_email_owner(uid);
         Ok(())
     }
 
@@ -1675,6 +1739,7 @@ impl AuthStore {
         for identity in &removed {
             Self::remove_index_owner(&mut self.local_ids_for_federated, identity, uid);
         }
+        self.activate_email_owner(uid);
         Ok(changed)
     }
 
@@ -1818,6 +1883,7 @@ impl AuthStore {
             if identity.photo_url.is_some() {
                 u.photo_url.clone_from(&identity.photo_url);
             }
+            self.activate_email_owner(uid);
         }
     }
 
@@ -1825,6 +1891,7 @@ impl AuthStore {
     fn set_email_verified_flag(&mut self, uid: &LocalId, verified: bool) {
         if let Some(u) = self.users.get_mut(uid).map(Arc::make_mut) {
             u.email_verified = verified;
+            self.activate_email_owner(uid);
         }
     }
 
@@ -1855,6 +1922,7 @@ impl AuthStore {
             phone_number: phone.to_owned(),
             enrolled_at: now,
         });
+        self.activate_email_owner(uid);
         Ok(EnrolledFactor {
             mfa_enrollment_id: enrollment_id,
             display_name,
@@ -1875,6 +1943,7 @@ impl AuthStore {
         for (phone, display_name) in factors {
             self.enroll_phone_factor(uid, &phone, display_name, now)?;
         }
+        self.activate_email_owner(uid);
         Ok(())
     }
 
@@ -1896,7 +1965,11 @@ impl AuthStore {
         user.mfa
             .phone_factors_mut()
             .retain(|f| f.mfa_enrollment_id != enrollment_id);
-        Ok(user.mfa.factor_count() != before)
+        let changed = user.mfa.factor_count() != before;
+        if changed {
+            self.activate_email_owner(uid);
+        }
+        Ok(changed)
     }
 
     /// Completes the second-factor step with a verified phone code for `enrollment_id`.
@@ -1928,6 +2001,7 @@ impl AuthStore {
             return Err(MfaError::NoEnrolledFactor);
         }
         user.last_sign_in_at = Some(now);
+        self.activate_email_owner(uid);
         Ok(SecondFactorAssertion {
             sign_in_second_factor: "phone".to_owned(),
             second_factor_identifier: enrollment_id.to_owned(),
@@ -1976,6 +2050,7 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         user.password = Some(PasswordDigest::new(salt, password));
+        self.activate_email_owner(uid);
         Ok(())
     }
 
@@ -1987,7 +2062,9 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        Ok(user.password.take().is_some())
+        let changed = user.password.take().is_some();
+        self.activate_email_owner(uid);
+        Ok(changed)
     }
 
     /// Removes the email address and its verified flag (`deleteAttribute: EMAIL`).
@@ -1997,10 +2074,11 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        if let Some(email) = user.email.take() {
-            self.local_id_for_email.remove(&email);
-        }
+        let email = user.email.take();
         user.email_verified = false;
+        if let Some(email) = email {
+            self.remove_email_owner(&email, uid);
+        }
         Ok(())
     }
 
@@ -2055,6 +2133,7 @@ impl AuthStore {
         if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
         }
+        self.activate_email_owner(&uid);
         Ok(uid)
     }
 
@@ -2222,6 +2301,7 @@ impl AuthStore {
     /// Mutable user access. Clones the one user through [`Arc::make_mut`], so a snapshot that
     /// shares it is left untouched (`SNAP-MEM-03`).
     pub fn user_mut(&mut self, uid: &LocalId) -> Option<&mut UserRecord> {
+        self.activate_email_owner(uid);
         self.users.get_mut(uid).map(Arc::make_mut)
     }
 
@@ -2238,6 +2318,7 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         user.custom_claims = claims;
+        self.activate_email_owner(uid);
         Ok(())
     }
 
@@ -2363,6 +2444,7 @@ impl AuthStore {
             last_accepted_step: Some(step),
         };
         user.mfa.totp_factors_mut().push(factor);
+        self.activate_email_owner(uid);
         Ok(EnrolledFactor {
             mfa_enrollment_id: enrollment_id,
             display_name: None,
@@ -2433,6 +2515,7 @@ impl AuthStore {
             self.pending_user_ids.remove(uid);
         }
         let mut replayed = false;
+        let mut accepted_identifier = None;
         for factor in user.mfa.totp_factors_mut() {
             match match_code(
                 &factor.secret,
@@ -2445,15 +2528,20 @@ impl AuthStore {
                 CodeMatch::Accepted { step } => {
                     factor.last_accepted_step = Some(step);
                     user.last_sign_in_at = Some(now);
-                    return Ok(SecondFactorAssertion {
-                        sign_in_second_factor: "totp".to_owned(),
-                        second_factor_identifier: factor.mfa_enrollment_id.clone(),
-                        verified_at: now,
-                    });
+                    accepted_identifier = Some(factor.mfa_enrollment_id.clone());
+                    break;
                 }
                 CodeMatch::Replayed => replayed = true,
                 CodeMatch::NoMatch => {}
             }
+        }
+        if let Some(second_factor_identifier) = accepted_identifier {
+            self.activate_email_owner(uid);
+            return Ok(SecondFactorAssertion {
+                sign_in_second_factor: "totp".to_owned(),
+                second_factor_identifier,
+                verified_at: now,
+            });
         }
         Err(if replayed {
             MfaError::CodeAlreadyUsed
@@ -2518,6 +2606,7 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
+        self.activate_email_owner(uid);
         Ok(())
     }
 
@@ -3577,6 +3666,165 @@ mod snapshot_cow_tests {
             destination.redeem_refresh_token(&token),
             Err(super::AuthError::InvalidRefreshToken)
         ));
+    }
+}
+
+#[cfg(test)]
+mod index_invariant_tests {
+    use super::{AuthStore, FederatedIdentity, LocalId, NewUser, ProjectAuthConfig};
+    use crate::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+    use proptest::prelude::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const NOW: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+    fn assert_indexes(store: &AuthStore, active_emails: &BTreeMap<String, LocalId>) {
+        let mut emails: BTreeMap<String, BTreeSet<LocalId>> = BTreeMap::new();
+        let mut phones: BTreeMap<String, BTreeSet<LocalId>> = BTreeMap::new();
+        let mut federated: BTreeMap<(String, String), BTreeSet<LocalId>> = BTreeMap::new();
+        let mut sequences = BTreeMap::new();
+        for (uid, user) in &store.users {
+            assert_eq!(uid, &user.local_id);
+            if let Some(email) = &user.email {
+                emails.entry(email.clone()).or_default().insert(uid.clone());
+            }
+            if let Some(phone) = &user.phone_number {
+                phones.entry(phone.clone()).or_default().insert(uid.clone());
+            }
+            for identity in &user.federated {
+                federated
+                    .entry((identity.provider_id.clone(), identity.raw_id.clone()))
+                    .or_default()
+                    .insert(uid.clone());
+            }
+            sequences.insert(user.sequence, uid.clone());
+        }
+        assert_eq!(store.local_ids_for_email, emails);
+        assert_eq!(store.local_ids_for_phone, phones);
+        assert_eq!(store.local_ids_for_federated, federated);
+        assert_eq!(store.by_sequence, sequences);
+        assert_eq!(&store.local_id_for_email, active_emails);
+        assert!(active_emails.iter().all(|(email, active)| emails
+            .get(email)
+            .is_some_and(|owners| owners.contains(active))));
+    }
+
+    proptest! {
+        #[test]
+        fn indexes_equal_scans_after_random_mutations(
+            allow_duplicate_emails in any::<bool>(),
+            operations in prop::collection::vec((0_u8..8, 0_u8..18, 0_u8..16), 1..200)
+        ) {
+            let mut store = AuthStore::new("demo-app", SplitMix64::new(17), TotpPolicy::default());
+            let mut active_emails = BTreeMap::new();
+            let mut duplicate_owners = Vec::new();
+            store.set_config(ProjectAuthConfig {
+                allow_duplicate_emails,
+                ..ProjectAuthConfig::default()
+            });
+            if allow_duplicate_emails {
+                for raw_id in ["duplicate-owner-a", "duplicate-owner-b"] {
+                    let result = store.sign_in_with_idp(
+                        FederatedIdentity {
+                            provider_id: "example.test".to_owned(),
+                            raw_id: raw_id.to_owned(),
+                            email: Some("shared@example.com".to_owned()),
+                            display_name: None,
+                            photo_url: None,
+                        },
+                        true,
+                        NOW,
+                    ).unwrap();
+                    let super::IdpSignIn::SignedIn { uid, .. } = result else {
+                        unreachable!("new IdP fixture completes sign-in")
+                    };
+                    duplicate_owners.push(uid);
+                }
+                active_emails.insert(
+                    "shared@example.com".to_owned(),
+                    duplicate_owners[1].clone(),
+                );
+                assert_eq!(store.local_ids_for_email["shared@example.com"].len(), 2);
+                assert_indexes(&store, &active_emails);
+            }
+            for (kind, user_slot, value_slot) in operations {
+                let key = match user_slot {
+                    16 | 17 if allow_duplicate_emails => {
+                        duplicate_owners[usize::from(user_slot - 16)].clone()
+                    }
+                    _ => LocalId(format!("user-{user_slot}")),
+                };
+                let uid = key.as_str().to_owned();
+                let old_email = store.users.get(&key).and_then(|user| user.email.clone());
+                let succeeded = match kind {
+                    0 => {
+                        store.create_user_with_id(
+                            NewUser::email(&format!("email-{user_slot}@example.com")),
+                            Some(&uid),
+                            NOW,
+                        ).is_ok()
+                    }
+                    1 => {
+                        store.set_email(&key, &format!("email-{value_slot}@example.com")).is_ok()
+                    }
+                    2 => {
+                        store.clear_email(&key).is_ok()
+                    }
+                    3 => {
+                        store.set_phone_number(
+                            &key,
+                            Some(&format!("+1555000{value_slot:04}")),
+                        ).is_ok()
+                    }
+                    4 => {
+                        store.set_phone_number(&key, None).is_ok()
+                    }
+                    5 => {
+                        store.link_federated(
+                            &key,
+                            FederatedIdentity {
+                                provider_id: format!("provider-{}.test", value_slot % 3),
+                                raw_id: format!("subject-{value_slot}"),
+                                email: None,
+                                display_name: None,
+                                photo_url: None,
+                            },
+                        ).is_ok()
+                    }
+                    6 => {
+                        let existed = store.users.contains_key(&key);
+                        store.record_sign_in(&key, NOW);
+                        existed
+                    }
+                    _ => store.delete_user_by_id(&uid).is_ok(),
+                };
+                if succeeded {
+                    match kind {
+                        0 | 1 => {
+                            if let Some(old_email) = old_email {
+                                active_emails.remove(&old_email);
+                            }
+                            if let Some(email) = store.users.get(&key).and_then(|u| u.email.clone()) {
+                                active_emails.insert(email, key.clone());
+                            }
+                        }
+                        2 | 7 => {
+                            if let Some(old_email) = old_email {
+                                active_emails.remove(&old_email);
+                            }
+                        }
+                        _ => {
+                            if let Some(email) = store.users.get(&key).and_then(|u| u.email.clone()) {
+                                active_emails.insert(email, key.clone());
+                            }
+                        }
+                    }
+                }
+                assert_indexes(&store, &active_emails);
+            }
+        }
     }
 }
 

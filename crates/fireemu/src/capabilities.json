@@ -180,6 +180,7 @@
       "one route table (crates/fireemu-adapter-http/src/identity_toolkit/routes.rs) drives dispatch, the App Check bypass classification and the bounded operation labels; a route cannot be dispatched without a label",
       "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; expired entries are swept before every request and never observable; refresh tokens are not swept",
       "Admin batchCreate (importUsers) verifies a rawPassword or the emulator's fakeHash form; any other passwordHash is kept out and the account is created without a password credential, which is observably what the official emulator does with a hash it cannot compare",
+      "Admin accounts:query preserves the official emulator's unbounded, ignored-limit behavior under the firebase profile; strict applies the documented Identity Platform default and maximum page size of 500, offset ordering, count semantics and field validation as an explicit production-oriented boundary",
       "conformance: auth/sign-up-and-sign-in-errors, auth/identity-toolkit-error-shapes, auth/oob-code-shapes, auth/admin-account-lifecycle, auth/client-account-flows (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "status": "implemented"

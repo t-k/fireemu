@@ -36,6 +36,7 @@ fn state() -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -197,6 +198,7 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
 #[test]
 fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     let s = AuthState {
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,

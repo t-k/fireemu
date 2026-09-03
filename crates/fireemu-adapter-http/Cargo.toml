@@ -37,3 +37,7 @@ workspace = true
 [[bench]]
 name = "auth_signing_parallel"
 harness = false
+
+[[bench]]
+name = "auth_index_scaling"
+harness = false

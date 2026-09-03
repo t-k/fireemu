@@ -35,6 +35,7 @@ fn state() -> Arc<AuthState> {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,

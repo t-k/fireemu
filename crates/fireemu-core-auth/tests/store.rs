@@ -211,6 +211,80 @@ fn duplicate_email_mode_creates_a_distinct_idp_account_but_keeps_password_signup
         idp_user,
         "the last created duplicate is the active email lookup target"
     );
+    s.delete_user_by_id(password_user.as_str()).unwrap();
+    assert!(
+        s.user_by_email("shared@example.com").is_none(),
+        "the official emulator clears its single email index when any duplicate is deleted"
+    );
+}
+
+#[test]
+fn duplicate_email_active_owner_follows_updates_and_any_owner_deletion_clears_it() {
+    let mut s = store();
+    s.set_config(ProjectAuthConfig {
+        allow_duplicate_emails: true,
+        ..ProjectAuthConfig::default()
+    });
+    let fireemu_core_auth::store::IdpSignIn::SignedIn { uid: first, .. } = s
+        .sign_in_with_idp(
+            federated("oidc.partner", "first", Some("shared@example.com")),
+            true,
+            t0(),
+        )
+        .unwrap()
+    else {
+        panic!("expected a completed IdP sign-in");
+    };
+    let fireemu_core_auth::store::IdpSignIn::SignedIn { uid: second, .. } = s
+        .sign_in_with_idp(
+            federated("oidc.partner", "second", Some("shared@example.com")),
+            true,
+            t(1),
+        )
+        .unwrap()
+    else {
+        panic!("expected a completed IdP sign-in");
+    };
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        second
+    );
+
+    s.set_phone_number(&first, Some("+15550000001")).unwrap();
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        first,
+        "a non-email update makes that duplicate the active owner"
+    );
+    s.record_sign_in(&second, t(2));
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        second,
+        "a sign-in is also an official user update"
+    );
+    let factor = s
+        .enroll_phone_factor(&first, "+15550000002", None, t(3))
+        .unwrap();
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        first,
+        "MFA enrollment updates the official user record"
+    );
+    s.record_sign_in(&second, t(4));
+    assert!(s
+        .unenroll_factor(&first, &factor.mfa_enrollment_id)
+        .unwrap());
+    assert_eq!(
+        s.user_by_email("shared@example.com").unwrap().local_id,
+        first,
+        "MFA withdrawal updates the official user record"
+    );
+    s.record_sign_in(&second, t(5));
+    s.delete_user_by_id(first.as_str()).unwrap();
+    assert!(
+        s.user_by_email("shared@example.com").is_none(),
+        "deleting any duplicate clears the official emulator's single active index"
+    );
 }
 
 #[test]

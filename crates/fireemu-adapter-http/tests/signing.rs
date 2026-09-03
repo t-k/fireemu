@@ -91,6 +91,7 @@ fn auth_jwks_uses_the_signers_precomputed_structured_key() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -157,6 +158,7 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -227,6 +229,7 @@ fn blocking_auth_with_fifty_thousand_sessions_copies_only_changed_registries() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -418,6 +421,7 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -493,6 +497,7 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,

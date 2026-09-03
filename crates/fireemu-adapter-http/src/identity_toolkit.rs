@@ -362,6 +362,16 @@ pub enum FakeCustomTokenExpiry {
     Reject,
 }
 
+/// Whether Admin `accounts:query` follows the unbounded official emulator behavior or the
+/// documented production page contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthQueryLimits {
+    /// Preserve Firebase Auth Emulator compatibility: `limit` and `offset` are ignored.
+    EmulatorUnbounded,
+    /// Apply Identity Platform's default and maximum page size of 500.
+    ProductionBounded,
+}
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
@@ -398,6 +408,8 @@ pub struct AuthState {
     pub stateless_refresh_tokens: bool,
     /// Expiry policy for unsigned fake custom tokens.
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
+    /// Profile-specific Admin query behavior.
+    pub query_limits: AuthQueryLimits,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
     pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
@@ -1524,7 +1536,7 @@ pub fn handle_with(
                 route.handler,
                 routes::Handler::AdminCreate | routes::Handler::AdminBatchCreate
             )
-            && !store.all_user_ids().is_empty();
+            && store.user_count() != 0;
         drop(store);
         if retain_candidate {
             let project = pending_routed_project.expect("checked above");
@@ -1622,6 +1634,7 @@ struct DispatchOptions {
     totp_extension_enabled: bool,
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
+    query_limits: AuthQueryLimits,
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -1630,6 +1643,7 @@ impl From<&AuthState> for DispatchOptions {
             totp_extension_enabled: state.totp_extension_enabled,
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
+            query_limits: state.query_limits,
         }
     }
 }
@@ -1708,7 +1722,7 @@ fn dispatch(
         Handler::AdminBatchGet => admin_batch_get(store, query, body),
         Handler::AdminBatchCreate => admin_batch_create(store, body, at),
         Handler::AdminBatchDelete => admin_batch_delete(store, body),
-        Handler::AdminQuery => admin_query(store, body),
+        Handler::AdminQuery => admin_query(store, body, options.query_limits),
         // Admin link generators: the code and link come back to the caller.
         Handler::AdminSendOobCode => {
             let mut with_link = body.clone();
@@ -3282,9 +3296,10 @@ fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
     }
 }
 
-/// Admin `accounts:query` (`queryAccounts`): the count, or every user in `localId` order.
-/// Expressions, limits and offsets are not implemented by the official emulator either.
-fn admin_query(store: &AuthStore, body: &Value) -> JsonResponse {
+/// Admin `accounts:query` (`queryAccounts`): the count, or users in `localId` order.
+/// Expressions are not implemented by the official emulator either. The Firebase profile
+/// preserves its ignored paging fields; strict applies the documented production contract.
+fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> JsonResponse {
     if body
         .get("expression")
         .and_then(Value::as_array)
@@ -3292,12 +3307,38 @@ fn admin_query(store: &AuthStore, body: &Value) -> JsonResponse {
     {
         return not_implemented("expression is not implemented.");
     }
+    let return_user_info = if limits == AuthQueryLimits::ProductionBounded {
+        match opt_bool(body, "returnUserInfo") {
+            Ok(value) => value.unwrap_or(true),
+            Err(response) => return response,
+        }
+    } else {
+        body.get("returnUserInfo").and_then(Value::as_bool) != Some(false)
+    };
+    if limits == AuthQueryLimits::ProductionBounded {
+        if let Err(response) = validate_production_admin_query_enums(body) {
+            return response;
+        }
+    }
     let count = store.user_count();
-    if body.get("returnUserInfo").and_then(Value::as_bool) == Some(false) {
+    if !return_user_info {
+        if limits == AuthQueryLimits::ProductionBounded
+            && ["limit", "offset"]
+                .iter()
+                .any(|field| body.get(*field).is_some_and(|value| !value.is_null()))
+        {
+            return error(
+                400,
+                "INVALID_ARGUMENT : limit and offset require returnUserInfo",
+            );
+        }
         return JsonResponse {
             status: 200,
             body: json!({"recordsCount": count.to_string()}),
         };
+    }
+    if limits == AuthQueryLimits::ProductionBounded {
+        return production_admin_query_page(store, body);
     }
     let mut ids = store.all_user_ids();
     if str_field(body, "order") == Some("DESC") {
@@ -3307,6 +3348,54 @@ fn admin_query(store: &AuthStore, body: &Value) -> JsonResponse {
     JsonResponse {
         status: 200,
         body: json!({"recordsCount": count.to_string(), "userInfo": users}),
+    }
+}
+
+fn production_admin_query_page(store: &AuthStore, body: &Value) -> JsonResponse {
+    // Enum fields were validated before the count-only branch in `admin_query`.
+    let descending = str_field(body, "order") == Some("DESC");
+    let limit = match query_i64(body, "limit", 500) {
+        Ok(limit @ 0..=500) => usize::try_from(limit).unwrap_or(500),
+        Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid limit"),
+    };
+    let offset = match query_i64(body, "offset", 0) {
+        Ok(offset @ 0..) => match usize::try_from(offset) {
+            Ok(offset) => offset,
+            Err(_) => return error(400, "INVALID_ARGUMENT : invalid offset"),
+        },
+        Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
+    };
+    let page = store.users_by_local_id_page(offset, limit, descending);
+    let users = page
+        .iter()
+        .map(|user| user_json(store, &user.local_id))
+        .collect::<Vec<_>>();
+    JsonResponse {
+        status: 200,
+        body: json!({"recordsCount": users.len().to_string(), "userInfo": users}),
+    }
+}
+
+fn validate_production_admin_query_enums(body: &Value) -> Result<(), JsonResponse> {
+    match opt_str(body, "sortBy") {
+        Ok(None | Some("SORT_BY_FIELD_UNSPECIFIED" | "USER_ID")) => {}
+        Ok(Some("NAME" | "CREATED_AT" | "LAST_LOGIN_AT" | "USER_EMAIL")) => {
+            return Err(not_implemented("sortBy is not implemented."));
+        }
+        Ok(Some(_)) | Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
+    }
+    match opt_str(body, "order") {
+        Ok(None | Some("ORDER_UNSPECIFIED" | "ASC" | "DESC")) => Ok(()),
+        Ok(Some(_)) | Err(_) => Err(error(400, "INVALID_ARGUMENT : invalid order")),
+    }
+}
+
+fn query_i64(body: &Value, field: &str, default: i64) -> Result<i64, ()> {
+    match body.get(field) {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::String(value)) => value.parse().map_err(|_| ()),
+        Some(Value::Number(value)) => value.as_i64().ok_or(()),
+        Some(_) => Err(()),
     }
 }
 

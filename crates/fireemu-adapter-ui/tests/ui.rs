@@ -143,6 +143,8 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             registry: None,
             allow_routed_projects: false,
             stateless_refresh_tokens: true,
+            query_limits:
+                fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
             fake_custom_token_expiry:
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
             app_check: None,

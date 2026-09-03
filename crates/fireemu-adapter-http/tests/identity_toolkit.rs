@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, AuthBlockingHook, AuthState, BlockingFunctionCode, BlockingFunctionFailure,
+    handle, AuthBlockingHook, AuthQueryLimits, AuthState, BlockingFunctionCode,
+    BlockingFunctionFailure,
 };
 use fireemu_adapter_http::signing::RsaSigner;
 use fireemu_core_auth::base32;
@@ -278,6 +279,7 @@ fn state() -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        query_limits: AuthQueryLimits::EmulatorUnbounded,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -295,6 +297,7 @@ fn state_with_totp_extension() -> AuthState {
 
 fn strict_state() -> AuthState {
     AuthState {
+        query_limits: AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
@@ -1824,6 +1827,120 @@ fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
     assert_eq!(status, 200);
     assert_eq!(count["recordsCount"], "5");
     assert!(count.get("userInfo").is_none());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn strict_admin_query_applies_the_production_page_contract() {
+    let strict = strict_state();
+    for index in 0..503 {
+        let (status, body) = admin(
+            &strict,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": format!("user-{index:03}")}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+
+    let (status, first) = admin(
+        &strict,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["recordsCount"], "500");
+    assert_eq!(first["userInfo"].as_array().map(Vec::len), Some(500));
+    assert_eq!(first["userInfo"][0]["localId"], "user-000");
+
+    let (status, page) = admin(
+        &strict,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"limit": "2", "offset": "500", "order": "ASC"}),
+    );
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(page["recordsCount"], "2");
+    assert_eq!(page["userInfo"][0]["localId"], "user-500");
+    assert_eq!(page["userInfo"][1]["localId"], "user-501");
+
+    let (status, descending) = admin(
+        &strict,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"limit": "2", "offset": "1", "order": "DESC"}),
+    );
+    assert_eq!(status, 200, "{descending}");
+    assert_eq!(descending["userInfo"][0]["localId"], "user-501");
+
+    let (status, numeric_page) = admin(
+        &strict,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"limit": 2, "offset": 500, "sortBy": "USER_ID"}),
+    );
+    assert_eq!(status, 200, "{numeric_page}");
+    assert_eq!(numeric_page["userInfo"].as_array().map(Vec::len), Some(2));
+
+    let (status, count) = admin(
+        &strict,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"returnUserInfo": false, "limit": null, "offset": null}),
+    );
+    assert_eq!(status, 200, "{count}");
+    assert_eq!(count["recordsCount"], "503");
+
+    let (status, unsupported_sort) = admin(
+        &strict,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"sortBy": "NAME"}),
+    );
+    assert_eq!(status, 501, "{unsupported_sort}");
+
+    for invalid in [
+        json!({"limit": "501"}),
+        json!({"limit": "-1"}),
+        json!({"offset": "-1"}),
+        json!({"returnUserInfo": "true"}),
+        json!({"order": "SIDEWAYS"}),
+        json!({"order": 1}),
+        json!({"sortBy": "SIDEWAYS"}),
+        json!({"sortBy": 1}),
+        json!({"returnUserInfo": false, "order": "SIDEWAYS"}),
+        json!({"returnUserInfo": false, "sortBy": "SIDEWAYS"}),
+        json!({"returnUserInfo": false, "limit": "2"}),
+    ] {
+        let (status, _) = admin(
+            &strict,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &invalid,
+        );
+        assert_eq!(status, 400, "{invalid}");
+    }
+
+    let firebase = state();
+    for index in 0..501 {
+        let (status, _) = admin(
+            &firebase,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": format!("firebase-{index:03}")}),
+        );
+        assert_eq!(status, 200);
+    }
+    let (status, unbounded) = admin(
+        &firebase,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"limit": "2"}),
+    );
+    assert_eq!(status, 200, "{unbounded}");
+    assert_eq!(unbounded["recordsCount"], "501");
+    assert_eq!(unbounded["userInfo"].as_array().map(Vec::len), Some(501));
 }
 
 #[test]

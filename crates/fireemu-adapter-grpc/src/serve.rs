@@ -11,6 +11,7 @@ use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::service::service_fn;
+use hyper::HeaderMap;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
@@ -243,6 +244,43 @@ fn is_grpc(req: &Request<Incoming>) -> bool {
     header(req, "content-type").is_some_and(|ct| ct.starts_with("application/grpc"))
 }
 
+fn normalize_prost_recursion_status(headers: &mut HeaderMap) {
+    let Some(status) = Status::from_header_map(headers) else {
+        return;
+    };
+    if status.code() != tonic::Code::Internal
+        || !status
+            .message()
+            .starts_with("failed to decode Protobuf message:")
+        || !status.message().ends_with("recursion limit reached")
+    {
+        return;
+    }
+    let replacement = Status::invalid_argument(format!(
+        "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum {}, got more than {}",
+        fireemu_core_firestore::value::MAX_NESTING_DEPTH,
+        fireemu_core_firestore::value::MAX_NESTING_DEPTH
+    ));
+    let mut replacement_headers = HeaderMap::new();
+    if replacement.add_header(&mut replacement_headers).is_err() {
+        return;
+    }
+    headers.remove(Status::GRPC_STATUS_DETAILS);
+    if let Some(value) = replacement_headers.remove(Status::GRPC_STATUS) {
+        headers.insert(Status::GRPC_STATUS, value);
+    }
+    if let Some(value) = replacement_headers.remove(Status::GRPC_MESSAGE) {
+        headers.insert(Status::GRPC_MESSAGE, value);
+    }
+}
+
+fn normalize_prost_recursion_frame(mut frame: Frame<Bytes>) -> Frame<Bytes> {
+    if let Some(trailers) = frame.trailers_mut() {
+        normalize_prost_recursion_status(trailers);
+    }
+    frame
+}
+
 fn channel_kind(path: &str) -> Option<StreamKind> {
     match path {
         "/google.firestore.v1.Firestore/Listen/channel" => Some(StreamKind::Listen),
@@ -284,10 +322,11 @@ where
                         let req = req.map(|b| {
                             tonic::body::Body::new(b.map_err(|e| Status::internal(e.to_string())))
                         });
-                        let response = match grpc.call(req).await {
+                        let mut response = match grpc.call(req).await {
                             Ok(r) => r,
                             Err(never) => match never {},
                         };
+                        normalize_prost_recursion_status(response.headers_mut());
                         if response
                             .headers()
                             .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -296,9 +335,11 @@ where
                             // the connection closed (HTTP/1) instead of delivering it.
                             return Err(dropped());
                         }
-                        return Ok::<_, std::io::Error>(
-                            response.map(|b| b.map_err(|e| Box::new(e) as BoxError).boxed_unsync()),
-                        );
+                        return Ok::<_, std::io::Error>(response.map(|b| {
+                            b.map_frame(normalize_prost_recursion_frame)
+                                .map_err(|e| Box::new(e) as BoxError)
+                                .boxed_unsync()
+                        }));
                     }
                     if let Some(origin) = header(&req, "origin") {
                         if !crate::webchannel::origin_is_local(origin) {
@@ -330,5 +371,57 @@ where
                 .serve_connection(io, svc)
                 .await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_prost_recursion_status;
+    use bytes::Bytes;
+    use hyper::HeaderMap;
+    use tonic::{Code, Status};
+
+    fn headers(status: &Status) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        status.add_header(&mut headers).unwrap();
+        headers
+    }
+
+    #[test]
+    fn only_the_prost_recursion_failure_is_normalized() {
+        let ordinary = Status::with_details(
+            Code::Internal,
+            "backend failed",
+            Bytes::from_static(b"details"),
+        );
+        let mut ordinary_headers = headers(&ordinary);
+        normalize_prost_recursion_status(&mut ordinary_headers);
+        let unchanged = Status::from_header_map(&ordinary_headers).unwrap();
+        assert_eq!(unchanged.code(), Code::Internal);
+        assert_eq!(unchanged.message(), "backend failed");
+        assert_eq!(unchanged.details(), b"details");
+
+        let already_client_error =
+            Status::invalid_argument("failed to decode Protobuf message: recursion limit reached");
+        let mut client_headers = headers(&already_client_error);
+        normalize_prost_recursion_status(&mut client_headers);
+        assert_eq!(
+            Status::from_header_map(&client_headers).unwrap().message(),
+            already_client_error.message()
+        );
+
+        let prost = Status::with_details(
+            Code::Internal,
+            "failed to decode Protobuf message: Value.value_type: recursion limit reached",
+            Bytes::from_static(b"stale-internal-details"),
+        );
+        let mut prost_headers = headers(&prost);
+        normalize_prost_recursion_status(&mut prost_headers);
+        let normalized = Status::from_header_map(&prost_headers).unwrap();
+        assert_eq!(normalized.code(), Code::InvalidArgument);
+        assert!(normalized
+            .message()
+            .contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+        assert!(normalized.details().is_empty());
     }
 }

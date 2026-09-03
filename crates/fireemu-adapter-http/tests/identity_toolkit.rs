@@ -1482,6 +1482,16 @@ fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
         &json!({}),
     );
     assert_eq!(status, 400);
+
+    let (status, count) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"returnUserInfo": false}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(count["recordsCount"], "5");
+    assert!(count.get("userInfo").is_none());
 }
 
 #[test]

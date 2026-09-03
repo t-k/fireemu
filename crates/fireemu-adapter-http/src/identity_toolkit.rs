@@ -3195,7 +3195,7 @@ fn admin_query(store: &AuthStore, body: &Value) -> JsonResponse {
     {
         return not_implemented("expression is not implemented.");
     }
-    let count = store.all_user_ids().len();
+    let count = store.user_count();
     if body.get("returnUserInfo").and_then(Value::as_bool) == Some(false) {
         return JsonResponse {
             status: 200,

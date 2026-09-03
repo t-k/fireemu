@@ -1224,6 +1224,12 @@ impl AuthStore {
         self.users.keys().cloned().collect()
     }
 
+    /// Number of users without allocating an ID list.
+    #[must_use]
+    pub fn user_count(&self) -> usize {
+        self.users.len()
+    }
+
     /// A cheap estimate of the heap bytes the user records hold (`SNAP-MEM-01`), each user
     /// counted once. Saturating throughout, so no store -- however large or adversarial -- can
     /// overflow the estimate into a small number and slip past a byte budget.

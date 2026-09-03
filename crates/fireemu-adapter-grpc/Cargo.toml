@@ -9,6 +9,7 @@ publish.workspace = true
 description = "gRPC shell: Firestore v1 wire decoding, strict gateway validation, optional upstream proxy"
 
 [dependencies]
+fireemu-adapter-support = { path = "../fireemu-adapter-support" }
 fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-limits = { path = "../fireemu-core-limits" }
 fireemu-core-firestore = { path = "../fireemu-core-firestore" }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -119,16 +119,14 @@ async fn respond(
             .collect(),
     };
     // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
-    let collected = Limited::new(req.into_body(), MAX_BODY_BYTES)
-        .collect()
-        .await;
+    let collected =
+        fireemu_adapter_support::body::collect_limited(req.into_body(), MAX_BODY_BYTES).await;
     let (status, body) = match collected {
         Err(_) => (
             413,
             serde_json::json!({"error": {"code": 413, "message": "PAYLOAD_TOO_LARGE"}}),
         ),
-        Ok(collected) => {
-            let bytes = collected.to_bytes();
+        Ok(bytes) => {
             // Dispatched before the control API: the exchange and the JWKS are public on
             // loopback, while every debug-token management route checks the control token
             // itself, for every method and whatever the Origin.

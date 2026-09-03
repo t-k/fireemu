@@ -339,14 +339,15 @@ enum Dialect {
 /// a prefix, and it binds to the metadata the caller actually resolved: the same bucket, the
 /// same decoded object name and the same generation the request selected.
 fn download_token_matches(meta: Option<&ObjectMetadata>, presented: Option<&str>) -> bool {
-    use subtle::ConstantTimeEq as _;
     let (Some(meta), Some(presented)) = (meta, presented) else {
         return false;
     };
     let mut matched = false;
     for token in &meta.download_tokens {
-        let same = token.len() == presented.len()
-            && bool::from(token.as_bytes().ct_eq(presented.as_bytes()));
+        let same = fireemu_adapter_support::secret::constant_time_eq(
+            token.as_bytes(),
+            presented.as_bytes(),
+        );
         matched |= same;
     }
     matched
@@ -1849,8 +1850,6 @@ fn bucket_name(bucket: &str) -> Result<BucketName, StorageResponse> {
 }
 
 fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bool {
-    use subtle::ConstantTimeEq as _;
-
     let (Some(capability), Some(presented)) = (
         state.admin_capability.as_deref(),
         req.header("authorization"),
@@ -1868,7 +1867,7 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
         "Basic {}",
         fireemu_core_storage::hash::base64(format!("fireemu:{capability}").as_bytes())
     );
-    presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
+    fireemu_adapter_support::secret::constant_time_eq(presented.as_bytes(), expected.as_bytes())
 }
 
 fn object_name(name: &str) -> Result<ObjectName, StorageResponse> {

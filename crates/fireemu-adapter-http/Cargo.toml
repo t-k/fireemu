@@ -9,6 +9,7 @@ publish.workspace = true
 description = "HTTP shell: Identity Toolkit (Firebase Auth) REST subset over hyper"
 
 [dependencies]
+fireemu-adapter-support = { path = "../fireemu-adapter-support" }
 fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-auth = { path = "../fireemu-core-auth" }
 fireemu-core-app-check = { path = "../fireemu-core-app-check" }

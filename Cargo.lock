@@ -531,6 +531,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "fireemu-adapter-grpc",
+ "fireemu-adapter-support",
  "fireemu-core-app-check",
  "fireemu-core-auth",
  "fireemu-core-events",
@@ -554,6 +555,7 @@ name = "fireemu-adapter-grpc"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "fireemu-adapter-support",
  "fireemu-core-app-check",
  "fireemu-core-auth",
  "fireemu-core-firestore",
@@ -578,6 +580,7 @@ name = "fireemu-adapter-http"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "fireemu-adapter-support",
  "fireemu-core-app-check",
  "fireemu-core-auth",
  "fireemu-core-firestore",
@@ -626,6 +629,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fireemu-adapter-support"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "http-body",
+ "http-body-util",
+ "subtle",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "fireemu-adapter-ui"
 version = "0.1.0"
 dependencies = [
@@ -633,6 +649,7 @@ dependencies = [
  "fireemu-adapter-functions",
  "fireemu-adapter-grpc",
  "fireemu-adapter-http",
+ "fireemu-adapter-support",
  "fireemu-core-app-check",
  "fireemu-core-auth",
  "fireemu-core-firestore",

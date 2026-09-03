@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Full, Limited, StreamBody};
+use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -86,10 +86,11 @@ async fn respond(
         return Ok(to_hyper(refusal));
     }
     let limit = body_limit(&request.path);
-    request.body = match Limited::new(req.into_body(), limit).collect().await {
-        Ok(c) => c.to_bytes().to_vec(),
-        Err(_) => return Ok(to_hyper(UiResponse::error(413, "PAYLOAD_TOO_LARGE"))),
-    };
+    request.body =
+        match fireemu_adapter_support::body::collect_limited(req.into_body(), limit).await {
+            Ok(bytes) => bytes.to_vec(),
+            Err(_) => return Ok(to_hyper(UiResponse::error(413, "PAYLOAD_TOO_LARGE"))),
+        };
     let response = handle(&state, &request).await;
     if response
         .headers

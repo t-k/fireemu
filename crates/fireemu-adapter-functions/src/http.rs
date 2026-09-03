@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -455,8 +455,8 @@ fn task_route(
 
 /// Reads a request body up to the forwarding limit, or the 413 that replaces it.
 async fn collect_body(body: Incoming) -> Result<Bytes, Refusal> {
-    match Limited::new(body, MAX_FUNCTION_BODY_BYTES).collect().await {
-        Ok(collected) => Ok(collected.to_bytes()),
+    match fireemu_adapter_support::body::collect_limited(body, MAX_FUNCTION_BODY_BYTES).await {
+        Ok(bytes) => Ok(bytes),
         Err(_) => Err(Box::new(simple(
             StatusCode::PAYLOAD_TOO_LARGE,
             "request body too large",

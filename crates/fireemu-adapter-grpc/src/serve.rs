@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use http_body_util::combinators::UnsyncBoxBody;
-use http_body_util::{BodyExt, Full, Limited, StreamBody};
+use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -89,10 +89,8 @@ fn header<'a>(req: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
 }
 
 async fn read_body(req: Request<Incoming>, limit: usize) -> Result<Bytes, ()> {
-    Limited::new(req.into_body(), limit)
-        .collect()
+    fireemu_adapter_support::body::collect_limited(req.into_body(), limit)
         .await
-        .map(http_body_util::Collected::to_bytes)
         .map_err(|_| ())
 }
 

@@ -281,12 +281,7 @@ fn ok(body: Value) -> JsonResponse {
 /// other credentials the daemon holds (debug tokens, download tokens, the runner secret).
 #[must_use]
 pub fn token_matches(presented: Option<&str>, expected: &str) -> bool {
-    use subtle::ConstantTimeEq as _;
-    let Some(presented) = presented else {
-        return false;
-    };
-    // A length mismatch is a mismatch; lengths are not secret.
-    presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
+    fireemu_adapter_support::secret::optional_str_matches(presented, expected)
 }
 
 /// What the session owning `project` owns.

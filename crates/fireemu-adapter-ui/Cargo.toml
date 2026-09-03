@@ -10,6 +10,7 @@ description = "Emulator UI: the embedded single-page app and its same-origin pri
 build = "build.rs"
 
 [dependencies]
+fireemu-adapter-support = { path = "../fireemu-adapter-support" }
 fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-auth = { path = "../fireemu-core-auth" }
 fireemu-core-session = { path = "../fireemu-core-session" }

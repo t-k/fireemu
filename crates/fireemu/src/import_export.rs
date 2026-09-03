@@ -64,7 +64,7 @@ use crate::config::Selection;
 
 #[cfg(all(test, unix))]
 #[path = "../../../tests/support/trusted_temp.rs"]
-mod trusted_temp;
+pub(crate) mod trusted_temp;
 
 /// The CLI version an export manifest is stamped with. The official emulator writes the
 /// `firebase-tools` version here; fireemu writes the version it is compatible with, so that

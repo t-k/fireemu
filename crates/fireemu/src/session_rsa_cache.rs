@@ -360,10 +360,6 @@ fn publish_entry(directory: &std::fs::File, name: &str, seed: u64, envelope: &[u
     }
 }
 
-#[cfg(all(test, unix))]
-#[path = "../../../tests/support/trusted_temp.rs"]
-mod trusted_temp;
-
 #[cfg(test)]
 mod tests {
     #[cfg(not(unix))]
@@ -371,14 +367,14 @@ mod tests {
 
     use fireemu_core_auth::jwt::IdTokenSigner as _;
 
-    #[cfg(unix)]
-    use super::trusted_temp::TrustedTempDir;
     use super::{
         cache_base_for, cache_entry_path, load_or_generate_at, secure_file_metadata,
         CacheFileMetadata,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{entry_name, load_entry, open_cache_directory, EntryLoad};
+    #[cfg(unix)]
+    use crate::import_export::trusted_temp::TrustedTempDir;
 
     #[cfg(unix)]
     fn scratch(name: &str) -> TrustedTempDir {

@@ -164,6 +164,25 @@ fn update_watch_hash(hash: u64, byte: u8) -> u64 {
     hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
 }
 
+/// Aggregate sustained read budget for all Functions source supervisors in one daemon.
+const MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND: u64 = 64 * 1024 * 1024;
+/// Aggregate sustained metadata-walk budget for source trees dominated by small files.
+const MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND: u64 = 20_000;
+
+fn rate_pacing_delay(units: u64, units_per_second: u64) -> Duration {
+    let nanos = u128::from(units)
+        .saturating_mul(1_000_000_000)
+        .checked_div(u128::from(units_per_second))
+        .unwrap_or(u128::MAX);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+
+fn source_scan_pacing_delay(tracked_files: u64, tracked_bytes: u64) -> Duration {
+    rate_pacing_delay(tracked_bytes, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND).max(
+        rate_pacing_delay(tracked_files, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND),
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FunctionsSourceStamp {
     change_guard: u64,
@@ -286,6 +305,31 @@ async fn functions_source_stamp_off_thread(
         .map_err(|error| format!("watch worker failed: {error}"))?
 }
 
+struct FunctionsSourceScanBudget {
+    gate: tokio::sync::Semaphore,
+}
+
+impl FunctionsSourceScanBudget {
+    fn new() -> Self {
+        Self {
+            gate: tokio::sync::Semaphore::new(1),
+        }
+    }
+
+    async fn scan(&self, root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
+        let _permit = self
+            .gate
+            .acquire()
+            .await
+            .map_err(|_| "Functions source scan budget closed".to_owned())?;
+        let started = tokio::time::Instant::now();
+        let stamp = functions_source_stamp_off_thread(root, ignores).await?;
+        let pacing = source_scan_pacing_delay(stamp.tracked_files, stamp.tracked_bytes);
+        tokio::time::sleep(pacing.saturating_sub(started.elapsed())).await;
+        Ok(stamp)
+    }
+}
+
 async fn snapshot_functions_source_off_thread(
     root: &Path,
     ignores: &[String],
@@ -402,6 +446,7 @@ fn start_reload_supervisors(
     runner_secret: &str,
     callable_trusted_protocol: bool,
 ) {
+    let scan_budget = Arc::new(FunctionsSourceScanBudget::new());
     for codebase in cfg.functions_to_load() {
         tokio::spawn(supervise_codebase_reloads(
             Arc::downgrade(runtime),
@@ -410,6 +455,7 @@ fn start_reload_supervisors(
             hosts.clone(),
             runner_secret.to_owned(),
             callable_trusted_protocol,
+            scan_budget.clone(),
         ));
     }
 }
@@ -436,15 +482,16 @@ async fn supervise_codebase_reloads(
     hosts: EmulatorHosts,
     secret: String,
     callable_trusted_protocol: bool,
+    scan_budget: Arc<FunctionsSourceScanBudget>,
 ) {
     let root = PathBuf::from(&codebase.source);
-    let mut observed_stamp = functions_source_stamp(&root, &codebase.ignore).ok();
+    let mut observed_stamp = scan_budget.scan(&root, &codebase.ignore).await.ok();
     loop {
         tokio::time::sleep(Duration::from_millis(750)).await;
         let Some(runtime) = weak_runtime.upgrade() else {
             return;
         };
-        let next_stamp = match functions_source_stamp_off_thread(&root, &codebase.ignore).await {
+        let next_stamp = match scan_budget.scan(&root, &codebase.ignore).await {
             Ok(stamp) => stamp,
             Err(reason) => {
                 eprintln!(
@@ -458,7 +505,8 @@ async fn supervise_codebase_reloads(
             continue;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
-        let stable_stamp = functions_source_stamp_off_thread(&root, &codebase.ignore)
+        let stable_stamp = scan_budget
+            .scan(&root, &codebase.ignore)
             .await
             .unwrap_or(next_stamp);
         if stable_stamp != next_stamp {
@@ -480,8 +528,8 @@ async fn supervise_codebase_reloads(
             }
         };
         let (snapshot_stamp, current_stamp) = tokio::join!(
-            functions_source_stamp_off_thread(&snapshot, &codebase.ignore),
-            functions_source_stamp_off_thread(&root, &codebase.ignore),
+            scan_budget.scan(&snapshot, &codebase.ignore),
+            scan_budget.scan(&root, &codebase.ignore),
         );
         if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
             || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
@@ -2449,14 +2497,47 @@ mod tests {
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
         functions_source_stamp, hash_source_stamp_entry, node_engine_matches, package_node_engine,
         parse_node_version, provision_function_pubsub_resources, select_node_installation,
-        snapshot_functions_source, update_watch_hash, validate_functions_codebase_budget,
-        NodeInstallation, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        snapshot_functions_source, source_scan_pacing_delay, update_watch_hash,
+        validate_functions_codebase_budget, NodeInstallation, BLOCKING_AUTH_DEADLINE,
+        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
+        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
     use serde_json::json;
+
+    #[test]
+    fn source_scan_pacing_charges_every_tracked_byte_to_one_global_rate() {
+        assert_eq!(source_scan_pacing_delay(0, 0), Duration::ZERO);
+        assert_eq!(
+            source_scan_pacing_delay(0, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            source_scan_pacing_delay(0, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND / 4),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            (0..32)
+                .map(|_| source_scan_pacing_delay(0, 2 * 1024 * 1024))
+                .sum::<Duration>(),
+            Duration::from_secs(1),
+            "32 codebases share the same 64 MiB/s budget instead of multiplying it"
+        );
+        assert_eq!(
+            source_scan_pacing_delay(MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, 0),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            (0..32)
+                .map(|_| source_scan_pacing_delay(625, 0))
+                .sum::<Duration>(),
+            Duration::from_secs(1),
+            "many small files share one global metadata-walk budget"
+        );
+    }
 
     #[test]
     fn runtime_refuses_too_many_codebases_before_starting_runners() {
@@ -3050,6 +3131,49 @@ mod tests {
         let second = functions_source_stamp(&root, &[]).unwrap();
         assert_ne!(second.content_signature, first.content_signature);
         assert_ne!(second, first);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "release-only Functions source scan performance gate"]
+    fn source_stamp_sustains_the_documented_scan_throughput() {
+        const FILES: usize = 32;
+        const BYTES_PER_FILE: usize = 1024 * 1024;
+        const MIN_BYTES_PER_SECOND: u128 = 16 * 1024 * 1024;
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-source-throughput-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let payload = vec![b'x'; BYTES_PER_FILE];
+        for index in 0..FILES {
+            std::fs::write(root.join(format!("source-{index:03}.js")), &payload).unwrap();
+        }
+        let expected_bytes = u64::try_from(FILES * BYTES_PER_FILE).unwrap();
+        let warm = functions_source_stamp(&root, &[]).unwrap();
+        assert_eq!(warm.tracked_bytes, expected_bytes);
+
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            let stamp = functions_source_stamp(&root, &[]).unwrap();
+            samples.push(started.elapsed());
+            assert_eq!(stamp, warm);
+        }
+        samples.sort_unstable();
+        let median = samples[samples.len() / 2];
+        let bytes_per_second = u128::from(expected_bytes)
+            .saturating_mul(1_000_000_000)
+            .checked_div(median.as_nanos().max(1))
+            .unwrap();
+        eprintln!(
+            "Functions source stamp: {expected_bytes} bytes in {median:?} ({bytes_per_second} bytes/s)"
+        );
+        assert!(
+            bytes_per_second >= MIN_BYTES_PER_SECOND,
+            "source scanning fell below the 16 MiB/s release gate: {bytes_per_second} bytes/s"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

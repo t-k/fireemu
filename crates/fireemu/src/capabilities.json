@@ -795,7 +795,7 @@
       "a function name two codebases both export is refused, naming both",
       "`source`, `codebase`, `runtime` and `ignore` are read; a codebase whose runtime is not nodejs* is refused with the language named",
       "the bundled runner selects Node before loading user code: functions.runner and FIREEMU_NODE are exact overrides; on Unix automatic candidates are the first Node on PATH plus installed runtimes under VOLTA_HOME, a Node 20+ request prefers the capability to synchronously load ES modules from CommonJS before the firebase runtime major, package.json engines.node and stable discovery order, and every effective mismatch is reported without evaluating user code twice; on Windows FIREEMU_NODE or the first PATH Node preserves the previous runner behavior",
-      "source, compiled output, dotenv, local-secret and runtime-config changes start a fresh discovery runner and atomically replace the old generation only when its trigger manifest is unchanged"
+      "source, compiled output, dotenv, local-secret and runtime-config changes start a fresh discovery runner and atomically replace the old generation only when its trigger manifest is unchanged; every non-ignored byte remains content-hashed, while one daemon-wide scan admission paces aggregate steady-state source work to 64 MiB/s and 20,000 tracked files/s"
     ],
     "unimplemented": [
       "Python (functions-framework) and Dart loader paths: refused by name, never handed to node"

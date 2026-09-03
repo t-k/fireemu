@@ -679,6 +679,28 @@ impl FunctionsRuntime {
         self.codebases.iter().map(|c| c.name.as_str()).collect()
     }
 
+    /// The current runner generation for every codebase, in configuration order.
+    ///
+    /// Callers that own process-wide concerns such as logging and shutdown must use this view
+    /// rather than the single-codebase compatibility accessor [`Self::runner`]. A hot reload may
+    /// replace an `Arc<Runner>`, so long-lived callers should refresh this snapshot periodically.
+    #[must_use]
+    pub fn current_runners(&self) -> Vec<(String, Arc<Runner>)> {
+        self.codebases
+            .iter()
+            .map(|codebase| (codebase.name.clone(), codebase.generation().runner.clone()))
+            .collect()
+    }
+
+    /// Shuts down every current codebase runner concurrently.
+    pub async fn shutdown(&self) {
+        let mut shutdowns = tokio::task::JoinSet::new();
+        for (_, runner) in self.current_runners() {
+            shutdowns.spawn(async move { runner.shutdown().await });
+        }
+        while shutdowns.join_next().await.is_some() {}
+    }
+
     /// The codebase that exported `function`.
     #[must_use]
     pub fn codebase_of(&self, function: &str) -> Option<&str> {

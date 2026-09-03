@@ -123,6 +123,71 @@ async fn start_with_runtime_options(
 }
 
 #[tokio::test]
+async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let first = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    let second = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    let first_manifest = parse_manifest(first.hello().manifest.as_ref().unwrap()).unwrap();
+    let mut second_manifest = parse_manifest(second.hello().manifest.as_ref().unwrap()).unwrap();
+    for function in &mut second_manifest.functions {
+        function.name = format!("secondary_{}", function.name);
+    }
+    let runtime = FunctionsRuntime::with_codebases(
+        vec![
+            CodebaseSpec {
+                name: "primary".to_owned(),
+                manifest: first_manifest,
+                runner: first.clone(),
+                spawn: None,
+                cleanup_dir: None,
+            },
+            CodebaseSpec {
+                name: "secondary".to_owned(),
+                manifest: second_manifest,
+                runner: second.clone(),
+                spawn: None,
+                cleanup_dir: None,
+            },
+        ],
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: SessionId::new(7),
+            max_running: 4,
+            retry_attempts: 1,
+            max_catch_up_runs: 1,
+            runner_secret: "s".into(),
+            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: None,
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+    )
+    .unwrap();
+
+    let runners = runtime.current_runners();
+    assert_eq!(
+        runners
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["primary", "secondary"]
+    );
+    assert!(runners.iter().all(|(_, runner)| runner.is_alive()));
+
+    runtime.shutdown().await;
+    assert!(!first.is_alive());
+    assert!(!second.is_alive());
+}
+
+#[tokio::test]
 async fn omitted_second_generation_concurrency_admits_two_http_requests() {
     let (runtime, _clock) = start_with_policies_and_manifest(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,

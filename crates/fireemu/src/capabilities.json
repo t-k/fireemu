@@ -733,7 +733,7 @@
       "the functions runner's log lines are fed into the bus tagged emulator=functions, and each emulator's own lifecycle line is tagged with emulator=<name>"
     ],
     "unimplemented": [
-      "function-name tagging of runner lines (a runner line carries an invocation id, not a function name) and secondary-codebase runner lines: only the first codebase's runner is polled",
+      "function-name tagging of runner lines: a runner line carries an invocation id and codebase label, but not a function name",
       "differential verification of the official Emulator UI's Logs page consuming the stream end to end (a browser matrix); the primary evidence is a Rust client that connects to the bound port and asserts the handshake and a functions log frame"
     ],
     "notes": [

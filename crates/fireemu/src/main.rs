@@ -2469,40 +2469,52 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 );
             }
         }
-        // Feed the functions runner's lines into the bus, tagged emulator=functions, by polling
-        // its log accessor (the UI's SSE stream reads the same accessor). Function-name tagging
-        // is best effort and currently absent: a runner line carries an invocation id, not a
-        // function name, and only the first codebase's runner is polled (recorded as a
-        // precision on the `logging` surface).
+        // Feed every Functions codebase runner's lines into the bus, tagged
+        // emulator=functions, by polling its log accessor. A hot reload replaces a runner, so
+        // the cursor is reset when the Arc identity changes rather than carrying the retired
+        // generation's sequence into the new log buffer.
         let functions_log_pump = functions_runtime.clone().map(|runtime| {
             let bus = log_bus.clone();
             let clock = clock.clone();
             tokio::spawn(async move {
-                let mut cursor = None;
+                let mut cursors: std::collections::BTreeMap<
+                    String,
+                    (Arc<fireemu_adapter_functions::runner::Runner>, Option<u64>),
+                > = std::collections::BTreeMap::new();
                 let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
                 loop {
                     poll.tick().await;
-                    let slice = runtime.runner().logs_since(cursor);
-                    cursor = Some(slice.next_seq);
-                    if slice.truncated {
-                        bus.publish(
-                            &fireemu_adapter_logging::LogInput::plain(
-                                "warning",
-                                "earlier function logs were truncated",
-                                clock_millis(&clock),
-                            )
-                            .for_emulator("functions"),
-                        );
-                    }
-                    for line in slice.lines {
-                        bus.publish(
-                            &fireemu_adapter_logging::LogInput::plain(
-                                "info",
-                                line,
-                                clock_millis(&clock),
-                            )
-                            .for_emulator("functions"),
-                        );
+                    let runners = runtime.current_runners();
+                    cursors.retain(|name, _| runners.iter().any(|(current, _)| current == name));
+                    for (codebase, runner) in runners {
+                        let state = cursors
+                            .entry(codebase.clone())
+                            .or_insert_with(|| (runner.clone(), None));
+                        if !Arc::ptr_eq(&state.0, &runner) {
+                            *state = (runner.clone(), None);
+                        }
+                        let slice = runner.logs_since(state.1);
+                        state.1 = Some(slice.next_seq);
+                        if slice.truncated {
+                            bus.publish(
+                                &fireemu_adapter_logging::LogInput::plain(
+                                    "warning",
+                                    format!("earlier function logs were truncated for codebase {codebase}"),
+                                    clock_millis(&clock),
+                                )
+                                .for_emulator("functions"),
+                            );
+                        }
+                        for line in slice.lines {
+                            bus.publish(
+                                &fireemu_adapter_logging::LogInput::plain(
+                                    "info",
+                                    line,
+                                    clock_millis(&clock),
+                                )
+                                .for_emulator("functions"),
+                            );
+                        }
                     }
                 }
             })
@@ -2619,7 +2631,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             }
         }
         if let Some(runtime) = functions_runtime {
-            runtime.runner().shutdown().await;
+            runtime.shutdown().await;
         }
         outcome.map(|_| code)
     });

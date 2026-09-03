@@ -1143,7 +1143,7 @@ impl LocalBackend {
             })?;
             (Some(CommitVersion::from_value(v)), i)
         };
-        let (paths, version): (Vec<DocumentPath>, CommitVersion) = self.with_db(&parent, |db| {
+        let (paths, version): (Vec<DocumentPath>, CommitVersion) = self.read_db(&parent, |db| {
             let version = match (token_version, read_time) {
                 (Some(v), _) => v,
                 (None, Some(t)) => db.version_at(t),
@@ -2292,7 +2292,7 @@ impl LocalBackend {
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
-        self.with_db(&parent, |db| {
+        self.read_db(&parent, |db| {
             let mut ids = db.list_collection_ids(parent.document.as_ref());
             if let Some(after) = &after {
                 ids.retain(|id| id > after);

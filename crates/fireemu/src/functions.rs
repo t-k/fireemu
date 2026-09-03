@@ -6,6 +6,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -168,6 +169,10 @@ fn update_watch_hash(hash: u64, byte: u8) -> u64 {
 const MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND: u64 = 64 * 1024 * 1024;
 /// Aggregate sustained metadata-walk budget for source trees dominated by small files.
 const MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND: u64 = 20_000;
+/// Maximum number of directory entries one source tree may enumerate per operation.
+const MAX_FUNCTIONS_SOURCE_ENTRIES: u64 = 100_000;
+/// Maximum supported source-tree nesting, excluding the source root.
+const MAX_FUNCTIONS_SOURCE_DEPTH: usize = 128;
 
 fn rate_pacing_delay(units: u64, units_per_second: u64) -> Duration {
     let nanos = u128::from(units)
@@ -183,6 +188,86 @@ fn source_scan_pacing_delay(tracked_files: u64, tracked_bytes: u64) -> Duration 
     )
 }
 
+const SOURCE_IO_BUFFER_BYTES: usize = 64 * 1024;
+
+fn stream_source_chunks(
+    reader: &mut impl Read,
+    mut consume: impl FnMut(&[u8]) -> std::io::Result<()>,
+    mut charge: impl FnMut(u64) -> std::io::Result<()>,
+    cancelled: &AtomicBool,
+) -> std::io::Result<u64> {
+    let mut buffer = vec![0_u8; SOURCE_IO_BUFFER_BYTES].into_boxed_slice();
+    let mut total = 0_u64;
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "Functions source work was cancelled",
+            ));
+        }
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(total);
+        }
+        let read_u64 = u64::try_from(read).unwrap_or(u64::MAX);
+        total = total.saturating_add(read_u64);
+        charge(read_u64)?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "Functions source work was cancelled",
+            ));
+        }
+        consume(&buffer[..read])?;
+    }
+}
+
+#[derive(Default)]
+struct FunctionsSourceEntryBudget {
+    entries: u64,
+}
+
+impl FunctionsSourceEntryBudget {
+    fn claim(&mut self, entries: u64) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(entries);
+        if self.entries > MAX_FUNCTIONS_SOURCE_ENTRIES {
+            return Err(format!(
+                "Functions source trees may contain at most {MAX_FUNCTIONS_SOURCE_ENTRIES} entries"
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn ensure_source_work_active(cancelled: &AtomicBool) -> Result<(), String> {
+    if cancelled.load(Ordering::Acquire) {
+        Err("Functions source work was cancelled".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+fn sorted_source_entries(
+    directory: &Path,
+    operation: &str,
+    entry_budget: &mut FunctionsSourceEntryBudget,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<Vec<std::fs::DirEntry>, String> {
+    let entries = std::fs::read_dir(directory)
+        .map_err(|error| format!("{operation} {}: {error}", directory.display()))?;
+    let mut collected = Vec::new();
+    for entry in entries {
+        ensure_source_work_active(cancelled)?;
+        charge(1, 0)?;
+        entry_budget.claim(1)?;
+        collected
+            .push(entry.map_err(|error| format!("{operation} {}: {error}", directory.display()))?);
+    }
+    collected.sort_by_key(std::fs::DirEntry::file_name);
+    Ok(collected)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FunctionsSourceStamp {
     change_guard: u64,
@@ -191,14 +276,37 @@ struct FunctionsSourceStamp {
     tracked_bytes: u64,
 }
 
+#[cfg(test)]
 fn hash_source_stamp_entry(
-    mut hash: u64,
+    hash: u64,
     relative: &[u8],
     len: u64,
     modified_nanos: u128,
     changed_seconds: i64,
     changed_nanos: i64,
     content: &[u8],
+) -> u64 {
+    let mut hash = hash_source_stamp_metadata(
+        hash,
+        relative,
+        len,
+        modified_nanos,
+        changed_seconds,
+        changed_nanos,
+    );
+    for byte in content {
+        hash = update_watch_hash(hash, *byte);
+    }
+    hash
+}
+
+fn hash_source_stamp_metadata(
+    mut hash: u64,
+    relative: &[u8],
+    len: u64,
+    modified_nanos: u128,
+    changed_seconds: i64,
+    changed_nanos: i64,
 ) -> u64 {
     for byte in relative.iter().copied().chain([0]) {
         hash = update_watch_hash(hash, byte);
@@ -209,71 +317,67 @@ fn hash_source_stamp_entry(
         .chain(modified_nanos.to_le_bytes())
         .chain(changed_seconds.to_le_bytes())
         .chain(changed_nanos.to_le_bytes())
-        .chain(content.iter().copied())
     {
         hash = update_watch_hash(hash, byte);
     }
     hash
 }
 
+#[cfg(test)]
 fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
-    fn visit(
-        root: &Path,
+    functions_source_stamp_with_charge(root, ignores, &mut |_, _| Ok(()), &AtomicBool::new(false))
+}
+
+struct FunctionsSourceTraversal<'a> {
+    root: &'a Path,
+    ignores: &'a [String],
+    entry_budget: FunctionsSourceEntryBudget,
+    charge: &'a mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &'a AtomicBool,
+}
+
+impl FunctionsSourceTraversal<'_> {
+    fn entries(
+        &mut self,
         directory: &Path,
-        ignores: &[String],
+        operation: &str,
+        depth: usize,
+    ) -> Result<Vec<std::fs::DirEntry>, String> {
+        if depth > MAX_FUNCTIONS_SOURCE_DEPTH {
+            return Err(format!(
+                "{operation} {}: Functions source trees may be at most {MAX_FUNCTIONS_SOURCE_DEPTH} directories deep",
+                directory.display()
+            ));
+        }
+        sorted_source_entries(
+            directory,
+            operation,
+            &mut self.entry_budget,
+            self.charge,
+            self.cancelled,
+        )
+    }
+
+    fn scan_directory(
+        &mut self,
+        directory: &Path,
         stamp: &mut FunctionsSourceStamp,
+        depth: usize,
     ) -> Result<(), String> {
-        let mut entries = std::fs::read_dir(directory)
-            .map_err(|error| format!("watch {}: {error}", directory.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("watch {}: {error}", directory.display()))?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
+        for entry in self.entries(directory, "watch", depth)? {
+            ensure_source_work_active(self.cancelled)?;
             let child = entry.path();
-            let relative = child.strip_prefix(root).unwrap_or(&child);
-            if ignored_reload_path(relative, ignores) {
+            let relative = child.strip_prefix(self.root).unwrap_or(&child);
+            if ignored_reload_path(relative, self.ignores) {
                 continue;
             }
             let kind = entry
                 .file_type()
                 .map_err(|error| format!("watch {}: {error}", child.display()))?;
             if kind.is_dir() {
-                visit(root, &child, ignores, stamp)?;
+                self.scan_directory(&child, stamp, depth.saturating_add(1))?;
             } else if kind.is_file() {
-                let metadata = entry
-                    .metadata()
-                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
-                let modified = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or(0, |duration| duration.as_nanos());
-                let bytes = std::fs::read(&child)
-                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
-                #[cfg(unix)]
-                let (changed_seconds, changed_nanos) = {
-                    use std::os::unix::fs::MetadataExt as _;
-                    (metadata.ctime(), metadata.ctime_nsec())
-                };
-                #[cfg(not(unix))]
-                let (changed_seconds, changed_nanos) = (0, 0);
-                stamp.change_guard = hash_source_stamp_entry(
-                    stamp.change_guard,
-                    relative.to_string_lossy().as_bytes(),
-                    metadata.len(),
-                    modified,
-                    changed_seconds,
-                    changed_nanos,
-                    &bytes,
-                );
-                for byte in relative.to_string_lossy().bytes().chain([0]) {
-                    stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
-                }
-                for byte in &bytes {
-                    stamp.content_signature = update_watch_hash(stamp.content_signature, *byte);
-                }
-                stamp.tracked_files = stamp.tracked_files.saturating_add(1);
-                stamp.tracked_bytes = stamp.tracked_bytes.saturating_add(metadata.len());
+                self.hash_file(&entry, &child, relative, stamp)?;
             } else if kind.is_symlink() {
                 return Err(format!(
                     "watch {}: symbolic links outside node_modules are not supported",
@@ -284,100 +388,82 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
         Ok(())
     }
 
-    let mut stamp = FunctionsSourceStamp {
-        change_guard: 0xcbf2_9ce4_8422_2325,
-        content_signature: 0xcbf2_9ce4_8422_2325,
-        tracked_files: 0,
-        tracked_bytes: 0,
-    };
-    visit(root, root, ignores, &mut stamp)?;
-    Ok(stamp)
-}
-
-async fn functions_source_stamp_off_thread(
-    root: &Path,
-    ignores: &[String],
-) -> Result<FunctionsSourceStamp, String> {
-    let root = root.to_owned();
-    let ignores = ignores.to_owned();
-    tokio::task::spawn_blocking(move || functions_source_stamp(&root, &ignores))
-        .await
-        .map_err(|error| format!("watch worker failed: {error}"))?
-}
-
-struct FunctionsSourceScanBudget {
-    gate: tokio::sync::Semaphore,
-}
-
-impl FunctionsSourceScanBudget {
-    fn new() -> Self {
-        Self {
-            gate: tokio::sync::Semaphore::new(1),
+    fn hash_file(
+        &mut self,
+        entry: &std::fs::DirEntry,
+        child: &Path,
+        relative: &Path,
+        stamp: &mut FunctionsSourceStamp,
+    ) -> Result<(), String> {
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("watch {}: {error}", child.display()))?;
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| duration.as_nanos());
+        #[cfg(unix)]
+        let (changed_seconds, changed_nanos) = {
+            use std::os::unix::fs::MetadataExt as _;
+            (metadata.ctime(), metadata.ctime_nsec())
+        };
+        #[cfg(not(unix))]
+        let (changed_seconds, changed_nanos) = (0, 0);
+        stamp.change_guard = hash_source_stamp_metadata(
+            stamp.change_guard,
+            relative.to_string_lossy().as_bytes(),
+            metadata.len(),
+            modified,
+            changed_seconds,
+            changed_nanos,
+        );
+        for byte in relative.to_string_lossy().bytes().chain([0]) {
+            stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
         }
+        let mut file = std::fs::File::open(child)
+            .map_err(|error| format!("watch {}: {error}", child.display()))?;
+        stream_source_chunks(
+            &mut file,
+            |bytes| {
+                for byte in bytes {
+                    stamp.change_guard = update_watch_hash(stamp.change_guard, *byte);
+                    stamp.content_signature = update_watch_hash(stamp.content_signature, *byte);
+                }
+                Ok(())
+            },
+            |bytes| (self.charge)(0, bytes).map_err(std::io::Error::other),
+            self.cancelled,
+        )
+        .map_err(|error| format!("watch {}: {error}", child.display()))?;
+        stamp.tracked_files = stamp.tracked_files.saturating_add(1);
+        stamp.tracked_bytes = stamp.tracked_bytes.saturating_add(metadata.len());
+        Ok(())
     }
 
-    async fn scan(&self, root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
-        let _permit = self
-            .gate
-            .acquire()
-            .await
-            .map_err(|_| "Functions source scan budget closed".to_owned())?;
-        let started = tokio::time::Instant::now();
-        let stamp = functions_source_stamp_off_thread(root, ignores).await?;
-        let pacing = source_scan_pacing_delay(stamp.tracked_files, stamp.tracked_bytes);
-        tokio::time::sleep(pacing.saturating_sub(started.elapsed())).await;
-        Ok(stamp)
-    }
-}
-
-async fn snapshot_functions_source_off_thread(
-    root: &Path,
-    ignores: &[String],
-) -> Result<PathBuf, String> {
-    let root = root.to_owned();
-    let ignores = ignores.to_owned();
-    tokio::task::spawn_blocking(move || snapshot_functions_source(&root, &ignores))
-        .await
-        .map_err(|error| format!("snapshot worker failed: {error}"))?
-}
-
-async fn remove_snapshot_off_thread(snapshot: PathBuf) {
-    let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(snapshot)).await;
-}
-
-fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf, String> {
-    fn copy_tree(
-        root: &Path,
+    fn copy_directory(
+        &mut self,
         source: &Path,
         destination: &Path,
-        ignores: &[String],
+        depth: usize,
     ) -> Result<(), String> {
-        let mut entries = std::fs::read_dir(source)
-            .map_err(|e| format!("snapshot {}: {e}", source.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("snapshot {}: {e}", source.display()))?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
+        for entry in self.entries(source, "snapshot", depth)? {
+            ensure_source_work_active(self.cancelled)?;
             let path = entry.path();
-            let relative = path.strip_prefix(root).unwrap_or(&path);
-            if ignored_reload_path(relative, ignores) {
+            let relative = path.strip_prefix(self.root).unwrap_or(&path);
+            if ignored_reload_path(relative, self.ignores) {
                 continue;
             }
             let kind = entry
                 .file_type()
-                .map_err(|e| format!("snapshot {}: {e}", path.display()))?;
+                .map_err(|error| format!("snapshot {}: {error}", path.display()))?;
             let target = destination.join(relative);
             if kind.is_dir() {
                 std::fs::create_dir_all(&target)
-                    .map_err(|e| format!("snapshot {}: {e}", target.display()))?;
-                copy_tree(root, &path, destination, ignores)?;
+                    .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
+                self.copy_directory(&path, destination, depth.saturating_add(1))?;
             } else if kind.is_file() {
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("snapshot {}: {e}", parent.display()))?;
-                }
-                std::fs::copy(&path, &target)
-                    .map_err(|e| format!("snapshot {}: {e}", path.display()))?;
+                self.copy_file(&path, &target)?;
             } else if kind.is_symlink() {
                 return Err(format!(
                     "snapshot {}: symbolic links outside node_modules are not supported",
@@ -388,6 +474,209 @@ fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf,
         Ok(())
     }
 
+    fn copy_file(&mut self, source: &Path, target: &Path) -> Result<(), String> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("snapshot {}: {error}", parent.display()))?;
+        }
+        let mut source_file = std::fs::File::open(source)
+            .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
+        let mut target_file = std::fs::File::create(target)
+            .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
+        stream_source_chunks(
+            &mut source_file,
+            |bytes| target_file.write_all(bytes),
+            |bytes| (self.charge)(0, bytes).map_err(std::io::Error::other),
+            self.cancelled,
+        )
+        .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
+        Ok(())
+    }
+}
+
+fn functions_source_stamp_with_charge(
+    root: &Path,
+    ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<FunctionsSourceStamp, String> {
+    let mut stamp = FunctionsSourceStamp {
+        change_guard: 0xcbf2_9ce4_8422_2325,
+        content_signature: 0xcbf2_9ce4_8422_2325,
+        tracked_files: 0,
+        tracked_bytes: 0,
+    };
+    charge(1, 0)?;
+    FunctionsSourceTraversal {
+        root,
+        ignores,
+        entry_budget: FunctionsSourceEntryBudget::default(),
+        charge,
+        cancelled,
+    }
+    .scan_directory(root, &mut stamp, 0)?;
+    Ok(stamp)
+}
+
+struct FunctionsSourceScanBudget {
+    gate: Arc<tokio::sync::Semaphore>,
+}
+
+struct CancelBlockingSourceWork(Arc<AtomicBool>);
+
+impl Drop for CancelBlockingSourceWork {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+struct BlockingSourceWorkPacer {
+    started: Instant,
+    entries: u64,
+    bytes: u64,
+}
+
+impl BlockingSourceWorkPacer {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            entries: 0,
+            bytes: 0,
+        }
+    }
+
+    fn charge(&mut self, entries: u64, bytes: u64, cancelled: &AtomicBool) -> Result<(), String> {
+        ensure_source_work_active(cancelled)?;
+        self.entries = self.entries.saturating_add(entries);
+        self.bytes = self.bytes.saturating_add(bytes);
+        let delay = source_scan_pacing_delay(self.entries, self.bytes);
+        if let Some(remaining) = delay.checked_sub(self.started.elapsed()) {
+            std::thread::sleep(remaining);
+        }
+        ensure_source_work_active(cancelled)
+    }
+}
+
+impl FunctionsSourceScanBudget {
+    fn new() -> Self {
+        Self {
+            gate: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
+
+    async fn scan(&self, root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
+        let permit = Arc::clone(&self.gate)
+            .acquire_owned()
+            .await
+            .map_err(|_| "Functions source scan budget closed".to_owned())?;
+        let root = root.to_owned();
+        let ignores = ignores.to_owned();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_on_drop = CancelBlockingSourceWork(Arc::clone(&cancelled));
+        let result = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut pacer = BlockingSourceWorkPacer::new();
+            functions_source_stamp_with_charge(
+                &root,
+                &ignores,
+                &mut |entries, bytes| pacer.charge(entries, bytes, &cancelled),
+                &cancelled,
+            )
+        })
+        .await
+        .map_err(|error| format!("watch worker failed: {error}"))?;
+        drop(cancel_on_drop);
+        result
+    }
+
+    async fn snapshot(
+        &self,
+        root: &Path,
+        ignores: &[String],
+    ) -> Result<FunctionsSourceSnapshot, String> {
+        let permit = Arc::clone(&self.gate)
+            .acquire_owned()
+            .await
+            .map_err(|_| "Functions source scan budget closed".to_owned())?;
+        let root = root.to_owned();
+        let ignores = ignores.to_owned();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_on_drop = CancelBlockingSourceWork(Arc::clone(&cancelled));
+        let result = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut pacer = BlockingSourceWorkPacer::new();
+            snapshot_functions_source_with_charge(
+                &root,
+                &ignores,
+                &mut |entries, bytes| pacer.charge(entries, bytes, &cancelled),
+                &cancelled,
+            )
+        })
+        .await
+        .map_err(|error| format!("snapshot worker failed: {error}"))?;
+        drop(cancel_on_drop);
+        result
+    }
+}
+
+#[derive(Debug)]
+struct FunctionsSourceSnapshot {
+    path: Option<PathBuf>,
+}
+
+impl FunctionsSourceSnapshot {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn into_path(mut self) -> PathBuf {
+        self.path
+            .take()
+            .expect("a snapshot path is transferred once")
+    }
+}
+
+impl std::ops::Deref for FunctionsSourceSnapshot {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.path.as_deref().expect("a live snapshot owns its path")
+    }
+}
+
+impl AsRef<Path> for FunctionsSourceSnapshot {
+    fn as_ref(&self) -> &Path {
+        self
+    }
+}
+
+impl Drop for FunctionsSourceSnapshot {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
+#[cfg(test)]
+fn snapshot_functions_source(
+    root: &Path,
+    ignores: &[String],
+) -> Result<FunctionsSourceSnapshot, String> {
+    snapshot_functions_source_with_charge(
+        root,
+        ignores,
+        &mut |_, _| Ok(()),
+        &AtomicBool::new(false),
+    )
+}
+
+fn snapshot_functions_source_with_charge(
+    root: &Path,
+    ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<FunctionsSourceSnapshot, String> {
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let destination = std::env::temp_dir().join(format!(
@@ -396,8 +685,18 @@ fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf,
     ));
     std::fs::create_dir(&destination)
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
+    let snapshot = FunctionsSourceSnapshot::new(destination.clone());
     secure_snapshot_directory(&destination)?;
-    let result = copy_tree(root, root, &destination, ignores).and_then(|()| {
+    charge(1, 0)?;
+    FunctionsSourceTraversal {
+        root,
+        ignores,
+        entry_budget: FunctionsSourceEntryBudget::default(),
+        charge,
+        cancelled,
+    }
+    .copy_directory(root, &destination, 0)
+    .and_then(|()| {
         let dependencies = root
             .ancestors()
             .map(|ancestor| ancestor.join("node_modules"))
@@ -406,12 +705,8 @@ fn snapshot_functions_source(root: &Path, ignores: &[String]) -> Result<PathBuf,
             link_dependency_directory(&dependencies, &destination.join("node_modules"))?;
         }
         Ok(())
-    });
-    if let Err(reason) = result {
-        let _ = std::fs::remove_dir_all(&destination);
-        return Err(reason);
-    }
-    Ok(destination)
+    })?;
+    Ok(snapshot)
 }
 
 #[cfg(unix)]
@@ -517,7 +812,7 @@ async fn supervise_codebase_reloads(
             observed_stamp = Some(stable_stamp);
             continue;
         }
-        let snapshot = match snapshot_functions_source_off_thread(&root, &codebase.ignore).await {
+        let snapshot = match scan_budget.snapshot(&root, &codebase.ignore).await {
             Ok(snapshot) => snapshot,
             Err(reason) => {
                 eprintln!(
@@ -534,7 +829,6 @@ async fn supervise_codebase_reloads(
         if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
             || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
         {
-            remove_snapshot_off_thread(snapshot).await;
             continue;
         }
         observed_stamp = Some(stable_stamp);
@@ -542,7 +836,7 @@ async fn supervise_codebase_reloads(
         staged.source = snapshot.to_string_lossy().into_owned();
         match start_codebase(&cfg, &staged, &hosts, &secret, callable_trusted_protocol).await {
             Ok(mut spec) => {
-                spec.cleanup_dir = Some(snapshot);
+                spec.cleanup_dir = Some(snapshot.into_path());
                 match runtime.reload_codebase(spec) {
                     Ok(generation) => eprintln!(
                         "note: functions[{}]: reloaded generation {generation}",
@@ -555,7 +849,6 @@ async fn supervise_codebase_reloads(
                 }
             }
             Err(reason) => {
-                remove_snapshot_off_thread(snapshot).await;
                 eprintln!(
                             "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
                             codebase.codebase
@@ -2483,9 +2776,10 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
     use std::process::Command;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -2497,16 +2791,118 @@ mod tests {
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
         functions_source_stamp, hash_source_stamp_entry, node_engine_matches, package_node_engine,
         parse_node_version, provision_function_pubsub_resources, select_node_installation,
-        snapshot_functions_source, source_scan_pacing_delay, update_watch_hash,
-        validate_functions_codebase_budget, NodeInstallation, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
-        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
+        snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
+        update_watch_hash, validate_functions_codebase_budget, FunctionsSourceEntryBudget,
+        FunctionsSourceScanBudget, NodeInstallation, BLOCKING_AUTH_DEADLINE,
+        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
+        SOURCE_IO_BUFFER_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
     use serde_json::json;
+
+    #[test]
+    fn source_streaming_bounds_each_read_and_charges_bytes_before_a_late_error() {
+        struct ProbeReader {
+            reads: usize,
+        }
+
+        impl std::io::Read for ProbeReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                assert!(buffer.len() <= SOURCE_IO_BUFFER_BYTES);
+                if self.reads == 2 {
+                    return Err(std::io::Error::other("late read failure"));
+                }
+                self.reads += 1;
+                buffer.fill(b'x');
+                Ok(buffer.len())
+            }
+        }
+
+        let mut reader = ProbeReader { reads: 0 };
+        let mut charged = 0_u64;
+        let cancelled = AtomicBool::new(false);
+        let error = stream_source_chunks(
+            &mut reader,
+            |_| Ok(()),
+            |bytes| {
+                charged = charged.saturating_add(bytes);
+                Ok(())
+            },
+            &cancelled,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(charged, u64::try_from(2 * SOURCE_IO_BUFFER_BYTES).unwrap());
+    }
+
+    #[test]
+    fn source_tree_entry_budget_rejects_the_first_entry_past_the_limit() {
+        let mut budget = FunctionsSourceEntryBudget::default();
+        budget.claim(MAX_FUNCTIONS_SOURCE_ENTRIES).unwrap();
+
+        let error = budget.claim(1).unwrap_err();
+
+        assert!(error.contains("100000 entries"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_budgeted_snapshot_removes_the_partial_copy() {
+        static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let fixture = NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-cancelled-snapshot-source-{}-{fixture}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let marker = format!("cancel-{fixture}.js");
+        std::fs::File::create(root.join(&marker))
+            .unwrap()
+            .set_len(512 * 1024 * 1024)
+            .unwrap();
+        let prefix = format!("fireemu-functions-{}-", std::process::id());
+        let snapshots = || {
+            std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with(&prefix))
+                        && path.join(&marker).exists()
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        let budget = Arc::new(FunctionsSourceScanBudget::new());
+        let task_root = root.clone();
+        let task = tokio::spawn(async move { budget.snapshot(&task_root, &[]).await });
+        let created = tokio::time::Instant::now() + Duration::from_secs(3);
+        while snapshots().is_empty() {
+            assert!(
+                tokio::time::Instant::now() < created,
+                "the snapshot task did not create its destination"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        task.abort();
+        let _ = task.await;
+        let cleaned = tokio::time::Instant::now() + Duration::from_secs(1);
+        while !snapshots().is_empty() {
+            assert!(
+                tokio::time::Instant::now() < cleaned,
+                "cancelling a paced 512 MiB snapshot did not stop and clean up within one second"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn source_scan_pacing_charges_every_tracked_byte_to_one_global_rate() {
@@ -3221,7 +3617,9 @@ mod tests {
             expected
         );
 
-        std::fs::remove_dir_all(snapshot).unwrap();
+        let snapshot_path = snapshot.to_path_buf();
+        drop(snapshot);
+        assert!(!snapshot_path.exists());
         assert!(root.join("node_modules/pkg/index.js").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }

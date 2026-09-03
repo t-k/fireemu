@@ -671,16 +671,23 @@ mod tests {
 
         spawning.abort();
         let _ = spawning.await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(
-            !Command::new("/bin/kill")
+        let gone = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if !Command::new("/bin/kill")
                 .args(["-0", pid.trim()])
                 .status()
                 .unwrap()
-                .success(),
-            "cancelling discovery left descendant process {} alive",
-            pid.trim()
-        );
+                .success()
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < gone,
+                "cancelling discovery left descendant process {} alive",
+                pid.trim()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

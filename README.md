@@ -30,6 +30,8 @@ The recommended `strict` profile enables additional validation, including checks
 
 If `firebase.json` exists, `init` references it instead of copying its settings. Rules, indexes, Functions codebases, and emulator ports are loaded from that file each time fireemu starts. `firebase-tools@15.28.2` does not impose a Functions codebase-count limit, but fireemu applies a documented local safety budget of 32 simultaneously selected codebases because each starts a Node runner; `--only functions:<codebase>` selects one from a larger project.
 
+Functions source reloads hash all non-ignored file content. One daemon-wide source-work admission paces scans and snapshots to 64 MiB/s and 20,000 directory entries/s, stops abandoned work between 64 KiB chunks, and rejects a watch or reload operation whose source tree exceeds 100,000 entries or 128 directory levels. These are local resource-safety limits rather than Firebase CLI compatibility claims.
+
 For CI or scripted setup, use the non-interactive form:
 
 ```sh

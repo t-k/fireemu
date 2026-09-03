@@ -12,6 +12,13 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
+#[cfg(unix)]
+use trusted_temp::TrustedTempDir;
+
 const STARTUP_TRANSCRIPT_LIMIT: usize = 32 * 1024;
 
 fn append_startup_output(transcript: &Mutex<String>, text: &str) {
@@ -115,6 +122,7 @@ struct Daemon {
     child: Child,
     project: String,
     hub_port: u16,
+    stopped: bool,
 }
 
 struct StartupFailure {
@@ -260,6 +268,7 @@ impl Daemon {
             child,
             project: project.to_owned(),
             hub_port,
+            stopped: false,
         })
     }
 
@@ -277,19 +286,116 @@ impl Daemon {
         locator["fireemuControlToken"].as_str().unwrap().to_owned()
     }
 
+    fn cleanup(&mut self) -> bool {
+        if self.stopped {
+            return false;
+        }
+        let pid = self.child.id();
+        let locator = self.locator();
+        let owned_locator = locator_names_pid(&locator, pid);
+        let mut exited = self.child.try_wait().is_ok_and(|status| status.is_some());
+        if !exited {
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if self.child.try_wait().is_ok_and(|status| status.is_some()) {
+                    exited = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        if !exited {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        self.stopped = true;
+
+        if locator_names_pid(&locator, pid) {
+            let _ = std::fs::remove_file(locator);
+        }
+        owned_locator
+    }
+
     fn stop(mut self) {
-        let _ = Command::new("kill")
-            .args(["-TERM", &self.child.id().to_string()])
-            .status();
-        let _ = self.child.wait();
+        let owned_locator = self.cleanup();
+        assert!(
+            self.child.try_wait().is_ok_and(|status| status.is_some()),
+            "daemon {} survived explicit cleanup",
+            self.child.id()
+        );
+        if owned_locator {
+            assert!(
+                !self.locator().exists(),
+                "{} survived explicit cleanup",
+                self.locator().display()
+            );
+        }
     }
 }
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.cleanup();
     }
+}
+
+fn locator_names_pid(path: &std::path::Path, pid: u32) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+        && std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|json| json.get("pid").and_then(serde_json::Value::as_u64))
+            == Some(u64::from(pid))
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+#[test]
+fn implicit_daemon_cleanup_reaps_the_process_and_removes_its_locator() {
+    let (pid, locator) = {
+        let daemon = Daemon::start("demo-hub-implicit-cleanup", &[]);
+        (daemon.child.id(), daemon.locator())
+    };
+
+    assert!(!process_exists(pid), "daemon {pid} survived its guard");
+    assert!(
+        !locator.exists(),
+        "{} survived its daemon",
+        locator.display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unwinding_daemon_cleanup_reaps_the_process_and_removes_its_locator() {
+    let observed = Arc::new(Mutex::new(None));
+    let capture = Arc::clone(&observed);
+    let result = std::panic::catch_unwind(move || {
+        let daemon = Daemon::start("demo-hub-unwind-cleanup", &[]);
+        *capture.lock().unwrap() = Some((daemon.child.id(), daemon.locator()));
+        panic!("exercise daemon cleanup during unwinding");
+    });
+    assert!(result.is_err());
+
+    let (pid, locator) = observed.lock().unwrap().clone().unwrap();
+    assert!(!process_exists(pid), "daemon {pid} survived unwinding");
+    assert!(
+        !locator.exists(),
+        "{} survived unwinding",
+        locator.display()
+    );
 }
 
 #[test]
@@ -788,7 +894,13 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     use std::net::TcpStream;
     use std::time::Duration;
 
+    #[cfg(unix)]
+    let trusted = TrustedTempDir::new("hub-export");
+    #[cfg(unix)]
+    let dir = trusted.join("export");
+    #[cfg(not(unix))]
     let dir = std::env::temp_dir().join(format!("fireemu-hub-export-{}", std::process::id()));
+    #[cfg(not(unix))]
     let _ = std::fs::remove_dir_all(&dir);
     let daemon = Daemon::start("demo-hub-export", &[]);
     let port = daemon.hub_port();
@@ -843,5 +955,6 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     assert_eq!(send(None, Some(&bearer)), 200);
     assert!(dir.join("firebase-export-metadata.json").is_file());
     drop(daemon);
-    let _ = std::fs::remove_dir_all(&dir);
+    #[cfg(not(unix))]
+    let _ = std::fs::remove_dir_all(dir);
 }

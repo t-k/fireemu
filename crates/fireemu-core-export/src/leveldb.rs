@@ -28,6 +28,13 @@ enum RecordType {
 /// What went wrong while reading a log file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogError {
+    /// Reading or writing the log failed.
+    Io {
+        /// Byte offset reached before the I/O failure.
+        offset: usize,
+        /// Platform error without retaining a non-cloneable `io::Error`.
+        message: String,
+    },
     /// A header ran past the end of the file.
     Truncated {
         /// Byte offset of the header.
@@ -56,6 +63,9 @@ pub enum LogError {
 impl core::fmt::Display for LogError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Io { offset, message } => {
+                write!(f, "I/O failed at byte {offset}: {message}")
+            }
             Self::Truncated { offset } => {
                 write!(f, "the log record at byte {offset} is truncated")
             }
@@ -90,40 +100,45 @@ use fireemu_core_types::hash::Crc32c;
 /// Appends `records` to a `LevelDB` log file body.
 #[must_use]
 pub fn write_log(records: &[Vec<u8>]) -> Vec<u8> {
-    let mut writer = LogWriter::new();
+    let mut writer = LogWriter::new(Vec::new());
     for record in records {
-        writer.push(record);
+        writer.push(record).expect("writing to a Vec cannot fail");
     }
-    writer.finish()
+    writer.finish().0
 }
 
 /// Incremental `LevelDB` log encoder used by dataset exporters so encoded records do not
 /// have to be retained beside the final framed output.
-pub(crate) struct LogWriter {
-    out: Vec<u8>,
+pub(crate) struct LogWriter<W> {
+    out: W,
+    written: usize,
 }
 
-impl LogWriter {
-    pub(crate) const fn new() -> Self {
-        Self { out: Vec::new() }
+impl<W: std::io::Write> LogWriter<W> {
+    pub(crate) const fn new(out: W) -> Self {
+        Self { out, written: 0 }
     }
 
-    pub(crate) fn push(&mut self, payload: &[u8]) {
-        write_record(&mut self.out, payload);
+    pub(crate) fn push(&mut self, payload: &[u8]) -> Result<(), LogError> {
+        write_record(&mut self.out, &mut self.written, payload)
     }
 
-    pub(crate) fn finish(self) -> Vec<u8> {
-        self.out
+    pub(crate) fn finish(self) -> (W, u64) {
+        (self.out, self.written as u64)
     }
 }
 
-fn write_record(out: &mut Vec<u8>, payload: &[u8]) {
+fn write_record(
+    out: &mut impl std::io::Write,
+    written: &mut usize,
+    payload: &[u8],
+) -> Result<(), LogError> {
     let mut rest = payload;
     let mut first = true;
     loop {
-        let mut room = BLOCK_SIZE - (out.len() % BLOCK_SIZE);
+        let mut room = BLOCK_SIZE - (*written % BLOCK_SIZE);
         if room < HEADER_SIZE {
-            out.extend(std::iter::repeat_n(0u8, room));
+            write_all(out, written, &vec![0u8; room])?;
             room = BLOCK_SIZE;
         }
         let capacity = room - HEADER_SIZE;
@@ -135,25 +150,45 @@ fn write_record(out: &mut Vec<u8>, payload: &[u8]) {
             (false, true) => RecordType::Last,
             (false, false) => RecordType::Middle,
         };
-        emit(out, kind, &rest[..take]);
+        emit(out, written, kind, &rest[..take])?;
         rest = &rest[take..];
         first = false;
         if last {
-            return;
+            return Ok(());
         }
     }
 }
 
-fn emit(out: &mut Vec<u8>, kind: RecordType, payload: &[u8]) {
+fn emit(
+    out: &mut impl std::io::Write,
+    written: &mut usize,
+    kind: RecordType,
+    payload: &[u8],
+) -> Result<(), LogError> {
     let mut checked = Crc32c::new();
     checked.update(&[kind as u8]);
     checked.update(payload);
     let crc = mask(checked.finalize());
-    out.extend_from_slice(&crc.to_le_bytes());
     let len = u16::try_from(payload.len()).unwrap_or(u16::MAX);
-    out.extend_from_slice(&len.to_le_bytes());
-    out.push(kind as u8);
-    out.extend_from_slice(payload);
+    let mut header = [0u8; HEADER_SIZE];
+    header[..4].copy_from_slice(&crc.to_le_bytes());
+    header[4..6].copy_from_slice(&len.to_le_bytes());
+    header[6] = kind as u8;
+    write_all(out, written, &header)?;
+    write_all(out, written, payload)
+}
+
+fn write_all(
+    out: &mut impl std::io::Write,
+    written: &mut usize,
+    bytes: &[u8],
+) -> Result<(), LogError> {
+    out.write_all(bytes).map_err(|error| LogError::Io {
+        offset: *written,
+        message: error.to_string(),
+    })?;
+    *written = written.saturating_add(bytes.len());
+    Ok(())
 }
 
 /// Reads every record of a `LevelDB` log file.
@@ -163,71 +198,113 @@ fn emit(out: &mut Vec<u8>, kind: RecordType, payload: &[u8]) {
 /// this format exists to prevent.
 pub fn read_log(bytes: &[u8]) -> Result<Vec<Vec<u8>>, LogError> {
     let mut records = Vec::new();
+    let visited = for_each_record(std::io::Cursor::new(bytes), |record| {
+        records.push(record.to_vec());
+        Ok::<(), core::convert::Infallible>(())
+    })?;
+    match visited {
+        Ok(()) => Ok(records),
+        Err(never) => match never {},
+    }
+}
+
+/// Visits each logical record while retaining at most one fragmented record.
+pub(crate) fn for_each_record<R, E>(
+    mut input: R,
+    mut visit: impl FnMut(&[u8]) -> Result<(), E>,
+) -> Result<Result<(), E>, LogError>
+where
+    R: std::io::Read,
+{
     let mut pending: Option<Vec<u8>> = None;
-    let mut pos = 0usize;
-    while pos < bytes.len() {
-        let block_offset = pos % BLOCK_SIZE;
-        if BLOCK_SIZE - block_offset < HEADER_SIZE {
-            // The zero-filled remainder of a block.
-            pos += BLOCK_SIZE - block_offset;
-            continue;
-        }
-        let header = bytes
-            .get(pos..pos + HEADER_SIZE)
-            .ok_or(LogError::Truncated { offset: pos })?;
-        let stored = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-        let len = usize::from(u16::from_le_bytes([header[4], header[5]]));
-        let kind = header[6];
-        if stored == 0 && len == 0 && kind == 0 {
-            // Zero padding before the next block.
-            pos += BLOCK_SIZE - block_offset;
-            continue;
-        }
-        let payload = bytes
-            .get(pos + HEADER_SIZE..pos + HEADER_SIZE + len)
-            .ok_or(LogError::Truncated { offset: pos })?;
-        let mut checked = Crc32c::new();
-        checked.update(&[kind]);
-        checked.update(payload);
-        if mask(checked.finalize()) != stored {
-            return Err(LogError::Checksum { offset: pos });
-        }
-        match kind {
-            1 => {
-                if pending.is_some() {
-                    return Err(LogError::Fragmentation { offset: pos });
+    let mut block = vec![0u8; BLOCK_SIZE].into_boxed_slice();
+    let mut base = 0usize;
+    loop {
+        let mut filled = 0usize;
+        while filled < BLOCK_SIZE {
+            match input.read(&mut block[filled..]) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    return Err(LogError::Io {
+                        offset: base + filled,
+                        message: error.to_string(),
+                    })
                 }
-                records.push(payload.to_vec());
             }
-            2 => {
-                if pending.is_some() {
-                    return Err(LogError::Fragmentation { offset: pos });
-                }
-                pending = Some(payload.to_vec());
-            }
-            3 => {
-                let acc = pending
-                    .as_mut()
-                    .ok_or(LogError::Fragmentation { offset: pos })?;
-                acc.extend_from_slice(payload);
-            }
-            4 => {
-                let mut acc = pending
-                    .take()
-                    .ok_or(LogError::Fragmentation { offset: pos })?;
-                acc.extend_from_slice(payload);
-                records.push(acc);
-            }
-            found => return Err(LogError::UnknownType { offset: pos, found }),
         }
-        pos += HEADER_SIZE + len;
+        if filled == 0 {
+            break;
+        }
+        let mut pos = 0usize;
+        while filled.saturating_sub(pos) >= HEADER_SIZE {
+            let header = &block[pos..pos + HEADER_SIZE];
+            let stored = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+            let len = usize::from(u16::from_le_bytes([header[4], header[5]]));
+            let kind = header[6];
+            if stored == 0 && len == 0 && kind == 0 {
+                // Zero padding before the next block.
+                break;
+            }
+            let payload = block
+                .get(pos + HEADER_SIZE..pos + HEADER_SIZE + len)
+                .filter(|_| pos + HEADER_SIZE + len <= filled)
+                .ok_or(LogError::Truncated { offset: base + pos })?;
+            let mut checked = Crc32c::new();
+            checked.update(&[kind]);
+            checked.update(payload);
+            if mask(checked.finalize()) != stored {
+                return Err(LogError::Checksum { offset: base + pos });
+            }
+            match kind {
+                1 => {
+                    if pending.is_some() {
+                        return Err(LogError::Fragmentation { offset: base + pos });
+                    }
+                    if let Err(error) = visit(payload) {
+                        return Ok(Err(error));
+                    }
+                }
+                2 => {
+                    if pending.is_some() {
+                        return Err(LogError::Fragmentation { offset: base + pos });
+                    }
+                    pending = Some(payload.to_vec());
+                }
+                3 => {
+                    let acc = pending
+                        .as_mut()
+                        .ok_or(LogError::Fragmentation { offset: base + pos })?;
+                    acc.extend_from_slice(payload);
+                }
+                4 => {
+                    let mut acc = pending
+                        .take()
+                        .ok_or(LogError::Fragmentation { offset: base + pos })?;
+                    acc.extend_from_slice(payload);
+                    if let Err(error) = visit(&acc) {
+                        return Ok(Err(error));
+                    }
+                }
+                found => {
+                    return Err(LogError::UnknownType {
+                        offset: base + pos,
+                        found,
+                    })
+                }
+            }
+            pos += HEADER_SIZE + len;
+        }
+        base = base.saturating_add(filled);
+        if filled < BLOCK_SIZE {
+            break;
+        }
     }
     if pending.is_some() {
-        return Err(LogError::Truncated {
-            offset: bytes.len(),
-        });
+        return Err(LogError::Truncated { offset: base });
     }
-    Ok(records)
+    Ok(Ok(()))
 }
 
 #[cfg(test)]

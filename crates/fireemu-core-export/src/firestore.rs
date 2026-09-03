@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value};
 
-use crate::leveldb::{read_log, write_log, LogError, LogWriter};
+use crate::leveldb::{for_each_record, read_log, write_log, LogError, LogWriter};
 use crate::wire::{Reader, WireError, WireType, Writer};
 
 /// The partition every emulator export writes: all namespaces, all kinds.
@@ -359,19 +359,39 @@ impl PartitionMetadata {
 
 /// Decodes every document of one `output-*` file.
 pub fn read_output(bytes: &[u8]) -> Result<Vec<ExportDocument>, FirestoreExportError> {
-    read_log(bytes)?
-        .iter()
-        .map(|record| read_entity(record))
-        .collect()
+    read_output_from(std::io::Cursor::new(bytes))
+}
+
+/// Decodes documents incrementally from an `output-*` reader.
+pub fn read_output_from(
+    input: impl std::io::Read,
+) -> Result<Vec<ExportDocument>, FirestoreExportError> {
+    let mut documents = Vec::new();
+    let visited = for_each_record(input, |record| {
+        documents.push(read_entity(record)?);
+        Ok::<(), FirestoreExportError>(())
+    })?;
+    visited?;
+    Ok(documents)
 }
 
 /// Encodes an `output-*` file holding `documents`, in the given order.
 pub fn write_output(documents: &[ExportDocument]) -> Result<Vec<u8>, FirestoreExportError> {
-    let mut writer = LogWriter::new();
+    let mut output = Vec::new();
+    write_output_to(documents, &mut output)?;
+    Ok(output)
+}
+
+/// Encodes documents incrementally into an `output-*` writer and returns its byte count.
+pub fn write_output_to(
+    documents: &[ExportDocument],
+    output: impl std::io::Write,
+) -> Result<u64, FirestoreExportError> {
+    let mut writer = LogWriter::new(output);
     for document in documents {
-        writer.push(&write_entity(document)?);
+        writer.push(&write_entity(document)?)?;
     }
-    Ok(writer.finish())
+    Ok(writer.finish().1)
 }
 
 /// Encodes one document as an `EntityProto` record.
@@ -862,8 +882,8 @@ fn as_vector(fields: &BTreeMap<String, Value>) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        read_entity, read_output, write_entity, write_output, ExportDocument, OverallMetadata,
-        PartitionMetadata, Value,
+        read_entity, read_output, read_output_from, write_entity, write_output, write_output_to,
+        ExportDocument, OverallMetadata, PartitionMetadata, Value,
     };
     use fireemu_core_firestore::value::{GeoPoint, Timestamp};
     use std::collections::BTreeMap;
@@ -1032,6 +1052,27 @@ mod tests {
             .collect();
         let bytes = write_output(&docs).expect("the output encodes");
         assert_eq!(read_output(&bytes).expect("the output decodes"), docs);
+    }
+
+    #[test]
+    fn streamed_output_is_byte_identical_and_reads_across_short_chunks() {
+        let docs = vec![
+            document(field("small", Value::Integer(1))),
+            document(field("large", Value::String("x".repeat(70_000)))),
+            document(field("tail", Value::Boolean(true))),
+        ];
+        let expected = write_output(&docs).expect("legacy wrapper encodes");
+        let mut streamed = Vec::new();
+
+        let byte_count = write_output_to(&docs, &mut streamed).expect("streamed output encodes");
+
+        assert_eq!(byte_count, streamed.len() as u64);
+        assert_eq!(streamed, expected);
+        let short_reads = std::io::BufReader::with_capacity(7, std::io::Cursor::new(&streamed));
+        assert_eq!(
+            read_output_from(short_reads).expect("short streamed reads decode"),
+            docs
+        );
     }
 
     #[test]

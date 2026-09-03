@@ -176,6 +176,11 @@ test "$latest" = "after!"
         stderr.contains("keeping the last-known-good generation"),
         "{stderr}"
     );
+    assert_eq!(
+        stderr.matches("reloaded generation").count(),
+        1,
+        "unchanged content or the accepted generation reloaded repeatedly: {stderr}"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let observations = stdout.lines().rev().take(3).collect::<Vec<_>>();
     assert_eq!(observations, ["after!", "before", "before"], "{stdout}");

@@ -370,6 +370,13 @@ struct Evidence {
 #[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn check(root: &Path) -> Report {
+    check_with_quint_evidence(root, None)
+}
+
+/// Runs every traceability rule with an optional staged Quint evidence directory.
+#[allow(clippy::too_many_lines)]
+#[must_use]
+pub fn check_with_quint_evidence(root: &Path, quint_evidence_dir: Option<&Path>) -> Report {
     let mut report = Report::default();
     let problems = &mut report.problems;
     let mutants: MutantCatalog = match read_json(&root.join("verification/mutants/catalog.json")) {
@@ -554,9 +561,11 @@ pub fn check(root: &Path) -> Report {
         let mut formal_mutant_ids = BTreeSet::new();
         if resolve {
             if let Some((descriptor, property)) = resolved_quint {
-                let quint_root = root.join("verification/quint");
-                let evidence_path = quint_root
-                    .join("evidence")
+                let evidence_path = quint_evidence_dir
+                    .map_or_else(
+                        || root.join("verification/quint/evidence"),
+                        Path::to_path_buf,
+                    )
                     .join(format!("{}.json", descriptor.name));
                 match validate_quint_evidence_file(root, &evidence_path, descriptor) {
                     Ok(verified) => {

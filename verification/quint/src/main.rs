@@ -4,13 +4,14 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use fireemu_verification_quint::cargo_authority::{validate_authority_file, write_authority};
 use fireemu_verification_quint::evidence::validate_evidence_file;
 use fireemu_verification_quint::model::{model, ModelDescriptor};
 use fireemu_verification_quint::process::{
     mutate_model as run_mutations, verify_model as run_model,
 };
 
-const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL [--root PATH] [--evidence PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH]\n";
+const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL [--root PATH] [--evidence PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH]\n  fireemu-verification-quint cargo-authority [--root PATH] (--write PATH | --check PATH)\n";
 
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
@@ -37,8 +38,36 @@ fn run(arguments: &[String]) -> Result<(), String> {
             mutate_model(&compatible)
         }
         Some("verify-evidence") => verify_evidence(&arguments[1..]),
+        Some("cargo-authority") => cargo_authority(&arguments[1..]),
         Some(other) => Err(format!("unknown command {other:?}")),
         None => Err("missing command".to_owned()),
+    }
+}
+
+fn cargo_authority(arguments: &[String]) -> Result<(), String> {
+    let mut root = None;
+    let mut action = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let flag = &arguments[index];
+        let value = arguments
+            .get(index + 1)
+            .ok_or_else(|| format!("missing value for {flag:?}"))?;
+        match flag.as_str() {
+            "--root" if root.is_none() => root = Some(PathBuf::from(value)),
+            "--write" | "--check" if action.is_none() => {
+                action = Some((flag.as_str(), PathBuf::from(value)));
+            }
+            _ => return Err(format!("repeated or unsupported flag {flag:?}")),
+        }
+        index += 2;
+    }
+    let root = root.unwrap_or_else(default_root);
+    match action {
+        Some(("--write", path)) => write_authority(&root, &path),
+        Some(("--check", path)) => validate_authority_file(&root, &path),
+        Some(_) => unreachable!("only known actions are stored"),
+        None => Err("missing required --write PATH or --check PATH".to_owned()),
     }
 }
 

@@ -1,0 +1,72 @@
+name: Quint verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  quint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: verify pinned Rust toolchain
+        run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml)"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: verification/quint/pnpm-lock.yaml
+      - name: install pinned Quint
+        run: pnpm -C verification/quint install --frozen-lockfile
+      - name: install verified Apalache backend
+        run: |
+          quint_home="$RUNNER_TEMP/quint-home"
+          QUINT_HOME="$quint_home" verification/quint/bin/install-apalache
+          echo "QUINT_HOME=$quint_home" >> "$GITHUB_ENV"
+      - name: configure guarded Quint path
+        run: |
+          echo "QUINT_REAL_BIN=$GITHUB_WORKSPACE/verification/quint/node_modules/.bin/quint" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/verification/quint/bin" >> "$GITHUB_PATH"
+      - name: normal Quint crate tests
+        run: cargo test -p fireemu-verification-quint
+      - name: complete Quint authority pass without retry
+        env:
+          VERIFICATION_PASSES: "1"
+        run: verification/quint/run-verification.sh
+      - name: fail on leaked owned checker processes
+        if: always()
+        shell: bash
+        run: |
+          ps -eo pid=,comm=,args= | awk \
+            -v root="$GITHUB_WORKSPACE/verification/quint" \
+            -v quint="$GITHUB_WORKSPACE/verification/quint/node_modules/.bin/quint" '
+            {
+              pid = $1
+              comm = $2
+              $1 = $2 = ""
+              args = $0
+            }
+            (comm ~ /^node/ && index(args, root)) ||
+            (comm == "timeout" && index(args, quint)) ||
+            (comm ~ /^java/ && (args ~ /tlc2\.TLC/ || args ~ /[Aa]palache/)) {
+              print pid, comm, args
+              leaked = 1
+            }
+            END { exit leaked }
+          '

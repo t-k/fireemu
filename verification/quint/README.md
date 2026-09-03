@@ -48,11 +48,12 @@ Generated conformance campaigns use the checked-in seeds `0x1`, `0x2`, `0x3`, an
 
 Mutation manifests under `mutations/` use tool-neutral `M-FORMAL-*` identifiers. Each exact source replacement must match once, and every mutant must produce the expected safety or temporal counterexample. Parser, typechecker, translator, launch, timeout, and other tool failures never count as mutation kills.
 
-Evidence under `evidence/` binds the model, checker configuration, mutation manifest, package manifests, lockfiles, tool versions, properties, scenarios, action coverage, projection negative checks, seeds, bounds, and production sources. Regenerate a model only after its baseline, deterministic scenarios, generated campaigns, projection negative checks, and real mutation campaign pass:
+Evidence under `evidence/` binds the model, checker configuration, mutation manifest, pinned toolchain, dedicated CI workflow, tool versions, properties, scenarios, action coverage, projection negative checks, seeds, bounds, and production sources. `cargo-authority.json` records only the locked normal dependency graph reachable from `fireemu-verification-quint`, with repository-relative workspace paths. Unrelated workspace dependencies, Cargo profiles, and CI jobs are intentionally outside this authority.
+
+Refresh the complete evidence set only after every baseline, deterministic scenario, generated campaign, projection negative check, and real mutation campaign passes:
 
 ```sh
-cargo run -p fireemu-verification-quint -- mutate-model --model EventDelivery --evidence verification/quint/evidence/EventDelivery.json
-cargo run -p fireemu-verification-quint -- verify-evidence --model EventDelivery
+QUINT_REAL_BIN="$PWD/verification/quint/node_modules/.bin/quint" PATH="$PWD/verification/quint/bin:$PATH" VERIFICATION_PASSES=1 verification/quint/run-verification.sh --refresh
 ```
 
-The JSON stores stable bounded classifications rather than checker timestamps or temporary paths. Any bound input change requires deliberate regeneration and review.
+The refresh command generates the Cargo authority and all fourteen model documents in staging, validates traceability against that complete staged set, and replaces the checked-in evidence directory only after every gate passes. A failure or signal preserves the previous complete set. The JSON stores stable bounded classifications rather than checker timestamps or temporary paths. Any bound input change requires deliberate regeneration and review.

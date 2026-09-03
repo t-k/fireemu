@@ -47,6 +47,22 @@ except BlockingIOError as error:
 PY
 unset FIREEMU_QUINT_AUTHORITY_LOCK_FD
 
+refresh=0
+case "$#" in
+  0) ;;
+  1)
+    if [ "$1" != "--refresh" ]; then
+      echo "error: unknown argument: $1" >&2
+      exit 2
+    fi
+    refresh=1
+    ;;
+  *)
+    echo "error: usage: verification/quint/run-verification.sh [--refresh]" >&2
+    exit 2
+    ;;
+esac
+
 APALACHE_VERSION=0.56.1
 APALACHE_JAR_SHA256=4753c0ebb2cbb266e2c6ac19ab5ca3827d726cc80fd1fc5d7c1eeb64736cd60b
 quint_home=${QUINT_HOME:-${HOME:?HOME or QUINT_HOME is required}/.quint}
@@ -110,11 +126,25 @@ cleanup_checker_output() {
 }
 
 owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-authority.XXXXXX")
+staged_evidence="$owned_temp/evidence"
+mkdir "$staged_evidence"
+authority_path="$script_dir/evidence/cargo-authority.json"
+authority_backup="$owned_temp/cargo-authority.original.json"
+authority_existed=0
+authority_installed=0
+refresh_committed=0
 active_pid=
 launching=0
 pending_signal=
 cleanup() {
   cleanup_checker_output || true
+  if [ "$refresh" -eq 1 ] && [ "$authority_installed" -eq 1 ] && [ "$refresh_committed" -eq 0 ]; then
+    if [ "$authority_existed" -eq 1 ]; then
+      cp -- "$authority_backup" "$authority_path"
+    else
+      rm -f -- "$authority_path"
+    fi
+  fi
   rm -rf -- "$owned_temp"
 }
 
@@ -174,6 +204,22 @@ run_gate() {
   return "$status"
 }
 
+if [ "$refresh" -eq 1 ]; then
+  run_gate cargo-authority cargo run -p fireemu-verification-quint -- cargo-authority --write "$staged_evidence/cargo-authority.json"
+  if [ -f "$authority_path" ] && [ ! -L "$authority_path" ]; then
+    cp -- "$authority_path" "$authority_backup"
+    authority_existed=1
+  elif [ -e "$authority_path" ] || [ -L "$authority_path" ]; then
+    echo "error: Cargo authority is not a regular file: $authority_path" >&2
+    exit 2
+  fi
+  cp -- "$staged_evidence/cargo-authority.json" "$authority_path"
+  authority_installed=1
+else
+  run_gate cargo-authority cargo run -p fireemu-verification-quint -- cargo-authority --check "$authority_path"
+  cp -- "$authority_path" "$staged_evidence/cargo-authority.json"
+fi
+
 pass=1
 while [ "$pass" -le "$passes" ]; do
   echo "Quint authority pass $pass/$passes"
@@ -195,13 +241,19 @@ while [ "$pass" -le "$passes" ]; do
   do
     model=${entry%%:*}
     test_target=${entry#*:}
-    mutation_evidence="$owned_temp/$model-pass-$pass.json"
+    mutation_evidence="$staged_evidence/$model.json"
     run_gate "$model-model" cargo run -p fireemu-verification-quint -- verify-model --model "$model"
     run_gate "$model-connect" cargo test -p fireemu-verification-quint --test "$test_target" -- --ignored --test-threads=1
     run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --evidence "$mutation_evidence"
     run_gate "$model-evidence" cargo run -p fireemu-verification-quint -- verify-evidence --model "$model" --evidence "$mutation_evidence"
   done
-  run_gate traceability cargo run -p traceability-check
+  run_gate traceability cargo run -p traceability-check -- --quint-evidence-dir "$staged_evidence"
 
   pass=$((pass + 1))
 done
+
+if [ "$refresh" -eq 1 ]; then
+  run_gate publish-evidence "$script_dir/bin/publish-evidence" "$staged_evidence" "$script_dir/evidence"
+  refresh_committed=1
+  echo "Quint evidence refreshed atomically"
+fi

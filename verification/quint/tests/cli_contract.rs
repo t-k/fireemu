@@ -665,6 +665,10 @@ fn authority_script_declares_all_models_and_ordered_gates() {
     assert!(script.contains("mktemp -d"));
     assert!(script.contains("trap cleanup"));
     assert!(script.contains("cleanup_checker_output"));
+    assert!(script.contains("--refresh"));
+    assert!(script.contains("cargo-authority --write"));
+    assert!(script.contains("--quint-evidence-dir"));
+    assert!(script.contains("bin/publish-evidence"));
     let launch_contract = [
         "launching=1",
         "\"$group_launcher\" \"$@\" &",
@@ -679,6 +683,18 @@ fn authority_script_declares_all_models_and_ordered_gates() {
             .unwrap_or_else(|| panic!("missing or out-of-order launch contract {statement}"));
         launch_offset += found + statement.len();
     }
+}
+
+#[test]
+fn authority_script_rejects_unknown_refresh_arguments_before_tool_setup() {
+    let output = Command::new(authority_script_path())
+        .arg("--unknown")
+        .env_remove("QUINT_REAL_BIN")
+        .env_remove("QUINT_HOME")
+        .output()
+        .expect("authority script must launch");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown argument: --unknown"));
 }
 
 #[test]

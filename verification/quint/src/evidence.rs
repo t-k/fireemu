@@ -22,27 +22,24 @@ const BACKEND: &str = "tlc";
 const TRACES_PER_SEED: usize = 100;
 const MAX_STEPS: usize = 20;
 const COMMON_DIGEST_PATHS: &[&str] = &[
-    ".github/workflows/ci.yml",
-    "Cargo.lock",
-    "Cargo.toml",
-    "verification/quint/Cargo.toml",
-    "verification/quint/README.md",
+    ".github/workflows/quint.yml",
+    "rust-toolchain.toml",
     "verification/quint/apalache.lock.json",
     "verification/quint/bin/install-apalache",
     "verification/quint/bin/process-group",
+    "verification/quint/bin/publish-evidence",
     "verification/quint/bin/quint",
     "verification/quint/bin/authority-lock",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-verification.sh",
+    "verification/quint/evidence/cargo-authority.json",
+    "verification/quint/src/cargo_authority.rs",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
-    "verification/quint/tests/cli_contract.rs",
-    "verification/quint/tests/evidence_contract.rs",
-    "verification/quint/tests/model_registry.rs",
 ];
 
 /// Strict, versioned evidence document shared by every model.
@@ -276,7 +273,11 @@ fn validate_semantics(
         for (path, digest) in expected_digests {
             match evidence.digests.get(&path) {
                 Some(actual) if actual == &digest => {}
-                _ => return Err(format!("digest mismatch for {path}")),
+                _ => {
+                    return Err(format!(
+                        "digest mismatch for {path}; run verification/quint/run-verification.sh --refresh"
+                    ));
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ pub mod atomic_commit_outbox;
 pub mod atomic_export_publication;
 pub mod auth_totp;
 pub mod await_idle;
+pub mod cargo_authority;
 pub mod compatibility_selection;
 pub mod event_delivery;
 pub mod evidence;

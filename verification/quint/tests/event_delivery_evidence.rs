@@ -12,10 +12,9 @@ use fireemu_verification_quint::process::{
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 34] = [
-    ".github/workflows/ci.yml",
-    "Cargo.toml",
-    "Cargo.lock",
+const BOUND_INPUTS: [&str; 31] = [
+    ".github/workflows/quint.yml",
+    "rust-toolchain.toml",
     "crates/fireemu-core-events/Cargo.toml",
     "crates/fireemu-core-events/src/event.rs",
     "crates/fireemu-core-events/src/retry.rs",
@@ -23,30 +22,28 @@ const BOUND_INPUTS: [&str; 34] = [
     "crates/fireemu-core-types/Cargo.toml",
     "crates/fireemu-core-types/src/ids.rs",
     "crates/fireemu-core-types/src/time.rs",
-    "verification/quint/Cargo.toml",
-    "verification/quint/README.md",
     "verification/quint/apalache.lock.json",
     "verification/quint/bin/install-apalache",
     "verification/quint/bin/quint",
     "verification/quint/bin/process-group",
+    "verification/quint/bin/publish-evidence",
     "verification/quint/bin/authority-lock",
     "verification/quint/run-verification.sh",
+    "verification/quint/evidence/cargo-authority.json",
     "verification/quint/specs/EventDelivery.qnt",
     "verification/quint/configs/EventDelivery.json",
     "verification/quint/mutations/EventDelivery.json",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/src/event_delivery.rs",
+    "verification/quint/src/cargo_authority.rs",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
-    "verification/quint/tests/cli_contract.rs",
-    "verification/quint/tests/evidence_contract.rs",
     "verification/quint/tests/event_delivery_connect.rs",
     "verification/quint/tests/event_delivery_evidence.rs",
-    "verification/quint/tests/model_registry.rs",
 ];
 
 fn repository_root() -> PathBuf {
@@ -98,6 +95,12 @@ fn checked_in_evidence_rejects_each_bound_input_tamper() {
         let error = validate_evidence_json(EVIDENCE, descriptor(), Some(&temporary.path))
             .expect_err("tampered input must invalidate evidence");
         assert!(error.contains(relative), "{relative}: {error}");
+        if relative == ".github/workflows/quint.yml" {
+            assert!(
+                error.contains("verification/quint/run-verification.sh --refresh"),
+                "missing refresh command: {error}"
+            );
+        }
         temporary.close().expect("remove owned test repository");
     }
 }

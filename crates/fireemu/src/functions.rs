@@ -209,13 +209,32 @@ fn functions_source_signature(root: &Path, ignores: &[String]) -> Result<u64, St
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FunctionsSourceStamp(u64);
 
-fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
-    fn hash_bytes(hash: &mut u64, bytes: impl IntoIterator<Item = u8>) {
-        for byte in bytes {
-            *hash = update_watch_hash(*hash, byte);
-        }
+fn hash_source_stamp_entry(
+    mut hash: u64,
+    relative: &[u8],
+    len: u64,
+    modified_nanos: u128,
+    changed_seconds: i64,
+    changed_nanos: i64,
+    content: &[u8],
+) -> u64 {
+    for byte in relative.iter().copied().chain([0]) {
+        hash = update_watch_hash(hash, byte);
     }
+    for byte in len
+        .to_le_bytes()
+        .into_iter()
+        .chain(modified_nanos.to_le_bytes())
+        .chain(changed_seconds.to_le_bytes())
+        .chain(changed_nanos.to_le_bytes())
+        .chain(content.iter().copied())
+    {
+        hash = update_watch_hash(hash, byte);
+    }
+    hash
+}
 
+fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSourceStamp, String> {
     fn visit(
         root: &Path,
         directory: &Path,
@@ -247,21 +266,24 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
                     .ok()
                     .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                     .map_or(0, |duration| duration.as_nanos());
-                hash_bytes(hash, relative.to_string_lossy().bytes().chain([0]));
-                hash_bytes(hash, metadata.len().to_le_bytes());
-                hash_bytes(hash, modified.to_le_bytes());
+                let bytes = std::fs::read(&child)
+                    .map_err(|error| format!("watch {}: {error}", child.display()))?;
                 #[cfg(unix)]
-                {
+                let (changed_seconds, changed_nanos) = {
                     use std::os::unix::fs::MetadataExt as _;
-                    hash_bytes(hash, metadata.ctime().to_le_bytes());
-                    hash_bytes(hash, metadata.ctime_nsec().to_le_bytes());
-                }
+                    (metadata.ctime(), metadata.ctime_nsec())
+                };
                 #[cfg(not(unix))]
-                {
-                    let bytes = std::fs::read(&child)
-                        .map_err(|error| format!("watch {}: {error}", child.display()))?;
-                    hash_bytes(hash, bytes);
-                }
+                let (changed_seconds, changed_nanos) = (0, 0);
+                *hash = hash_source_stamp_entry(
+                    *hash,
+                    relative.to_string_lossy().as_bytes(),
+                    metadata.len(),
+                    modified,
+                    changed_seconds,
+                    changed_nanos,
+                    &bytes,
+                );
             } else if kind.is_symlink() {
                 return Err(format!(
                     "watch {}: symbolic links outside node_modules are not supported",
@@ -2416,10 +2438,11 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_signature, functions_source_stamp, node_engine_matches,
-        package_node_engine, parse_node_version, provision_function_pubsub_resources,
-        select_node_installation, snapshot_functions_source, update_watch_hash, NodeInstallation,
-        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        functions_source_signature, functions_source_stamp, hash_source_stamp_entry,
+        node_engine_matches, package_node_engine, parse_node_version,
+        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
+        update_watch_hash, NodeInstallation, BLOCKING_AUTH_DEADLINE,
+        MAX_BLOCKING_AUTH_RESPONSE_BYTES,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
@@ -2834,6 +2857,30 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_stamp_distinguishes_content_when_all_metadata_is_identical() {
+        let first = hash_source_stamp_entry(
+            0xcbf2_9ce4_8422_2325,
+            b"lib/index.js",
+            23,
+            1_788_123_456_000_000_000,
+            1_788_123_456,
+            0,
+            b"export const value = 1;",
+        );
+        let second = hash_source_stamp_entry(
+            0xcbf2_9ce4_8422_2325,
+            b"lib/index.js",
+            23,
+            1_788_123_456_000_000_000,
+            1_788_123_456,
+            0,
+            b"export const value = 2;",
+        );
+
+        assert_ne!(first, second);
     }
 
     #[test]

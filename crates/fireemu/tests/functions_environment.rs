@@ -86,6 +86,21 @@ fn exec_script(source: &Path, project: &str, script: &str) -> Output {
         .unwrap()
 }
 
+fn exec_script_with_arg(source: &Path, project: &str, script: &str, arg: &Path) -> Output {
+    fireemu_exec(source, project)
+        .args([
+            "--",
+            "sh",
+            "-c",
+            script,
+            "functions-reload-test",
+            arg.to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
     let config = source.join(format!("fireemu-{profile}.json"));
     write(
@@ -109,6 +124,62 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
         .stdin(Stdio::null())
         .output()
         .unwrap()
+}
+
+#[test]
+fn a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one() {
+    if !have_sdk() {
+        return;
+    }
+    let dir = scratch_codebase("same-size-reload");
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nconst marker = \"before\";\nexports.fxReload = onRequest((_request, response) => response.status(200).send(marker));\n",
+    );
+    write(
+        &dir,
+        "package.json",
+        r#"{"name":"same-size-reload","private":true,"main":"index.js","engines":{"node":"20"}}"#,
+    );
+    let source = dir.join("index.js");
+    let output = exec_script_with_arg(
+        &dir,
+        "demo-same-size-reload",
+        r#"
+set -eu
+endpoint="$FIREEMU_FUNCTIONS_HOST/demo-same-size-reload/us-central1/fxReload"
+first=$(curl -fsS "$endpoint")
+node -e 'const fs=require("fs"); const p=process.argv[1]; const s=fs.readFileSync(p,"utf8"); fs.writeFileSync(p,s.replace("\"before\"", "missing!"));' "$1"
+sleep 3
+last_good=$(curl -fsS "$endpoint")
+node -e 'const fs=require("fs"); const p=process.argv[1]; const s=fs.readFileSync(p,"utf8"); fs.writeFileSync(p,s.replace("missing!", "\"after!\""));' "$1"
+latest=""
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 1
+  latest=$(curl -fsS "$endpoint")
+  if [ "$latest" = "after!" ]; then
+    break
+  fi
+done
+printf '%s\n%s\n%s\n' "$first" "$last_good" "$latest"
+test "$first" = "before"
+test "$last_good" = "before"
+test "$latest" = "after!"
+"#,
+        &source,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("keeping the last-known-good generation"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let observations = stdout.lines().rev().take(3).collect::<Vec<_>>();
+    assert_eq!(observations, ["after!", "before", "before"], "{stdout}");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// The one line the fixture prints at load, parsed.

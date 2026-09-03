@@ -1495,37 +1495,46 @@ impl LocalBackend {
             None => (None, None),
         };
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
-        let document = self.with_db(&parent, |db| {
-            let (document, version) = match (&txn, read_at) {
-                (Some(t), _) => {
-                    db.touch_transaction(t, now)
-                        .map_err(|e| status_from_error(&e))?;
-                    let version = db
-                        .transaction_read_version(t)
-                        .map_err(|e| status_from_error(&e))?;
-                    (db.get_at(&path, version).cloned(), Some(version))
-                }
-                (None, Some(at)) => {
+        let document = if let Some(txn) = txn {
+            self.with_db(&parent, |db| {
+                db.touch_transaction(&txn, now)
+                    .map_err(|e| status_from_error(&e))?;
+                let version = db
+                    .transaction_read_version(&txn)
+                    .map_err(|e| status_from_error(&e))?;
+                let document = db.get_at(&path, version).cloned();
+                guard(
+                    db,
+                    Some(version),
+                    ReadCheck::Document {
+                        path: &path,
+                        snapshot: document.as_ref(),
+                    },
+                )?;
+                // The read joins the transaction's read set only once it is authorized.
+                db.record_transaction_read(&txn, &path, document.as_ref())
+                    .map_err(|e| status_from_error(&e))?;
+                Ok(document)
+            })?
+        } else {
+            self.read_db(&parent, |db| {
+                let (document, version) = if let Some(at) = read_at {
                     let version = Self::retained_read_version(db, at)?;
                     (db.get_at(&path, version).cloned(), Some(version))
-                }
-                (None, None) => (db.get(&path).cloned(), None),
-            };
-            guard(
-                db,
-                version,
-                ReadCheck::Document {
-                    path: &path,
-                    snapshot: document.as_ref(),
-                },
-            )?;
-            // The read joins the transaction's read set only once it is authorized.
-            if let Some(t) = &txn {
-                db.record_transaction_read(t, &path, document.as_ref())
-                    .map_err(|e| status_from_error(&e))?;
-            }
-            Ok(document)
-        })?;
+                } else {
+                    (db.get(&path).cloned(), None)
+                };
+                guard(
+                    db,
+                    version,
+                    ReadCheck::Document {
+                        path: &path,
+                        snapshot: document.as_ref(),
+                    },
+                )?;
+                Ok(document)
+            })?
+        };
         Ok(DocumentSnapshot {
             path,
             document,
@@ -2646,7 +2655,29 @@ mod lock_tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::time::LogicalInstant;
+
     use super::*;
+
+    fn backend() -> Arc<LocalBackend> {
+        Arc::new(LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Conservative,
+                },
+                indexes: IndexSet::default(),
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            7,
+        ))
+    }
 
     #[test]
     fn two_readers_enter_the_same_database_concurrently() {
@@ -2677,5 +2708,48 @@ mod lock_tests {
         assert!(first_thread.join().unwrap().is_some());
         assert!(second_thread.join().unwrap().is_some());
         assert!(concurrent.is_ok(), "the second reader waited for the first");
+    }
+
+    #[test]
+    fn two_latest_gets_authorize_under_shared_database_locks() {
+        let backend = backend();
+        let request = pb::GetDocumentRequest {
+            name: "projects/demo-app/databases/(default)/documents/items/missing".to_owned(),
+            ..Default::default()
+        };
+        let (first_entered_tx, first_entered_rx) = mpsc::channel();
+        let (second_entered_tx, second_entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let first_backend = backend.clone();
+        let first_request = request.clone();
+        let first = std::thread::spawn(move || {
+            let guard = |_: &FirestoreState, _: Option<CommitVersion>, _: ReadCheck<'_>| {
+                first_entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            };
+            first_backend.get_document_snapshot(&first_request, &guard)
+        });
+        first_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let second = std::thread::spawn(move || {
+            let guard = |_: &FirestoreState, _: Option<CommitVersion>, _: ReadCheck<'_>| {
+                second_entered_tx.send(()).unwrap();
+                Ok(())
+            };
+            backend.get_document_snapshot(&request, &guard)
+        });
+        let concurrent = second_entered_rx.recv_timeout(Duration::from_secs(1));
+        release_tx.send(()).unwrap();
+
+        assert!(first.join().unwrap().is_ok());
+        assert!(second.join().unwrap().is_ok());
+        assert!(
+            concurrent.is_ok(),
+            "the second GetDocument waited for the first"
+        );
     }
 }

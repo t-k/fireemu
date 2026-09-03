@@ -4,7 +4,7 @@
 //! requests get permissive CORS answers (loopback test runtime).
 
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -25,9 +25,22 @@ use crate::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 
 /// Maximum accepted REST request body.
 pub const MAX_REST_BODY_BYTES: usize = 10 * 1024 * 1024;
+/// Maximum Firestore REST requests that may retain bodies while waiting for synchronous work.
+pub const MAX_BLOCKING_REST_REQUESTS: usize = 64;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type OutBody = UnsyncBoxBody<Bytes, BoxError>;
+
+fn rest_work_limiter() -> &'static Arc<tokio::sync::Semaphore> {
+    static LIMITER: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    LIMITER.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_BLOCKING_REST_REQUESTS)))
+}
+
+fn try_admit_rest_work(
+    limiter: &Arc<tokio::sync::Semaphore>,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    limiter.clone().try_acquire_owned().ok()
+}
 
 fn full(bytes: Bytes) -> OutBody {
     Full::new(bytes)
@@ -100,6 +113,19 @@ async fn rest_call(
     req: Request<Incoming>,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let origin = header(&req, "origin").map(str::to_owned);
+    let Some(permit) = try_admit_rest_work(rest_work_limiter()) else {
+        return Ok(json_response(
+            &RestResponse {
+                status: 503,
+                body: fireemu_adapter_support::api_error::google_rpc(
+                    503,
+                    "too many concurrent Firestore REST requests",
+                    "RESOURCE_EXHAUSTED",
+                ),
+            },
+            origin.as_deref(),
+        ));
+    };
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
@@ -140,14 +166,20 @@ async fn rest_call(
             }
         }
     };
-    let response = state.handle(&RestRequest {
+    let request = RestRequest {
         method,
         path,
         query,
         authorization,
         app_check,
         body,
-    });
+    };
+    let response = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state.handle(&request)
+    })
+    .await
+    .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
     if crate::rest::drops_connection(&response) {
         // A `dropConnection` fault: the connection closes without a response.
         return Err(dropped());
@@ -372,7 +404,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_prost_recursion_status;
+    use std::sync::Arc;
+
+    use super::{normalize_prost_recursion_status, try_admit_rest_work};
     use bytes::Bytes;
     use hyper::HeaderMap;
     use tonic::{Code, Status};
@@ -420,5 +454,40 @@ mod tests {
             "failed to decode Protobuf message: Value.value_type: recursion limit reached"
         );
         assert!(normalized.details().is_empty());
+    }
+
+    #[test]
+    fn blocking_rest_admission_is_bounded_and_released_by_raii() {
+        let limiter = Arc::new(tokio::sync::Semaphore::new(2));
+        let first = try_admit_rest_work(&limiter).expect("first request is admitted");
+        let second = try_admit_rest_work(&limiter).expect("second request is admitted");
+        assert!(try_admit_rest_work(&limiter).is_none());
+
+        drop(first);
+        let replacement = try_admit_rest_work(&limiter).expect("a dropped request releases one");
+        drop((second, replacement));
+        assert_eq!(limiter.available_permits(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_the_waiter_does_not_release_running_blocking_work() {
+        let limiter = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = try_admit_rest_work(&limiter).expect("the request is admitted");
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let task = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        task.abort();
+        assert!(try_admit_rest_work(&limiter).is_none());
+        release_tx.send(()).unwrap();
+        task.await.unwrap();
+        assert!(try_admit_rest_work(&limiter).is_some());
     }
 }

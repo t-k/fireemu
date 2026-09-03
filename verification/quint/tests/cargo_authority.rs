@@ -46,4 +46,20 @@ fn authority_is_path_independent_and_excludes_unrelated_workspace_packages() {
         .packages
         .iter()
         .any(|package| package.name == "quint-connect"));
+    for build_dependency in ["autocfg", "version_check"] {
+        assert!(
+            authority
+                .packages
+                .iter()
+                .any(|package| package.name == build_dependency),
+            "reachable build dependency is missing: {build_dependency}"
+        );
+    }
+    assert!(
+        authority
+            .packages
+            .iter()
+            .all(|package| package.name != "proptest"),
+        "dev-only dependencies must remain outside the authority"
+    );
 }

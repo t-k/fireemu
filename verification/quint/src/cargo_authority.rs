@@ -40,7 +40,7 @@ pub struct AuthorityPackage {
     pub manifest: Option<String>,
     /// Enabled features for this resolved node.
     pub features: Vec<String>,
-    /// Canonical identities of resolved normal dependencies.
+    /// Canonical identities of resolved normal and build dependencies.
     pub dependencies: Vec<String>,
 }
 
@@ -147,7 +147,7 @@ fn authority_from_metadata(repository_root: &Path, bytes: &[u8]) -> Result<Cargo
         let node = nodes_by_raw_id
             .get(&raw_id)
             .ok_or_else(|| format!("cargo metadata has no node for {raw_id}"))?;
-        for dependency in normal_dependencies(node)? {
+        for dependency in authority_dependencies(node)? {
             pending.push(dependency);
         }
     }
@@ -162,7 +162,7 @@ fn authority_from_metadata(repository_root: &Path, bytes: &[u8]) -> Result<Cargo
             .ok_or_else(|| format!("cargo metadata has no node for {raw_id}"))?;
         let mut features = string_array(node, "features")?;
         features.sort();
-        let mut dependencies = normal_dependencies(node)?
+        let mut dependencies = authority_dependencies(node)?
             .into_iter()
             .map(|dependency| {
                 canonical_by_raw_id
@@ -244,15 +244,17 @@ fn string_array(value: &serde_json::Value, field: &str) -> Result<Vec<String>, S
         .collect()
 }
 
-fn normal_dependencies(node: &serde_json::Value) -> Result<Vec<String>, String> {
+fn authority_dependencies(node: &serde_json::Value) -> Result<Vec<String>, String> {
     node["deps"]
         .as_array()
         .ok_or_else(|| "cargo metadata node has no deps array".to_owned())?
         .iter()
         .filter(|dependency| {
-            dependency["dep_kinds"]
-                .as_array()
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind["kind"].is_null()))
+            dependency["dep_kinds"].as_array().is_some_and(|kinds| {
+                kinds
+                    .iter()
+                    .any(|kind| kind["kind"].is_null() || kind["kind"].as_str() == Some("build"))
+            })
         })
         .map(|dependency| {
             dependency["pkg"]
@@ -261,4 +263,65 @@ fn normal_dependencies(node: &serde_json::Value) -> Result<Vec<String>, String> 
                 .ok_or_else(|| "cargo metadata dependency has no package id".to_owned())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authority_follows_normal_and_build_edges_but_not_dev_edges() {
+        let root = Path::new("/repository");
+        let package = |id: &str, name: &str, source: Option<&str>| {
+            serde_json::json!({
+                "id": id,
+                "name": name,
+                "version": "1.0.0",
+                "source": source,
+                "manifest_path": format!("/repository/{name}/Cargo.toml")
+            })
+        };
+        let dependency = |package: &str, kind: serde_json::Value| {
+            serde_json::json!({
+                "pkg": package,
+                "dep_kinds": [{ "kind": kind, "target": null }]
+            })
+        };
+        let node = |id: &str, dependencies: Vec<serde_json::Value>| serde_json::json!({ "id": id, "features": [], "deps": dependencies });
+        let metadata = serde_json::json!({
+            "packages": [
+                package("root", ROOT_PACKAGE, None),
+                package("normal", "normal-dependency", Some("registry+normal")),
+                package("build", "build-dependency", Some("registry+build")),
+                package("dev", "dev-dependency", Some("registry+dev"))
+            ],
+            "resolve": {
+                "nodes": [
+                    node("root", vec![
+                        dependency("normal", serde_json::Value::Null),
+                        dependency("dev", serde_json::json!("dev"))
+                    ]),
+                    node("normal", vec![dependency("build", serde_json::json!("build"))]),
+                    node("build", vec![]),
+                    node("dev", vec![])
+                ]
+            }
+        });
+
+        let authority = authority_from_metadata(
+            root,
+            &serde_json::to_vec(&metadata).expect("metadata must serialize"),
+        )
+        .expect("synthetic metadata must produce an authority");
+        let names = authority
+            .packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert!(names.contains(ROOT_PACKAGE));
+        assert!(names.contains("normal-dependency"));
+        assert!(names.contains("build-dependency"));
+        assert!(!names.contains("dev-dependency"));
+    }
 }

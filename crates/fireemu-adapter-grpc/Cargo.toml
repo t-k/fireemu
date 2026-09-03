@@ -35,3 +35,7 @@ proptest.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "read_concurrency"
+harness = false

@@ -22,6 +22,38 @@ use serde_json::json;
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 
+// These are deliberately public, insecure test keys. They must never be referenced outside
+// this integration test crate or included in a release artifact.
+const INSECURE_TEST_ONLY_RSA_A_HEX: &[u8] =
+    include_bytes!("fixtures/INSECURE_TEST_ONLY_RSA_A.der.hex");
+const INSECURE_TEST_ONLY_RSA_B_HEX: &[u8] =
+    include_bytes!("fixtures/INSECURE_TEST_ONLY_RSA_B.der.hex");
+
+fn fixture_signer(hex: &[u8]) -> Arc<RsaSigner> {
+    let digits = hex
+        .iter()
+        .copied()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    let mut der = Vec::with_capacity(digits.len() / 2);
+    for pair in digits.chunks_exact(2) {
+        let high = hex_nibble(pair[0]).expect("test key contains hexadecimal bytes");
+        let low = hex_nibble(pair[1]).expect("test key contains hexadecimal bytes");
+        der.push((high << 4) | low);
+    }
+    assert_eq!(digits.len() % 2, 0, "test key hex must contain byte pairs");
+    RsaSigner::from_pkcs8_der(&der).expect("public test key must be valid PKCS#8")
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 struct LockCheckingSigner {
     store: Weak<Mutex<AuthStore>>,
     calls: AtomicUsize,
@@ -281,7 +313,7 @@ fn blocking_auth_with_fifty_thousand_sessions_copies_only_changed_registries() {
 
 #[test]
 fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
-    let signer = RsaSigner::from_seed(7).unwrap();
+    let signer = fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX);
     assert_eq!(signer.alg(), "RS256");
     assert_eq!(signer.kid().len(), 16);
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
@@ -307,10 +339,7 @@ fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
         verify_id_token(&token, &store, START).unwrap().uid,
         uid.as_str()
     );
-    // Same seed, same key: tokens are reproducible; another seed does not verify.
-    let again = RsaSigner::from_seed(7).unwrap();
-    assert_eq!(again.kid(), signer.kid());
-    let other = RsaSigner::from_seed(8).unwrap();
+    let other = fixture_signer(INSECURE_TEST_ONLY_RSA_B_HEX);
     assert_ne!(other.kid(), signer.kid());
     assert!(!other.verify(
         format!("{}.{}", parts[0], parts[1]).as_bytes(),
@@ -375,11 +404,20 @@ fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
 }
 
 #[test]
+fn session_rsa_generation_is_deterministic_and_seed_separated() {
+    let first = RsaSigner::from_seed(7).unwrap();
+    let repeated = RsaSigner::from_seed(7).unwrap();
+    let other = RsaSigner::from_seed(8).unwrap();
+    assert_eq!(first.kid(), repeated.kid());
+    assert_ne!(first.kid(), other.kid());
+}
+
+#[test]
 fn session_rsa_cache_material_round_trips_and_rejects_wrong_key_parameters() {
     use rand_core::SeedableRng as _;
     use rsa::pkcs8::EncodePrivateKey as _;
 
-    let signer = RsaSigner::from_seed(71).unwrap();
+    let signer = fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX);
     let document = signer.to_pkcs8_der().unwrap();
     let restored = RsaSigner::from_pkcs8_der(document.as_bytes()).unwrap();
     assert_eq!(restored.kid(), signer.kid());
@@ -405,7 +443,7 @@ fn app_check_operating_system_keys_remain_instance_specific() {
 
 #[test]
 fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
-    let signer = RsaSigner::from_seed(9).unwrap();
+    let signer = fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX);
     let mut store = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
     store.set_signer(signer.clone());
     let state = AuthState {

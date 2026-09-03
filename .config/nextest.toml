@@ -32,11 +32,13 @@ fail-fast = true
 [profile.pr]
 retries = 0
 fail-fast = true
+slow-timeout = { period = "10s" }
 leak-timeout = { period = "30s", result = "fail" }
 
 [profile.ci]
 retries = 0
 fail-fast = false
+slow-timeout = { period = "10s" }
 leak-timeout = { period = "30s", result = "fail" }
 
 [profile.ci.junit]

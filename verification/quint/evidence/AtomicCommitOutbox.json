@@ -51,10 +51,10 @@
   ],
   "digests": {
     ".github/workflows/ci.yml": "baf0efbb35276e2f19cd5b1ac24597b0bc50c99f31b3e4bd223bd6c40a447799",
-    "Cargo.lock": "a023c9c5357e988be0c5b758102907ac7b323862a6b25cd5c0e3663d779a1bb5",
+    "Cargo.lock": "7a3ca041f11d5b80b76585b14ab3df40d9930f81b48042602a066bd374bd7f95",
     "Cargo.toml": "af72737999b69807b6686c18cb86d376e70dae497d35cd6e7844f9488ad72240",
     "crates/fireemu-core-firestore/src/store.rs": "bb0dcf0fec1d8ed090d4e2dc90f3569c388f9ce955a0ada9e42abc542bd32931",
-    "verification/quint/Cargo.toml": "47f9687c41b5eeb9741111ea6b806a60e6f922c0e3ca41fe5f608832887105ca",
+    "verification/quint/Cargo.toml": "d77f83f2702297285eb378664f4cd7b2346ce30acd218cc6073233c6fb3ad5ac",
     "verification/quint/README.md": "303aaa74bc991b323359bc7f8ae3288125c1799149df6c9dcdb252f78abd592d",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
     "verification/quint/bin/authority-lock": "51530b393fbff9bedadd2c97721fa72c889ab47420e25d5d79b1ee8d974f4ce6",
@@ -74,7 +74,7 @@
     "verification/quint/src/model.rs": "a17b646ad378b199594891f3d3db9dd7a2df7fa85b5754956cdaa559562a7042",
     "verification/quint/src/process.rs": "1657b6af09d982ac32776e64ef84d4db310ed1366cc0097d0c53357c502793ba",
     "verification/quint/tests/atomic_commit_outbox_connect.rs": "2aa5dfd9b468ac7a1105c12e2a6234c2f6e79a1f97ab78cb1c7c135827293f50",
-    "verification/quint/tests/cli_contract.rs": "5ddddd13e7970db75a4c0780082df28fb84e03530b74bdcee679690698775c99",
+    "verification/quint/tests/cli_contract.rs": "4d4c8ef44ea77582fa45d592ef9e71049196bcb8ec3a0203aa385f8bfcb62e27",
     "verification/quint/tests/evidence_contract.rs": "dce0d71712d23419937b359c820a47f7241c4023f55df653fe6cf6fdee32b79a",
     "verification/quint/tests/model_registry.rs": "d436d2586cb2cb9d0fe58c049d97e331bdcae31bdab0127e23f2bb49857a0a01"
   },

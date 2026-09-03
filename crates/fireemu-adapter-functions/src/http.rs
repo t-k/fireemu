@@ -10,19 +10,93 @@ use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use std::fmt::Write as _;
 
 pub use fireemu_core_session::loopback::origin_is_local;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::runtime::FunctionsRuntime;
 
 /// Maximum request body forwarded to a function.
 pub const MAX_FUNCTION_BODY_BYTES: usize = 32 * 1024 * 1024;
+/// Express' default JSON limit used by the pinned Cloud Tasks emulator.
+pub const MAX_TASK_BODY_BYTES: usize = 100 * 1024;
 /// Maximum response body accepted from a function (responses are buffered).
 pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_FUNCTION_CONNECTIONS: usize = 128;
+const MAX_CONCURRENT_BODY_READS: usize = 64;
+const MAX_RESERVED_BODY_BYTES: usize = 64 * 1024 * 1024;
+const REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[derive(Clone)]
+struct RequestAdmission {
+    requests: Arc<Semaphore>,
+    bytes: Arc<Semaphore>,
+}
+
+struct RequestPermit {
+    _request: OwnedSemaphorePermit,
+    _bytes: OwnedSemaphorePermit,
+}
+
+impl RequestAdmission {
+    fn new() -> Self {
+        Self::with_limits(MAX_CONCURRENT_BODY_READS, MAX_RESERVED_BODY_BYTES)
+    }
+
+    fn with_limits(requests: usize, bytes: usize) -> Self {
+        Self {
+            requests: Arc::new(Semaphore::new(requests)),
+            bytes: Arc::new(Semaphore::new(bytes)),
+        }
+    }
+
+    async fn acquire(&self, bytes: usize) -> RequestPermit {
+        let request = self
+            .requests
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the request admission semaphore is never closed");
+        let bytes = self
+            .bytes
+            .clone()
+            .acquire_many_owned(
+                u32::try_from(bytes).expect("request body limits fit in semaphore permits"),
+            )
+            .await
+            .expect("the request byte semaphore is never closed");
+        RequestPermit {
+            _request: request,
+            _bytes: bytes,
+        }
+    }
+}
+
+fn request_body_limit(path: &str) -> usize {
+    if crate::tasks::route(path).is_some() {
+        MAX_TASK_BODY_BYTES
+    } else {
+        MAX_FUNCTION_BODY_BYTES
+    }
+}
+
+fn request_body_reservation(req: &Request<Incoming>, limit: usize) -> usize {
+    let lengths = req.headers().get_all(hyper::header::CONTENT_LENGTH);
+    let mut values = lengths.iter();
+    let declared = values
+        .next()
+        .filter(|_| values.next().is_none())
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    // A chunked or otherwise unknown-length body reserves the full route limit. A framed
+    // Content-Length cannot deliver more bytes than declared; one permit still bounds an
+    // empty request by the concurrent-request ceiling.
+    declared.map_or(limit, |bytes| bytes.min(limit).max(1))
+}
 
 fn simple(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
     typed(status, "text/plain; charset=utf-8", text)
@@ -454,12 +528,21 @@ fn task_route(
 }
 
 /// Reads a request body up to the forwarding limit, or the 413 that replaces it.
-async fn collect_body(body: Incoming) -> Result<Bytes, Refusal> {
-    match fireemu_adapter_support::body::collect_limited(body, MAX_FUNCTION_BODY_BYTES).await {
-        Ok(bytes) => Ok(bytes),
-        Err(_) => Err(Box::new(simple(
+async fn collect_body(body: Incoming, limit: usize) -> Result<Bytes, Refusal> {
+    match tokio::time::timeout(
+        REQUEST_READ_TIMEOUT,
+        fireemu_adapter_support::body::collect_limited(body, limit),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(_)) => Err(Box::new(simple(
             StatusCode::PAYLOAD_TOO_LARGE,
             "request body too large",
+        ))),
+        Err(_) => Err(Box::new(simple(
+            StatusCode::REQUEST_TIMEOUT,
+            "request body timed out",
         ))),
     }
 }
@@ -468,25 +551,29 @@ async fn collect_body(body: Incoming) -> Result<Bytes, Refusal> {
 /// `Incoming` is dropped before the body has arrived; a client that is still writing then sees
 /// a timing-dependent connection reset instead of the callable's stable error envelope.
 async fn drain_refused_body(mut body: Incoming) {
-    let mut remaining = MAX_FUNCTION_BODY_BYTES;
-    while let Some(frame) = body.frame().await {
-        let Ok(frame) = frame else {
-            return;
-        };
-        let Ok(data) = frame.into_data() else {
-            continue;
-        };
-        let len = data.len();
-        if len > remaining {
-            return;
+    let drain = async {
+        let mut remaining = MAX_FUNCTION_BODY_BYTES;
+        while let Some(frame) = body.frame().await {
+            let Ok(frame) = frame else {
+                return;
+            };
+            let Ok(data) = frame.into_data() else {
+                continue;
+            };
+            let len = data.len();
+            if len > remaining {
+                return;
+            }
+            remaining -= len;
         }
-        remaining -= len;
-    }
+    };
+    let _ = tokio::time::timeout(REQUEST_READ_TIMEOUT, drain).await;
 }
 
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
+    body_limit: usize,
 ) -> Result<Response<Full<Bytes>>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
@@ -507,7 +594,7 @@ async fn respond(
     // ID reaches, and both end in a literal the function route does not have.
     if req.method() == hyper::Method::POST {
         if let Some(channel) = crate::eventarc::publish_channel(&path) {
-            return Ok(match collect_body(req.into_body()).await {
+            return Ok(match collect_body(req.into_body(), body_limit).await {
                 Ok(body) => publish_events(&runtime, &channel, &body),
                 Err(answer) => *answer,
             });
@@ -516,7 +603,7 @@ async fn respond(
     // Cloud Tasks shares this port for the same reason Eventarc does.
     if let Some(route) = crate::tasks::route(&path) {
         let method = req.method().clone();
-        return Ok(match collect_body(req.into_body()).await {
+        return Ok(match collect_body(req.into_body(), body_limit).await {
             Ok(body) => task_route(&runtime, &route, &method, &body),
             Err(answer) => *answer,
         });
@@ -563,7 +650,7 @@ async fn respond(
             ));
         }
     };
-    let body = match collect_body(req.into_body()).await {
+    let body = match collect_body(req.into_body(), body_limit).await {
         Ok(body) => body,
         Err(answer) => return Ok(*answer),
     };
@@ -724,13 +811,104 @@ pub async fn serve_functions(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
 ) -> std::io::Result<()> {
+    let request_admission = RequestAdmission::new();
+    let connection_slots = Arc::new(Semaphore::new(MAX_FUNCTION_CONNECTIONS));
     loop {
         let (stream, _) = listener.accept().await?;
+        let connection = connection_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the connection semaphore is never closed");
         let runtime = runtime.clone();
+        let request_admission = request_admission.clone();
         tokio::spawn(async move {
+            let _connection = connection;
             let io = TokioIo::new(stream);
-            let svc = service_fn(move |req| respond(runtime.clone(), req));
-            let _ = http1::Builder::new().serve_connection(io, svc).await;
+            let svc = service_fn(move |req| {
+                let runtime = runtime.clone();
+                let request_admission = request_admission.clone();
+                async move {
+                    let body_limit = request_body_limit(req.uri().path());
+                    let reservation = request_body_reservation(&req, body_limit);
+                    let _request = request_admission.acquire(reservation).await;
+                    respond(runtime, req, body_limit).await
+                }
+            });
+            let mut builder = http1::Builder::new();
+            builder
+                .timer(TokioTimer::new())
+                .header_read_timeout(REQUEST_READ_TIMEOUT);
+            builder.keep_alive(false);
+            let _ = builder.serve_connection(io, svc).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::{
+        request_body_limit, RequestAdmission, MAX_FUNCTION_BODY_BYTES, MAX_TASK_BODY_BYTES,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn task_routes_use_the_official_json_body_limit() {
+        assert_eq!(
+            request_body_limit("/projects/demo-app/locations/us-central1/queues/work/tasks"),
+            MAX_TASK_BODY_BYTES
+        );
+        assert_eq!(
+            request_body_limit("/demo-app/us-central1/ordinary"),
+            MAX_FUNCTION_BODY_BYTES
+        );
+    }
+
+    #[tokio::test]
+    async fn request_admission_bounds_concurrency_and_reserved_bytes() {
+        let admission = RequestAdmission::with_limits(1, 8);
+        let first = admission.acquire(8).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), admission.acquire(1))
+                .await
+                .is_err()
+        );
+        drop(first);
+        let second = tokio::time::timeout(Duration::from_millis(20), admission.acquire(1))
+            .await
+            .expect("dropping an admitted request releases both permits");
+        drop(second);
+    }
+
+    #[tokio::test]
+    async fn cancelled_or_panicked_requests_release_all_admission_permits() {
+        let admission = RequestAdmission::with_limits(1, 8);
+        let cancelled_admission = admission.clone();
+        let (ready, ready_rx) = tokio::sync::oneshot::channel();
+        let cancelled = tokio::spawn(async move {
+            let _permit = cancelled_admission.acquire(8).await;
+            let _ = ready.send(());
+            std::future::pending::<()>().await;
+        });
+        ready_rx.await.expect("the cancelled request was admitted");
+        cancelled.abort();
+        let _ = cancelled.await;
+        drop(
+            tokio::time::timeout(Duration::from_millis(20), admission.acquire(8))
+                .await
+                .expect("cancellation releases request and byte permits"),
+        );
+
+        let panicked_admission = admission.clone();
+        let panicked = tokio::spawn(async move {
+            let _permit = panicked_admission.acquire(8).await;
+            panic!("exercise request-admission unwind cleanup");
+        });
+        assert!(panicked.await.expect_err("the task panics").is_panic());
+        drop(
+            tokio::time::timeout(Duration::from_millis(20), admission.acquire(8))
+                .await
+                .expect("panic cleanup releases request and byte permits"),
+        );
     }
 }

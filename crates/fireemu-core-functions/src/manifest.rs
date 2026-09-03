@@ -387,25 +387,25 @@ impl TaskRetryConfig {
 }
 
 /// A task queue's rate limits (`RATE_LIMITS_DEFAULT`, `tasksEmulator.js:18`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TaskRateLimits {
     /// How many tasks of this queue may be in flight at once.
     pub max_concurrent_dispatches: u32,
     /// The token-bucket refill rate.
-    pub max_dispatches_per_second: u32,
+    pub max_dispatches_per_second: f64,
 }
 
 impl Default for TaskRateLimits {
     fn default() -> Self {
         Self {
             max_concurrent_dispatches: 1000,
-            max_dispatches_per_second: 500,
+            max_dispatches_per_second: 500.0,
         }
     }
 }
 
 /// What invokes a function.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Trigger {
     /// HTTP request (`onRequest`) or callable (`onCall`).
     Http {
@@ -485,7 +485,7 @@ pub enum Trigger {
 }
 
 /// One function.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionSpec {
     /// Name (unique within the manifest).
     pub name: String,
@@ -508,7 +508,32 @@ pub struct FunctionSpec {
 }
 
 impl FunctionSpec {
+    fn validate_task_queue_options(&self) -> Result<(), ManifestError> {
+        let Trigger::TaskQueue { rate_limits, .. } = self.trigger else {
+            return Ok(());
+        };
+        if rate_limits.max_concurrent_dispatches > 5_000 {
+            return Err(ManifestError::InvalidOption {
+                function: self.name.clone(),
+                field: "rateLimits.maxConcurrentDispatches",
+                reason: "must be at most 5000",
+            });
+        }
+        if !rate_limits.max_dispatches_per_second.is_finite()
+            || rate_limits.max_dispatches_per_second <= 0.0
+            || rate_limits.max_dispatches_per_second > 500.0
+        {
+            return Err(ManifestError::InvalidOption {
+                function: self.name.clone(),
+                field: "rateLimits.maxDispatchesPerSecond",
+                reason: "must be greater than 0 and at most 500",
+            });
+        }
+        Ok(())
+    }
+
     fn validate_capacity_options(&self) -> Result<(), ManifestError> {
+        self.validate_task_queue_options()?;
         if self.concurrency == Some(0) {
             return Err(ManifestError::InvalidLimit {
                 function: self.name.clone(),
@@ -709,7 +734,7 @@ pub struct IgnoredFunction {
 }
 
 /// The function manifest.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FunctionManifest {
     /// Functions.
     pub functions: Vec<FunctionSpec>,
@@ -773,7 +798,7 @@ pub fn channel_suffix(channel: &str) -> &str {
 }
 
 /// A Firestore trigger matched by a document change.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FirestoreMatch<'a> {
     /// The function.
     pub function: &'a FunctionSpec,

@@ -1,6 +1,7 @@
 //! The runtime against a fake runner: dispatch, outcomes, retries in virtual time,
 //! schedules, await-idle, and the protocol helpers.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,7 +14,9 @@ use fireemu_adapter_grpc::local::CommitEvent;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
 use fireemu_core_firestore::value::Value as FsValue;
-use fireemu_core_functions::manifest::BlockingAuthEvent;
+use fireemu_core_functions::manifest::{
+    BlockingAuthEvent, TaskRateLimits, TaskRetryConfig, Trigger,
+};
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
@@ -120,6 +123,389 @@ async fn start_with_runtime_options(
     );
     tokio::spawn(runtime.clone().dispatch_loop());
     (runtime, clock)
+}
+
+async fn start_task_runtime(
+    probe: &Path,
+    configure: impl Fn(&str) -> TaskRateLimits,
+) -> Arc<FunctionsRuntime> {
+    start_task_runtime_with_max(probe, 4, configure).await
+}
+
+async fn start_task_runtime_with_max(
+    probe: &Path,
+    max_running: usize,
+    configure: impl Fn(&str) -> TaskRateLimits,
+) -> Arc<FunctionsRuntime> {
+    start_task_runtime_with_policy(probe, max_running, |name| {
+        (TaskRetryConfig::default(), configure(name))
+    })
+    .await
+}
+
+async fn start_task_runtime_with_policy(
+    probe: &Path,
+    max_running: usize,
+    configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
+) -> Arc<FunctionsRuntime> {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: vec![(
+            "FIREEMU_FAKE_TASK_PROBE".to_owned(),
+            probe.display().to_string(),
+        )],
+        hello_timeout: Duration::from_secs(20),
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    let template = manifest.get("echo").unwrap().clone();
+    for name in ["taskA", "taskB"] {
+        let mut function = template.clone();
+        name.clone_into(&mut function.name);
+        name.clone_into(&mut function.entry_point);
+        let (retry, rate_limits) = configure(name);
+        function.trigger = Trigger::TaskQueue { retry, rate_limits };
+        manifest.functions.push(function);
+    }
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: SessionId::new(7),
+            max_running,
+            retry_attempts: 1,
+            max_catch_up_runs: 1,
+            runner_secret: "s".into(),
+            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: Some("127.0.0.1:5001".into()),
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        Arc::new(runner),
+        Some(spec),
+    );
+    tokio::spawn(runtime.clone().dispatch_loop());
+    runtime
+}
+
+fn task_body(id: &str) -> serde_json::Value {
+    json!({"task": {
+        "name": format!("projects/demo-app/locations/us-central1/queues/task/tasks/{id}"),
+        "httpRequest": {"url": "", "body": "eyJkYXRhIjp7fX0="}
+    }})
+}
+
+async fn wait_for_task_entries(probe: &Path, expected: usize) -> Vec<String> {
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let entries = std::fs::read_to_string(probe)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if entries.len() >= expected {
+                return entries;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("task entries reached the probe")
+}
+
+#[tokio::test]
+async fn task_queue_concurrency_is_isolated_per_queue() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-limits-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
+        max_concurrent_dispatches: 1,
+        max_dispatches_per_second: 500.0,
+    })
+    .await;
+
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("a1"))
+        .unwrap();
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("a2"))
+        .unwrap();
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskB", &task_body("b1"))
+        .unwrap();
+
+    let _ = wait_for_task_entries(&probe, 2).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let entries = std::fs::read_to_string(&probe).unwrap();
+    assert_eq!(entries.lines().filter(|line| *line == "taskA").count(), 1);
+    assert_eq!(entries.lines().filter(|line| *line == "taskB").count(), 1);
+
+    std::fs::write(format!("{}.taskA.release", probe.display()), b"").unwrap();
+    std::fs::write(format!("{}.taskB.release", probe.display()), b"").unwrap();
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !runtime.is_idle() {
+            runtime.idle_notify().notified().await;
+        }
+    })
+    .await
+    .expect("all task queues became idle");
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn reset_task_completion_cannot_release_a_new_generation_task() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-reset-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
+        max_concurrent_dispatches: 1,
+        max_dispatches_per_second: 500.0,
+    })
+    .await;
+
+    let body = task_body("same");
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &body)
+        .unwrap();
+    let _ = wait_for_task_entries(&probe, 1).await;
+    runtime.reset();
+    assert_eq!(runtime.status()["tasksInFlight"], 0);
+
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &body)
+        .unwrap();
+    let _ = wait_for_task_entries(&probe, 2).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(runtime.status()["tasksInFlight"], 1);
+
+    std::fs::write(format!("{}.taskA.release", probe.display()), b"").unwrap();
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !runtime.is_idle() {
+            runtime.idle_notify().notified().await;
+        }
+    })
+    .await
+    .expect("the new generation task became idle");
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn shutdown_cancels_pending_tasks_and_closes_admission() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-shutdown-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
+        max_concurrent_dispatches: 1,
+        max_dispatches_per_second: 1.0,
+    })
+    .await;
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("pending"))
+        .unwrap();
+
+    runtime.shutdown().await;
+    assert!(runtime.is_idle());
+    assert_eq!(runtime.status()["tasksInFlight"], 0);
+    let refusal = runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("late"))
+        .unwrap_err();
+    assert_eq!(refusal.status, 503);
+    assert!(refusal.body.contains("shutting down"));
+    assert!(!probe.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn shutdown_aborts_an_active_task_and_its_retry_lifecycle() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-active-shutdown-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
+        max_concurrent_dispatches: 1,
+        max_dispatches_per_second: 500.0,
+    })
+    .await;
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("active"))
+        .unwrap();
+    let _ = wait_for_task_entries(&probe, 1).await;
+
+    tokio::time::timeout(Duration::from_secs(4), runtime.shutdown())
+        .await
+        .expect("shutdown aborts the active delivery without waiting for its retry deadline");
+    assert!(runtime.is_idle());
+    assert_eq!(runtime.status()["tasksInFlight"], 0);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn local_http_contention_defers_a_task_without_spending_its_retry_budget() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-contention-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime_with_max(&probe, 1, |_| TaskRateLimits {
+        max_concurrent_dispatches: 1,
+        max_dispatches_per_second: 500.0,
+    })
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let occupied_runtime = runtime.clone();
+    let occupied = tokio::spawn(async move {
+        occupied_runtime
+            .invoke_http(&target, "POST", "/hold", &[], &[])
+            .await
+            .unwrap()
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("deferred"))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!probe.exists(), "the task must wait for local capacity");
+
+    assert_eq!(occupied.await.unwrap().status, 204);
+    let _ = wait_for_task_entries(&probe, 1).await;
+    std::fs::write(format!("{}.taskA.release", probe.display()), b"").unwrap();
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !runtime.is_idle() {
+            runtime.idle_notify().notified().await;
+        }
+    })
+    .await
+    .expect("the deferred task became idle");
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn local_capacity_wait_before_first_delivery_does_not_spend_max_retry_duration() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-retry-duration-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime_with_policy(&probe, 1, |_| {
+        (
+            TaskRetryConfig {
+                max_attempts: 1,
+                max_retry_millis: Some(100),
+                max_backoff_millis: 100,
+                max_doublings: 0,
+                min_backoff_millis: 10,
+            },
+            TaskRateLimits {
+                max_concurrent_dispatches: 1,
+                max_dispatches_per_second: 500.0,
+            },
+        )
+    })
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let occupied_runtime = runtime.clone();
+    let occupied = tokio::spawn(async move {
+        occupied_runtime
+            .invoke_http(&target, "POST", "/hold", &[], &[])
+            .await
+            .unwrap()
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("failing"))
+        .unwrap();
+    assert_eq!(occupied.await.unwrap().status, 204);
+    let entries = wait_for_task_entries(&probe, 2).await;
+    assert_eq!(
+        &entries[..2],
+        ["taskA:0:0", "taskA:1:0"],
+        "one genuine retry must survive pre-delivery contention"
+    );
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !runtime.is_idle() {
+            runtime.idle_notify().notified().await;
+        }
+    })
+    .await
+    .expect("the failed task exhausts its bounded retry policy");
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn retry_rate_wait_cannot_outlive_an_exhausted_retry_duration() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-rate-expiry-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime_with_policy(&probe, 1, |_| {
+        (
+            TaskRetryConfig {
+                max_attempts: 1,
+                max_retry_millis: Some(100),
+                max_backoff_millis: 100,
+                max_doublings: 0,
+                min_backoff_millis: 10,
+            },
+            TaskRateLimits {
+                max_concurrent_dispatches: 1,
+                max_dispatches_per_second: 0.5,
+            },
+        )
+    })
+    .await;
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &task_body("failing"))
+        .unwrap();
+    let _ = wait_for_task_entries(&probe, 1).await;
+
+    tokio::time::timeout(Duration::from_millis(500), async {
+        while !runtime.is_idle() {
+            runtime.idle_notify().notified().await;
+        }
+    })
+    .await
+    .expect("retry-duration expiry wins over a later rate token");
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 1);
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
@@ -901,6 +1287,32 @@ fn manifest_json_round_trips_and_rejects_bad_input() {
         "functions": [{"name": "bad", "generation": 3, "trigger": {"type": "http"}}]
     }))
     .is_err());
+}
+
+#[test]
+fn manifest_json_preserves_fractional_task_dispatch_rates() {
+    let manifest = parse_manifest(&json!({"functions": [{
+        "name": "fractionalQueue",
+        "generation": 2,
+        "trigger": {
+            "type": "tasks",
+            "rateLimits": {
+                "maxConcurrentDispatches": 1,
+                "maxDispatchesPerSecond": 0.5
+            }
+        }
+    }]}))
+    .unwrap();
+
+    let Trigger::TaskQueue { rate_limits, .. } = manifest.functions[0].trigger else {
+        panic!("expected a task queue trigger");
+    };
+    assert!((rate_limits.max_dispatches_per_second - 0.5).abs() < f64::EPSILON);
+    assert_eq!(
+        manifest_to_json(&manifest)["functions"][0]["trigger"]["rateLimits"]
+            ["maxDispatchesPerSecond"],
+        0.5
+    );
 }
 
 #[test]

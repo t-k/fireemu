@@ -1163,7 +1163,7 @@
         },
         {
           "id": "FN-CLAIM-EVENTS",
-          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued and dispatched, all with retries, dead letters and bounded diagnostic retention.",
+          "statement": "Firestore document, Storage object, Pub/Sub topic, Auth user, Eventarc custom and Firebase alert events are delivered to v1 and v2 handlers as JSON CloudEvents, and Cloud Tasks queue functions are enqueued through bounded per-queue FIFOs and dispatched under their declared rate and concurrency limits, all with retries, dead letters and bounded diagnostic retention.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1181,7 +1181,8 @@
           },
           "officialLimitations": [
             "the official emulator consumes JSON CloudEvents in the Node runtime; the protobuf payload form is not what firebase-functions reads",
-            "the official Tasks emulator ignores a task's scheduleTime -- nothing in its dispatch loop consults it, so a scheduled task fires immediately and the value only decorates the X-CloudTasks-TaskETA header"
+            "the official Tasks emulator ignores a task's scheduleTime -- nothing in its dispatch loop consults it, so a scheduled task fires immediately and the value only decorates the X-CloudTasks-TaskETA header",
+            "the official Tasks emulator starts every queue with zero tokens, refills once per second into a bucket whose capacity is max(maxDispatchesPerSecond, 1.1), holds maxConcurrentDispatches slots across retry backoff, and does not charge retry attempts to the rate bucket"
           ],
           "fireemuOnly": [
             {
@@ -1195,9 +1196,15 @@
             {
               "behaviour": "a task may not name a URL of its own: only this emulator's function URL is dispatched to, where the official emulator POSTs a task to any address it is given",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "the local runtime adds a process-wide ceiling of 10000 outstanding tasks and 64 MiB of retained task data, with completed duplicate-history queue and task names kept inside that byte budget and bounded to 65536 entries and 8 MiB of identifier text across all queues; the official emulator only bounds each pending FIFO to 10000 and otherwise retains completed names for the process lifetime",
+              "precision": "conservative"
             }
           ],
-          "productionOnly": [],
+          "productionOnly": [
+            "Cloud Tasks applies maxDispatchesPerSecond to every first or retry attempt; fireemu follows that production contract while the pinned Tasks emulator only consumes a token for the first attempt"
+          ],
           "preview": []
         },
         {
@@ -1940,7 +1947,7 @@
         "supportedByFunctions"
       ],
       "state": "gap",
-      "decision": "Active supported surface with an open gap: no Cloud Tasks queue surface is served.",
+      "decision": "Active supported surface with an open orchestration gap: queue create and enqueue routes are served on the Functions listener rather than a dedicated Tasks emulator listener.",
       "docs": [
         "https://firebase.google.com/docs/functions/task-functions"
       ],
@@ -1949,7 +1956,7 @@
       ],
       "notes": [],
       "gaps": [
-        "task queues, enqueue and dispatch to onTaskDispatched functions"
+        "dedicated port 9499 listener, Hub registration and independent Tasks emulator lifecycle"
       ],
       "prohibitedClaimTerms": [],
       "claims": []

@@ -275,14 +275,8 @@ impl RecordLog {
 }
 
 struct Inner {
-    /// Cloud Tasks deliveries that have been accepted and not yet finished, including the
-    /// time they spend in backoff between attempts. They are outstanding causal work, so
-    /// `await-idle` waits for them; they are not in `running`, because a task holds its place
-    /// across attempts while `running` counts one invocation at a time.
-    tasks_in_flight: usize,
-    /// Task resource names this runtime has accepted. The official emulator never removes an
-    /// id from its set either, so a name is single-use for the life of the queue.
-    task_names: std::collections::BTreeSet<String>,
+    /// Bounded per-function Cloud Tasks queues and conservative retained-data accounting.
+    task_scheduler: crate::task_scheduler::TaskScheduler,
     /// Supplies the id of a task that did not name itself.
     next_task: u64,
     outbox: Outbox,
@@ -461,6 +455,9 @@ pub struct FunctionsRuntime {
     /// Function name to its codebase's index in `codebases`.
     owner: BTreeMap<String, usize>,
     inner: Mutex<Inner>,
+    /// Only active Cloud Tasks dispatches own Tokio tasks. Reset and shutdown replace this set,
+    /// which aborts every old-generation attempt and its retry timer.
+    task_attempts: Mutex<tokio::task::JoinSet<()>>,
     wake: Notify,
     idle: Arc<Notify>,
     retry: RetryPolicy,
@@ -485,6 +482,32 @@ pub struct FunctionsRuntime {
     trigger_generation: std::sync::atomic::AtomicU64,
     /// Once set, no reload or respawn may install another child process.
     shutting_down: std::sync::atomic::AtomicBool,
+}
+
+/// Generation-tagged cleanup for one active task dispatch. Dropping the future because of a
+/// reset, shutdown or panic releases only the exact scheduler entry it leased.
+struct TaskCompletion {
+    runtime: std::sync::Weak<FunctionsRuntime>,
+    queue: String,
+    id: u64,
+    generation: u64,
+}
+
+impl Drop for TaskCompletion {
+    fn drop(&mut self) {
+        let Some(runtime) = self.runtime.upgrade() else {
+            return;
+        };
+        let finished = runtime.inner.lock().is_ok_and(|mut inner| {
+            inner
+                .task_scheduler
+                .finish(&self.queue, self.id, self.generation)
+        });
+        if finished {
+            runtime.idle.notify_waiters();
+            runtime.wake.notify_one();
+        }
+    }
 }
 
 impl FunctionsRuntime {
@@ -585,6 +608,10 @@ impl FunctionsRuntime {
             )
             .expect("a single attempt is a valid policy")
         });
+        let task_scheduler = crate::task_scheduler::TaskScheduler::from_manifest(
+            &manifest,
+            std::time::Instant::now(),
+        );
         Arc::new(Self {
             manifest,
             config,
@@ -605,8 +632,7 @@ impl FunctionsRuntime {
                 .collect(),
             owner,
             inner: Mutex::new(Inner {
-                tasks_in_flight: 0,
-                task_names: std::collections::BTreeSet::new(),
+                task_scheduler,
                 next_task: 0,
                 outbox: Outbox::new(),
                 payloads: BTreeMap::new(),
@@ -624,6 +650,7 @@ impl FunctionsRuntime {
                 overlap_rejected: 0,
                 delayed: BTreeMap::new(),
             }),
+            task_attempts: Mutex::new(tokio::task::JoinSet::new()),
             wake: Notify::new(),
             idle: Arc::new(Notify::new()),
             retry,
@@ -699,6 +726,21 @@ impl FunctionsRuntime {
     pub async fn shutdown(&self) {
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut retired_attempts = {
+            let mut attempts = self
+                .task_attempts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.task_scheduler.close(std::time::Instant::now());
+            }
+            std::mem::take(&mut *attempts)
+        };
+        retired_attempts.shutdown().await;
+        // There is exactly one dispatch loop. A stored permit also covers the narrow window
+        // between its shutdown check and awaiting the notification.
+        self.wake.notify_one();
+        self.idle.notify_waiters();
         let mut shutdowns = tokio::task::JoinSet::new();
         for (_, runner) in self.current_runners() {
             shutdowns.spawn(async move { runner.shutdown().await });
@@ -1097,11 +1139,15 @@ impl FunctionsRuntime {
         queue: &str,
         body: &Value,
     ) -> Result<Value, crate::tasks::EnqueueRefusal> {
+        use crate::task_scheduler::AdmissionError;
         use crate::tasks::EnqueueRefusal;
         let refuse = |status: u16, body: &str| EnqueueRefusal {
             status,
             body: body.to_owned(),
         };
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(refuse(503, "the Functions runtime is shutting down"));
+        }
         if project != self.config.project {
             return Err(refuse(
                 404,
@@ -1150,30 +1196,37 @@ impl FunctionsRuntime {
                 "a task may only be dispatched to this emulator's own function URL",
             ));
         }
-        {
-            let Ok(mut inner) = self.inner.lock() else {
-                return Err(refuse(500, "runtime poisoned"));
-            };
-            if !inner.task_names.insert(task.name.clone()) {
+        // Precharge every per-task allocation that can exist during dispatch. Pending tasks
+        // do not own these route strings yet, but reserving their eventual cost before
+        // admission keeps activation from escaping the retained-data ceiling.
+        let queue_key_bytes = crate::tasks::queue_key(project, location, queue).len();
+        let retained_bytes = task
+            .retained_bytes()
+            .saturating_add(task.name.len())
+            .saturating_add(queue.len().saturating_mul(3))
+            .saturating_add(project.len())
+            .saturating_add(location.len())
+            .saturating_add(queue_key_bytes);
+        let admission = self
+            .inner
+            .lock()
+            .map_err(|_| refuse(500, "runtime poisoned"))?
+            .task_scheduler
+            .enqueue(queue, task.clone(), retry, retained_bytes);
+        match admission {
+            Ok(()) => {}
+            Err(AdmissionError::Duplicate | AdmissionError::QueueFull) => {
                 return Err(refuse(409, "A task with the same name already exists"));
             }
-            inner.tasks_in_flight += 1;
+            Err(AdmissionError::RuntimeFull) => {
+                return Err(refuse(429, "the local task queue capacity is exhausted"));
+            }
+            Err(AdmissionError::Closed) => {
+                return Err(refuse(503, "the Functions runtime is shutting down"));
+            }
         }
         let answer = crate::tasks::accepted_response(&task);
-        let runtime = self.clone();
-        let key = crate::tasks::queue_key(project, location, queue);
-        let function = queue.to_owned();
-        let region = location.to_owned();
-        let project = project.to_owned();
-        tokio::spawn(async move {
-            runtime
-                .dispatch_task(&task, &key, &project, &region, &function, retry)
-                .await;
-            if let Ok(mut inner) = runtime.inner.lock() {
-                inner.tasks_in_flight = inner.tasks_in_flight.saturating_sub(1);
-            }
-            runtime.idle.notify_waiters();
-        });
+        self.wake.notify_one();
         Ok(answer)
     }
 
@@ -1185,34 +1238,42 @@ impl FunctionsRuntime {
     /// is a wall-clock policy in production too.
     async fn dispatch_task(
         self: &Arc<Self>,
-        task: &crate::tasks::Task,
-        queue_key: &str,
-        project: &str,
-        region: &str,
-        function: &str,
-        retry: fireemu_core_functions::manifest::TaskRetryConfig,
+        dispatch: &crate::task_scheduler::Dispatch,
+        epoch: Epoch,
     ) {
-        let started = std::time::Instant::now();
-        let epoch = self.inner.lock().ok().map(|i| i.epoch);
+        let task = &dispatch.task;
+        let mut started = None;
         let mut attempt = 1u32;
         let mut execution_count = 0u32;
         let mut previous: Option<u16> = None;
         let body = serde_json::to_vec(&task.body).unwrap_or_default();
         loop {
             // A reset supersedes every task accepted before it.
-            if self.inner.lock().ok().map(|i| i.epoch) != epoch {
+            if self.inner.lock().ok().map(|i| i.epoch) != Some(epoch) {
                 return;
             }
-            let Some(target) = self.http_target(project, region, function) else {
+            if started.is_some_and(|first_delivery| {
+                task_retry_exhausted(first_delivery, dispatch.retry, attempt)
+            }) {
                 eprintln!(
-                    "[functions] task {}: {function} is no longer served",
-                    task.name
+                    "[functions] task {:?} gave up after {} attempt(s)",
+                    task.name,
+                    attempt - 1
+                );
+                return;
+            }
+            let Some(target) =
+                self.http_target(&dispatch.project, &dispatch.region, &dispatch.function)
+            else {
+                eprintln!(
+                    "[functions] task {:?}: {} is no longer served",
+                    task.name, dispatch.function
                 );
                 return;
             };
             let headers = crate::tasks::dispatch_headers(
                 task,
-                queue_key,
+                &dispatch.queue_key,
                 attempt,
                 execution_count,
                 previous,
@@ -1221,19 +1282,44 @@ impl FunctionsRuntime {
             // The runner's HTTP server routes on the public path, and strips it before the
             // handler sees the request, so the dispatch carries the function's own URL path
             // rather than the `/` the queue would send to an arbitrary address.
-            let path = format!("/{project}/{region}/{function}");
+            let path = format!(
+                "/{}/{}/{}",
+                dispatch.project, dispatch.region, dispatch.function
+            );
+            let attempt_started = std::time::Instant::now();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(task.dispatch_deadline_seconds),
-                self.invoke_http(&target, "POST", &path, &headers, &body),
+                self.invoke_http_classified(&target, "POST", &path, &headers, &body),
             )
             .await;
             let status = match outcome {
                 Ok(Ok(response)) if (200..300).contains(&response.status) => return,
                 Ok(Ok(response)) => Some(response.status),
+                Ok(Err(HttpInvokeError::Capacity { .. })) => {
+                    // The task has not reached a runner. Local process contention is
+                    // backpressure, not a Cloud Tasks delivery attempt, so it cannot spend
+                    // the queue's retry or rate budget.
+                    if let Ok(mut inner) = self.inner.lock() {
+                        inner.task_scheduler.refund_token(
+                            &dispatch.queue,
+                            dispatch.id,
+                            dispatch.generation,
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let retry_deadline = started.and_then(|first_delivery| {
+                        task_retry_deadline(first_delivery, dispatch.retry, attempt)
+                    });
+                    if !self.wait_for_task_token(dispatch, retry_deadline).await {
+                        return;
+                    }
+                    continue;
+                }
                 // A transport failure or an overrun deadline is a retry with no previous
                 // response, exactly as the official `catch` treats an aborted fetch.
                 Ok(Err(_)) | Err(_) => None,
             };
+            let first_delivery = *started.get_or_insert(attempt_started);
             if let Some(status) = status {
                 // Only a non-5xx failure bumps the execution count upstream.
                 if !(500..600).contains(&status) {
@@ -1242,17 +1328,54 @@ impl FunctionsRuntime {
                 previous = Some(status);
             }
             attempt += 1;
-            #[allow(clippy::cast_possible_truncation)]
-            let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-            if retry.exhausted(attempt, elapsed) {
+            if task_retry_exhausted(first_delivery, dispatch.retry, attempt) {
                 eprintln!(
-                    "[functions] task {} gave up after {} attempt(s)",
+                    "[functions] task {:?} gave up after {} attempt(s)",
                     task.name,
                     attempt - 1
                 );
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(retry.backoff_millis(attempt))).await;
+            tokio::time::sleep(Duration::from_millis(
+                dispatch.retry.backoff_millis(attempt),
+            ))
+            .await;
+            let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
+            if !self.wait_for_task_token(dispatch, retry_deadline).await {
+                return;
+            }
+        }
+    }
+
+    async fn wait_for_task_token(
+        &self,
+        dispatch: &crate::task_scheduler::Dispatch,
+        retry_deadline: Option<std::time::Instant>,
+    ) -> bool {
+        loop {
+            let decision = {
+                let Ok(mut inner) = self.inner.lock() else {
+                    return false;
+                };
+                let now = std::time::Instant::now();
+                if retry_deadline.is_some_and(|deadline| now > deadline) {
+                    return false;
+                }
+                inner.task_scheduler.reserve_retry(
+                    &dispatch.queue,
+                    dispatch.id,
+                    dispatch.generation,
+                    now,
+                )
+            };
+            match decision {
+                crate::task_scheduler::RetryToken::Ready => return true,
+                crate::task_scheduler::RetryToken::Gone => return false,
+                crate::task_scheduler::RetryToken::WaitUntil(deadline) => {
+                    let deadline = retry_deadline.map_or(deadline, |expiry| expiry.min(deadline));
+                    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                }
+            }
         }
     }
 
@@ -1607,33 +1730,42 @@ impl FunctionsRuntime {
             return;
         }
         let now = self.now();
-        let mut generation = None;
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.epoch = inner.epoch.next().unwrap_or(inner.epoch);
-            let epoch = inner.epoch;
-            generation = Some(epoch);
-            // Killed under the same lock the restart installs under: a replacement from an
-            // earlier reset cannot slip in between the bump and the kill. Every codebase's
-            // runner goes: a handler still running in any of them must not write into the
-            // reset session.
-            for codebase in &self.codebases {
-                let mut current = codebase.generation_mut();
-                current.blocking_restart_ticket = None;
-                current.runner.kill_now();
+        let (retired_attempts, generation) = {
+            // The supervisor is locked before queue state for both dispatch and lifecycle
+            // transitions. No dispatch can be removed from the scheduler without being added
+            // to this exact JoinSet generation.
+            let mut attempts = self
+                .task_attempts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut generation = None;
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.epoch = inner.epoch.next().unwrap_or(inner.epoch);
+                let epoch = inner.epoch;
+                generation = Some(epoch);
+                // Killed under the same lock the restart installs under: a replacement from an
+                // earlier reset cannot slip in between the bump and the kill. Every codebase's
+                // runner goes: a handler still running in any of them must not write into the
+                // reset session.
+                for codebase in &self.codebases {
+                    let mut current = codebase.generation_mut();
+                    current.blocking_restart_ticket = None;
+                    current.runner.kill_now();
+                }
+                inner.outbox.discard_stale(epoch);
+                inner.payloads.clear();
+                inner.running.clear();
+                inner.delayed.clear();
+                inner.catch_up_pending = false;
+                // A task accepted before the reset must not reach the new session's handlers.
+                inner.task_scheduler.reset(std::time::Instant::now());
+                for job in &mut inner.jobs {
+                    job.cursor = now;
+                }
             }
-            inner.outbox.discard_stale(epoch);
-            inner.payloads.clear();
-            inner.running.clear();
-            inner.delayed.clear();
-            inner.catch_up_pending = false;
-            // A task accepted before the reset must not reach the new session's handlers.
-            // The dispatchers see the epoch change and stop.
-            inner.tasks_in_flight = 0;
-            inner.task_names.clear();
-            for job in &mut inner.jobs {
-                job.cursor = now;
-            }
-        }
+            (std::mem::take(&mut *attempts), generation)
+        };
+        drop(retired_attempts);
         self.respawn_runner(generation);
         self.idle.notify_waiters();
         self.wake.notify_one();
@@ -1816,7 +1948,7 @@ impl FunctionsRuntime {
                 !i.outbox.has_active()
                     && i.running.is_empty()
                     && !i.catch_up_pending
-                    && i.tasks_in_flight == 0
+                    && i.task_scheduler.outstanding() == 0
             })
             .unwrap_or(true)
     }
@@ -1854,7 +1986,7 @@ impl FunctionsRuntime {
             "succeeded": inner.succeeded_total,
             "deadLettered": inner.dead_lettered_total,
             "catchUpPending": inner.catch_up_pending,
-            "tasksInFlight": inner.tasks_in_flight,
+            "tasksInFlight": inner.task_scheduler.outstanding(),
             "overlapRejected": inner.overlap_rejected,
             "timeZoneDatabase": crate::zone::database_version(),
             "runnerAlive": self.runner_alive(),
@@ -2192,8 +2324,23 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<ProxiedResponse, String> {
+        self.invoke_http_classified(target, method, path_and_query, headers, body)
+            .await
+            .map_err(HttpInvokeError::into_message)
+    }
+
+    async fn invoke_http_classified(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        method: &str,
+        path_and_query: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<ProxiedResponse, HttpInvokeError> {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err("the Functions runtime is shutting down".to_owned());
+            return Err(HttpInvokeError::Message(
+                "the Functions runtime is shutting down".to_owned(),
+            ));
         }
         let (timeout, function_capacity) =
             self.manifest
@@ -2221,11 +2368,11 @@ impl FunctionsRuntime {
                     },
                 });
             }
-            return faulted;
+            return faulted.map_err(HttpInvokeError::Message);
         }
         let (id, key) = {
             let Ok(mut inner) = self.inner.lock() else {
-                return Err("runtime poisoned".into());
+                return Err(HttpInvokeError::Message("runtime poisoned".into()));
             };
             // HTTP invocations share the admission limits of event invocations.
             let running_here = inner
@@ -2234,10 +2381,9 @@ impl FunctionsRuntime {
                 .filter(|f| **f == target.function)
                 .count();
             if inner.running.len() >= self.config.max_running || running_here >= function_capacity {
-                return Err(format!(
-                    "function {} is at its concurrency limit; retry later",
-                    target.function
-                ));
+                return Err(HttpInvokeError::Capacity {
+                    function: target.function.clone(),
+                });
             }
             inner.next_event += 1;
             let id = EventId::new(u128::from(inner.next_event));
@@ -2283,7 +2429,7 @@ impl FunctionsRuntime {
             });
         }
         if let Ok(answer) = result {
-            answer
+            answer.map_err(HttpInvokeError::Message)
         } else {
             // What the official emulator says and answers when a function overruns
             // `timeoutSeconds` (`functionsRuntimeWorker.js:139` logs this sentence, then
@@ -2361,9 +2507,74 @@ impl FunctionsRuntime {
     /// The dispatch loop: run it as a task for the runtime's lifetime.
     pub async fn dispatch_loop(self: Arc<Self>) {
         loop {
+            let wake = self.wake.notified();
+            tokio::pin!(wake);
+            wake.as_mut().enable();
+            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
             self.dispatch_ready();
-            self.wake.notified().await;
+            let next_task_wake = self.dispatch_tasks_ready();
+            match next_task_wake {
+                Some(deadline) => {
+                    tokio::select! {
+                        () = &mut wake => {}
+                        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {}
+                    }
+                }
+                None => wake.await,
+            }
         }
+    }
+
+    /// Moves ready Cloud Tasks from their bounded FIFOs into active dispatch slots. Only an
+    /// active slot owns a Tokio task; pending bodies remain plain queue entries.
+    fn dispatch_tasks_ready(self: &Arc<Self>) -> Option<std::time::Instant> {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        let mut attempts = self
+            .task_attempts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        let (dispatches, next_wake, epoch) = {
+            let Ok(mut inner) = self.inner.lock() else {
+                return None;
+            };
+            // A task that is inside invoke_http appears in both sets. Using the larger set
+            // avoids double-counting that task while keeping active task futures bounded;
+            // invoke_http remains the atomic authority for mixed HTTP/task execution slots.
+            let occupied = inner.running.len().max(inner.task_scheduler.active());
+            let room = self.config.max_running.saturating_sub(occupied);
+            let epoch = inner.epoch;
+            let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready(
+                std::time::Instant::now(),
+                &self.config.project,
+                |function| self.manifest.get(function).map(|spec| spec.region.clone()),
+                room,
+            );
+            (dispatches, next_wake, epoch)
+        };
+        if dispatches.is_empty() {
+            return next_wake;
+        }
+        while attempts.try_join_next().is_some() {}
+        for dispatch in dispatches {
+            let runtime = self.clone();
+            attempts.spawn(async move {
+                let _completion = TaskCompletion {
+                    runtime: Arc::downgrade(&runtime),
+                    queue: dispatch.queue.clone(),
+                    id: dispatch.id,
+                    generation: dispatch.generation,
+                };
+                runtime.dispatch_task(&dispatch, epoch).await;
+            });
+        }
+        next_wake
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2662,6 +2873,47 @@ impl FunctionsRuntime {
 /// closes the client's connection instead of answering.
 pub const DROP_CONNECTION: &str = "fault plan: connection dropped";
 
+enum HttpInvokeError {
+    Capacity { function: String },
+    Message(String),
+}
+
+fn task_retry_deadline(
+    first_delivery: std::time::Instant,
+    retry: fireemu_core_functions::manifest::TaskRetryConfig,
+    attempt: u32,
+) -> Option<std::time::Instant> {
+    (attempt > retry.max_attempts)
+        .then_some(retry.max_retry_millis)
+        .flatten()
+        .filter(|millis| *millis > 0)
+        .and_then(|millis| first_delivery.checked_add(Duration::from_millis(millis)))
+}
+
+fn task_retry_exhausted(
+    first_delivery: std::time::Instant,
+    retry: fireemu_core_functions::manifest::TaskRetryConfig,
+    attempt: u32,
+) -> bool {
+    #[allow(clippy::cast_possible_truncation)]
+    let elapsed = first_delivery
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    retry.exhausted(attempt, elapsed)
+}
+
+impl HttpInvokeError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Capacity { function } => {
+                format!("function {function} is at its concurrency limit; retry later")
+            }
+            Self::Message(message) => message,
+        }
+    }
+}
+
 /// An HTTP status from a number or a gRPC code name (fault plan `returnError`).
 fn http_status(code: &str) -> u16 {
     if let Ok(n) = code.parse::<u16>() {
@@ -2705,5 +2957,180 @@ impl Drop for BlockingAuthAdmission {
 impl Drop for Admission<'_> {
     fn drop(&mut self) {
         self.runtime.release(&self.key);
+    }
+}
+
+#[cfg(test)]
+mod task_completion_tests {
+    use super::{FunctionsConfig, FunctionsRuntime, TaskCompletion};
+    use crate::manifest_json::parse_manifest;
+    use crate::runner::{Runner, SpawnSpec};
+    use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::ids::SessionId;
+    use fireemu_core_types::time::LogicalInstant;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    async fn runtime() -> Arc<FunctionsRuntime> {
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(20),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let template = manifest.get("echo").unwrap().clone();
+        for name in ["taskA", "taskB"] {
+            let mut queue = template.clone();
+            queue.name = name.to_owned();
+            queue.entry_point = name.to_owned();
+            queue.trigger = Trigger::TaskQueue {
+                retry: TaskRetryConfig::default(),
+                rate_limits: TaskRateLimits::default(),
+            };
+            manifest.functions.push(queue);
+        }
+        FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: super::OverlapPolicy::Allow,
+                catch_up: super::CatchUpPolicy::All,
+                functions_host: Some("127.0.0.1:5001".to_owned()),
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Arc::new(runner),
+            Some(spec),
+        )
+    }
+
+    fn body(id: &str) -> serde_json::Value {
+        json!({"task": {
+            "name": format!("projects/demo-app/locations/us-central1/queues/taskA/tasks/{id}"),
+            "httpRequest": {"url": "", "body": "eyJkYXRhIjp7fX0="}
+        }})
+    }
+
+    fn lease(runtime: &FunctionsRuntime) -> crate::task_scheduler::Dispatch {
+        let mut inner = runtime.inner.lock().unwrap();
+        let (mut dispatches, _) = inner.task_scheduler.dispatch_ready(
+            Instant::now() + Duration::from_secs(1),
+            "demo-app",
+            |_| Some("us-central1".to_owned()),
+            1,
+        );
+        dispatches.remove(0)
+    }
+
+    async fn assert_cleanup_after(
+        runtime: &Arc<FunctionsRuntime>,
+        dispatch: crate::task_scheduler::Dispatch,
+        panic: bool,
+    ) {
+        let retained_before = runtime
+            .inner
+            .lock()
+            .unwrap()
+            .task_scheduler
+            .retained_bytes();
+        let idle = runtime.idle_notify();
+        let notified = idle.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let weak = Arc::downgrade(runtime);
+        let (ready, ready_rx) = tokio::sync::oneshot::channel();
+        let attempt = tokio::spawn(async move {
+            let _completion = TaskCompletion {
+                runtime: weak,
+                queue: dispatch.queue,
+                id: dispatch.id,
+                generation: dispatch.generation,
+            };
+            let _ = ready.send(());
+            assert!(!panic, "exercise task-completion unwind cleanup");
+            std::future::pending::<()>().await;
+        });
+        ready_rx.await.unwrap();
+        if panic {
+            assert!(attempt.await.unwrap_err().is_panic());
+        } else {
+            attempt.abort();
+            let _ = attempt.await;
+        }
+        tokio::time::timeout(Duration::from_millis(100), &mut notified)
+            .await
+            .expect("task cleanup wakes idle waiters");
+        let inner = runtime.inner.lock().unwrap();
+        assert_eq!(inner.task_scheduler.outstanding(), 0);
+        assert_eq!(inner.task_scheduler.active(), 0);
+        assert!(inner.task_scheduler.retained_bytes() < retained_before);
+    }
+
+    #[tokio::test]
+    async fn task_completion_releases_scheduler_state_on_cancellation_and_panic() {
+        let runtime = runtime().await;
+        runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &body("cancelled"))
+            .unwrap();
+        assert_cleanup_after(&runtime, lease(&runtime), false).await;
+        runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &body("panicked"))
+            .unwrap();
+        assert_cleanup_after(&runtime, lease(&runtime), true).await;
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn runtime_maps_queue_and_process_task_capacity_to_distinct_responses() {
+        let runtime = runtime().await;
+        for sequence in 0..crate::task_scheduler::MAX_PENDING_PER_QUEUE {
+            runtime
+                .enqueue_task(
+                    "demo-app",
+                    "us-central1",
+                    "taskA",
+                    &body(&format!("queued-{sequence}")),
+                )
+                .unwrap();
+        }
+        let queue_full = runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &body("queue-full"))
+            .unwrap_err();
+        assert_eq!(queue_full.status, 409);
+
+        let active = lease(&runtime);
+        let process_full = runtime
+            .enqueue_task("demo-app", "us-central1", "taskB", &body("process-full"))
+            .unwrap_err();
+        assert_eq!(process_full.status, 429);
+        assert_eq!(
+            process_full.body,
+            "the local task queue capacity is exhausted"
+        );
+        drop(TaskCompletion {
+            runtime: Arc::downgrade(&runtime),
+            queue: active.queue,
+            id: active.id,
+            generation: active.generation,
+        });
+        runtime
+            .enqueue_task("demo-app", "us-central1", "taskB", &body("process-full"))
+            .expect("a count-refused name remains reusable after capacity is released");
+        runtime.shutdown().await;
     }
 }

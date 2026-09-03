@@ -233,6 +233,36 @@ impl Harness {
             .map(|response| response.status)
             .map_err(std::io::Error::other)
     }
+
+    async fn post_raw(&self, path: &str, body: &[u8]) -> u16 {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            self.addr,
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(self.addr)
+            .await
+            .expect("the functions port accepts");
+        stream
+            .write_all(head.as_bytes())
+            .await
+            .expect("the request head is written");
+        stream
+            .write_all(body)
+            .await
+            .expect("the request body is written");
+        stream.flush().await.expect("flush");
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("the response is read");
+        fireemu_adapter_functions::http::parse_response(&raw, "POST")
+            .expect("a well-formed response")
+            .status
+    }
 }
 
 fn response_header<'a>(
@@ -377,6 +407,34 @@ async fn a_callable_denial_drains_a_body_that_arrives_after_its_headers() {
         .await
         .expect("the client receives a complete denial without a connection reset");
     assert_eq!(status, 401);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn a_cloud_tasks_request_uses_the_official_express_json_limit() {
+    let h = start(true).await;
+    let mut boundary = br#"{"padding":""#.to_vec();
+    boundary.extend(std::iter::repeat_n(
+        b'x',
+        fireemu_adapter_functions::http::MAX_TASK_BODY_BYTES - boundary.len() - 2,
+    ));
+    boundary.extend_from_slice(br#""}"#);
+    assert_eq!(
+        boundary.len(),
+        fireemu_adapter_functions::http::MAX_TASK_BODY_BYTES
+    );
+    let tasks_path = "/projects/demo-app/locations/us-central1/queues/work/tasks";
+    assert_eq!(h.post_raw(tasks_path, &boundary).await, 404);
+
+    let mut over = boundary.clone();
+    over.push(b' ');
+    let status = h.post_raw(tasks_path, &over).await;
+    assert_eq!(status, 413);
+    assert_eq!(
+        h.post_raw("/demo-app/us-central1/echo", &over).await,
+        200,
+        "the Tasks JSON limit must not replace the Functions body limit"
+    );
     h.stop().await;
 }
 

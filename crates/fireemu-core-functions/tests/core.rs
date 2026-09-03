@@ -285,6 +285,68 @@ fn manifest_validation_rejects_invalid_memory_and_instance_limits() {
 }
 
 #[test]
+fn manifest_validation_rejects_task_concurrency_above_the_emulator_limit() {
+    let mut spec = function(
+        "queue",
+        Trigger::TaskQueue {
+            retry: fireemu_core_functions::manifest::TaskRetryConfig::default(),
+            rate_limits: fireemu_core_functions::manifest::TaskRateLimits {
+                max_concurrent_dispatches: 5_001,
+                max_dispatches_per_second: 500.0,
+            },
+        },
+    );
+    let error = validate_function(&spec).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("rateLimits.maxConcurrentDispatches must be at most 5000"),
+        "{error}"
+    );
+
+    if let Trigger::TaskQueue { rate_limits, .. } = &mut spec.trigger {
+        rate_limits.max_concurrent_dispatches = 5_000;
+    }
+    validate_function(&spec).unwrap();
+}
+
+#[test]
+fn manifest_validation_rejects_task_dispatch_rates_outside_production_limits() {
+    let mut spec = function(
+        "queue",
+        Trigger::TaskQueue {
+            retry: fireemu_core_functions::manifest::TaskRetryConfig::default(),
+            rate_limits: fireemu_core_functions::manifest::TaskRateLimits {
+                max_concurrent_dispatches: 1,
+                max_dispatches_per_second: 0.0,
+            },
+        },
+    );
+    for invalid in [0.0, -0.5, 500.1, f64::INFINITY, f64::NAN] {
+        let Trigger::TaskQueue { rate_limits, .. } = &mut spec.trigger else {
+            unreachable!();
+        };
+        rate_limits.max_dispatches_per_second = invalid;
+        let error = validate_function(&spec).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "rateLimits.maxDispatchesPerSecond must be greater than 0 and at most 500"
+            ),
+            "{invalid:?}: {error}"
+        );
+    }
+
+    if let Trigger::TaskQueue { rate_limits, .. } = &mut spec.trigger {
+        rate_limits.max_dispatches_per_second = 0.5;
+    }
+    validate_function(&spec).unwrap();
+    if let Trigger::TaskQueue { rate_limits, .. } = &mut spec.trigger {
+        rate_limits.max_dispatches_per_second = 500.0;
+    }
+    validate_function(&spec).unwrap();
+}
+
+#[test]
 fn cron_schedules_compute_the_next_run_in_a_fixed_offset_zone() {
     let s = Schedule::parse("*/15 9-17 * * mon-fri").unwrap();
     // Saturday 2026-08-29 12:00 UTC: the next run is Monday 09:00.

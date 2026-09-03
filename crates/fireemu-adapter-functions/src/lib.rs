@@ -16,5 +16,6 @@ pub mod node_selection;
 pub mod protocol;
 pub mod runner;
 pub mod runtime;
+mod task_scheduler;
 pub mod tasks;
 pub mod zone;

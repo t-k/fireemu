@@ -13,6 +13,7 @@ consumeAppCheckToken value, for the fail-closed discovery tests.
 import http.server
 import json
 import os
+import pathlib
 import sys
 import threading
 import time
@@ -40,6 +41,32 @@ class Echo(http.server.BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - the stdlib spelling
         length = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(length) if length else b""
+        task_probe = os.environ.get("FIREEMU_FAKE_TASK_PROBE")
+        if task_probe and self.path.rsplit("/", 1)[-1] in {"taskA", "taskB"}:
+            queue = self.path.rsplit("/", 1)[-1]
+            task_name = self.headers.get("x-cloudtasks-taskname", "")
+            failing = "failing" in task_name
+            entry = queue
+            if failing:
+                entry = (
+                    f"{queue}:{self.headers.get('x-cloudtasks-taskretrycount')}:"
+                    f"{self.headers.get('x-cloudtasks-taskexecutioncount')}"
+                )
+            with self.hold_condition:
+                with open(task_probe, "a", encoding="utf-8") as probe:
+                    probe.write(f"{entry}\n")
+                    probe.flush()
+                self.hold_condition.notify_all()
+            if failing:
+                self.send_response(500)
+                self.end_headers()
+                return
+            release = pathlib.Path(f"{task_probe}.{queue}.release")
+            while not release.exists():
+                time.sleep(0.01)
+            self.send_response(204)
+            self.end_headers()
+            return
         if self.path.endswith("/beforeCreate"):
             time.sleep(int(os.environ.get("FIREEMU_FAKE_BLOCKING_HANG_MS", "0")) / 1000)
         if self.path == "/hold":

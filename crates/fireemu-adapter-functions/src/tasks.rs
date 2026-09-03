@@ -45,6 +45,28 @@ pub struct Task {
     pub dispatch_deadline_seconds: u64,
 }
 
+impl Task {
+    /// Approximate heap data retained while this task is pending or being dispatched.
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        let headers = self
+            .headers
+            .iter()
+            .map(|(name, value)| name.len().saturating_add(value.len()))
+            .sum::<usize>();
+        self.name
+            .len()
+            .saturating_add(self.url.len())
+            .saturating_add(headers)
+            .saturating_add(
+                self.schedule_time
+                    .as_ref()
+                    .map_or(0, std::string::String::len),
+            )
+            .saturating_add(serde_json::to_vec(&self.body).map_or(usize::MAX, |body| body.len()))
+    }
+}
+
 /// Why an enqueue was refused, with the status the Admin SDK will see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnqueueRefusal {

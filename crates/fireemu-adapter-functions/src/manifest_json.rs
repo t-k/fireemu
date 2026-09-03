@@ -338,7 +338,7 @@ fn parse_function(f: &Value) -> Result<FunctionSpec, String> {
                 rate_limits: TaskRateLimits {
                     max_concurrent_dispatches: count("rateLimits", "maxConcurrentDispatches")
                         .unwrap_or(limits.max_concurrent_dispatches),
-                    max_dispatches_per_second: count("rateLimits", "maxDispatchesPerSecond")
+                    max_dispatches_per_second: number("rateLimits", "maxDispatchesPerSecond")
                         .unwrap_or(limits.max_dispatches_per_second),
                 },
             }

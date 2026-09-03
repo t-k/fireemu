@@ -188,6 +188,49 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
 }
 
 #[tokio::test]
+async fn shutdown_rejects_late_reload_and_reset_runner_installation() {
+    let (runtime, _clock) = start().await;
+    let manifest = runtime.manifest().clone();
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    runtime.shutdown().await;
+
+    let error = runtime
+        .invoke_http(&target, "POST", "/", &[], &[])
+        .await
+        .unwrap_err();
+    assert!(error.contains("shutting down"), "{error}");
+
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(20),
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    let error = runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest,
+            runner: replacement.clone(),
+            spawn: Some(spec),
+            cleanup_dir: None,
+        })
+        .unwrap_err();
+    assert!(error.contains("shutting down"), "{error}");
+    assert!(!replacement.is_alive());
+
+    runtime.reset();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !runtime.runner().is_alive(),
+        "reset must not install a runner after shutdown begins"
+    );
+}
+
+#[tokio::test]
 async fn omitted_second_generation_concurrency_admits_two_http_requests() {
     let (runtime, _clock) = start_with_policies_and_manifest(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,

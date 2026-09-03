@@ -483,6 +483,8 @@ pub struct FunctionsRuntime {
     /// How many times the sources have been reloaded (`triggerGeneration`). It is part of an
     /// event trigger's key, which the 404 for an unknown function lists.
     trigger_generation: std::sync::atomic::AtomicU64,
+    /// Once set, no reload or respawn may install another child process.
+    shutting_down: std::sync::atomic::AtomicBool,
 }
 
 impl FunctionsRuntime {
@@ -629,6 +631,7 @@ impl FunctionsRuntime {
             callable_trust: std::sync::RwLock::new(None),
             background_triggers: std::sync::atomic::AtomicBool::new(true),
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
+            shutting_down: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -694,6 +697,8 @@ impl FunctionsRuntime {
 
     /// Shuts down every current codebase runner concurrently.
     pub async fn shutdown(&self) {
+        self.shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let mut shutdowns = tokio::task::JoinSet::new();
         for (_, runner) in self.current_runners() {
             shutdowns.spawn(async move { runner.shutdown().await });
@@ -716,6 +721,13 @@ impl FunctionsRuntime {
     /// adding or removing triggers keeps the last-known-good generation rather than exposing
     /// a new Node export behind stale Rust routing.
     pub fn reload_codebase(&self, spec: CodebaseSpec) -> Result<u64, String> {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            spec.runner.kill_now();
+            if let Some(path) = spec.cleanup_dir {
+                let _ = std::fs::remove_dir_all(path);
+            }
+            return Err("the Functions runtime is shutting down".to_owned());
+        }
         let Some(codebase) = self
             .codebases
             .iter()
@@ -739,6 +751,13 @@ impl FunctionsRuntime {
         }
         let old = {
             let mut generation = codebase.generation_mut();
+            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                spec.runner.kill_now();
+                if let Some(path) = spec.cleanup_dir {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+                return Err("the Functions runtime is shutting down".to_owned());
+            }
             let revision = generation.revision.saturating_add(1);
             std::mem::replace(
                 &mut *generation,
@@ -1584,6 +1603,9 @@ impl FunctionsRuntime {
     /// reset session) and restarted from its spec, every non-terminal event is discarded,
     /// and schedules restart from now. Dispatch resumes when the new runner is up.
     pub fn reset(self: &Arc<Self>) {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let now = self.now();
         let mut generation = None;
         if let Ok(mut inner) = self.inner.lock() {
@@ -1649,6 +1671,9 @@ impl FunctionsRuntime {
         generation: Option<Epoch>,
         respawn: RespawnGeneration,
     ) {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let RespawnGeneration {
             runner: retired_runner,
             spawn,
@@ -1665,6 +1690,13 @@ impl FunctionsRuntime {
             let _source_generation = source_generation;
             match Runner::spawn_spec(&spawn).await {
                 Ok(runner) => {
+                    if runtime
+                        .shutting_down
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        runner.kill_now();
+                        return;
+                    }
                     // A later reset supersedes this restart: its own replacement is
                     // the runner of record and this one must not outlive the kill.
                     // Checked and installed under the runtime lock (the lock a reset
@@ -1672,7 +1704,10 @@ impl FunctionsRuntime {
                     let installed = match runtime.inner.lock() {
                         Ok(inner) if Some(inner.epoch) == generation => {
                             let mut current = runtime.codebases[index].generation_mut();
-                            if current.revision == codebase_revision
+                            if !runtime
+                                .shutting_down
+                                .load(std::sync::atomic::Ordering::SeqCst)
+                                && current.revision == codebase_revision
                                 && Arc::ptr_eq(&current.runner, &retired_runner)
                             {
                                 let old = std::mem::replace(&mut current.runner, Arc::new(runner));
@@ -1705,6 +1740,9 @@ impl FunctionsRuntime {
         ticket: Arc<()>,
         respawn: RespawnGeneration,
     ) {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let RespawnGeneration {
             spawn,
             cleanup_dir: source_generation,
@@ -1718,12 +1756,22 @@ impl FunctionsRuntime {
             let _source_generation = source_generation;
             match Runner::spawn_spec(&spawn).await {
                 Ok(runner) => {
+                    if runtime
+                        .shutting_down
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        runner.kill_now();
+                        return;
+                    }
                     let installed = if let Ok(_inner) = runtime.inner.lock() {
                         let mut current = runtime.codebases[index].generation_mut();
-                        if current
-                            .blocking_restart_ticket
-                            .as_ref()
-                            .is_some_and(|active| Arc::ptr_eq(active, &ticket))
+                        if !runtime
+                            .shutting_down
+                            .load(std::sync::atomic::Ordering::SeqCst)
+                            && current
+                                .blocking_restart_ticket
+                                .as_ref()
+                                .is_some_and(|active| Arc::ptr_eq(active, &ticket))
                         {
                             let old = std::mem::replace(&mut current.runner, Arc::new(runner));
                             current.blocking_restart_ticket = None;
@@ -2026,6 +2074,9 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> Result<Option<(BlockingAuthTarget, BlockingAuthAdmission)>, String> {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the Functions runtime is shutting down".to_owned());
+        }
         let Some(spec) = self.manifest.functions.iter().find(|function| {
             matches!(function.trigger, Trigger::BlockingAuth { event: candidate } if candidate == event)
         }) else {
@@ -2096,6 +2147,9 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         target: &BlockingAuthTarget,
     ) -> bool {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return false;
+        }
         let Ok(inner) = self.inner.lock() else {
             return false;
         };
@@ -2138,6 +2192,9 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<ProxiedResponse, String> {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the Functions runtime is shutting down".to_owned());
+        }
         let (timeout, function_capacity) =
             self.manifest
                 .get(&target.function)
@@ -2311,6 +2368,9 @@ impl FunctionsRuntime {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch_ready(self: &Arc<Self>) {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         // The runners snapshotted here are the ones every invocation of this pass goes to: an
         // event leased before a reset must not reach a runner spawned after it. One per
         // codebase, and a codebase whose runner is down holds only its own queued work: the

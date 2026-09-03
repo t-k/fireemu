@@ -277,6 +277,8 @@ impl Runner {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?;
+        #[cfg(unix)]
+        let mut process_group_guard = ProcessGroupGuard::new(child.id());
         #[cfg(windows)]
         let mut child = {
             let mut wrapped = TokioCommandWrap::from(cmd);
@@ -453,6 +455,8 @@ impl Runner {
                 ));
             }
         };
+        #[cfg(unix)]
+        process_group_guard.disarm();
         Ok(Self {
             child: AsyncMutex::new(Some(child)),
             stdin: AsyncMutex::new(Some(stdin)),
@@ -588,6 +592,32 @@ impl Runner {
     }
 }
 
+/// Cancellation guard for discovery and respawn. Dropping a Tokio child kills only the direct
+/// process; user code may already have created descendants in the runner's process group before
+/// sending its hello.
+#[cfg(unix)]
+struct ProcessGroupGuard {
+    pid: Option<u32>,
+}
+
+#[cfg(unix)]
+impl ProcessGroupGuard {
+    fn new(pid: Option<u32>) -> Self {
+        Self { pid }
+    }
+
+    fn disarm(&mut self) {
+        self.pid = None;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        kill_process_group(self.pid);
+    }
+}
+
 /// Kills the process group the runner leads (`process_group(0)`: its id is the runner's
 /// pid), taking the subprocesses of handlers with it.
 #[cfg(unix)]
@@ -604,6 +634,55 @@ fn kill_process_group(pid: Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::{LogBuffer, LOG_CAPACITY};
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelling_runner_start_kills_its_whole_process_group() {
+        use std::process::Command;
+        use std::time::Duration;
+
+        let root =
+            std::env::temp_dir().join(format!("fireemu-runner-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let descendant_pid = root.join("descendant.pid");
+        let script = format!(
+            "sleep 30 & echo $! > '{}'; sleep 30",
+            descendant_pid.display()
+        );
+        let spawning = tokio::spawn(async move {
+            super::Runner::spawn(
+                &["/bin/sh".to_owned(), "-c".to_owned(), script],
+                None,
+                &[],
+                Duration::from_secs(60),
+            )
+            .await
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while !descendant_pid.is_file() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the runner fixture did not create its descendant"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = std::fs::read_to_string(&descendant_pid).unwrap();
+
+        spawning.abort();
+        let _ = spawning.await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !Command::new("/bin/kill")
+                .args(["-0", pid.trim()])
+                .status()
+                .unwrap()
+                .success(),
+            "cancelling discovery left descendant process {} alive",
+            pid.trim()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn log_buffer_evicts_old_lines_and_keeps_a_monotonic_cursor() {

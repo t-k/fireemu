@@ -2032,8 +2032,15 @@ fn select_store(
         }
     }
     if let Some(token) = str_field(body, "refresh_token") {
-        if let Some(store) = registry.find(|s| s.owns_refresh_token(token)) {
-            return Ok(store);
+        use fireemu_core_auth::store::RefreshTokenStoreMatch;
+
+        match registry.store_for_refresh_token(token) {
+            RefreshTokenStoreMatch::Unique(store) => return Ok(store),
+            RefreshTokenStoreMatch::Ambiguous => {
+                return Err(error(400, "INVALID_REFRESH_TOKEN"));
+            }
+            RefreshTokenStoreMatch::Unavailable => return Err(error(500, "INTERNAL")),
+            RefreshTokenStoreMatch::NotFound => {}
         }
     }
     if let Some(tenant) = str_field(body, "tenantId") {

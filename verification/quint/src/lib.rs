@@ -12,6 +12,7 @@ pub mod evidence;
 pub mod firestore_listen_refresh;
 pub mod model;
 pub mod process;
+pub mod publication;
 pub mod regex_authorization;
 pub mod regex_evaluation_cache;
 pub mod regex_linear_repeat;

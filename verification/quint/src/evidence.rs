@@ -21,25 +21,26 @@ const TLC_VERSION: &str = "2.19 of 08 August 2024";
 const BACKEND: &str = "tlc";
 const TRACES_PER_SEED: usize = 100;
 const MAX_STEPS: usize = 20;
+const CARGO_AUTHORITY_INPUT: &str = "verification/quint/evidence/cargo-authority.json";
 const COMMON_DIGEST_PATHS: &[&str] = &[
     ".github/workflows/quint.yml",
     "rust-toolchain.toml",
     "verification/quint/apalache.lock.json",
     "verification/quint/bin/install-apalache",
     "verification/quint/bin/process-group",
-    "verification/quint/bin/publish-evidence",
     "verification/quint/bin/quint",
     "verification/quint/bin/authority-lock",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-verification.sh",
-    "verification/quint/evidence/cargo-authority.json",
+    CARGO_AUTHORITY_INPUT,
     "verification/quint/src/cargo_authority.rs",
     "verification/quint/src/evidence.rs",
     "verification/quint/src/lib.rs",
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
+    "verification/quint/src/publication.rs",
 ];
 
 /// Strict, versioned evidence document shared by every model.
@@ -138,6 +139,15 @@ pub fn build_evidence(
     descriptor: &'static ModelDescriptor,
     mutation_results: &[MutationResult],
 ) -> Result<Evidence, String> {
+    build_evidence_with_cargo_authority(repository_root, descriptor, mutation_results, None)
+}
+
+fn build_evidence_with_cargo_authority(
+    repository_root: &Path,
+    descriptor: &'static ModelDescriptor,
+    mutation_results: &[MutationResult],
+    cargo_authority: Option<&Path>,
+) -> Result<Evidence, String> {
     validate_apalache_distribution()?;
     let manifest = read_manifest(repository_root, descriptor)?;
     let mutations = normalize_mutations(&manifest, mutation_results)?;
@@ -151,7 +161,7 @@ pub fn build_evidence(
         mutation_manifest: descriptor.mutation_manifest.to_owned(),
         tools: expected_tools(),
         bounds: expected_bounds(descriptor)?,
-        digests: compute_digests(repository_root, &bound_inputs)?,
+        digests: compute_digests(repository_root, &bound_inputs, cargo_authority)?,
         bound_inputs,
         invariants: expected_properties(descriptor, PropertyKind::Invariant),
         temporal_properties: expected_properties(descriptor, PropertyKind::Temporal),
@@ -161,7 +171,12 @@ pub fn build_evidence(
         projection_fields: strings(descriptor.projection_fields),
         simulation: expected_simulation(),
     };
-    validate_semantics(&evidence, descriptor, Some(repository_root))?;
+    validate_semantics(
+        &evidence,
+        descriptor,
+        Some(repository_root),
+        cargo_authority,
+    )?;
     Ok(evidence)
 }
 
@@ -171,8 +186,14 @@ pub fn write_evidence(
     path: &Path,
     descriptor: &'static ModelDescriptor,
     mutation_results: &[MutationResult],
+    cargo_authority: Option<&Path>,
 ) -> Result<(), String> {
-    let evidence = build_evidence(repository_root, descriptor, mutation_results)?;
+    let evidence = build_evidence_with_cargo_authority(
+        repository_root,
+        descriptor,
+        mutation_results,
+        cargo_authority,
+    )?;
     let mut json = serde_json::to_string_pretty(&evidence)
         .map_err(|error| format!("cannot serialize evidence: {error}"))?;
     json.push('\n');
@@ -196,7 +217,7 @@ pub fn validate_evidence_json(
 ) -> Result<Evidence, String> {
     let evidence: Evidence =
         serde_json::from_str(json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
-    validate_semantics(&evidence, descriptor, repository_root)?;
+    validate_semantics(&evidence, descriptor, repository_root, None)?;
     Ok(evidence)
 }
 
@@ -206,15 +227,34 @@ pub fn validate_evidence_file(
     path: &Path,
     descriptor: &'static ModelDescriptor,
 ) -> Result<Evidence, String> {
+    validate_evidence_file_with_cargo_authority(repository_root, path, descriptor, None)
+}
+
+/// Validates an evidence file using an explicit staged Cargo authority input.
+pub fn validate_evidence_file_with_cargo_authority(
+    repository_root: &Path,
+    path: &Path,
+    descriptor: &'static ModelDescriptor,
+    cargo_authority: Option<&Path>,
+) -> Result<Evidence, String> {
     let json = fs::read_to_string(path)
         .map_err(|error| format!("cannot read evidence {}: {error}", path.display()))?;
-    validate_evidence_json(&json, descriptor, Some(repository_root))
+    let evidence: Evidence =
+        serde_json::from_str(&json).map_err(|error| format!("invalid evidence JSON: {error}"))?;
+    validate_semantics(
+        &evidence,
+        descriptor,
+        Some(repository_root),
+        cargo_authority,
+    )?;
+    Ok(evidence)
 }
 
 fn validate_semantics(
     evidence: &Evidence,
     descriptor: &'static ModelDescriptor,
     repository_root: Option<&Path>,
+    cargo_authority: Option<&Path>,
 ) -> Result<(), String> {
     if evidence.schema_version != 3
         || evidence.model != descriptor.name
@@ -269,7 +309,7 @@ fn validate_semantics(
     if let Some(root) = repository_root {
         let manifest = read_manifest(root, descriptor)?;
         validate_manifest_results(&manifest, &evidence.mutations)?;
-        let expected_digests = compute_digests(root, &bound_inputs)?;
+        let expected_digests = compute_digests(root, &bound_inputs, cargo_authority)?;
         for (path, digest) in expected_digests {
             match evidence.digests.get(&path) {
                 Some(actual) if actual == &digest => {}
@@ -430,11 +470,25 @@ fn expected_simulation() -> SimulationEvidence {
 fn compute_digests(
     repository_root: &Path,
     relative_paths: &[String],
+    cargo_authority: Option<&Path>,
 ) -> Result<BTreeMap<String, String>, String> {
     relative_paths
         .iter()
         .map(|relative| {
-            let path = repository_root.join(relative);
+            let path = if relative == CARGO_AUTHORITY_INPUT {
+                cargo_authority.map_or_else(|| repository_root.join(relative), Path::to_path_buf)
+            } else {
+                repository_root.join(relative)
+            };
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                format!("cannot inspect bound input {}: {error}", path.display())
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "bound input is not a regular file: {}",
+                    path.display()
+                ));
+            }
             let bytes = fs::read(&path)
                 .map_err(|error| format!("cannot read bound input {}: {error}", path.display()))?;
             Ok((relative.clone(), format!("{:x}", Sha256::digest(bytes))))
@@ -444,4 +498,61 @@ fn compute_digests(
 
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn cargo_authority_digest_can_be_read_from_a_staged_override() {
+        let temporary = OwnedTestDirectory::create();
+        let live = temporary
+            .path
+            .join("verification/quint/evidence/cargo-authority.json");
+        let staged = temporary.path.join("staged/cargo-authority.json");
+        fs::create_dir_all(live.parent().expect("live parent")).expect("create live parent");
+        fs::create_dir_all(staged.parent().expect("staged parent")).expect("create staged parent");
+        fs::write(&live, b"live").expect("write live authority");
+        fs::write(&staged, b"staged").expect("write staged authority");
+
+        let digests = compute_digests(
+            &temporary.path,
+            &["verification/quint/evidence/cargo-authority.json".to_owned()],
+            Some(&staged),
+        )
+        .expect("staged authority must be digestible");
+
+        assert_eq!(
+            digests["verification/quint/evidence/cargo-authority.json"],
+            format!("{:x}", Sha256::digest(b"staged"))
+        );
+    }
+
+    struct OwnedTestDirectory {
+        path: PathBuf,
+    }
+
+    impl OwnedTestDirectory {
+        fn create() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock must be after the epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "fireemu-quint-evidence-override-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create temporary test directory");
+            Self { path }
+        }
+    }
+
+    impl Drop for OwnedTestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }

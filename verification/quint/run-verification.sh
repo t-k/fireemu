@@ -129,22 +129,11 @@ owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-authority.XXXXXX")
 staged_evidence="$owned_temp/evidence"
 mkdir "$staged_evidence"
 authority_path="$script_dir/evidence/cargo-authority.json"
-authority_backup="$owned_temp/cargo-authority.original.json"
-authority_existed=0
-authority_installed=0
-refresh_committed=0
 active_pid=
 launching=0
 pending_signal=
 cleanup() {
   cleanup_checker_output || true
-  if [ "$refresh" -eq 1 ] && [ "$authority_installed" -eq 1 ] && [ "$refresh_committed" -eq 0 ]; then
-    if [ "$authority_existed" -eq 1 ]; then
-      cp -- "$authority_backup" "$authority_path"
-    else
-      rm -f -- "$authority_path"
-    fi
-  fi
   rm -rf -- "$owned_temp"
 }
 
@@ -206,15 +195,6 @@ run_gate() {
 
 if [ "$refresh" -eq 1 ]; then
   run_gate cargo-authority cargo run -p fireemu-verification-quint -- cargo-authority --write "$staged_evidence/cargo-authority.json"
-  if [ -f "$authority_path" ] && [ ! -L "$authority_path" ]; then
-    cp -- "$authority_path" "$authority_backup"
-    authority_existed=1
-  elif [ -e "$authority_path" ] || [ -L "$authority_path" ]; then
-    echo "error: Cargo authority is not a regular file: $authority_path" >&2
-    exit 2
-  fi
-  cp -- "$staged_evidence/cargo-authority.json" "$authority_path"
-  authority_installed=1
 else
   run_gate cargo-authority cargo run -p fireemu-verification-quint -- cargo-authority --check "$authority_path"
   cp -- "$authority_path" "$staged_evidence/cargo-authority.json"
@@ -244,8 +224,8 @@ while [ "$pass" -le "$passes" ]; do
     mutation_evidence="$staged_evidence/$model.json"
     run_gate "$model-model" cargo run -p fireemu-verification-quint -- verify-model --model "$model"
     run_gate "$model-connect" cargo test -p fireemu-verification-quint --test "$test_target" -- --ignored --test-threads=1
-    run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --evidence "$mutation_evidence"
-    run_gate "$model-evidence" cargo run -p fireemu-verification-quint -- verify-evidence --model "$model" --evidence "$mutation_evidence"
+    run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
+    run_gate "$model-evidence" cargo run -p fireemu-verification-quint -- verify-evidence --model "$model" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
   done
   run_gate traceability cargo run -p traceability-check -- --quint-evidence-dir "$staged_evidence"
 
@@ -253,7 +233,6 @@ while [ "$pass" -le "$passes" ]; do
 done
 
 if [ "$refresh" -eq 1 ]; then
-  run_gate publish-evidence "$script_dir/bin/publish-evidence" "$staged_evidence" "$script_dir/evidence"
-  refresh_committed=1
+  run_gate publish-evidence cargo run -p fireemu-verification-quint -- publish-evidence --source "$staged_evidence" --target "$script_dir/evidence"
   echo "Quint evidence refreshed atomically"
 fi

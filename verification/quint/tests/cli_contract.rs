@@ -603,14 +603,20 @@ fn cli_declares_verify_model_command() {
         "help must declare the verify-model contract"
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("mutate-model --model MODEL [--root PATH] [--evidence PATH]"),
+        String::from_utf8_lossy(&output.stdout).contains(
+            "mutate-model --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]"
+        ),
         "help must declare the mutation contract"
     );
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("verify-evidence --model MODEL [--root PATH] [--evidence PATH]"),
+            .contains("verify-evidence --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]"),
         "help must declare the evidence contract"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("publish-evidence --source PATH --target PATH"),
+        "help must declare the atomic publication contract"
     );
 }
 
@@ -668,7 +674,11 @@ fn authority_script_declares_all_models_and_ordered_gates() {
     assert!(script.contains("--refresh"));
     assert!(script.contains("cargo-authority --write"));
     assert!(script.contains("--quint-evidence-dir"));
-    assert!(script.contains("bin/publish-evidence"));
+    assert!(script.contains("publish-evidence --source"));
+    assert!(script.contains("--cargo-authority \"$staged_evidence/cargo-authority.json\""));
+    assert!(!script.contains("authority_backup"));
+    assert!(!script.contains("authority_installed"));
+    assert!(!script.contains("refresh_committed"));
     let launch_contract = [
         "launching=1",
         "\"$group_launcher\" \"$@\" &",

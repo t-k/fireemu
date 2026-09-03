@@ -5,13 +5,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use fireemu_verification_quint::cargo_authority::{validate_authority_file, write_authority};
-use fireemu_verification_quint::evidence::validate_evidence_file;
+use fireemu_verification_quint::evidence::validate_evidence_file_with_cargo_authority;
 use fireemu_verification_quint::model::{model, ModelDescriptor};
 use fireemu_verification_quint::process::{
     mutate_model as run_mutations, verify_model as run_model,
 };
+use fireemu_verification_quint::publication::publish_evidence as publish_evidence_snapshot;
 
-const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL [--root PATH] [--evidence PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH]\n  fireemu-verification-quint cargo-authority [--root PATH] (--write PATH | --check PATH)\n";
+const USAGE: &str = "Usage:\n  fireemu-verification-quint verify-model --model MODEL [--root PATH]\n  fireemu-verification-quint mutate-model --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint verify-evidence --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]\n  fireemu-verification-quint cargo-authority [--root PATH] (--write PATH | --check PATH)\n  fireemu-verification-quint publish-evidence --source PATH --target PATH\n";
 
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
@@ -39,9 +40,34 @@ fn run(arguments: &[String]) -> Result<(), String> {
         }
         Some("verify-evidence") => verify_evidence(&arguments[1..]),
         Some("cargo-authority") => cargo_authority(&arguments[1..]),
+        Some("publish-evidence") => publish_evidence(&arguments[1..]),
         Some(other) => Err(format!("unknown command {other:?}")),
         None => Err("missing command".to_owned()),
     }
+}
+
+fn publish_evidence(arguments: &[String]) -> Result<(), String> {
+    let mut source = None;
+    let mut target = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let flag = &arguments[index];
+        let value = arguments
+            .get(index + 1)
+            .ok_or_else(|| format!("missing value for {flag:?}"))?;
+        match flag.as_str() {
+            "--source" if source.is_none() => source = Some(PathBuf::from(value)),
+            "--target" if target.is_none() => target = Some(PathBuf::from(value)),
+            "--source" | "--target" => {
+                return Err(format!("repeated flag {flag:?}"));
+            }
+            _ => return Err(format!("unknown flag {flag:?}")),
+        }
+        index += 2;
+    }
+    let source = source.ok_or_else(|| "missing required --source PATH".to_owned())?;
+    let target = target.ok_or_else(|| "missing required --target PATH".to_owned())?;
+    publish_evidence_snapshot(&source, &target)
 }
 
 fn cargo_authority(arguments: &[String]) -> Result<(), String> {
@@ -92,6 +118,7 @@ fn mutate_model(arguments: &[String]) -> Result<(), String> {
         &options.root,
         options.descriptor,
         options.evidence.as_deref(),
+        options.cargo_authority.as_deref(),
     )?;
     println!(
         "{} Quint mutants killed: {}",
@@ -109,7 +136,12 @@ fn verify_evidence(arguments: &[String]) -> Result<(), String> {
             options.descriptor.name
         ))
     });
-    let validated = validate_evidence_file(&options.root, &evidence, options.descriptor)?;
+    let validated = validate_evidence_file_with_cargo_authority(
+        &options.root,
+        &evidence,
+        options.descriptor,
+        options.cargo_authority.as_deref(),
+    )?;
     if validated.model != options.descriptor.name {
         return Err(format!(
             "evidence model {} does not match requested model {}",
@@ -124,12 +156,14 @@ struct CommandOptions {
     descriptor: &'static ModelDescriptor,
     root: PathBuf,
     evidence: Option<PathBuf>,
+    cargo_authority: Option<PathBuf>,
 }
 
 fn parse_options(arguments: &[String], accepts_evidence: bool) -> Result<CommandOptions, String> {
     let mut model_name = None;
     let mut root = None;
     let mut evidence = None;
+    let mut cargo_authority = None;
     let mut index = 0;
     while index < arguments.len() {
         let flag = &arguments[index];
@@ -142,7 +176,10 @@ fn parse_options(arguments: &[String], accepts_evidence: bool) -> Result<Command
             "--evidence" if accepts_evidence && evidence.is_none() => {
                 evidence = Some(PathBuf::from(value));
             }
-            "--model" | "--root" | "--evidence" => {
+            "--cargo-authority" if accepts_evidence && cargo_authority.is_none() => {
+                cargo_authority = Some(PathBuf::from(value));
+            }
+            "--model" | "--root" | "--evidence" | "--cargo-authority" => {
                 return Err(format!("repeated or unsupported flag {flag:?}"));
             }
             _ => return Err(format!("unknown flag {flag:?}")),
@@ -155,5 +192,6 @@ fn parse_options(arguments: &[String], accepts_evidence: bool) -> Result<Command
         descriptor,
         root: root.unwrap_or_else(default_root),
         evidence,
+        cargo_authority,
     })
 }

@@ -26,7 +26,7 @@ const BOUND_INPUTS: [&str; 31] = [
     "verification/quint/bin/install-apalache",
     "verification/quint/bin/quint",
     "verification/quint/bin/process-group",
-    "verification/quint/bin/publish-evidence",
+    "verification/quint/src/publication.rs",
     "verification/quint/bin/authority-lock",
     "verification/quint/run-verification.sh",
     "verification/quint/evidence/cargo-authority.json",

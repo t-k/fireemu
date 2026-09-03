@@ -389,6 +389,7 @@ pub fn mutate_model(
     repository_root: &Path,
     descriptor: &'static ModelDescriptor,
     evidence_path: Option<&Path>,
+    cargo_authority: Option<&Path>,
 ) -> Result<Vec<MutationResult>, String> {
     validate_apalache_distribution()?;
     let workdir = repository_root.join("verification/quint");
@@ -449,7 +450,13 @@ pub fn mutate_model(
     }
 
     if let Some(path) = evidence_path {
-        crate::evidence::write_evidence(repository_root, path, descriptor, &results)?;
+        crate::evidence::write_evidence(
+            repository_root,
+            path,
+            descriptor,
+            &results,
+            cargo_authority,
+        )?;
     }
     Ok(results)
 }
@@ -463,6 +470,7 @@ pub fn mutate_event_delivery(
         repository_root,
         model("EventDelivery").expect("EventDelivery must remain registered"),
         evidence_path,
+        None,
     )
 }
 

@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fireemu_verification_quint::evidence::validate_evidence_file as validate_quint_evidence_file;
+use fireemu_verification_quint::evidence::validate_evidence_file_with_cargo_authority as validate_quint_evidence_file;
 use fireemu_verification_quint::model::{model as quint_model, ModelDescriptor};
 use serde::Deserialize;
 
@@ -567,7 +567,14 @@ pub fn check_with_quint_evidence(root: &Path, quint_evidence_dir: Option<&Path>)
                         Path::to_path_buf,
                     )
                     .join(format!("{}.json", descriptor.name));
-                match validate_quint_evidence_file(root, &evidence_path, descriptor) {
+                let cargo_authority =
+                    quint_evidence_dir.map(|directory| directory.join("cargo-authority.json"));
+                match validate_quint_evidence_file(
+                    root,
+                    &evidence_path,
+                    descriptor,
+                    cargo_authority.as_deref(),
+                ) {
                     Ok(verified) => {
                         let mut matching_property_mutation = false;
                         for result in verified.mutations {

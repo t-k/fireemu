@@ -4,6 +4,8 @@ use std::fs;
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::process::{Child, ExitStatus};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -85,6 +87,105 @@ fn process_exists(pid: u32) -> bool {
 }
 
 #[cfg(unix)]
+fn read_complete_pid_record(path: &Path, expected: usize) -> Option<Vec<u32>> {
+    let text = fs::read_to_string(path).ok()?;
+    let pids = text
+        .split_whitespace()
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (pids.len() == expected && pids.iter().all(|pid| *pid > 0)).then_some(pids)
+}
+
+#[cfg(unix)]
+struct AuthorityChild {
+    child: Option<Child>,
+    pid_file: PathBuf,
+    expected_pids: usize,
+}
+
+#[cfg(unix)]
+impl AuthorityChild {
+    fn new(child: Child, pid_file: PathBuf, expected_pids: usize) -> Self {
+        Self {
+            child: Some(child),
+            pid_file,
+            expected_pids,
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("authority child is present")
+    }
+
+    fn terminate_and_wait(mut self, timeout: Duration) -> ExitStatus {
+        self.terminate(timeout)
+            .expect("authority child must produce an exit status")
+    }
+
+    fn terminate(&mut self, timeout: Duration) -> Option<ExitStatus> {
+        let child = self.child.as_mut()?;
+        let pid = child.id();
+        let mut status = child.try_wait().ok().flatten();
+        if status.is_none() {
+            let _ = Command::new("/bin/kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                if let Ok(Some(exited)) = child.try_wait() {
+                    status = Some(exited);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        if status.is_none() {
+            let _ = child.kill();
+            status = child.wait().ok();
+        }
+        self.child.take();
+
+        if let Some(pids) = read_complete_pid_record(&self.pid_file, self.expected_pids) {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline && pids.iter().any(|pid| process_exists(*pid)) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let mut survivors = pids
+                .into_iter()
+                .filter(|pid| process_exists(*pid))
+                .collect::<Vec<_>>();
+            for pid in &survivors {
+                let _ = Command::new("/bin/kill")
+                    .args(["-TERM", &pid.to_string()])
+                    .status();
+            }
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < deadline && survivors.iter().any(|pid| process_exists(*pid)) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            survivors.retain(|pid| process_exists(*pid));
+            for pid in &survivors {
+                let _ = Command::new("/bin/kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .status();
+            }
+            let _ = wait_until(Duration::from_secs(1), || {
+                survivors.iter().all(|pid| !process_exists(*pid))
+            });
+        }
+        status
+    }
+}
+
+#[cfg(unix)]
+impl Drop for AuthorityChild {
+    fn drop(&mut self) {
+        let _ = self.terminate(Duration::from_secs(4));
+    }
+}
+
+#[cfg(unix)]
 fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -156,6 +257,58 @@ impl Drop for OwnedTestDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn incomplete_pid_records_are_not_ready() {
+    let temporary = OwnedTestDirectory::create("pid-record");
+    let path = temporary.0.join("children.pid");
+
+    for content in ["", "101", "101 partial", "0 102", "101 102 103"] {
+        fs::write(&path, content).expect("partial PID record must be writable");
+        assert_eq!(read_complete_pid_record(&path, 2), None, "{content:?}");
+    }
+
+    fs::write(&path, "101 102\n").expect("complete PID record must be writable");
+    assert_eq!(read_complete_pid_record(&path, 2), Some(vec![101, 102]));
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_child_cleanup_survives_panic_unwinding() {
+    let temporary = OwnedTestDirectory::create("authority-panic-cleanup");
+    let pid_file = temporary.0.join("children.pid");
+    let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let capture = std::sync::Arc::clone(&observed);
+    let pid_path = pid_file.clone();
+
+    let result = std::panic::catch_unwind(move || {
+        let child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "sleep 30 & child=$!; pid_tmp=\"${PID_FILE}.tmp.$$\"; printf '%s %s\\n' \"$$\" \"$child\" > \"$pid_tmp\"; mv \"$pid_tmp\" \"$PID_FILE\"; wait \"$child\"",
+            ])
+            .env("PID_FILE", &pid_path)
+            .spawn()
+            .expect("panic fixture must launch");
+        let guard = AuthorityChild::new(child, pid_path.clone(), 2);
+        let mut pids = None;
+        assert!(wait_until(Duration::from_secs(3), || {
+            pids = read_complete_pid_record(&pid_path, 2);
+            pids.is_some()
+        }));
+        *capture.lock().unwrap() = pids.unwrap();
+        let _guard = guard;
+        panic!("exercise authority cleanup during unwinding");
+    });
+    assert!(result.is_err());
+    let pids = observed.lock().unwrap();
+    assert_eq!(pids.len(), 2, "panic fixture never became ready");
+    assert!(
+        pids.iter().all(|pid| !process_exists(*pid)),
+        "fixture descendants survived panic cleanup: {pids:?}"
+    );
 }
 
 #[test]
@@ -232,7 +385,7 @@ fn process_group_supervisor_escalates_and_reaps_term_resistant_descendants() {
         let pid_file = temporary.0.join("descendants.pid");
         fs::write(
             &fixture,
-            "#!/bin/sh\ntrap '' HUP INT TERM\n/bin/sh -c 'trap \"\" HUP INT TERM; while :; do sleep 1; done' &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$SUPERVISOR_PID_FILE\"\nwait \"$child\"\n",
+            "#!/bin/sh\ntrap '' HUP INT TERM\n/bin/sh -c 'trap \"\" HUP INT TERM; while :; do sleep 1; done' &\nchild=$!\npid_tmp=\"${SUPERVISOR_PID_FILE}.tmp.$$\"\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$pid_tmp\"\nmv \"$pid_tmp\" \"$SUPERVISOR_PID_FILE\"\nwait \"$child\"\n",
         )
         .expect("signal-resistant fixture must be written");
         let mut permissions = fs::metadata(&fixture)
@@ -246,16 +399,15 @@ fn process_group_supervisor_escalates_and_reaps_term_resistant_descendants() {
             .env("SUPERVISOR_PID_FILE", &pid_file)
             .spawn()
             .expect("process-group supervisor must launch");
+        let mut pids = None;
         assert!(
-            wait_until(Duration::from_secs(30), || pid_file.exists()),
+            wait_until(Duration::from_secs(30), || {
+                pids = read_complete_pid_record(&pid_file, 2);
+                pids.is_some()
+            }),
             "supervised descendants must become ready"
         );
-        let pids = fs::read_to_string(&pid_file).expect("supervised pid file must be readable");
-        let pids = pids
-            .split_whitespace()
-            .map(|pid| pid.parse::<u32>().expect("supervised pid must be numeric"))
-            .collect::<Vec<_>>();
-        assert_eq!(pids.len(), 2);
+        let pids = pids.expect("supervised PID record must be complete");
 
         let signal = Command::new("/bin/kill")
             .args([format!("-{signal_name}"), supervisor.id().to_string()])
@@ -656,7 +808,7 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
     let gate = fake_bin.join("cargo");
     fs::write(
         &gate,
-        "#!/bin/sh\nsleep 30 &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$AUTHORITY_CHILD_PID_FILE\"\nwait \"$child\"\n",
+        "#!/bin/sh\nsleep 30 &\nchild=$!\npid_tmp=\"${AUTHORITY_CHILD_PID_FILE}.tmp.$$\"\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$pid_tmp\"\nmv \"$pid_tmp\" \"$AUTHORITY_CHILD_PID_FILE\"\nwait \"$child\"\n",
     )
     .expect("cargo fixture must be written");
     make_executable(&[&authority, &launcher, &gate]);
@@ -667,9 +819,13 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
     let stderr = stdout
         .try_clone()
         .expect("authority log handle must be cloned");
-    let mut child = Command::new(&authority)
+    let child = Command::new(&authority)
         .current_dir(&temporary.0)
         .env("AUTHORITY_CHILD_PID_FILE", &pid_file)
+        .env(
+            "FIREEMU_QUINT_AUTHORITY_LOCK",
+            temporary.0.join("authority.lock"),
+        )
         .env("QUINT_HOME", &quint_home)
         .env("QUINT_REAL_BIN", "/bin/sh")
         .env(
@@ -683,12 +839,16 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
         .stderr(stderr)
         .spawn()
         .expect("authority must launch");
+    let mut child = AuthorityChild::new(child, pid_file.clone(), 2);
     let mut early_status = None;
+    let mut pids = None;
     let ready = wait_until(Duration::from_secs(30), || {
-        if pid_file.exists() {
+        pids = read_complete_pid_record(&pid_file, 2);
+        if pids.is_some() {
             return true;
         }
         early_status = child
+            .child_mut()
             .try_wait()
             .expect("authority readiness wait must succeed");
         early_status.is_some()
@@ -698,41 +858,11 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
         panic!("authority exited before the active gate was ready ({status}):\n{log}");
     }
     if !ready {
-        let _ = Command::new("/bin/kill")
-            .args(["-TERM", &child.id().to_string()])
-            .status();
-        let _ = child.wait();
         let log = fs::read_to_string(&authority_log).unwrap_or_default();
         panic!("active gate did not become ready within 30 seconds:\n{log}");
     }
-    let pids = fs::read_to_string(&pid_file).expect("child pid file must be readable");
-    let pids = pids
-        .split_whitespace()
-        .map(|pid| pid.parse::<u32>().expect("child pid must be numeric"))
-        .collect::<Vec<_>>();
-    assert_eq!(pids.len(), 2);
-
-    let signal = Command::new("/bin/kill")
-        .args(["-TERM", &child.id().to_string()])
-        .status()
-        .expect("TERM command must launch");
-    assert!(signal.success());
-    let exited = wait_until(Duration::from_secs(4), || {
-        child
-            .try_wait()
-            .expect("authority wait must succeed")
-            .is_some()
-    });
-    if !exited {
-        let _ = child.kill();
-        for pid in &pids {
-            let _ = Command::new("/bin/kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-        }
-        panic!("TERM must stop the authority promptly");
-    }
-    let status = child.wait().expect("authority must be reaped");
+    let pids = pids.expect("child PID record must be complete");
+    let status = child.terminate_and_wait(Duration::from_secs(4));
     assert_eq!(status.code(), Some(143));
     assert!(
         wait_until(Duration::from_secs(2), || pids
@@ -760,7 +890,7 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
     let real_quint = temporary.0.join("fake-quint");
     fs::write(
         &real_quint,
-        "#!/bin/sh\nsleep 30 &\nchild=$!\ntimeout_pid=$(ps -o ppid= -p \"$$\" | tr -d ' ')\nprintf '%s %s %s\\n' \"$timeout_pid\" \"$$\" \"$child\" > \"$NESTED_PID_FILE\"\nwait \"$child\"\n",
+        "#!/bin/sh\nsleep 30 &\nchild=$!\ntimeout_pid=$(ps -o ppid= -p \"$$\" | tr -d ' ')\npid_tmp=\"${NESTED_PID_FILE}.tmp.$$\"\nprintf '%s %s %s\\n' \"$timeout_pid\" \"$$\" \"$child\" > \"$pid_tmp\"\nmv \"$pid_tmp\" \"$NESTED_PID_FILE\"\nwait \"$child\"\n",
     )
     .expect("fake Quint must be written");
     let gate = fake_bin.join("cargo");
@@ -777,10 +907,14 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
     let stderr = stdout
         .try_clone()
         .expect("authority log handle must be cloned");
-    let mut child = Command::new(&authority)
+    let child = Command::new(&authority)
         .current_dir(&temporary.0)
         .env("NESTED_PID_FILE", &pid_file)
         .env("AUTHORITY_QUINT_WRAPPER", &wrapper)
+        .env(
+            "FIREEMU_QUINT_AUTHORITY_LOCK",
+            temporary.0.join("authority.lock"),
+        )
         .env("QUINT_HOME", &quint_home)
         .env("QUINT_REAL_BIN", &real_quint)
         .env("QUINT_TIMEOUT_SECONDS", "30")
@@ -795,12 +929,16 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
         .stderr(stderr)
         .spawn()
         .expect("nested authority must launch");
+    let mut child = AuthorityChild::new(child, pid_file.clone(), 3);
     let mut early_status = None;
+    let mut pids = None;
     let ready = wait_until(Duration::from_secs(30), || {
-        if pid_file.exists() {
+        pids = read_complete_pid_record(&pid_file, 3);
+        if pids.is_some() {
             return true;
         }
         early_status = child
+            .child_mut()
             .try_wait()
             .expect("nested authority readiness wait must succeed");
         early_status.is_some()
@@ -810,41 +948,11 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
         panic!("nested authority exited before readiness ({status}):\n{log}");
     }
     if !ready {
-        let _ = Command::new("/bin/kill")
-            .args(["-TERM", &child.id().to_string()])
-            .status();
-        let _ = child.wait();
         let log = fs::read_to_string(&authority_log).unwrap_or_default();
         panic!("nested Quint group did not become ready:\n{log}");
     }
-    let pids = fs::read_to_string(&pid_file).expect("nested pid file must be readable");
-    let pids = pids
-        .split_whitespace()
-        .map(|pid| pid.parse::<u32>().expect("nested pid must be numeric"))
-        .collect::<Vec<_>>();
-    assert_eq!(pids.len(), 3);
-
-    let signal = Command::new("/bin/kill")
-        .args(["-TERM", &child.id().to_string()])
-        .status()
-        .expect("TERM command must launch");
-    assert!(signal.success());
-    let exited = wait_until(Duration::from_secs(6), || {
-        child
-            .try_wait()
-            .expect("nested authority wait must succeed")
-            .is_some()
-    });
-    if !exited {
-        let _ = child.kill();
-        for pid in &pids {
-            let _ = Command::new("/bin/kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-        }
-        panic!("TERM must stop the nested authority promptly");
-    }
-    let status = child.wait().expect("nested authority must be reaped");
+    let pids = pids.expect("nested PID record must be complete");
+    let status = child.terminate_and_wait(Duration::from_secs(6));
     assert_eq!(status.code(), Some(143));
     assert!(
         wait_until(Duration::from_secs(2), || pids

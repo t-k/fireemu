@@ -9,6 +9,13 @@ use fireemu_export_publication::{CompletePublicationStage, PublicationStage};
 use quint_connect::{switch, Config, Driver, Result, State, Step};
 use serde::Deserialize;
 
+#[cfg(unix)]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
+#[cfg(unix)]
+use trusted_temp::TrustedTempDir;
+
 /// Actions exercised through the production publication capability.
 pub const MODELED_ACTIONS: [&str; 7] = [
     "Create",
@@ -456,11 +463,15 @@ fn stage_root(stage: &Stage) -> Option<&Path> {
 
 struct OwnedRoot {
     path: PathBuf,
+    #[cfg(not(unix))]
     identity: FileIdentity,
+    #[cfg(unix)]
+    _trusted_namespace: TrustedTempDir,
 }
 
 impl Drop for OwnedRoot {
     fn drop(&mut self) {
+        #[cfg(not(unix))]
         if file_identity(&self.path).is_ok_and(|identity| identity == self.identity) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
@@ -469,11 +480,24 @@ impl Drop for OwnedRoot {
 
 fn fresh_filesystem() -> Result<(OwnedRoot, PathBuf, PathBuf, FileIdentity)> {
     let id = NEXT_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+    #[cfg(unix)]
+    let trusted_namespace = TrustedTempDir::new("quint-export-publication");
+    #[cfg(unix)]
+    let path = trusted_namespace.path().join(format!("filesystem-{id}"));
+    #[cfg(not(unix))]
     let base = trusted_scratch_base()?;
+    #[cfg(not(unix))]
     let path = base.join(format!("fireemu-quint-export-{}-{id}", std::process::id()));
     create_private_dir(&path)?;
+    #[cfg(not(unix))]
     let identity = file_identity(&path)?;
-    let root = OwnedRoot { path, identity };
+    let root = OwnedRoot {
+        path,
+        #[cfg(not(unix))]
+        identity,
+        #[cfg(unix)]
+        _trusted_namespace: trusted_namespace,
+    };
     let target = root.path.join("target");
     let displaced = root.path.join("displaced");
     create_private_dir(&target)?;
@@ -482,36 +506,16 @@ fn fresh_filesystem() -> Result<(OwnedRoot, PathBuf, PathBuf, FileIdentity)> {
     Ok((root, target, displaced, initial_identity))
 }
 
+#[cfg(not(unix))]
 fn trusted_scratch_base() -> Result<PathBuf> {
     let path = platform_scratch_base()?;
     std::fs::create_dir_all(&path)
         .map_err(|error| invalid_data(&format!("cannot create trusted scratch base: {error}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).map_err(
-            |error| invalid_data(&format!("cannot restrict trusted scratch base: {error}")),
-        )?;
-    }
     std::fs::canonicalize(&path)
         .map_err(|error| invalid_data(&format!("cannot resolve trusted scratch base: {error}")))
 }
 
-#[cfg(target_os = "macos")]
-fn platform_scratch_base() -> Result<PathBuf> {
-    let output = std::process::Command::new("getconf")
-        .arg("DARWIN_USER_TEMP_DIR")
-        .output()
-        .map_err(|error| invalid_data(&format!("cannot read the macOS temporary root: {error}")))?;
-    if !output.status.success() {
-        return Err(invalid_data("getconf DARWIN_USER_TEMP_DIR failed"));
-    }
-    let path = String::from_utf8(output.stdout)
-        .map_err(|error| invalid_data(&format!("macOS temporary root is not UTF-8: {error}")))?;
-    Ok(PathBuf::from(path.trim()).join("fireemu-quint-publication"))
-}
-
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(unix))]
 fn platform_scratch_base() -> Result<PathBuf> {
     Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fireemu-quint-publication"))
 }

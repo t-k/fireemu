@@ -846,6 +846,7 @@ dependencies = [
  "fireemu-core-types",
  "fireemu-export-publication",
  "quint-connect",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

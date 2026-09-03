@@ -42,6 +42,11 @@ pub trait AppCheckSigner: Send + Sync {
     fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool;
     /// The public key as a JWK (JSON text) for the local JWKS endpoint. Never private material.
     fn public_jwk_json(&self) -> String;
+    /// Cached public-key fields, when the signer exposes a structured representation.
+    #[must_use]
+    fn public_jwk(&self) -> Option<&fireemu_core_auth::jwt::PublicJwk> {
+        None
+    }
 }
 
 impl fmt::Debug for dyn AppCheckSigner {

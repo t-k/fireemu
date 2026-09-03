@@ -1545,7 +1545,12 @@ fn dispatch(
             // The public keys signed ID tokens verify against (empty for unsigned sessions).
             let keys: Vec<Value> = store
                 .signer()
-                .and_then(|s| serde_json::from_str::<Value>(&s.public_jwk_json()).ok())
+                .and_then(|signer| {
+                    signer.public_jwk().map_or_else(
+                        || serde_json::from_str::<Value>(&signer.public_jwk_json()).ok(),
+                        |jwk| Some(crate::signing::jwk_value(jwk)),
+                    )
+                })
                 .into_iter()
                 .collect();
             JsonResponse {

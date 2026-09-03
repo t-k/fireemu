@@ -10,7 +10,7 @@ use fireemu_adapter_http::identity_toolkit::{
 };
 use fireemu_adapter_http::signing::{AppCheckKeySource, AppCheckRsaSigner, RsaSigner};
 use fireemu_core_auth::jwt::{
-    decode_token, encode_unsigned, encode_with, verify_id_token, IdTokenSigner, JwtError,
+    decode_token, encode_unsigned, encode_with, verify_id_token, IdTokenSigner, JwtError, PublicJwk,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthStore, NewUser};
@@ -29,6 +29,34 @@ struct LockCheckingSigner {
 
 struct PassthroughBlockingHook;
 
+struct StructuredJwkSigner(PublicJwk);
+
+impl IdTokenSigner for StructuredJwkSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+
+    fn kid(&self) -> &str {
+        &self.0.kid
+    }
+
+    fn sign(&self, _signing_input: &[u8]) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn verify(&self, _signing_input: &[u8], _signature: &[u8]) -> bool {
+        false
+    }
+
+    fn public_jwk_json(&self) -> String {
+        panic!("the structured JWK path must not stringify and reparse JSON")
+    }
+
+    fn public_jwk(&self) -> Option<&PublicJwk> {
+        Some(&self.0)
+    }
+}
+
 impl AuthBlockingHook for PassthroughBlockingHook {
     fn invoke(
         &self,
@@ -37,6 +65,41 @@ impl AuthBlockingHook for PassthroughBlockingHook {
     ) -> Result<serde_json::Value, BlockingFunctionFailure> {
         Ok(json!({}))
     }
+}
+
+#[test]
+fn auth_jwks_uses_the_signers_precomputed_structured_key() {
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(42), TotpPolicy::default());
+    store.set_signer(Arc::new(StructuredJwkSigner(PublicJwk {
+        kty: "RSA",
+        alg: "RS256",
+        usage: "sig",
+        kid: "structured".to_owned(),
+        modulus: "AQID".to_owned(),
+        exponent: "AQAB".to_owned(),
+    })));
+    let state = AuthState {
+        store: Arc::new(Mutex::new(store)),
+        clock: Arc::new(Mutex::new(VirtualClock::new(START))),
+        wall_clock: None,
+        totp_extension_enabled: false,
+        barrier: None,
+        events: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
+        control_token: None,
+        registry: None,
+        allow_routed_projects: false,
+        stateless_refresh_tokens: true,
+        app_check: None,
+        app_check_policy: None,
+        tenancy: None,
+    };
+
+    let response = handle(&state, "GET", JWKS_PATHS[0], &json!({}));
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body["keys"][0]["kid"], "structured");
+    assert_eq!(response.body["keys"][0]["n"], "AQID");
 }
 
 impl IdTokenSigner for LockCheckingSigner {
@@ -214,6 +277,21 @@ fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
     ));
     // A third party verifies against the published JWK (n / e round trip).
     let jwk = signer.jwks()["keys"][0].clone();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&signer.public_jwk_json()).unwrap(),
+        jwk
+    );
+    assert_eq!(
+        jwk.as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["alg", "e", "kid", "kty", "n", "use"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
     assert_eq!(jwk["kty"], "RSA");
     assert_eq!(jwk["kid"], signer.kid());
     assert!(jwk["n"].as_str().unwrap().len() > 300);
@@ -243,6 +321,10 @@ fn app_check_operating_system_keys_remain_instance_specific() {
     let first = AppCheckRsaSigner::generate(AppCheckKeySource::OperatingSystem).unwrap();
     let second = AppCheckRsaSigner::generate(AppCheckKeySource::OperatingSystem).unwrap();
     assert_ne!(first.kid(), second.kid());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&first.public_jwk_json()).unwrap(),
+        first.jwks()["keys"][0]
+    );
 }
 
 #[test]

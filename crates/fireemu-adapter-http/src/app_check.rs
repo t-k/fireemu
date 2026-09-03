@@ -249,7 +249,10 @@ pub fn handle_raw(state: &AppCheckState, request: &RawRequest<'_>) -> JsonRespon
 
 /// `GET /v1/jwks`: the public App Check key, and nothing else.
 fn jwks(state: &AppCheckState) -> JsonResponse {
-    let key: Value = serde_json::from_str(&state.signer.public_jwk_json()).unwrap_or(Value::Null);
+    let key = state.signer.public_jwk().map_or_else(
+        || serde_json::from_str(&state.signer.public_jwk_json()).unwrap_or(Value::Null),
+        crate::signing::jwk_value,
+    );
     let keys: Vec<Value> = if key.is_null() { Vec::new() } else { vec![key] };
     JsonResponse {
         status: 200,

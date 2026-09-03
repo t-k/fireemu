@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use fireemu_core_auth::jwt::{base64url_encode, IdTokenSigner};
+use fireemu_core_auth::jwt::{base64url_encode, IdTokenSigner, PublicJwk};
 use rand_core::SeedableRng;
 use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
 use rsa::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _, SecretDocument};
@@ -18,7 +18,7 @@ pub struct RsaSigner {
     signing: SigningKey<Sha256>,
     verifying: VerifyingKey<Sha256>,
     kid: String,
-    jwk: serde_json::Value,
+    jwk: PublicJwk,
 }
 
 impl RsaSigner {
@@ -65,14 +65,14 @@ impl RsaSigner {
             let _ = write!(acc, "{b:02x}");
             acc
         });
-        let jwk = serde_json::json!({
-            "kty": "RSA",
-            "alg": "RS256",
-            "use": "sig",
-            "kid": kid,
-            "n": base64url_encode(&n),
-            "e": base64url_encode(&e),
-        });
+        let jwk = PublicJwk {
+            kty: "RSA",
+            alg: "RS256",
+            usage: "sig",
+            kid: kid.clone(),
+            modulus: base64url_encode(&n),
+            exponent: base64url_encode(&e),
+        };
         let signing = SigningKey::<Sha256>::new(key);
         let verifying = signing.verifying_key();
         Arc::new(Self {
@@ -86,7 +86,7 @@ impl RsaSigner {
     /// The JWKS document (`{"keys": [...]}`).
     #[must_use]
     pub fn jwks(&self) -> serde_json::Value {
-        serde_json::json!({"keys": [self.jwk.clone()]})
+        serde_json::json!({"keys": [jwk_value(&self.jwk)]})
     }
 }
 
@@ -110,7 +110,11 @@ impl IdTokenSigner for RsaSigner {
     }
 
     fn public_jwk_json(&self) -> String {
-        self.jwk.to_string()
+        jwk_value(&self.jwk).to_string()
+    }
+
+    fn public_jwk(&self) -> Option<&PublicJwk> {
+        Some(&self.jwk)
     }
 }
 
@@ -156,7 +160,7 @@ pub struct AppCheckRsaSigner {
     signing: AppCheckPrivateKey,
     verifying: VerifyingKey<Sha256>,
     kid: String,
-    jwk: serde_json::Value,
+    jwk: PublicJwk,
 }
 
 impl std::fmt::Debug for AppCheckRsaSigner {
@@ -194,14 +198,14 @@ impl AppCheckRsaSigner {
         );
         let signing = SigningKey::<Sha256>::new(key);
         let verifying = signing.verifying_key();
-        let jwk = serde_json::json!({
-            "kty": "RSA",
-            "alg": "RS256",
-            "use": "sig",
-            "kid": kid,
-            "n": base64url_encode(&n),
-            "e": base64url_encode(&e),
-        });
+        let jwk = PublicJwk {
+            kty: "RSA",
+            alg: "RS256",
+            usage: "sig",
+            kid: kid.clone(),
+            modulus: base64url_encode(&n),
+            exponent: base64url_encode(&e),
+        };
         Ok(Arc::new(Self {
             signing: AppCheckPrivateKey(signing),
             verifying,
@@ -213,7 +217,7 @@ impl AppCheckRsaSigner {
     /// The JWKS document (`{"keys": [...]}`) served at `/v1/jwks`. Public material only.
     #[must_use]
     pub fn jwks(&self) -> serde_json::Value {
-        serde_json::json!({"keys": [self.jwk.clone()]})
+        serde_json::json!({"keys": [jwk_value(&self.jwk)]})
     }
 }
 
@@ -237,8 +241,23 @@ impl fireemu_core_app_check::crypto::AppCheckSigner for AppCheckRsaSigner {
     }
 
     fn public_jwk_json(&self) -> String {
-        self.jwk.to_string()
+        jwk_value(&self.jwk).to_string()
     }
+
+    fn public_jwk(&self) -> Option<&PublicJwk> {
+        Some(&self.jwk)
+    }
+}
+
+pub(crate) fn jwk_value(jwk: &PublicJwk) -> serde_json::Value {
+    serde_json::json!({
+        "kty": jwk.kty,
+        "alg": jwk.alg,
+        "use": jwk.usage,
+        "kid": jwk.kid,
+        "n": jwk.modulus,
+        "e": jwk.exponent,
+    })
 }
 
 /// 32 bytes from the operating system's entropy source. The daemon refuses to start without

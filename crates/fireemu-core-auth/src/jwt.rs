@@ -179,6 +179,23 @@ impl fmt::Display for JwtError {
 
 impl std::error::Error for JwtError {}
 
+/// Public RSA key fields served by a JWKS endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicJwk {
+    /// Key type (`RSA`).
+    pub kty: &'static str,
+    /// JOSE algorithm (`RS256`).
+    pub alg: &'static str,
+    /// Intended use (`sig`).
+    pub usage: &'static str,
+    /// Key ID.
+    pub kid: String,
+    /// Base64url modulus.
+    pub modulus: String,
+    /// Base64url public exponent.
+    pub exponent: String,
+}
+
 /// Signs and verifies ID tokens (`RS256`); implemented by the runtime shell, which owns the
 /// session key. The core only sees the signing input and the signature bytes.
 pub trait IdTokenSigner: Send + Sync {
@@ -192,6 +209,11 @@ pub trait IdTokenSigner: Send + Sync {
     fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool;
     /// The public key as a JWK (JSON text), for the JWKS endpoint.
     fn public_jwk_json(&self) -> String;
+    /// Cached public-key fields, when the signer exposes a structured representation.
+    #[must_use]
+    fn public_jwk(&self) -> Option<&PublicJwk> {
+        None
+    }
 }
 
 impl fmt::Debug for dyn IdTokenSigner {

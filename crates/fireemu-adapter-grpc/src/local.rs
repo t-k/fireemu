@@ -1282,14 +1282,20 @@ impl LocalBackend {
     /// Rejects document names outside the request's database.
     pub fn check_database(parent: &Parent, name: &str) -> Result<DocumentPath, Status> {
         let path = decode_document_name(name).map_err(status)?;
+        Self::check_database_path(parent, &path)?;
+        Ok(path)
+    }
+
+    fn check_database_path(parent: &Parent, path: &DocumentPath) -> Result<(), Status> {
         if path.project() != &parent.project || path.database() != &parent.database {
+            let name = path.resource_name();
             return Err(Status::invalid_argument(format!(
                 "document {name} does not belong to database projects/{}/databases/{}",
                 parent.project.as_str(),
                 parent.database.as_str()
             )));
         }
-        Ok(path)
+        Ok(())
     }
 
     /// Validates a `read_time` selector: a well-formed, microsecond-precision timestamp that
@@ -1711,7 +1717,7 @@ impl LocalBackend {
             .collect::<Result<Vec<_>, _>>()
             .map_err(status)?;
         for w in &writes {
-            Self::check_database(&parent, &w.op.path().resource_name())?;
+            Self::check_database_path(&parent, w.op.path())?;
         }
         Ok((parent, writes))
     }
@@ -1724,7 +1730,7 @@ impl LocalBackend {
             .writes
             .iter()
             .filter_map(|w| decode_write(w).ok())
-            .filter(|w| Self::check_database(&parent, &w.op.path().resource_name()).is_ok())
+            .filter(|w| Self::check_database_path(&parent, w.op.path()).is_ok())
             .collect();
         Ok((parent, writes))
     }
@@ -2315,7 +2321,7 @@ impl LocalBackend {
             .iter()
             .map(|w| {
                 let write = decode_write(w).map_err(status)?;
-                Self::check_database(&parent, &write.op.path().resource_name())?;
+                Self::check_database_path(&parent, write.op.path())?;
                 Ok(write)
             })
             .collect();

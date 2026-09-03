@@ -7,8 +7,9 @@ use std::sync::Arc;
 use fireemu_core_auth::jwt::{base64url_encode, IdTokenSigner};
 use rand_core::SeedableRng;
 use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
+use rsa::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _, SecretDocument};
 use rsa::signature::{Keypair, SignatureEncoding, Signer, Verifier};
-use rsa::traits::PublicKeyParts;
+use rsa::traits::{PrivateKeyParts as _, PublicKeyParts};
 use rsa::RsaPrivateKey;
 use sha2::{Digest, Sha256};
 
@@ -17,8 +18,7 @@ pub struct RsaSigner {
     signing: SigningKey<Sha256>,
     verifying: VerifyingKey<Sha256>,
     kid: String,
-    n: Vec<u8>,
-    e: Vec<u8>,
+    jwk: serde_json::Value,
 }
 
 impl RsaSigner {
@@ -27,6 +27,36 @@ impl RsaSigner {
     pub fn from_seed(seed: u64) -> Result<Arc<Self>, String> {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(seed);
         let key = RsaPrivateKey::new(&mut rng, 2048).map_err(|e| format!("RSA key: {e}"))?;
+        Ok(Self::from_private_key(key))
+    }
+
+    /// Restores a deterministic session key from validated PKCS#8 DER cache material.
+    ///
+    /// The caller must keep the bytes owner-only and clear them after use. App Check keys never
+    /// use this path.
+    pub fn from_pkcs8_der(der: &[u8]) -> Result<Arc<Self>, String> {
+        let key = RsaPrivateKey::from_pkcs8_der(der).map_err(|_| "invalid RSA key".to_owned())?;
+        key.validate().map_err(|_| "invalid RSA key".to_owned())?;
+        if key.n().bits() != 2048
+            || key.e() != &rsa::BigUint::from(65_537_u32)
+            || key.primes().len() != 2
+        {
+            return Err("invalid RSA key parameters".to_owned());
+        }
+        Ok(Self::from_private_key(key))
+    }
+
+    /// Serialises the session key for the owner-only cache.
+    ///
+    /// The returned document zeroizes its secret bytes when dropped. It must never be logged,
+    /// exported, or committed. App Check keys deliberately expose no equivalent method.
+    pub fn to_pkcs8_der(&self) -> Result<SecretDocument, String> {
+        self.signing
+            .to_pkcs8_der()
+            .map_err(|_| "cannot encode RSA key".to_owned())
+    }
+
+    fn from_private_key(key: RsaPrivateKey) -> Arc<Self> {
         let n = key.n().to_bytes_be();
         let e = key.e().to_bytes_be();
         let digest = Sha256::digest(&n);
@@ -35,23 +65,28 @@ impl RsaSigner {
             let _ = write!(acc, "{b:02x}");
             acc
         });
+        let jwk = serde_json::json!({
+            "kty": "RSA",
+            "alg": "RS256",
+            "use": "sig",
+            "kid": kid,
+            "n": base64url_encode(&n),
+            "e": base64url_encode(&e),
+        });
         let signing = SigningKey::<Sha256>::new(key);
         let verifying = signing.verifying_key();
-        Ok(Arc::new(Self {
+        Arc::new(Self {
             signing,
             verifying,
             kid,
-            n,
-            e,
-        }))
+            jwk,
+        })
     }
 
     /// The JWKS document (`{"keys": [...]}`).
     #[must_use]
     pub fn jwks(&self) -> serde_json::Value {
-        let key: serde_json::Value =
-            serde_json::from_str(&self.public_jwk_json()).unwrap_or_default();
-        serde_json::json!({"keys": [key]})
+        serde_json::json!({"keys": [self.jwk.clone()]})
     }
 }
 
@@ -75,15 +110,7 @@ impl IdTokenSigner for RsaSigner {
     }
 
     fn public_jwk_json(&self) -> String {
-        serde_json::json!({
-            "kty": "RSA",
-            "alg": "RS256",
-            "use": "sig",
-            "kid": self.kid,
-            "n": base64url_encode(&self.n),
-            "e": base64url_encode(&self.e),
-        })
-        .to_string()
+        self.jwk.to_string()
     }
 }
 
@@ -129,8 +156,7 @@ pub struct AppCheckRsaSigner {
     signing: AppCheckPrivateKey,
     verifying: VerifyingKey<Sha256>,
     kid: String,
-    n: Vec<u8>,
-    e: Vec<u8>,
+    jwk: serde_json::Value,
 }
 
 impl std::fmt::Debug for AppCheckRsaSigner {
@@ -168,22 +194,26 @@ impl AppCheckRsaSigner {
         );
         let signing = SigningKey::<Sha256>::new(key);
         let verifying = signing.verifying_key();
+        let jwk = serde_json::json!({
+            "kty": "RSA",
+            "alg": "RS256",
+            "use": "sig",
+            "kid": kid,
+            "n": base64url_encode(&n),
+            "e": base64url_encode(&e),
+        });
         Ok(Arc::new(Self {
             signing: AppCheckPrivateKey(signing),
             verifying,
             kid,
-            n,
-            e,
+            jwk,
         }))
     }
 
     /// The JWKS document (`{"keys": [...]}`) served at `/v1/jwks`. Public material only.
     #[must_use]
     pub fn jwks(&self) -> serde_json::Value {
-        use fireemu_core_app_check::crypto::AppCheckSigner as _;
-        let key: serde_json::Value =
-            serde_json::from_str(&self.public_jwk_json()).unwrap_or_default();
-        serde_json::json!({"keys": [key]})
+        serde_json::json!({"keys": [self.jwk.clone()]})
     }
 }
 
@@ -207,15 +237,7 @@ impl fireemu_core_app_check::crypto::AppCheckSigner for AppCheckRsaSigner {
     }
 
     fn public_jwk_json(&self) -> String {
-        serde_json::json!({
-            "kty": "RSA",
-            "alg": "RS256",
-            "use": "sig",
-            "kid": self.kid,
-            "n": base64url_encode(&self.n),
-            "e": base64url_encode(&self.e),
-        })
-        .to_string()
+        self.jwk.to_string()
     }
 }
 

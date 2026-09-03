@@ -40,6 +40,10 @@ http-body-util = "0.1"
 bytes = "1"
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
+zeroize = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+exacl = "0.13"
 
 [lints]
 workspace = true

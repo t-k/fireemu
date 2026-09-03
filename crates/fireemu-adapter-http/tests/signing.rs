@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{handle, AuthState, JWKS_PATHS};
-use fireemu_adapter_http::signing::RsaSigner;
+use fireemu_adapter_http::signing::{AppCheckKeySource, AppCheckRsaSigner, RsaSigner};
 use fireemu_core_auth::jwt::{
     decode_token, encode_unsigned, encode_with, verify_id_token, IdTokenSigner, JwtError,
 };
@@ -95,6 +95,31 @@ fn session_rsa_tokens_round_trip_and_forgeries_are_refused() {
     assert_eq!(jwk["kid"], signer.kid());
     assert!(jwk["n"].as_str().unwrap().len() > 300);
     assert_eq!(jwk["e"], "AQAB");
+}
+
+#[test]
+fn session_rsa_cache_material_round_trips_and_rejects_wrong_key_parameters() {
+    use rand_core::SeedableRng as _;
+    use rsa::pkcs8::EncodePrivateKey as _;
+
+    let signer = RsaSigner::from_seed(71).unwrap();
+    let document = signer.to_pkcs8_der().unwrap();
+    let restored = RsaSigner::from_pkcs8_der(document.as_bytes()).unwrap();
+    assert_eq!(restored.kid(), signer.kid());
+
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(71);
+    let weak = rsa::RsaPrivateKey::new(&mut rng, 1024).unwrap();
+    let weak = weak.to_pkcs8_der().unwrap();
+    assert!(RsaSigner::from_pkcs8_der(weak.as_bytes()).is_err());
+}
+
+#[test]
+fn app_check_operating_system_keys_remain_instance_specific() {
+    use fireemu_core_app_check::crypto::AppCheckSigner as _;
+
+    let first = AppCheckRsaSigner::generate(AppCheckKeySource::OperatingSystem).unwrap();
+    let second = AppCheckRsaSigner::generate(AppCheckKeySource::OperatingSystem).unwrap();
+    assert_ne!(first.kid(), second.kid());
 }
 
 #[test]

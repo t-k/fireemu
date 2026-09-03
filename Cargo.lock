@@ -493,6 +493,7 @@ name = "fireemu"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "exacl",
  "fireemu-adapter-functions",
  "fireemu-adapter-grpc",
  "fireemu-adapter-http",
@@ -519,6 +520,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

@@ -43,6 +43,7 @@ mod functions;
 mod hub;
 mod import_export;
 mod init;
+mod session_rsa_cache;
 mod sessions;
 mod snapshots;
 mod ui;
@@ -163,6 +164,32 @@ impl Verbosity {
             "debug" => Some(Self::Debug),
             _ => None,
         }
+    }
+}
+
+struct RedactedRuntimeConfig<'a>(&'a RuntimeConfig);
+
+impl std::fmt::Debug for RedactedRuntimeConfig<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let config = self.0;
+        formatter
+            .debug_struct("RuntimeConfig")
+            .field("profile", &config.profile)
+            .field("edition", &config.edition)
+            .field("api_mode", &config.api_mode)
+            .field("index_policy", &config.index_policy)
+            .field("enforce_limits", &config.enforce_limits)
+            .field("token_acceptance", &config.token_acceptance)
+            .field("require_demo_prefix", &config.require_demo_prefix)
+            .field("clock_start_pinned", &config.clock_start_pinned)
+            .field("seed", &"[redacted]")
+            .field("auth_project", &"[redacted]")
+            .field("id_token_signing", &config.id_token_signing)
+            .field("rules_enforced", &config.rules_enforced)
+            .field("app_check_enabled", &config.app_check.enabled)
+            .field("app_check_apps", &config.app_check.apps.len())
+            .field("functions_codebases", &config.functions_codebases.len())
+            .finish()
     }
 }
 
@@ -1947,14 +1974,15 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // wanted they are generated concurrently on blocking tasks. They are always separate
         // keys: the Auth key is derived from the session seed, the App Check key is drawn from
         // the operating system CSPRNG once per daemon instance (spec 7.2).
-        let want_auth_key = cfg.id_token_signing == fireemu_core_auth::jwt::SigningMode::SessionRsa;
+        let want_auth_key = only.uses_auth_identity()
+            && cfg.id_token_signing == fireemu_core_auth::jwt::SigningMode::SessionRsa;
         let want_app_check = only.app_check_available(&cfg.app_check);
         if (want_auth_key || want_app_check) && !quiet {
             println!("  generating the RSA signing keys ...");
         }
         let auth_key = want_auth_key.then(|| {
             let seed = cfg.seed ^ 0x2256;
-            tokio::task::spawn_blocking(move || fireemu_adapter_http::signing::RsaSigner::from_seed(seed))
+            tokio::task::spawn_blocking(move || session_rsa_cache::load_or_generate(seed))
         });
         let app_check_key = want_app_check.then(|| {
             tokio::task::spawn_blocking(|| {
@@ -2340,7 +2368,7 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 println!("  functions loaded: {}", names.join(", "));
             }
             if verbosity == Verbosity::Debug {
-                println!("  resolved config:  {cfg:?}");
+                println!("  resolved config:  {:?}", RedactedRuntimeConfig(&cfg));
                 println!("  selection:        {only:?}");
             }
         }

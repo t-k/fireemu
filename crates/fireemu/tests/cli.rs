@@ -455,6 +455,59 @@ fn log_verbosity_decides_whether_the_banner_is_printed() {
 }
 
 #[test]
+fn debug_logging_redacts_seed_project_and_app_check_digests() {
+    let dir = scratch("debug-redaction");
+    let config = write(
+        &dir,
+        "fireemu.json",
+        r#"{
+  "schemaVersion": 1,
+  "daemon": {"seed": 918273645, "authProject": "demo-sensitive-project"},
+  "appCheck": {
+    "enabled": true,
+    "apps": [{
+      "projectId": "demo-sensitive-project",
+      "projectNumber": "1234567890",
+      "appId": "1:1234567890:web:redaction",
+      "debugTokenSha256": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    }]
+  }
+}"#,
+    );
+    let output = exec_with(
+        &[
+            "--config",
+            config.to_str().unwrap(),
+            "--only",
+            "auth",
+            "--log-verbosity",
+            "debug",
+        ],
+        &["true"],
+    );
+    let logs = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(output.status.success(), "{logs}");
+    for sensitive in [
+        "918273645",
+        "demo-sensitive-project",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        assert!(
+            !logs.contains(sensitive),
+            "debug logs exposed {sensitive}: {logs}"
+        );
+    }
+    assert!(logs.contains("resolved config:"));
+    assert!(logs.contains("[redacted]"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn inspect_functions_passes_the_node_inspector_through_to_the_runner() {
     let dir = scratch("inspect");
     // With no codebase there is no runner to start, so the flag only has to be accepted.

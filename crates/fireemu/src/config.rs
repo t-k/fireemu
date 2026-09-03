@@ -601,6 +601,15 @@ impl Selection {
         cfg.enabled && (self.appcheck || self.functions)
     }
 
+    /// Whether a selected surface can consume a Firebase Auth identity.
+    ///
+    /// Firestore and Storage rules inspect Auth tokens, while callable Functions verify them
+    /// before invocation. App Check and Pub/Sub alone do not need an Auth signing key.
+    #[must_use]
+    pub const fn uses_auth_identity(&self) -> bool {
+        self.auth || self.firestore || self.storage || self.functions
+    }
+
     /// The effective baseline mode of one product: a configured mode applies only while App
     /// Check is available and the product itself is selected. Everything else is `off`.
     #[must_use]
@@ -2337,6 +2346,22 @@ mod tests {
         assert!(all.appcheck);
         assert!(Selection::parse("appcheck").unwrap().appcheck);
         assert!(!Selection::parse("auth").unwrap().appcheck);
+    }
+
+    #[test]
+    fn every_surface_that_consumes_auth_identity_requires_the_configured_signer() {
+        for service in ["auth", "firestore", "storage", "functions"] {
+            assert!(
+                Selection::parse(service).unwrap().uses_auth_identity(),
+                "{service} consumes Firebase Auth identities"
+            );
+        }
+        for service in ["appcheck", "pubsub"] {
+            assert!(
+                !Selection::parse(service).unwrap().uses_auth_identity(),
+                "{service} alone does not consume Firebase Auth identities"
+            );
+        }
     }
 
     #[test]

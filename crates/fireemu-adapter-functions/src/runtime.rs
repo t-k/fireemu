@@ -884,7 +884,7 @@ impl FunctionsRuntime {
         };
         let mut enqueued = false;
         for change in commit.changes.iter() {
-            let Some(kind) = change_kind(change.before.as_ref(), change.after.as_ref()) else {
+            let Some(kind) = change_kind(change.before.as_deref(), change.after.as_deref()) else {
                 continue;
             };
             let relative = change.path.relative();
@@ -922,8 +922,8 @@ impl FunctionsRuntime {
                     &self.config.location,
                     &relative,
                     reported,
-                    change.before.as_ref(),
-                    change.after.as_ref(),
+                    change.before.as_deref(),
+                    change.after.as_deref(),
                     time,
                     with_auth.then_some((
                         commit.actor.auth_type.as_str(),

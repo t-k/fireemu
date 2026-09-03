@@ -191,7 +191,7 @@ async fn events_are_dispatched_and_retried_in_virtual_time() {
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/a", 1).path,
         before: None,
-        after: Some(doc("items/a", 1)),
+        after: Some(doc("items/a", 1).into()),
     }]));
     assert!(!runtime.is_idle());
     // `fail` retries: the session stays busy until virtual time releases the retry.
@@ -222,7 +222,7 @@ async fn events_are_dispatched_and_retried_in_virtual_time() {
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("other/x", 1).path,
         before: None,
-        after: Some(doc("other/x", 1)),
+        after: Some(doc("other/x", 1).into()),
     }]));
     assert!(runtime.is_idle());
     // Schedules: the retries advanced 3 minutes; 12 more make 15, i.e. three "every 5
@@ -282,8 +282,8 @@ async fn reset_discards_in_flight_work() {
     let (runtime, _clock) = start().await;
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/b", 1).path,
-        before: Some(doc("items/b", 0)),
-        after: Some(doc("items/b", 1)),
+        before: Some(doc("items/b", 0).into()),
+        after: Some(doc("items/b", 1).into()),
     }]));
     // `fail` (written) will be retry-waiting; a reset drops it, kills the runner and
     // restarts it, after which dispatch resumes.
@@ -302,7 +302,7 @@ async fn reset_discards_in_flight_work() {
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/c", 1).path,
         before: None,
-        after: Some(doc("items/c", 1)),
+        after: Some(doc("items/c", 1).into()),
     }]));
     let _ = runtime.await_idle(Duration::from_secs(5)).await;
     assert!(runtime
@@ -861,7 +861,7 @@ async fn with_auth_context_triggers_see_the_committing_principal() {
     let mut ev = commit(vec![DocumentChange {
         path: doc("audited/a", 1).path,
         before: None,
-        after: Some(doc("audited/a", 1)),
+        after: Some(doc("audited/a", 1).into()),
     }]);
     ev.actor = fireemu_adapter_grpc::local::Actor {
         auth_type: "app_user".into(),
@@ -987,7 +987,7 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("audited/c", 1).path,
         before: None,
-        after: Some(doc("audited/c", 1)),
+        after: Some(doc("audited/c", 1).into()),
     }]));
     assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
     assert!(runtime
@@ -1213,7 +1213,7 @@ async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/a", 1).path,
         before: None,
-        after: Some(doc("items/a", 1)),
+        after: Some(doc("items/a", 1).into()),
     }]));
     for _ in 0..100 {
         if runtime
@@ -1281,7 +1281,7 @@ async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/z", 1).path,
         before: None,
-        after: Some(doc("items/z", 1)),
+        after: Some(doc("items/z", 1).into()),
     }]));
     let _ = runtime.await_idle(Duration::from_secs(5)).await;
     assert!(

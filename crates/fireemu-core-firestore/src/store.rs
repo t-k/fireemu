@@ -80,6 +80,12 @@ pub struct Document {
     pub version: CommitVersion,
 }
 
+/// Immutable document allocation shared by MVCC history and commit-event consumers.
+pub type SharedDocument = Arc<Document>;
+
+type DocumentHistory = BTreeMap<DocumentPath, Vec<(CommitVersion, Option<SharedDocument>)>>;
+type StagedChange = (DocumentPath, Option<SharedDocument>, Option<SharedDocument>);
+
 /// One name-ordered `ListDocuments` entry when `show_missing` is enabled.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListedDocument {
@@ -216,9 +222,9 @@ pub struct DocumentChange {
     /// Path.
     pub path: DocumentPath,
     /// The document before the commit (`None` = absent).
-    pub before: Option<Document>,
+    pub before: Option<SharedDocument>,
     /// The document after the commit (`None` = deleted).
-    pub after: Option<Document>,
+    pub after: Option<SharedDocument>,
 }
 
 /// Commit result.
@@ -235,8 +241,8 @@ pub struct CommitResult {
 }
 
 struct StagedDocument {
-    before: Option<Document>,
-    current: Option<Document>,
+    before: Option<SharedDocument>,
+    current: Option<SharedDocument>,
     changed: bool,
 }
 
@@ -526,7 +532,7 @@ impl ListingTrie {
 #[derive(Debug, Clone)]
 pub struct FirestoreState {
     /// Version history per path; `None` entries are tombstones.
-    history: BTreeMap<DocumentPath, Vec<(CommitVersion, Option<Document>)>>,
+    history: DocumentHistory,
     /// Retained paths grouped by their exact parent and innermost collection.
     direct_collection_paths: DirectCollectionPaths,
     /// Live paths grouped by their exact parent and innermost collection.
@@ -958,7 +964,7 @@ impl FirestoreState {
         self.history
             .get(path)
             .and_then(|h| h.last())
-            .and_then(|(_, d)| d.as_ref())
+            .and_then(|(_, d)| d.as_deref())
     }
 
     /// Document as of `version`.
@@ -969,7 +975,7 @@ impl FirestoreState {
             .iter()
             .rev()
             .find(|(v, _)| *v <= version)
-            .and_then(|(_, d)| d.as_ref())
+            .and_then(|(_, d)| d.as_deref())
     }
 
     fn insert_scope_path(&mut self, path: &DocumentPath) {
@@ -1045,7 +1051,7 @@ impl FirestoreState {
     }
 
     fn rebuild_scope_paths(
-        history: &BTreeMap<DocumentPath, Vec<(CommitVersion, Option<Document>)>>,
+        history: &DocumentHistory,
     ) -> (
         DirectCollectionPaths,
         CollectionGroupPaths,
@@ -1199,6 +1205,9 @@ impl FirestoreState {
         self.history
             .into_values()
             .filter_map(|versions| versions.into_iter().next_back()?.1)
+            .map(|document| {
+                Arc::try_unwrap(document).unwrap_or_else(|shared| shared.as_ref().clone())
+            })
             .collect()
     }
 
@@ -1318,7 +1327,11 @@ impl FirestoreState {
         self.commit_times.push_back((next_version, commit_time));
         let mut changes = Vec::with_capacity(staged.len());
         for (path, document) in staged {
-            let before = self.get(&path).cloned();
+            let before = self
+                .history
+                .get(&path)
+                .and_then(|versions| versions.last())
+                .and_then(|(_, document)| document.clone());
             let became_live = before.is_none();
             // A second version is something a later compaction can drop, exactly as after a
             // normal commit.
@@ -1329,10 +1342,11 @@ impl FirestoreState {
             if became_live {
                 self.insert_live_scope_path(&path);
             }
+            let document = Arc::new(document);
             changes.push(DocumentChange {
                 path: path.clone(),
                 before,
-                after: Some(document.clone()),
+                after: Some(Arc::clone(&document)),
             });
             self.history
                 .entry(path.clone())
@@ -1983,7 +1997,11 @@ impl FirestoreState {
         for write in writes {
             let path = write.op.path().clone();
             if !staged.contains_key(&path) {
-                let before = self.get(&path).cloned();
+                let before = self
+                    .history
+                    .get(&path)
+                    .and_then(|versions| versions.last())
+                    .and_then(|(_, document)| document.clone());
                 staged.insert(
                     path.clone(),
                     StagedDocument {
@@ -1994,7 +2012,7 @@ impl FirestoreState {
                 );
             }
             let stage = staged.get_mut(&path).unwrap_or_else(|| unreachable!());
-            let current = stage.current.as_ref();
+            let current = stage.current.as_deref();
             check_precondition(write.precondition.as_ref(), current, &path)?;
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(doc) = &next {
@@ -2016,14 +2034,14 @@ impl FirestoreState {
                     result.update_time = Some(c.update_time);
                 }
             } else {
-                stage.current = next;
+                stage.current = next.map(Arc::new);
                 stage.changed = true;
             }
             results.push(result);
         }
 
         // Publish.
-        let changed: Vec<(DocumentPath, Option<Document>, Option<Document>)> = staged
+        let changed: Vec<StagedChange> = staged
             .into_iter()
             .filter(|(_, staged)| staged.changed)
             .map(|(path, staged)| (path, staged.before, staged.current))
@@ -2859,9 +2877,11 @@ fn apply_write(
         } => {
             let create_time = current.as_ref().map_or(now, |d| d.create_time);
             let mut next_fields = match (update_mask, current) {
-                (None, _) => fields.clone(),
+                (None, _) => clone_field_tree(fields),
                 (Some(mask), current) => {
-                    let mut base = current.map(|d| d.fields.clone()).unwrap_or_default();
+                    let mut base = current
+                        .map(|d| clone_field_tree(&d.fields))
+                        .unwrap_or_default();
                     for p in mask {
                         match get_field(fields, p) {
                             Some(v) => set_field(&mut base, p, v.clone()),
@@ -2892,6 +2912,22 @@ fn apply_write(
             ))
         }
     }
+}
+
+fn clone_field_tree(fields: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+    #[cfg(test)]
+    FIELD_TREE_CLONES.with(|count| count.set(count.get().saturating_add(1)));
+    fields.clone()
+}
+
+#[cfg(test)]
+thread_local! {
+    static FIELD_TREE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn take_field_tree_clone_count() -> usize {
+    FIELD_TREE_CLONES.with(std::cell::Cell::take)
 }
 
 fn select_from<'a, I, F>(
@@ -3794,5 +3830,45 @@ mod scope_index_tests {
 
         assert_eq!(documents.len(), 1);
         assert_eq!(before, after, "the owned field allocation is moved");
+    }
+
+    #[test]
+    fn commit_change_and_history_share_the_updated_document_allocation() {
+        let path = path("items/large");
+        let mut state = FirestoreState::new();
+        state
+            .commit(&[set("items/large")], None, LogicalInstant::UNIX_EPOCH)
+            .expect("create document");
+        take_field_tree_clone_count();
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "payload".to_owned(),
+            Value::String("x".repeat(1024 * 1024 - 1024)),
+        );
+        let result = state
+            .commit(
+                &[Write {
+                    op: WriteOp::Set {
+                        path: path.clone(),
+                        fields,
+                        update_mask: None,
+                    },
+                    precondition: None,
+                    transforms: Vec::new(),
+                }],
+                None,
+                LogicalInstant::from_unix_seconds(1),
+            )
+            .expect("update document");
+
+        let changed = result.changes[0].after.as_ref().expect("after image");
+        let stored = state
+            .history
+            .get(&path)
+            .and_then(|versions| versions.last())
+            .and_then(|(_, document)| document.as_ref())
+            .expect("stored document");
+        assert!(take_field_tree_clone_count() <= 2);
+        assert!(Arc::ptr_eq(changed, stored));
     }
 }

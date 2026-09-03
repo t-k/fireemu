@@ -18,3 +18,7 @@ proptest.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "commit_batch"
+harness = false

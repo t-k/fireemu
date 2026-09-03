@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::jwt::{encode_unsigned, verify_id_token_decoded, JwtError};
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser, TenantMetadataPatch};
+use fireemu_core_auth::store::{
+    AuthRegistry, AuthStore, NewUser, TenantMetadata, TenantMetadataPatch,
+};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 
@@ -64,6 +66,33 @@ fn tenant_ids_cannot_contain_export_path_separators() {
         .ensure_tenant("demo-app", "forward/slash")
         .is_none());
     assert!(registry.ensure_tenant("demo-app", "back\\slash").is_none());
+}
+
+#[test]
+fn implicitly_created_tenants_enable_each_supported_sign_in_policy_by_default() {
+    let default = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = AuthRegistry::new("demo-app", default);
+
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+
+    let metadata = registry.tenant_metadata("demo-app", "customer").unwrap();
+    assert!(metadata.allow_password_signup);
+    assert!(metadata.enable_email_link_signin);
+    assert!(metadata.enable_anonymous_user);
+}
+
+#[test]
+fn rejected_tenant_creation_does_not_consume_the_next_generated_id() {
+    let default = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = AuthRegistry::new("demo-app", default);
+
+    assert!(registry
+        .create_tenant("unknown-project", TenantMetadata::default())
+        .is_none());
+    assert_eq!(
+        registry.create_tenant("demo-app", TenantMetadata::default()),
+        Some("fireemu-00000000000000000001".to_owned())
+    );
 }
 
 #[test]

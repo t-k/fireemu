@@ -1449,22 +1449,35 @@ fn tenant_authentication_flags_are_enforced() {
 
     let mut s = state();
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
-    registry.ensure_tenant("demo-app", "restricted").unwrap();
-    assert!(registry.update_tenant("demo-app", "restricted", TenantMetadata::default(),));
+    let tenant = registry
+        .create_tenant("demo-app", TenantMetadata::default())
+        .unwrap();
     s.registry = Some(registry.clone());
 
     for body in [
-        json!({"tenantId": "restricted", "email": "a@example.com", "password": "hunter22"}),
-        json!({"tenantId": "restricted"}),
+        json!({"tenantId": tenant, "email": "a@example.com", "password": "hunter22"}),
+        json!({"tenantId": tenant}),
     ] {
         let (status, refused) = post(&s, &format!("{V1}/accounts:signUp"), &body);
         assert_eq!(status, 400, "{refused}");
         assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
     }
 
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({
+            "tenantId": tenant,
+            "email": "link@example.com",
+            "oobCode": "missing-code"
+        }),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "OPERATION_NOT_ALLOWED");
+
     assert!(registry.update_tenant(
         "demo-app",
-        "restricted",
+        &tenant,
         TenantMetadata {
             allow_password_signup: true,
             enable_email_link_signin: true,
@@ -1475,13 +1488,13 @@ fn tenant_authentication_flags_are_enforced() {
     let (status, created) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
-        &json!({"tenantId": "restricted", "email": "a@example.com", "password": "hunter22"}),
+        &json!({"tenantId": tenant, "email": "a@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 200, "{created}");
     let refresh_token = created["refreshToken"].as_str().unwrap().to_owned();
     assert!(registry.update_tenant(
         "demo-app",
-        "restricted",
+        &tenant,
         TenantMetadata {
             allow_password_signup: true,
             enable_email_link_signin: true,
@@ -1493,7 +1506,7 @@ fn tenant_authentication_flags_are_enforced() {
     let (status, refused) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
-        &json!({"tenantId": "restricted", "email": "a@example.com", "password": "hunter22"}),
+        &json!({"tenantId": tenant, "email": "a@example.com", "password": "hunter22"}),
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");
@@ -1505,6 +1518,46 @@ fn tenant_authentication_flags_are_enforced() {
     );
     assert_eq!(status, 400, "{refused}");
     assert_eq!(refused["error"]["message"], "PROJECT_DISABLED");
+}
+
+#[test]
+fn implicit_tenant_defaults_admit_password_anonymous_and_email_link_flows() {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "customer").unwrap();
+    s.registry = Some(registry);
+
+    let (status, password) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({
+            "tenantId": "customer",
+            "email": "password@example.com",
+            "password": "hunter22"
+        }),
+    );
+    assert_eq!(status, 200, "{password}");
+
+    let (status, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "customer"}),
+    );
+    assert_eq!(status, 200, "{anonymous}");
+
+    let (status, email_link) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({
+            "tenantId": "customer",
+            "email": "link@example.com",
+            "oobCode": "missing-code"
+        }),
+    );
+    assert_eq!(status, 400, "{email_link}");
+    assert_eq!(email_link["error"]["message"], "INVALID_OOB_CODE");
 }
 
 #[test]

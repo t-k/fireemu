@@ -2999,6 +2999,56 @@ impl AuthRegistry {
             .cloned()
     }
 
+    fn existing_tenant_with_metadata(&self, key: &TenantKey) -> Option<Arc<Mutex<AuthStore>>> {
+        let tenants = self.tenants.lock().ok()?;
+        let metadata = self.tenant_metadata.lock().ok()?;
+        metadata
+            .contains_key(key)
+            .then(|| tenants.get(key).cloned())
+            .flatten()
+    }
+
+    fn build_tenant_store(&self, project: &str, tenant: &str) -> Option<Arc<Mutex<AuthStore>>> {
+        let parent = self.store_for(project)?;
+        let (policy, config, signer) = {
+            let parent = parent.lock().ok()?;
+            (*parent.policy(), parent.config(), parent.signer_arc())
+        };
+        let seed = project
+            .bytes()
+            .chain(tenant.bytes())
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
+            });
+        let mut store = AuthStore::new_tenant(project, tenant, SplitMix64::new(seed), policy);
+        store.set_config(config);
+        if let Some(signer) = signer {
+            store.set_signer(signer);
+        }
+        Some(Arc::new(Mutex::new(store)))
+    }
+
+    fn publish_tenant(
+        &self,
+        key: TenantKey,
+        store: Arc<Mutex<AuthStore>>,
+        metadata: TenantMetadata,
+        select_existing: bool,
+    ) -> Option<Arc<Mutex<AuthStore>>> {
+        // Tenant authentication reads stores before metadata, so lifecycle writes retain both
+        // locks in that same order and never expose a namespace without its final policy.
+        let mut tenants = self.tenants.lock().ok()?;
+        let mut tenant_metadata = self.tenant_metadata.lock().ok()?;
+        if let Some(existing) = tenants.get(&key) {
+            return (select_existing && tenant_metadata.contains_key(&key))
+                .then(|| existing.clone());
+        }
+        tenant_metadata.insert(key.clone(), metadata);
+        tenants.insert(key, store.clone());
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Some(store)
+    }
+
     /// Per-namespace gate used while a blocking function runs without the store lock.
     #[must_use]
     pub fn operation_gate(&self, project: &str, tenant: Option<&str>) -> Arc<Mutex<()>> {
@@ -3022,45 +3072,22 @@ impl AuthRegistry {
         if tenant.is_empty() || tenant.contains(['/', '\\']) {
             return None;
         }
-        if let Some(store) = self.tenant_store(project, tenant) {
+        let key = (project.to_owned(), tenant.to_owned());
+        if let Some(store) = self.existing_tenant_with_metadata(&key) {
             return Some(store);
         }
-        let parent = self.store_for(project)?;
-        let (policy, config, signer) = {
-            let parent = parent.lock().ok()?;
-            (*parent.policy(), parent.config(), parent.signer_arc())
-        };
-        let seed = project
-            .bytes()
-            .chain(tenant.bytes())
-            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-                hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(byte)
-            });
-        let mut store = AuthStore::new_tenant(project, tenant, SplitMix64::new(seed), policy);
-        store.set_config(config);
-        if let Some(signer) = signer {
-            store.set_signer(signer);
-        }
-        let store = Arc::new(Mutex::new(store));
-        let mut tenants = self.tenants.lock().ok()?;
-        let key = (project.to_owned(), tenant.to_owned());
-        let inserted = !tenants.contains_key(&key);
-        let selected = tenants.entry(key).or_insert_with(|| store.clone()).clone();
-        drop(tenants);
-        if inserted {
-            self.membership_generation.fetch_add(1, Ordering::Release);
-        }
-        if let Ok(mut metadata) = self.tenant_metadata.lock() {
-            metadata
-                .entry((project.to_owned(), tenant.to_owned()))
-                .or_insert_with(|| TenantMetadata {
-                    allow_password_signup: true,
-                    enable_email_link_signin: true,
-                    enable_anonymous_user: true,
-                    ..TenantMetadata::default()
-                });
-        }
-        Some(selected)
+        let store = self.build_tenant_store(project, tenant)?;
+        self.publish_tenant(
+            key,
+            store,
+            TenantMetadata {
+                allow_password_signup: true,
+                enable_email_link_signin: true,
+                enable_anonymous_user: true,
+                ..TenantMetadata::default()
+            },
+            true,
+        )
     }
 
     /// Creates an explicitly configured tenant and returns its generated ID.
@@ -3068,11 +3095,8 @@ impl AuthRegistry {
         self.store_for(project)?;
         let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
         let tenant = format!("fireemu-{sequence:020}");
-        self.ensure_tenant(project, &tenant)?;
-        self.tenant_metadata
-            .lock()
-            .ok()?
-            .insert((project.to_owned(), tenant.clone()), metadata);
+        let store = self.build_tenant_store(project, &tenant)?;
+        self.publish_tenant((project.to_owned(), tenant.clone()), store, metadata, false)?;
         Some(tenant)
     }
 
@@ -3189,21 +3213,19 @@ impl AuthRegistry {
     /// Deletes a tenant namespace and its metadata.
     pub fn delete_tenant(&self, project: &str, tenant: &str) -> bool {
         let key = (project.to_owned(), tenant.to_owned());
-        let removed = self
-            .tenants
-            .lock()
-            .ok()
-            .is_some_and(|mut stores| stores.remove(&key).is_some());
-        if let Ok(mut metadata) = self.tenant_metadata.lock() {
+        let removed = self.tenants.lock().ok().and_then(|mut stores| {
+            let mut metadata = self.tenant_metadata.lock().ok()?;
+            let removed = stores.remove(&key).is_some();
             metadata.remove(&key);
-        }
+            Some(removed)
+        });
         if let Ok(mut gates) = self.operation_gates.lock() {
             gates.remove(&key);
         }
-        if removed {
+        if removed == Some(true) {
             self.membership_generation.fetch_add(1, Ordering::Release);
         }
-        removed
+        removed.unwrap_or(false)
     }
 
     /// The first store (the default first, then the registered ones in name order) that
@@ -3533,7 +3555,7 @@ mod snapshot_cow_tests {
 mod compatibility_routing_tests {
     use super::{
         AuthRegistry, AuthStore, CompatibilityUserStoreMatch, NewUser, RefreshTokenStoreMatch,
-        RoutedStoreInstall,
+        RoutedStoreInstall, TenantMetadata,
     };
     use crate::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
@@ -3673,6 +3695,104 @@ mod compatibility_routing_tests {
             result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             CompatibilityUserStoreMatch::NotFound
         ));
+    }
+
+    #[test]
+    fn restrictive_tenant_creation_never_publishes_a_store_before_its_policy() {
+        let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+        let metadata_guard = registry.tenant_metadata.lock().unwrap();
+        let creator_registry = registry.clone();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let creator = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            creator_registry.create_tenant(
+                "demo-app",
+                TenantMetadata {
+                    allow_password_signup: false,
+                    enable_email_link_signin: false,
+                    enable_anonymous_user: false,
+                    disable_auth: true,
+                    ..TenantMetadata::default()
+                },
+            )
+        });
+        started_rx.recv().unwrap();
+
+        let key = (
+            "demo-app".to_owned(),
+            "fireemu-00000000000000000001".to_owned(),
+        );
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let mut reached_publication = false;
+        let published_without_policy = loop {
+            match registry.tenants.try_lock() {
+                Ok(stores) if stores.contains_key(&key) => {
+                    reached_publication = true;
+                    break true;
+                }
+                Ok(stores) => drop(stores),
+                Err(TryLockError::WouldBlock) => reached_publication = true,
+                Err(TryLockError::Poisoned(_)) => panic!("tenant registry was poisoned"),
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::yield_now();
+        };
+
+        drop(metadata_guard);
+        let tenant = creator.join().unwrap().unwrap();
+        assert_eq!(tenant, key.1);
+        assert!(
+            reached_publication,
+            "the creator did not reach the tenant publication boundary"
+        );
+        assert!(
+            !published_without_policy,
+            "the tenant store became observable before restrictive metadata was installed"
+        );
+        assert_eq!(
+            registry.tenant_metadata("demo-app", &tenant),
+            Some(TenantMetadata {
+                allow_password_signup: false,
+                enable_email_link_signin: false,
+                enable_anonymous_user: false,
+                disable_auth: true,
+                ..TenantMetadata::default()
+            })
+        );
+    }
+
+    #[test]
+    fn an_existing_tenant_without_metadata_fails_closed() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        registry.ensure_tenant("demo-app", "customer").unwrap();
+        registry
+            .tenant_metadata
+            .lock()
+            .unwrap()
+            .remove(&("demo-app".to_owned(), "customer".to_owned()));
+
+        assert!(registry.ensure_tenant("demo-app", "customer").is_none());
+    }
+
+    #[test]
+    fn poisoned_tenant_metadata_never_leaves_a_published_store() {
+        let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+        let poison = registry.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.tenant_metadata.lock().unwrap();
+            panic!("poison tenant metadata");
+        })
+        .join()
+        .is_err());
+
+        assert!(registry
+            .create_tenant("demo-app", TenantMetadata::default())
+            .is_none());
+        assert!(registry
+            .tenant_store("demo-app", "fireemu-00000000000000000001")
+            .is_none());
     }
 
     #[test]

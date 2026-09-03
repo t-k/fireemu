@@ -7,7 +7,14 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::{Child, ExitStatus};
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
+#[cfg(unix)]
+use trusted_temp::TrustedTempDir;
 
 fn wrapper_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/quint")
@@ -100,18 +107,12 @@ fn read_complete_pid_record(path: &Path, expected: usize) -> Option<Vec<u32>> {
 #[cfg(unix)]
 struct AuthorityChild {
     child: Option<Child>,
-    pid_file: PathBuf,
-    expected_pids: usize,
 }
 
 #[cfg(unix)]
 impl AuthorityChild {
-    fn new(child: Child, pid_file: PathBuf, expected_pids: usize) -> Self {
-        Self {
-            child: Some(child),
-            pid_file,
-            expected_pids,
-        }
+    fn new(child: Child) -> Self {
+        Self { child: Some(child) }
     }
 
     fn child_mut(&mut self) -> &mut Child {
@@ -145,35 +146,6 @@ impl AuthorityChild {
             status = child.wait().ok();
         }
         self.child.take();
-
-        if let Some(pids) = read_complete_pid_record(&self.pid_file, self.expected_pids) {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < deadline && pids.iter().any(|pid| process_exists(*pid)) {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            let mut survivors = pids
-                .into_iter()
-                .filter(|pid| process_exists(*pid))
-                .collect::<Vec<_>>();
-            for pid in &survivors {
-                let _ = Command::new("/bin/kill")
-                    .args(["-TERM", &pid.to_string()])
-                    .status();
-            }
-            let deadline = Instant::now() + Duration::from_secs(1);
-            while Instant::now() < deadline && survivors.iter().any(|pid| process_exists(*pid)) {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            survivors.retain(|pid| process_exists(*pid));
-            for pid in &survivors {
-                let _ = Command::new("/bin/kill")
-                    .args(["-KILL", &pid.to_string()])
-                    .status();
-            }
-            let _ = wait_until(Duration::from_secs(1), || {
-                survivors.iter().all(|pid| !process_exists(*pid))
-            });
-        }
         status
     }
 }
@@ -234,28 +206,12 @@ fn prepare_authority_backend_fixture(
 }
 
 #[cfg(unix)]
-struct OwnedTestDirectory(PathBuf);
+struct OwnedTestDirectory(TrustedTempDir);
 
 #[cfg(unix)]
 impl OwnedTestDirectory {
     fn create(label: &str) -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock must follow the Unix epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "fireemu-quint-{label}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir(&path).expect("owned test directory must be created");
-        Self(path)
-    }
-}
-
-#[cfg(unix)]
-impl Drop for OwnedTestDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        Self(TrustedTempDir::new(&format!("quint-{label}")))
     }
 }
 
@@ -284,15 +240,16 @@ fn authority_child_cleanup_survives_panic_unwinding() {
     let pid_path = pid_file.clone();
 
     let result = std::panic::catch_unwind(move || {
-        let child = Command::new("/bin/sh")
+        let child = Command::new(process_group_launcher_path())
             .args([
+                "/bin/sh",
                 "-c",
                 "sleep 30 & child=$!; pid_tmp=\"${PID_FILE}.tmp.$$\"; printf '%s %s\\n' \"$$\" \"$child\" > \"$pid_tmp\"; mv \"$pid_tmp\" \"$PID_FILE\"; wait \"$child\"",
             ])
             .env("PID_FILE", &pid_path)
             .spawn()
             .expect("panic fixture must launch");
-        let guard = AuthorityChild::new(child, pid_path.clone(), 2);
+        let guard = AuthorityChild::new(child);
         let mut pids = None;
         assert!(wait_until(Duration::from_secs(3), || {
             pids = read_complete_pid_record(&pid_path, 2);
@@ -819,7 +776,8 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
     let stderr = stdout
         .try_clone()
         .expect("authority log handle must be cloned");
-    let child = Command::new(&authority)
+    let child = Command::new(process_group_launcher_path())
+        .arg(&authority)
         .current_dir(&temporary.0)
         .env("AUTHORITY_CHILD_PID_FILE", &pid_file)
         .env(
@@ -839,7 +797,7 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
         .stderr(stderr)
         .spawn()
         .expect("authority must launch");
-    let mut child = AuthorityChild::new(child, pid_file.clone(), 2);
+    let mut child = AuthorityChild::new(child);
     let mut early_status = None;
     let mut pids = None;
     let ready = wait_until(Duration::from_secs(30), || {
@@ -907,7 +865,8 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
     let stderr = stdout
         .try_clone()
         .expect("authority log handle must be cloned");
-    let child = Command::new(&authority)
+    let child = Command::new(process_group_launcher_path())
+        .arg(&authority)
         .current_dir(&temporary.0)
         .env("NESTED_PID_FILE", &pid_file)
         .env("AUTHORITY_QUINT_WRAPPER", &wrapper)
@@ -929,7 +888,7 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
         .stderr(stderr)
         .spawn()
         .expect("nested authority must launch");
-    let mut child = AuthorityChild::new(child, pid_file.clone(), 3);
+    let mut child = AuthorityChild::new(child);
     let mut early_status = None;
     let mut pids = None;
     let ready = wait_until(Duration::from_secs(30), || {

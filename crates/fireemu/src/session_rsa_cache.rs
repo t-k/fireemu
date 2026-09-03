@@ -360,12 +360,19 @@ fn publish_entry(directory: &std::fs::File, name: &str, seed: u64, envelope: &[u
     }
 }
 
+#[cfg(all(test, unix))]
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
 #[cfg(test)]
 mod tests {
+    #[cfg(not(unix))]
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use fireemu_core_auth::jwt::IdTokenSigner as _;
 
+    #[cfg(unix)]
+    use super::trusted_temp::TrustedTempDir;
     use super::{
         cache_base_for, cache_entry_path, load_or_generate_at, secure_file_metadata,
         CacheFileMetadata,
@@ -373,6 +380,12 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{entry_name, load_entry, open_cache_directory, EntryLoad};
 
+    #[cfg(unix)]
+    fn scratch(name: &str) -> TrustedTempDir {
+        TrustedTempDir::new(&format!("session-rsa-cache-{name}"))
+    }
+
+    #[cfg(not(unix))]
     fn scratch(name: &str) -> std::path::PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -381,14 +394,6 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt as _;
-
-            let mut builder = std::fs::DirBuilder::new();
-            builder.mode(0o700).create(&root).unwrap();
-        }
-        #[cfg(not(unix))]
         std::fs::create_dir(&root).unwrap();
         root
     }
@@ -597,9 +602,10 @@ mod tests {
     #[test]
     fn concurrent_misses_publish_one_complete_entry() {
         let root = scratch("concurrent");
+        let root_path = root.path().to_path_buf();
         let workers = (0..4)
             .map(|_| {
-                let root = root.clone();
+                let root = root_path.clone();
                 std::thread::spawn(move || {
                     load_or_generate_at(&root, 13)
                         .unwrap()

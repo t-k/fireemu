@@ -123,6 +123,32 @@ struct Daemon {
     project: String,
     hub_port: u16,
     stopped: bool,
+    namespace: DaemonNamespace,
+}
+
+struct DaemonNamespace {
+    #[cfg(unix)]
+    trusted: TrustedTempDir,
+}
+
+impl DaemonNamespace {
+    fn new(label: &str) -> Self {
+        Self {
+            #[cfg(unix)]
+            trusted: TrustedTempDir::new(label),
+        }
+    }
+
+    fn path(&self) -> PathBuf {
+        #[cfg(unix)]
+        {
+            self.trusted.path().to_path_buf()
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::temp_dir()
+        }
+    }
 }
 
 struct StartupFailure {
@@ -159,7 +185,8 @@ impl Daemon {
         let mut last_collision = None;
         for attempt in 0..MAX_BIND_ATTEMPTS {
             let hub_port = free_port();
-            match Self::start_once(project, hub_port, extra) {
+            let namespace = DaemonNamespace::new("hub-daemon");
+            match Self::start_once(project, hub_port, extra, namespace) {
                 Ok(daemon) => return daemon,
                 Err(failure) if failure.is_address_in_use() && attempt + 1 < MAX_BIND_ATTEMPTS => {
                     last_collision = Some(failure);
@@ -175,8 +202,20 @@ impl Daemon {
         );
     }
 
-    fn start_once(project: &str, hub_port: u16, extra: &[&str]) -> Result<Self, StartupFailure> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+    #[cfg(unix)]
+    fn start_in_namespace(project: &str, extra: &[&str], namespace: DaemonNamespace) -> Self {
+        Self::start_once(project, free_port(), extra, namespace)
+            .unwrap_or_else(|failure| panic!("{}", failure.report()))
+    }
+
+    fn start_once(
+        project: &str,
+        hub_port: u16,
+        extra: &[&str],
+        namespace: DaemonNamespace,
+    ) -> Result<Self, StartupFailure> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+        command
             .args([
                 "up",
                 "--firestore-port",
@@ -197,9 +236,10 @@ impl Daemon {
             .args(extra)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        command.env("TMPDIR", namespace.path());
+        let mut child = command.spawn().unwrap();
         // The banner's control-API line is printed once every listener is bound and served.
         // The pipe keeps being drained on its own thread afterwards: a closed stdout would
         // give the daemon a broken pipe on its next line and kill it mid-scenario.
@@ -269,6 +309,7 @@ impl Daemon {
             project: project.to_owned(),
             hub_port,
             stopped: false,
+            namespace,
         })
     }
 
@@ -277,7 +318,9 @@ impl Daemon {
     }
 
     fn locator(&self) -> PathBuf {
-        std::env::temp_dir().join(format!("hub-{}.json", self.project))
+        self.namespace
+            .path()
+            .join(format!("hub-{}.json", self.project))
     }
 
     fn control_token(&self) -> String {
@@ -291,8 +334,8 @@ impl Daemon {
             return false;
         }
         let pid = self.child.id();
-        let locator = self.locator();
-        let owned_locator = locator_names_pid(&locator, pid);
+        let owned_locator = std::fs::symlink_metadata(self.locator())
+            .is_ok_and(|metadata| metadata.file_type().is_file());
         let mut exited = self.child.try_wait().is_ok_and(|status| status.is_some());
         if !exited {
             let _ = Command::new("kill")
@@ -307,26 +350,23 @@ impl Daemon {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+        let graceful = exited;
         if !exited {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
         self.stopped = true;
-
-        if locator_names_pid(&locator, pid) {
-            let _ = std::fs::remove_file(locator);
-        }
-        owned_locator
+        graceful && owned_locator
     }
 
     fn stop(mut self) {
-        let owned_locator = self.cleanup();
+        let graceful = self.cleanup();
         assert!(
             self.child.try_wait().is_ok_and(|status| status.is_some()),
             "daemon {} survived explicit cleanup",
             self.child.id()
         );
-        if owned_locator {
+        if graceful {
             assert!(
                 !self.locator().exists(),
                 "{} survived explicit cleanup",
@@ -340,15 +380,6 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.cleanup();
     }
-}
-
-fn locator_names_pid(path: &std::path::Path, pid: u32) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
-        && std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .and_then(|json| json.get("pid").and_then(serde_json::Value::as_u64))
-            == Some(u64::from(pid))
 }
 
 #[cfg(unix)]
@@ -524,23 +555,20 @@ fn the_hub_discovery_file_never_follows_a_symlink() {
     use std::os::unix::fs::symlink;
 
     let project = format!("demo-hub-symlink-{}", std::process::id());
-    let path = std::env::temp_dir().join(format!("hub-{project}.json"));
-    let target = scratch("locator-symlink-target").join("target.txt");
+    let namespace = DaemonNamespace::new("hub-symlink-locator");
+    let path = namespace.path().join(format!("hub-{project}.json"));
+    let target_namespace = TrustedTempDir::new("hub-symlink-target");
+    let target = target_namespace.join("target.txt");
     std::fs::write(&target, "do not replace").unwrap();
-    let _ = std::fs::remove_file(&path);
     symlink(&target, &path).unwrap();
-    let daemon = Daemon::start(&project, &[]);
+    let daemon = Daemon::start_in_namespace(&project, &[], namespace);
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "do not replace");
     assert!(std::fs::symlink_metadata(&path)
         .unwrap()
         .file_type()
         .is_symlink());
     daemon.stop();
-    assert!(std::fs::symlink_metadata(&path)
-        .unwrap()
-        .file_type()
-        .is_symlink());
-    std::fs::remove_file(path).unwrap();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "do not replace");
 }
 
 #[test]

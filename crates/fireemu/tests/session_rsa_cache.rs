@@ -4,33 +4,26 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-fn scratch(name: &str) -> PathBuf {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!(
-        "fireemu-session-rsa-process-{name}-{}-{sequence}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir(&root).unwrap();
-    root
+#[path = "../../../tests/support/trusted_temp.rs"]
+mod trusted_temp;
+
+use trusted_temp::TrustedTempDir;
+
+fn scratch(name: &str) -> TrustedTempDir {
+    TrustedTempDir::new(&format!("session-rsa-process-{name}"))
 }
 
 fn cache_base(root: &Path) -> PathBuf {
+    use std::os::unix::fs::DirBuilderExt as _;
+
     #[cfg(target_os = "macos")]
-    {
-        let base = root.join("home/Library/Caches");
-        std::fs::create_dir_all(&base).unwrap();
-        base
-    }
+    let base = root.join("home/Library/Caches");
     #[cfg(not(target_os = "macos"))]
-    {
-        let base = root.join("cache");
-        std::fs::create_dir_all(&base).unwrap();
-        base
-    }
+    let base = root.join("cache");
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700).create(&base).unwrap();
+    base
 }
 
 fn command(root: &Path, config: &Path, only: &str) -> Command {

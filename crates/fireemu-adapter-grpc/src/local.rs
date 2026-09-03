@@ -24,7 +24,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{
     Aggregation, CommitResult, CommitVersion, Document, DocumentChange, FirestoreState,
-    ListedDocument, Precondition, TransactionId, Write, WriteOp,
+    ListedDocument, Precondition, QueryStats, TransactionId, Write, WriteOp,
 };
 use fireemu_core_session::barrier::AdmissionBarrier;
 use fireemu_core_session::clock::VirtualClock;
@@ -437,6 +437,84 @@ struct SelectedSnapshot {
     transaction: Option<TransactionId>,
     report: Vec<u8>,
     read_at: Option<fireemu_core_types::time::LogicalInstant>,
+}
+
+enum SnapshotState<'a> {
+    Shared(&'a FirestoreState),
+    Exclusive(&'a mut FirestoreState),
+}
+
+struct SnapshotAccess<'a> {
+    state: SnapshotState<'a>,
+    selected: SelectedSnapshot,
+}
+
+impl SnapshotAccess<'_> {
+    fn db(&self) -> &FirestoreState {
+        match &self.state {
+            SnapshotState::Shared(db) => db,
+            SnapshotState::Exclusive(db) => db,
+        }
+    }
+
+    fn version(&self) -> Result<Option<CommitVersion>, Status> {
+        self.selected.version(self.db())
+    }
+
+    fn read_time(
+        &self,
+        now: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<fireemu_core_types::time::LogicalInstant, Status> {
+        self.selected.read_time(self.db(), now)
+    }
+
+    fn report(&self) -> &[u8] {
+        &self.selected.report
+    }
+
+    fn record_document_reads(
+        &mut self,
+        reads: &[(DocumentPath, Option<Document>)],
+    ) -> Result<(), Status> {
+        match (&mut self.state, &self.selected.transaction) {
+            (SnapshotState::Shared(_), None) => Ok(()),
+            (SnapshotState::Exclusive(db), Some(transaction)) => {
+                for (path, document) in reads {
+                    db.record_transaction_read(transaction, path, document.as_ref())
+                        .map_err(|error| status_from_error(&error))?;
+                }
+                Ok(())
+            }
+            _ => Err(Status::internal("invalid Firestore snapshot access mode")),
+        }
+    }
+
+    fn run_query_with_stats(
+        &mut self,
+        query: &Query,
+    ) -> Result<(Vec<Document>, QueryStats), Status> {
+        let version = self.version()?;
+        match (&mut self.state, &self.selected.transaction) {
+            (SnapshotState::Exclusive(db), Some(transaction)) => db
+                .run_query_in_transaction_with_stats(transaction, query)
+                .map_err(|error| status_from_error(&error)),
+            (SnapshotState::Shared(db), None) => db
+                .run_query_with_stats(query, version)
+                .map_err(|error| status_from_error(&error)),
+            _ => Err(Status::internal("invalid Firestore snapshot access mode")),
+        }
+    }
+
+    fn record_query(&mut self, query: &Query) -> Result<(), Status> {
+        match (&mut self.state, &self.selected.transaction) {
+            (SnapshotState::Shared(_), None) => Ok(()),
+            (SnapshotState::Exclusive(db), Some(transaction)) => db
+                .run_query_in_transaction(transaction, query)
+                .map(|_| ())
+                .map_err(|error| status_from_error(&error)),
+            _ => Err(Status::internal("invalid Firestore snapshot access mode")),
+        }
+    }
 }
 
 impl SelectedSnapshot {
@@ -1460,18 +1538,48 @@ impl LocalBackend {
         parent: &Parent,
         selector: SnapshotSelector<'_>,
         now: fireemu_core_types::time::LogicalInstant,
-        run: impl FnOnce(&mut FirestoreState, &SelectedSnapshot) -> Result<T, Status>,
+        run: impl FnOnce(&mut SnapshotAccess<'_>) -> Result<T, Status>,
     ) -> Result<T, Status> {
-        self.with_db(parent, |db| {
-            let selected = Self::select_snapshot(parent, db, selector, now)?;
-            let outcome = run(db, &selected);
-            if outcome.is_err() && !selected.report.is_empty() {
-                if let Some(transaction) = &selected.transaction {
-                    db.abandon_transaction(transaction);
-                }
+        match selector {
+            SnapshotSelector::ReadTime(read_at) => self.read_db(parent, |db| {
+                run(&mut SnapshotAccess {
+                    state: SnapshotState::Shared(db),
+                    selected: SelectedSnapshot {
+                        transaction: None,
+                        report: Vec::new(),
+                        read_at: Some(read_at),
+                    },
+                })
+            }),
+            SnapshotSelector::Latest => self.read_db(parent, |db| {
+                run(&mut SnapshotAccess {
+                    state: SnapshotState::Shared(db),
+                    selected: SelectedSnapshot {
+                        transaction: None,
+                        report: Vec::new(),
+                        read_at: None,
+                    },
+                })
+            }),
+            SnapshotSelector::Transaction(_) | SnapshotSelector::NewTransaction(_) => {
+                self.with_db(parent, |db| {
+                    let selected = Self::select_snapshot(parent, db, selector, now)?;
+                    let mut access = SnapshotAccess {
+                        state: SnapshotState::Exclusive(db),
+                        selected,
+                    };
+                    let outcome = run(&mut access);
+                    if outcome.is_err() && !access.selected.report.is_empty() {
+                        if let (SnapshotState::Exclusive(db), Some(transaction)) =
+                            (&mut access.state, &access.selected.transaction)
+                        {
+                            db.abandon_transaction(transaction);
+                        }
+                    }
+                    outcome
+                })
             }
-            outcome
-        })
+        }
     }
 
     /// `GetDocument` as a snapshot, authorized by `guard` inside the critical section that
@@ -1579,28 +1687,23 @@ impl LocalBackend {
             }
             None => SnapshotSelector::Latest,
         };
-        self.with_selected_snapshot(&parent, selector, now, |db, selected| {
-            let read_time = selected.read_time(db, now)?;
-            let version = selected.version(db)?;
+        self.with_selected_snapshot(&parent, selector, now, |access| {
+            let read_time = access.read_time(now)?;
+            let version = access.version()?;
             // Every document is read from the snapshot first, then the whole batch is
             // authorized, and only then do the reads join the transaction's read set.
             let reads: Vec<(DocumentPath, Option<Document>)> = paths
                 .iter()
                 .map(|path| {
                     let doc = match version {
-                        Some(v) => db.get_at(path, v).cloned(),
-                        None => db.get(path).cloned(),
+                        Some(v) => access.db().get_at(path, v).cloned(),
+                        None => access.db().get(path).cloned(),
                     };
                     (path.clone(), doc)
                 })
                 .collect();
-            guard(db, version, ReadCheck::Documents(&reads))?;
-            if let Some(t) = &selected.transaction {
-                for (path, doc) in &reads {
-                    db.record_transaction_read(t, path, doc.as_ref())
-                        .map_err(|e| status_from_error(&e))?;
-                }
-            }
+            guard(access.db(), version, ReadCheck::Documents(&reads))?;
+            access.record_document_reads(&reads)?;
             let items = req
                 .documents
                 .iter()
@@ -1612,7 +1715,7 @@ impl LocalBackend {
                 .collect();
             Ok(BatchGetOutcome {
                 items,
-                transaction: selected.report.clone(),
+                transaction: access.report().to_vec(),
                 read_time,
                 mask: mask.clone(),
             })
@@ -1907,31 +2010,24 @@ impl LocalBackend {
             }
             None => SnapshotSelector::Latest,
         };
-        self.with_selected_snapshot(&parent, selector, now, |db, selected| {
-            let version = selected.version(db)?;
+        self.with_selected_snapshot(&parent, selector, now, |access| {
+            let version = access.version()?;
             // Authorized from the query constraints before any data is touched.
             guard(
-                db,
+                access.db(),
                 version,
                 ReadCheck::Query {
                     parent: &parent,
                     query: &accepted.query,
                 },
             )?;
-            let (docs, stats) = match &selected.transaction {
-                Some(t) => db
-                    .run_query_in_transaction_with_stats(t, &accepted.query)
-                    .map_err(|e| status_from_error(&e))?,
-                None => db
-                    .run_query_with_stats(&accepted.query, version)
-                    .map_err(|e| status_from_error(&e))?,
-            };
-            let read_time = Some(encode_instant(selected.read_time(db, now)?));
+            let (docs, stats) = access.run_query_with_stats(&accepted.query)?;
+            let read_time = Some(encode_instant(access.read_time(now)?));
             // The rows the offset skipped, reported on the first result as the backend does.
             let skipped = i32::try_from(u64::from(accepted.query.offset).min(stats.matched))
                 .unwrap_or(i32::MAX);
             Ok((
-                query_responses(&docs, read_time, &selected.report, skipped),
+                query_responses(&docs, read_time, access.report(), skipped),
                 accepted.warnings.clone(),
             ))
         })
@@ -1974,11 +2070,11 @@ impl LocalBackend {
             }
             None => SnapshotSelector::Latest,
         };
-        self.with_selected_snapshot(&parent, selector, now, |db, selected| {
-            let version = selected.version(db)?;
+        self.with_selected_snapshot(&parent, selector, now, |access| {
+            let version = access.version()?;
             // The underlying query is authorized from its constraints, like a list.
             guard(
-                db,
+                access.db(),
                 version,
                 ReadCheck::Query {
                     parent: &parent,
@@ -1987,12 +2083,10 @@ impl LocalBackend {
             )?;
             // Inside a transaction the aggregation is computed at the snapshot and the query
             // is recorded so that later changes abort the commit.
-            if let Some(t) = &selected.transaction {
-                db.run_query_in_transaction(t, &accepted.query)
-                    .map_err(|e| status_from_error(&e))?;
-            }
-            let read_time = selected.read_time(db, now)?;
-            let values = db
+            access.record_query(&accepted.query)?;
+            let read_time = access.read_time(now)?;
+            let values = access
+                .db()
                 .run_aggregation(&accepted.query, &aggregations, version)
                 .map_err(|e| status_from_error(&e))?;
             let aggregate_fields: HashMap<String, pb::Value> = aliases
@@ -2001,7 +2095,7 @@ impl LocalBackend {
                 .collect();
             Ok(pb::RunAggregationQueryResponse {
                 result: Some(pb::AggregationResult { aggregate_fields }),
-                transaction: selected.report.clone(),
+                transaction: access.report().to_vec(),
                 read_time: Some(encode_instant(read_time)),
                 explain_metrics: None,
             })
@@ -2027,6 +2121,15 @@ impl LocalBackend {
                 (Some(Self::required_txn(&parent, t)?), None)
             }
             None => (None, None),
+        };
+        let selector = match &req.consistency_selector {
+            Some(pb::list_documents_request::ConsistencySelector::ReadTime(_)) => {
+                SnapshotSelector::ReadTime(read_at.expect("read time was decoded"))
+            }
+            Some(pb::list_documents_request::ConsistencySelector::Transaction(bytes)) => {
+                SnapshotSelector::Transaction(bytes)
+            }
+            None => SnapshotSelector::Latest,
         };
         // Page tokens carry the resource name of the last document of the previous page
         // (documents are listed by name) and the identity of the listing they continue:
@@ -2087,21 +2190,10 @@ impl LocalBackend {
         proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
         let bounded_name_page = txn.is_none() && !ordered;
         let bounded_ordered_page = txn.is_none() && ordered;
-        self.with_db(&parent, |db| {
-            let version = match (&txn, read_at) {
-                (Some(t), _) => {
-                    db.touch_transaction(t, now)
-                        .map_err(|e| status_from_error(&e))?;
-                    Some(
-                        db.transaction_read_version(t)
-                            .map_err(|e| status_from_error(&e))?,
-                    )
-                }
-                (None, Some(at)) => Some(Self::retained_read_version(db, at)?),
-                (None, None) => None,
-            };
+        self.with_selected_snapshot(&parent, selector, now, |access| {
+            let version = access.version()?;
             guard(
-                db,
+                access.db(),
                 version,
                 ReadCheck::Query {
                     parent: &parent,
@@ -2111,40 +2203,47 @@ impl LocalBackend {
             // Inside a transaction the scan is recorded like a query, so a concurrent
             // change to the collection aborts the commit.
             let mut documents = if bounded_name_page && req.show_missing {
-                db.list_documents_with_missing_page_at(
-                    parent.document.as_ref(),
-                    &req.collection_id,
-                    version,
-                    after_path.as_ref(),
-                    page_size,
-                )
-                .0
-                .into_iter()
-                .map(|entry| match entry {
-                    ListedDocument::Present(mut document) => {
-                        if let Some(mask) = &mask {
-                            document.fields = project_fields(&document.fields, mask);
+                access
+                    .db()
+                    .list_documents_with_missing_page_at(
+                        parent.document.as_ref(),
+                        &req.collection_id,
+                        version,
+                        after_path.as_ref(),
+                        page_size,
+                    )
+                    .0
+                    .into_iter()
+                    .map(|entry| match entry {
+                        ListedDocument::Present(mut document) => {
+                            if let Some(mask) = &mask {
+                                document.fields = project_fields(&document.fields, mask);
+                            }
+                            encode_document(&document)
                         }
-                        encode_document(&document)
-                    }
-                    ListedDocument::Missing(path) => pb::Document {
-                        name: path.resource_name(),
-                        ..Default::default()
-                    },
-                })
-                .collect()
+                        ListedDocument::Missing(path) => pb::Document {
+                            name: path.resource_name(),
+                            ..Default::default()
+                        },
+                    })
+                    .collect()
             } else if bounded_ordered_page {
                 let mut page_query = accepted.query.clone();
                 page_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
                 let cursor = after_path
                     .as_ref()
-                    .map(|path| db.cursor_after_document(&accepted.query, version, path))
+                    .map(|path| {
+                        access
+                            .db()
+                            .cursor_after_document(&accepted.query, version, path)
+                    })
                     .transpose()
                     .map_err(|e| status_from_error(&e))?
                     .flatten();
                 let cursor_matches_document = cursor.is_some();
                 page_query.start_at = cursor;
-                let mut docs = db
+                let mut docs = access
+                    .db()
                     .run_query(&page_query, version)
                     .map_err(|e| status_from_error(&e))?;
                 let mut documents = docs
@@ -2161,13 +2260,14 @@ impl LocalBackend {
                     let mut continued_missing_suffix = false;
                     if !cursor_matches_document {
                         if let Some(after_path) = after_path.as_ref() {
-                            let (cursor_is_missing, page) = db.list_missing_parents_page_at(
-                                parent.document.as_ref(),
-                                &req.collection_id,
-                                version,
-                                Some(after_path),
-                                page_size,
-                            );
+                            let (cursor_is_missing, page) =
+                                access.db().list_missing_parents_page_at(
+                                    parent.document.as_ref(),
+                                    &req.collection_id,
+                                    version,
+                                    Some(after_path),
+                                    page_size,
+                                );
                             if cursor_is_missing {
                                 continued_missing_suffix = true;
                                 documents.clear();
@@ -2176,7 +2276,8 @@ impl LocalBackend {
                         }
                     }
                     if !continued_missing_suffix && documents.len() < page_size {
-                        missing = db
+                        missing = access
+                            .db()
                             .list_missing_parents_page_at(
                                 parent.document.as_ref(),
                                 &req.collection_id,
@@ -2194,22 +2295,23 @@ impl LocalBackend {
                 documents
             } else {
                 let mut docs = match (&txn, ordered) {
-                    (Some(t), _) => db
-                        .run_query_in_transaction(t, &accepted.query)
-                        .map_err(|e| status_from_error(&e))?,
-                    (None, true) => db
+                    (Some(_), _) => access.run_query_with_stats(&accepted.query)?.0,
+                    (None, true) => access
+                        .db()
                         .run_query(&accepted.query, version)
                         .map_err(|e| status_from_error(&e))?,
-                    (None, false) if bounded_name_page => db.list_documents_page_at(
+                    (None, false) if bounded_name_page => access.db().list_documents_page_at(
                         parent.document.as_ref(),
                         &req.collection_id,
                         version,
                         after_path.as_ref(),
                         page_size,
                     ),
-                    (None, false) => {
-                        db.list_documents_at(parent.document.as_ref(), &req.collection_id, version)
-                    }
+                    (None, false) => access.db().list_documents_at(
+                        parent.document.as_ref(),
+                        &req.collection_id,
+                        version,
+                    ),
                 };
                 let mut documents: Vec<pb::Document> = docs
                     .iter_mut()
@@ -2224,7 +2326,7 @@ impl LocalBackend {
                     // A path that holds no document but has descendants is listed by name
                     // alone, as the backend lists it. Under an explicit order the missing
                     // parents (which have no fields to order on) follow the ordered documents.
-                    let missing = db.list_missing_parents_at(
+                    let missing = access.db().list_missing_parents_at(
                         parent.document.as_ref(),
                         &req.collection_id,
                         version,

@@ -381,6 +381,14 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700).create(&root).unwrap();
+        }
+        #[cfg(not(unix))]
         std::fs::create_dir(&root).unwrap();
         root
     }
@@ -448,6 +456,37 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scratch_cache_bases_are_owner_only() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let root = scratch("owner-only-base");
+        let metadata = std::fs::symlink_metadata(&root).unwrap();
+        assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsafe_cache_base_is_refused_without_modification() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = scratch("unsafe-base");
+        let sentinel = root.join("sentinel");
+        std::fs::write(&sentinel, b"unchanged").unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o775)).unwrap();
+
+        let result = load_or_generate_at(&root, 70).unwrap();
+        assert!(!result.hit);
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+        assert!(!root.join("fireemu").exists());
+
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -256,11 +256,7 @@ fn normalize_prost_recursion_status(headers: &mut HeaderMap) {
     {
         return;
     }
-    let replacement = Status::invalid_argument(format!(
-        "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH has maximum {}, got more than {}",
-        fireemu_core_firestore::value::MAX_NESTING_DEPTH,
-        fireemu_core_firestore::value::MAX_NESTING_DEPTH
-    ));
+    let replacement = Status::invalid_argument(status.message().to_owned());
     let mut replacement_headers = HeaderMap::new();
     if replacement.add_header(&mut replacement_headers).is_err() {
         return;
@@ -419,9 +415,10 @@ mod tests {
         normalize_prost_recursion_status(&mut prost_headers);
         let normalized = Status::from_header_map(&prost_headers).unwrap();
         assert_eq!(normalized.code(), Code::InvalidArgument);
-        assert!(normalized
-            .message()
-            .contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+        assert_eq!(
+            normalized.message(),
+            "failed to decode Protobuf message: Value.value_type: recursion limit reached"
+        );
         assert!(normalized.details().is_empty());
     }
 }

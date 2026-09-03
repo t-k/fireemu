@@ -102,6 +102,19 @@ fn commit_with_nested_map(levels: usize) -> Vec<u8> {
     commit
 }
 
+fn get_document_with_nested_unknown_groups(levels: usize) -> Vec<u8> {
+    let mut request = delimited(1, DOC.as_bytes());
+    for _ in 0..levels {
+        // Unknown field 99 with the deprecated group wire types. Prost applies its
+        // recursion guard while skipping these fields.
+        push_varint(&mut request, (99 << 3) | 3);
+    }
+    for _ in 0..levels {
+        push_varint(&mut request, (99 << 3) | 4);
+    }
+    request
+}
+
 fn json_commit_with_nested_map(levels: usize) -> String {
     let mut value = r#"{"integerValue":"1"}"#.to_owned();
     for _ in 0..levels {
@@ -120,6 +133,154 @@ async fn http(addr: std::net::SocketAddr, method: &str, path: &str, body: &str) 
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     String::from_utf8(response).unwrap()
+}
+
+async fn verify_grpc_value_boundary(
+    raw: &mut tonic::client::Grpc<tonic::transport::Channel>,
+    channel: tonic::transport::Channel,
+) {
+    raw.ready().await.unwrap();
+    raw.unary(
+        tonic::Request::new(commit_with_nested_map(20)),
+        hyper::http::uri::PathAndQuery::from_static("/google.firestore.v1.Firestore/Commit"),
+        RawCodec,
+    )
+    .await
+    .expect("the documented depth boundary must be accepted");
+
+    let mut client = FirestoreClient::new(channel.clone());
+    let stored = client
+        .get_document(pb::GetDocumentRequest {
+            name: DOC.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .expect("the raw fixture must encode a valid nested Firestore value")
+        .into_inner();
+    let stored_depth = stored.fields["deep"]
+        .clone()
+        .value_type
+        .expect("the stored value has a value type");
+    let mut cursor = stored_depth;
+    for _ in 0..20 {
+        let pb::value::ValueType::MapValue(map) = cursor else {
+            panic!("the raw fixture did not encode a nested map")
+        };
+        cursor = map.fields["next"]
+            .clone()
+            .value_type
+            .expect("each nested value has a value type");
+    }
+    assert!(matches!(cursor, pb::value::ValueType::IntegerValue(1)));
+
+    raw.ready().await.unwrap();
+    let boundary_error = raw
+        .unary(
+            tonic::Request::new(commit_with_nested_map(21)),
+            hyper::http::uri::PathAndQuery::from_static("/google.firestore.v1.Firestore/Commit"),
+            RawCodec,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        boundary_error.code(),
+        tonic::Code::InvalidArgument,
+        "{boundary_error}"
+    );
+    assert!(
+        boundary_error
+            .message()
+            .contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"),
+        "{boundary_error}"
+    );
+}
+
+async fn verify_grpc_recursion_guard(
+    raw: &mut tonic::client::Grpc<tonic::transport::Channel>,
+    channel: tonic::transport::Channel,
+) {
+    raw.ready().await.unwrap();
+    let error = raw
+        .unary(
+            tonic::Request::new(commit_with_nested_map(10_000)),
+            hyper::http::uri::PathAndQuery::from_static("/google.firestore.v1.Firestore/Commit"),
+            RawCodec,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error}");
+    assert!(
+        error.message().contains("recursion limit reached"),
+        "{error}"
+    );
+    assert!(!error.message().contains("FS-LIMIT"), "{error}");
+
+    raw.ready().await.unwrap();
+    let unrelated_recursion = raw
+        .unary(
+            tonic::Request::new(get_document_with_nested_unknown_groups(200)),
+            hyper::http::uri::PathAndQuery::from_static(
+                "/google.firestore.v1.Firestore/GetDocument",
+            ),
+            RawCodec,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unrelated_recursion.code(),
+        tonic::Code::InvalidArgument,
+        "{unrelated_recursion}"
+    );
+    assert!(
+        unrelated_recursion
+            .message()
+            .contains("recursion limit reached"),
+        "{unrelated_recursion}"
+    );
+    assert!(
+        !unrelated_recursion.message().contains("FS-LIMIT"),
+        "{unrelated_recursion}"
+    );
+
+    let mut client = FirestoreClient::new(channel);
+    let alive = client
+        .get_document(pb::GetDocumentRequest {
+            name: "projects/demo-app/databases/(default)/documents/items/missing".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(alive.code(), tonic::Code::NotFound);
+}
+
+async fn verify_rest_depth_cases(addr: std::net::SocketAddr) {
+    let nested_rest = http(
+        addr,
+        "POST",
+        "/v1/projects/demo-app/databases/(default)/documents:commit",
+        &json_commit_with_nested_map(21),
+    )
+    .await;
+    assert!(nested_rest.starts_with("HTTP/1.1 400"), "{nested_rest}");
+    assert!(
+        nested_rest.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"),
+        "{nested_rest}"
+    );
+    assert!(nested_rest.contains("INVALID_ARGUMENT"), "{nested_rest}");
+
+    let serde_boundary = format!("{}0{}", "[".repeat(200), "]".repeat(200));
+    let malformed = http(
+        addr,
+        "POST",
+        "/v1/projects/demo-app/databases/(default)/documents:commit",
+        &serde_boundary,
+    )
+    .await;
+    assert!(malformed.starts_with("HTTP/1.1 400"), "{malformed}");
+    assert!(malformed.contains("INVALID_ARGUMENT"), "{malformed}");
+
+    let ready = http(addr, "GET", "/", "").await;
+    assert!(ready.starts_with("HTTP/1.1 200"), "{ready}");
 }
 
 async fn run_transport_case() {
@@ -159,58 +320,9 @@ async fn run_transport_case() {
         .await
         .unwrap();
     let mut raw = tonic::client::Grpc::new(channel.clone());
-    raw.ready().await.unwrap();
-    let error = raw
-        .unary(
-            tonic::Request::new(commit_with_nested_map(10_000)),
-            hyper::http::uri::PathAndQuery::from_static("/google.firestore.v1.Firestore/Commit"),
-            RawCodec,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error}");
-    assert!(
-        error.message().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"),
-        "{error}"
-    );
-
-    let mut client = FirestoreClient::new(channel);
-    let alive = client
-        .get_document(pb::GetDocumentRequest {
-            name: "projects/demo-app/databases/(default)/documents/items/missing".to_owned(),
-            ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(alive.code(), tonic::Code::NotFound);
-
-    let nested_rest = http(
-        addr,
-        "POST",
-        "/v1/projects/demo-app/databases/(default)/documents:commit",
-        &json_commit_with_nested_map(21),
-    )
-    .await;
-    assert!(nested_rest.starts_with("HTTP/1.1 400"), "{nested_rest}");
-    assert!(
-        nested_rest.contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"),
-        "{nested_rest}"
-    );
-    assert!(nested_rest.contains("INVALID_ARGUMENT"), "{nested_rest}");
-
-    let serde_boundary = format!("{}0{}", "[".repeat(200), "]".repeat(200));
-    let malformed = http(
-        addr,
-        "POST",
-        "/v1/projects/demo-app/databases/(default)/documents:commit",
-        &serde_boundary,
-    )
-    .await;
-    assert!(malformed.starts_with("HTTP/1.1 400"), "{malformed}");
-    assert!(malformed.contains("INVALID_ARGUMENT"), "{malformed}");
-
-    let ready = http(addr, "GET", "/", "").await;
-    assert!(ready.starts_with("HTTP/1.1 200"), "{ready}");
+    verify_grpc_value_boundary(&mut raw, channel.clone()).await;
+    verify_grpc_recursion_guard(&mut raw, channel).await;
+    verify_rest_depth_cases(addr).await;
     server.abort();
     let _ = server.await;
 }

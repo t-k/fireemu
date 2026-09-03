@@ -449,6 +449,49 @@ mod tests {
         value
     }
 
+    fn generated_value() -> impl Strategy<Value = pb::Value> {
+        Just(pb::Value {
+            value_type: Some(pb::value::ValueType::IntegerValue(1)),
+        })
+        .prop_recursive(MAX_NESTING_DEPTH + 8, 256, 4, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..=3).prop_map(|values| pb::Value {
+                    value_type: Some(pb::value::ValueType::ArrayValue(pb::ArrayValue { values })),
+                }),
+                proptest::collection::vec(inner, 0..=3).prop_map(|values| pb::Value {
+                    value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                        fields: values
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, value)| (format!("field-{index}"), value))
+                            .collect(),
+                    })),
+                }),
+            ]
+        })
+    }
+
+    fn protobuf_nesting_depth(value: &pb::Value) -> u32 {
+        let mut maximum = 0;
+        let mut pending = vec![(value, 0_u32)];
+        while let Some((value, parent_depth)) = pending.pop() {
+            match value.value_type.as_ref() {
+                Some(pb::value::ValueType::ArrayValue(array)) => {
+                    let depth = parent_depth + 1;
+                    maximum = maximum.max(depth);
+                    pending.extend(array.values.iter().map(|value| (value, depth)));
+                }
+                Some(pb::value::ValueType::MapValue(map)) => {
+                    let depth = parent_depth + 1;
+                    maximum = maximum.max(depth);
+                    pending.extend(map.fields.values().map(|value| (value, depth)));
+                }
+                _ => {}
+            }
+        }
+        maximum
+    }
+
     #[test]
     fn value_decoder_accepts_the_firestore_depth_limit_and_rejects_the_next_level() {
         let accepted = decode_value(&nested_map(MAX_NESTING_DEPTH)).expect("limit is accepted");
@@ -463,11 +506,17 @@ mod tests {
 
     proptest! {
         #[test]
-        fn every_successfully_decoded_value_is_within_the_firestore_depth_limit(
-            levels in 0_u32..=MAX_NESTING_DEPTH + 8,
-        ) {
-            if let Ok(value) = decode_value(&nested_map(levels)) {
-                prop_assert!(value.nesting_depth() <= MAX_NESTING_DEPTH);
+        fn generated_maps_and_arrays_respect_the_firestore_depth_limit(value in generated_value()) {
+            let expected_depth = protobuf_nesting_depth(&value);
+            match decode_value(&value) {
+                Ok(decoded) => {
+                    prop_assert!(expected_depth <= MAX_NESTING_DEPTH);
+                    prop_assert_eq!(decoded.nesting_depth(), expected_depth);
+                }
+                Err(error) => {
+                    prop_assert!(expected_depth > MAX_NESTING_DEPTH);
+                    prop_assert!(error.to_string().contains("FS-LIMIT-NESTED-MAP-ARRAY-DEPTH"));
+                }
             }
         }
     }

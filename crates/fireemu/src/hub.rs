@@ -383,7 +383,9 @@ fn mutation_preflight(req: &Request<Incoming>, path: &str) -> Response<Full<Byte
     {
         return json_response(
             StatusCode::FORBIDDEN,
-            &json!({"error": "the Hub mutation preflight was not admitted"}),
+            &fireemu_adapter_support::api_error::flat(
+                "the Hub mutation preflight was not admitted",
+            ),
             None,
         );
     }
@@ -433,7 +435,9 @@ async fn respond(
     if !host_is_local(&req) {
         return Ok(json_response(
             StatusCode::FORBIDDEN,
-            &json!({"error": "the Emulator Hub answers loopback Hosts only"}),
+            &fireemu_adapter_support::api_error::flat(
+                "the Emulator Hub answers loopback Hosts only",
+            ),
             None,
         ));
     }
@@ -456,7 +460,9 @@ async fn respond(
     {
         return Ok(json_response(
             StatusCode::FORBIDDEN,
-            &json!({"error": "Hub mutations require the control capability"}),
+            &fireemu_adapter_support::api_error::flat(
+                "Hub mutations require the control capability",
+            ),
             None,
         ));
     }
@@ -482,7 +488,9 @@ async fn respond(
         }
         _ => json_response(
             StatusCode::NOT_FOUND,
-            &json!({"error": format!("{method} {path} is not a Emulator Hub route")}),
+            &fireemu_adapter_support::api_error::flat(&format!(
+                "{method} {path} is not a Emulator Hub route"
+            )),
             origin,
         ),
     };
@@ -591,7 +599,9 @@ fn set_background_triggers(
     let Some(runtime) = &state.functions else {
         return mutation_json_response(
             StatusCode::BAD_REQUEST,
-            &json!({"error": "The Cloud Functions emulator is not running."}),
+            &fireemu_adapter_support::api_error::flat(
+                "The Cloud Functions emulator is not running.",
+            ),
             origin,
         );
     };

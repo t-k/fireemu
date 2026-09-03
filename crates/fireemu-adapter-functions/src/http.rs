@@ -414,9 +414,9 @@ fn task_route(
                 return typed(
                     StatusCode::NOT_FOUND,
                     "application/json",
-                    &serde_json::json!({"error": format!(
+                    &fireemu_adapter_support::api_error::flat(&format!(
                         "no onTaskDispatched function named {queue} in {project}/{location}"
-                    )})
+                    ))
                     .to_string(),
                 );
             }

@@ -12,6 +12,7 @@ description = "Protocol-neutral HTTP adapter utilities with bounded allocation a
 bytes = "1"
 http-body = "1"
 http-body-util = "0.1"
+serde_json.workspace = true
 subtle = "2"
 
 [dev-dependencies]

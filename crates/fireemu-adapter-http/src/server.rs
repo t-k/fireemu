@@ -78,7 +78,10 @@ async fn respond(
             if method != "GET" {
                 return Ok(finish(
                     405,
-                    &serde_json::json!({"error": {"code": 405, "message": "METHOD_NOT_ALLOWED"}}),
+                    &fireemu_adapter_support::api_error::firebase_minimal(
+                        405,
+                        "METHOD_NOT_ALLOWED",
+                    ),
                     origin.as_deref(),
                     false,
                 ));
@@ -124,7 +127,7 @@ async fn respond(
     let (status, body) = match collected {
         Err(_) => (
             413,
-            serde_json::json!({"error": {"code": 413, "message": "PAYLOAD_TOO_LARGE"}}),
+            fireemu_adapter_support::api_error::firebase_minimal(413, "PAYLOAD_TOO_LARGE"),
         ),
         Ok(bytes) => {
             // Dispatched before the control API: the exchange and the JWKS are public on
@@ -144,11 +147,11 @@ async fn respond(
                     ),
                     None => crate::identity_toolkit::JsonResponse {
                         status: 404,
-                        body: serde_json::json!({"error": {
-                            "code": 404,
-                            "message": "App Check is not enabled in this runtime (appCheck.enabled)",
-                            "status": "NOT_FOUND"
-                        }}),
+                        body: fireemu_adapter_support::api_error::google_rpc(
+                            404,
+                            "App Check is not enabled in this runtime (appCheck.enabled)",
+                            "NOT_FOUND",
+                        ),
                     },
                 };
                 return Ok(finish(r.status, &r.body, origin.as_deref(), true));
@@ -168,7 +171,10 @@ async fn respond(
             match json {
                 None => (
                     400,
-                    serde_json::json!({"error": {"code": 400, "message": "INVALID_JSON_PAYLOAD"}}),
+                    fireemu_adapter_support::api_error::firebase_minimal(
+                        400,
+                        "INVALID_JSON_PAYLOAD",
+                    ),
                 ),
                 Some(json) => {
                     let r = match &control {

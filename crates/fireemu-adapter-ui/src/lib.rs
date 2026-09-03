@@ -195,7 +195,7 @@ impl UiResponse {
     pub fn error(status: u16, message: &str) -> Self {
         Self::json(
             status,
-            &json!({"error": {"code": status, "message": message}}),
+            &fireemu_adapter_support::api_error::firebase_minimal(status, message),
         )
     }
 

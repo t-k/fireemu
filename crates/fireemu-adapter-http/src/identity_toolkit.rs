@@ -368,7 +368,7 @@ pub struct JsonResponse {
 fn error(status: u16, message: &str) -> JsonResponse {
     JsonResponse {
         status,
-        body: json!({"error": {"code": status, "message": message, "errors": [{"message": message, "domain": "global", "reason": "invalid"}]}}),
+        body: fireemu_adapter_support::api_error::identity_invalid(status, message),
     }
 }
 
@@ -425,7 +425,7 @@ fn sign_response_tokens(
 fn not_found() -> JsonResponse {
     JsonResponse {
         status: 404,
-        body: json!({"error": {"code": 404, "message": "Not Found", "errors": [{"message": "Not Found", "reason": "notFound"}], "status": "NOT_FOUND"}}),
+        body: fireemu_adapter_support::api_error::identity_not_found(),
     }
 }
 
@@ -818,13 +818,7 @@ fn app_check_denied(reason: &'static str) -> JsonResponse {
     };
     JsonResponse {
         status: 403,
-        body: json!({"error": {
-            "code": 403,
-            "message": message,
-            "status": "PERMISSION_DENIED",
-            "reason": reason,
-            "errors": [{"message": message, "domain": "global", "reason": "forbidden"}]
-        }}),
+        body: fireemu_adapter_support::api_error::identity_app_check_denied(message, reason),
     }
 }
 
@@ -3217,7 +3211,7 @@ fn admin_query(store: &AuthStore, body: &Value) -> JsonResponse {
 fn not_implemented(message: &str) -> JsonResponse {
     JsonResponse {
         status: 501,
-        body: json!({"error": {"code": 501, "message": message, "errors": [{"message": message, "reason": "unimplemented"}], "status": "NOT_IMPLEMENTED"}}),
+        body: fireemu_adapter_support::api_error::identity_unimplemented(message),
     }
 }
 
@@ -3933,7 +3927,7 @@ fn send_oob_code(
             None => {
                 return JsonResponse {
                     status: 501,
-                    body: json!({"error": {"code": 501, "message": t, "errors": [{"message": t, "reason": "unimplemented"}], "status": "NOT_IMPLEMENTED"}}),
+                    body: fireemu_adapter_support::api_error::identity_unimplemented(t),
                 }
             }
         },

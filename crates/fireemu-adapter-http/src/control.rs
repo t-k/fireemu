@@ -269,7 +269,7 @@ pub fn is_no_store_path(path: &str) -> bool {
 fn error(status: u16, message: &str) -> JsonResponse {
     JsonResponse {
         status,
-        body: json!({"error": {"code": status, "message": message}}),
+        body: fireemu_adapter_support::api_error::firebase_minimal(status, message),
     }
 }
 
@@ -2038,9 +2038,13 @@ pub async fn await_idle(state: &ControlState, body: &Value) -> JsonResponse {
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
+            let status = functions.status();
             return JsonResponse {
                 status: 504,
-                body: json!({"error": {"code": 504, "message": "DEADLINE_EXCEEDED : work is still outstanding", "status": functions.status()}}),
+                body: fireemu_adapter_support::api_error::control_deadline(
+                    "DEADLINE_EXCEEDED : work is still outstanding",
+                    &status,
+                ),
             };
         }
     }

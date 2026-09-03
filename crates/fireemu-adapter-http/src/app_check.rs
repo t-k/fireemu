@@ -170,7 +170,7 @@ fn decode_segment(text: &str) -> String {
 fn error(code: u16, status: &str, message: &str) -> JsonResponse {
     JsonResponse {
         status: code,
-        body: json!({"error": {"code": code, "message": message, "status": status}}),
+        body: fireemu_adapter_support::api_error::google_rpc(code, message, status),
     }
 }
 
@@ -178,9 +178,9 @@ fn error(code: u16, status: &str, message: &str) -> JsonResponse {
 fn error_with_reason(code: u16, status: &str, message: &str, reason: &str) -> JsonResponse {
     JsonResponse {
         status: code,
-        body: json!({
-            "error": {"code": code, "message": message, "status": status, "reason": reason}
-        }),
+        body: fireemu_adapter_support::api_error::google_rpc_with_reason(
+            code, message, status, reason,
+        ),
     }
 }
 

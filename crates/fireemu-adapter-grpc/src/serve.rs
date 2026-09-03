@@ -115,7 +115,11 @@ async fn rest_call(
         return Ok(json_response(
             &RestResponse {
                 status: 413,
-                body: serde_json::json!({"error": {"code": 413, "message": "request body too large", "status": "INVALID_ARGUMENT"}}),
+                body: fireemu_adapter_support::api_error::google_rpc(
+                    413,
+                    "request body too large",
+                    "INVALID_ARGUMENT",
+                ),
             },
             origin.as_deref(),
         ));
@@ -171,7 +175,11 @@ async fn channel_call(
         return json_response(
             &RestResponse {
                 status: 413,
-                body: serde_json::json!({"error": {"code": 413, "message": "request body too large", "status": "INVALID_ARGUMENT"}}),
+                body: fireemu_adapter_support::api_error::google_rpc(
+                    413,
+                    "request body too large",
+                    "INVALID_ARGUMENT",
+                ),
             },
             origin.as_deref(),
         );

@@ -13,6 +13,7 @@ name = "fireemu"
 path = "src/main.rs"
 
 [dependencies]
+fireemu-adapter-support = { path = "../fireemu-adapter-support" }
 fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-limits = { path = "../fireemu-core-limits" }
 fireemu-core-session = { path = "../fireemu-core-session" }

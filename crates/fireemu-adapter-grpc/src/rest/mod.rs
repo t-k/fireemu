@@ -110,7 +110,11 @@ fn status_name(code: Code) -> &'static str {
 #[must_use]
 pub fn error_response(status: &Status) -> RestResponse {
     let code = status.code();
-    let mut body = json!({"error": {"code": http_status(code), "message": status.message(), "status": status_name(code)}});
+    let mut body = fireemu_adapter_support::api_error::google_rpc(
+        http_status(code),
+        status.message(),
+        status_name(code),
+    );
     if status
         .metadata()
         .contains_key(crate::local::DROP_CONNECTION_KEY)

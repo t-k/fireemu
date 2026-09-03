@@ -371,11 +371,9 @@ fn error_response(dialect: Dialect, status: u16, message: &str) -> StorageRespon
     };
     let body = match dialect {
         Dialect::Firebase => {
-            json!({"error": {"code": status, "message": message, "status": status_name}})
+            fireemu_adapter_support::api_error::google_rpc(status, message, status_name)
         }
-        Dialect::Gcs => {
-            json!({"error": {"code": status, "message": message, "errors": [{"domain": "global", "reason": reason, "message": message}]}})
-        }
+        Dialect::Gcs => fireemu_adapter_support::api_error::gcs(status, message, reason),
     };
     StorageResponse::json(status, &body)
 }
@@ -418,7 +416,7 @@ fn html_text(status: u16, text: &str) -> StorageResponse {
 fn fb_json_error(status: u16, message: &str) -> StorageResponse {
     StorageResponse::json(
         status,
-        &json!({"error": {"code": status, "message": message}}),
+        &fireemu_adapter_support::api_error::firebase_minimal(status, message),
     )
 }
 
@@ -476,7 +474,7 @@ fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
 fn gcs_json_error(status: u16, message: &str, reason: &str) -> StorageResponse {
     StorageResponse::json(
         status,
-        &json!({"error": {"code": status, "message": message, "errors": [{"domain": "global", "reason": reason, "message": message}]}}),
+        &fireemu_adapter_support::api_error::gcs(status, message, reason),
     )
 }
 
@@ -3112,7 +3110,10 @@ fn gcs_upload(
                 .to_owned();
             let body = std::mem::take(&mut req.body);
             let (meta_json, data) = parse_multipart(&content_type, body).map_err(|e| {
-                StorageResponse::json(400, &json!({"error": {"code": 400, "message": e}}))
+                StorageResponse::json(
+                    400,
+                    &fireemu_adapter_support::api_error::firebase_minimal(400, &e),
+                )
             })?;
             let name = params
                 .get("name")

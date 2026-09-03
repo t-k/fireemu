@@ -980,6 +980,10 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
         "a refused export must not create the directory"
     );
     assert_eq!(send(None, None), 403);
+    assert!(
+        !dir.exists(),
+        "an export without the control capability must not create the directory"
+    );
     assert_eq!(send(None, Some(&bearer)), 200);
     assert!(dir.join("firebase-export-metadata.json").is_file());
     drop(daemon);

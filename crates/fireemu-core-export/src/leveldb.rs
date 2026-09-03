@@ -58,6 +58,11 @@ pub enum LogError {
         /// Byte offset of the header.
         offset: usize,
     },
+    /// A zero padding header was followed by nonzero bytes in the same block.
+    NonZeroPadding {
+        /// Byte offset of the first nonzero padding byte.
+        offset: usize,
+    },
 }
 
 impl core::fmt::Display for LogError {
@@ -81,6 +86,9 @@ impl core::fmt::Display for LogError {
                 f,
                 "the log record fragment at byte {offset} is out of order"
             ),
+            Self::NonZeroPadding { offset } => {
+                write!(f, "the log block padding at byte {offset} is not zero")
+            }
         }
     }
 }
@@ -220,20 +228,7 @@ where
     let mut block = vec![0u8; BLOCK_SIZE].into_boxed_slice();
     let mut base = 0usize;
     loop {
-        let mut filled = 0usize;
-        while filled < BLOCK_SIZE {
-            match input.read(&mut block[filled..]) {
-                Ok(0) => break,
-                Ok(read) => filled += read,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    return Err(LogError::Io {
-                        offset: base + filled,
-                        message: error.to_string(),
-                    })
-                }
-            }
-        }
+        let filled = fill_block(&mut input, &mut block, base)?;
         if filled == 0 {
             break;
         }
@@ -245,6 +240,12 @@ where
             let kind = header[6];
             if stored == 0 && len == 0 && kind == 0 {
                 // Zero padding before the next block.
+                if let Some(relative) = block[pos..filled].iter().position(|byte| *byte != 0) {
+                    return Err(LogError::NonZeroPadding {
+                        offset: base + pos + relative,
+                    });
+                }
+                pos = filled;
                 break;
             }
             let payload = block
@@ -296,6 +297,9 @@ where
             }
             pos += HEADER_SIZE + len;
         }
+        if filled < BLOCK_SIZE && pos < filled {
+            return Err(LogError::Truncated { offset: base + pos });
+        }
         base = base.saturating_add(filled);
         if filled < BLOCK_SIZE {
             break;
@@ -307,9 +311,31 @@ where
     Ok(Ok(()))
 }
 
+fn fill_block(
+    input: &mut impl std::io::Read,
+    block: &mut [u8],
+    base: usize,
+) -> Result<usize, LogError> {
+    let mut filled = 0usize;
+    while filled < block.len() {
+        match input.read(&mut block[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(LogError::Io {
+                    offset: base + filled,
+                    message: error.to_string(),
+                })
+            }
+        }
+    }
+    Ok(filled)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{crc32c, mask, read_log, write_log, BLOCK_SIZE};
+    use super::{crc32c, mask, read_log, write_log, LogError, BLOCK_SIZE};
 
     #[test]
     fn the_crc32c_matches_the_published_castagnoli_check_values() {
@@ -363,6 +389,17 @@ mod tests {
         assert!(matches!(
             read_log(&framed),
             Err(super::LogError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn nonzero_bytes_after_a_padding_header_are_refused() {
+        let mut framed = write_log(&[vec![7]]);
+        framed.resize(BLOCK_SIZE, 0);
+        framed[BLOCK_SIZE - 1] = 1;
+        assert!(matches!(
+            read_log(&framed),
+            Err(LogError::NonZeroPadding { .. })
         ));
     }
 }

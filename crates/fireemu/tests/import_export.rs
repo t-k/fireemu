@@ -156,6 +156,129 @@ fn walk(root: &Path, at: &Path, out: &mut Vec<String>) {
     }
 }
 
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn write_document_artifact(root: &Path, count: usize, payload_len: usize) -> u64 {
+    use std::collections::BTreeMap;
+    use std::io::Write as _;
+
+    use fireemu_core_export::firestore::{
+        write_output_to, ExportDocument, OverallMetadata, PartitionMetadata, EXPORT_NAME,
+        OUTPUT_FILE, PARTITION_DIR, PARTITION_METADATA,
+    };
+    use fireemu_core_export::metadata::{
+        ExportMetadata, Product, Section, FIRESTORE_OVERALL_METADATA, FIRESTORE_PATH,
+        METADATA_FILE_NAME,
+    };
+    use fireemu_core_firestore::value::Value;
+
+    let partition = root.join(FIRESTORE_PATH).join(PARTITION_DIR);
+    std::fs::create_dir_all(&partition).unwrap();
+    let documents: Vec<_> = (0..count)
+        .map(|index| {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "payload".to_owned(),
+                Value::Bytes(vec![u8::try_from(index % 251).unwrap(); payload_len]),
+            );
+            ExportDocument {
+                project: "demo-import-rss".to_owned(),
+                path: vec![("payloads".to_owned(), format!("doc-{index:06}"))],
+                fields,
+            }
+        })
+        .collect();
+    let mut output =
+        std::io::BufWriter::new(std::fs::File::create(partition.join(OUTPUT_FILE)).unwrap());
+    let artifact_bytes = write_output_to(&documents, &mut output).unwrap();
+    output.flush().unwrap();
+    std::fs::write(
+        partition.join(PARTITION_METADATA),
+        PartitionMetadata {
+            export_name: EXPORT_NAME.to_owned(),
+            start_micros: 0,
+            end_micros: 0,
+            output_files: vec![OUTPUT_FILE.to_owned()],
+        }
+        .to_bytes(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(FIRESTORE_PATH).join(FIRESTORE_OVERALL_METADATA),
+        OverallMetadata {
+            metadata_file: format!("{PARTITION_DIR}/{PARTITION_METADATA}"),
+            entity_count: count as u64,
+            byte_count: artifact_bytes,
+        }
+        .to_bytes(),
+    )
+    .unwrap();
+    let mut manifest = ExportMetadata::new("15.28.2");
+    manifest.set(
+        Product::Firestore,
+        Section {
+            version: "1.22.0".to_owned(),
+            path: FIRESTORE_PATH.to_owned(),
+            metadata_file: Some(format!("{FIRESTORE_PATH}/{FIRESTORE_OVERALL_METADATA}")),
+        },
+    );
+    std::fs::write(root.join(METADATA_FILE_NAME), manifest.to_json()).unwrap();
+    artifact_bytes
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn timed_import_max_rss(dir: &Path) -> u64 {
+    let output = Command::new("/usr/bin/time")
+        .env("LC_ALL", "C")
+        .arg("-l")
+        .arg(env!("CARGO_BIN_EXE_fireemu"))
+        .args([
+            "exec",
+            "--only",
+            "firestore",
+            "--firestore-port",
+            "0",
+            "--http-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--log-verbosity",
+            "quiet",
+            "--project",
+            "demo-import-rss",
+            "--import",
+        ])
+        .arg(dir)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let matches: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.trim_end().ends_with("maximum resident set size"))
+        .collect();
+    assert_eq!(matches.len(), 1, "{stderr}");
+    matches[0]
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn median_three(mut measure: impl FnMut() -> u64) -> u64 {
+    let mut values = [measure(), measure(), measure()];
+    values.sort_unstable();
+    values[1]
+}
+
 #[cfg(unix)]
 fn mode(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt as _;
@@ -390,6 +513,23 @@ fn a_corrupt_firestore_section_refuses_the_whole_import() {
         .output()
         .unwrap();
     assert_refused(&output, "firestore", "output-0");
+}
+
+#[test]
+fn a_firestore_output_truncated_at_a_record_boundary_is_refused() {
+    let dir = scratch("short-firestore");
+    let export = copy_fixture("official-multiproduct", &dir);
+    let output_file = export.join("firestore_export/all_namespaces/all_kinds/output-0");
+    std::fs::write(&output_file, []).unwrap();
+
+    let output = exec()
+        .args(["--import"])
+        .arg(&export)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+
+    assert_refused(&output, "firestore", "entity count");
 }
 
 #[test]
@@ -1306,4 +1446,30 @@ fn emulators_export_needs_a_directory() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+#[test]
+#[ignore = "release-only RSS qualification; writes and imports about 192 MiB three times"]
+fn document_only_import_peak_rss_is_within_one_point_two_times_the_artifact() {
+    let root = scratch("import-rss");
+    let empty = root.join("empty");
+    let loaded = root.join("loaded");
+    let _ = write_document_artifact(&empty, 0, 0);
+    let artifact_bytes = write_document_artifact(&loaded, 256, 768 * 1024);
+    assert!(artifact_bytes >= 192 * 1024 * 1024);
+
+    let baseline = median_three(|| timed_import_max_rss(&empty));
+    let loaded_rss = median_three(|| timed_import_max_rss(&loaded));
+    let incremental = loaded_rss
+        .checked_sub(baseline)
+        .expect("the payload import must exceed the empty baseline");
+    eprintln!(
+        "import RSS baseline={baseline}, loaded={loaded_rss}, incremental={incremental}, artifact={artifact_bytes}"
+    );
+
+    assert!(
+        u128::from(incremental) * 10 <= u128::from(artifact_bytes) * 12,
+        "baseline={baseline}, loaded={loaded_rss}, incremental={incremental}, artifact={artifact_bytes}"
+    );
 }

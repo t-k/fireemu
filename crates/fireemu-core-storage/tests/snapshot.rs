@@ -5,6 +5,7 @@
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
 use fireemu_core_types::time::LogicalInstant;
+use std::sync::{Arc, Mutex};
 
 fn t(n: i64) -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_000_000 + n)
@@ -60,6 +61,80 @@ fn captures_share_blobs_with_the_live_store_and_with_each_other() {
     assert_eq!(first.blob_bytes_shared_with(&live), 0);
     let small = first.get(&bucket(), &name("small.txt")).unwrap().clone();
     assert_eq!(first.bytes(&small), b"hello");
+}
+
+#[test]
+fn snapshot_export_work_does_not_hold_the_live_store_lock() {
+    let live = Arc::new(Mutex::new(StorageState::new(7)));
+    put(&mut live.lock().unwrap(), "large.bin", vec![0xA5; 16 * MIB]);
+    let snapshot = live.lock().unwrap().capture_buckets(|_| true);
+    let (reading_tx, reading_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let exporter = std::thread::spawn(move || {
+        let metadata = snapshot.get(&bucket(), &name("large.bin")).unwrap();
+        reading_tx.send(snapshot.bytes(metadata).len()).unwrap();
+        release_rx.recv().unwrap();
+        snapshot.bytes(metadata)[0]
+    });
+    assert_eq!(reading_rx.recv().unwrap(), 16 * MIB);
+
+    put(
+        &mut live.lock().unwrap(),
+        "concurrent-upload.bin",
+        b"uploaded while export still reads its snapshot".to_vec(),
+    );
+
+    release_tx.send(()).unwrap();
+    assert_eq!(exporter.join().unwrap(), 0xA5);
+    assert!(live
+        .lock()
+        .unwrap()
+        .get(&bucket(), &name("concurrent-upload.bin"))
+        .is_some());
+}
+
+#[test]
+#[ignore = "release qualification; allocates one GiB of object data"]
+fn one_gibibyte_snapshot_export_releases_the_store_before_writing() {
+    let live = Arc::new(Mutex::new(StorageState::new(7)));
+    for index in 0..4 {
+        put(
+            &mut live.lock().unwrap(),
+            &format!("part-{index}.bin"),
+            vec![u8::try_from(index).unwrap(); 256 * MIB],
+        );
+    }
+    let capture_started = std::time::Instant::now();
+    let snapshot = live.lock().unwrap().capture_buckets(|_| true);
+    let capture_elapsed = capture_started.elapsed();
+    assert_eq!(snapshot.retained_blob_bytes(), 1024 * MIB as u64);
+    assert_eq!(
+        snapshot.blob_bytes_shared_with(&live.lock().unwrap()),
+        1024 * MIB as u64
+    );
+    let (writing_tx, writing_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let exporter = std::thread::spawn(move || {
+        let bytes: u64 = snapshot
+            .all_objects()
+            .into_iter()
+            .map(|metadata| snapshot.bytes(metadata).len() as u64)
+            .sum();
+        writing_tx.send(bytes).unwrap();
+        release_rx.recv().unwrap();
+        bytes
+    });
+    assert_eq!(writing_rx.recv().unwrap(), 1024 * MIB as u64);
+
+    let mut store = live
+        .try_lock()
+        .expect("snapshot export writing must not retain the live store lock");
+    put(&mut store, "concurrent-upload.bin", b"upload".to_vec());
+    drop(store);
+
+    release_tx.send(()).unwrap();
+    assert_eq!(exporter.join().unwrap(), 1024 * MIB as u64);
+    eprintln!("one GiB snapshot capture completed in {capture_elapsed:?}");
 }
 
 #[test]

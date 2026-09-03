@@ -367,12 +367,39 @@ pub fn read_output_from(
     input: impl std::io::Read,
 ) -> Result<Vec<ExportDocument>, FirestoreExportError> {
     let mut documents = Vec::new();
-    let visited = for_each_record(input, |record| {
-        documents.push(read_entity(record)?);
-        Ok::<(), FirestoreExportError>(())
+    let visited = for_each_output(input, |document| {
+        documents.push(document);
+        Ok::<(), core::convert::Infallible>(())
     })?;
-    visited?;
+    match visited {
+        Ok(()) => {}
+        Err(never) => match never {},
+    }
     Ok(documents)
+}
+
+/// Visits decoded documents one at a time without retaining the artifact or prior records.
+pub fn for_each_output<R, E>(
+    input: R,
+    mut visit: impl FnMut(ExportDocument) -> Result<(), E>,
+) -> Result<Result<(), E>, FirestoreExportError>
+where
+    R: std::io::Read,
+{
+    enum VisitError<E> {
+        Decode(FirestoreExportError),
+        Visit(E),
+    }
+
+    let visited = for_each_record(input, |record| {
+        let document = read_entity(record).map_err(VisitError::Decode)?;
+        visit(document).map_err(VisitError::Visit)
+    })?;
+    match visited {
+        Ok(()) => Ok(Ok(())),
+        Err(VisitError::Decode(error)) => Err(error),
+        Err(VisitError::Visit(error)) => Ok(Err(error)),
+    }
 }
 
 /// Encodes an `output-*` file holding `documents`, in the given order.
@@ -1072,6 +1099,117 @@ mod tests {
         assert_eq!(
             read_output_from(short_reads).expect("short streamed reads decode"),
             docs
+        );
+    }
+
+    #[test]
+    fn one_hundred_thousand_documents_stream_without_retaining_the_artifact() {
+        let docs: Vec<_> = (0..100_000)
+            .map(|index| ExportDocument {
+                project: "demo-scale".to_owned(),
+                path: vec![("items".to_owned(), format!("{index:06}"))],
+                fields: field("value", Value::Integer(index)),
+            })
+            .collect();
+
+        let bytes = write_output_to(&docs, std::io::sink()).expect("the output streams");
+
+        assert!(bytes > 5_000_000);
+    }
+
+    #[test]
+    fn an_expanded_valid_array_record_round_trips_above_the_request_limit() {
+        let long_name = "f".repeat(1_500);
+        let doc = document(field(&long_name, Value::Array(vec![Value::Null; 7_000])));
+
+        let output = write_output(std::slice::from_ref(&doc)).expect("the document exports");
+
+        assert!(output.len() > 10 * 1024 * 1024);
+        assert_eq!(
+            read_output(&output).expect("the document imports"),
+            vec![doc]
+        );
+    }
+
+    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    fn export_probe_documents() -> Vec<ExportDocument> {
+        (0..100_000)
+            .map(|index| ExportDocument {
+                project: "demo-export-rss".to_owned(),
+                path: vec![("items".to_owned(), format!("{index:06}"))],
+                fields: field(
+                    "payload",
+                    Value::Bytes(vec![u8::try_from(index % 251).unwrap(); 1_024]),
+                ),
+            })
+            .collect()
+    }
+
+    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    #[test]
+    #[ignore = "child process for the export RSS qualification"]
+    fn one_hundred_thousand_document_export_rss_probe() {
+        let mode = std::env::var("FIREEMU_EXPORT_RSS_PROBE").expect("probe mode");
+        if mode == "empty" {
+            return;
+        }
+        let live = export_probe_documents();
+        if mode == "build" {
+            std::hint::black_box(&live);
+            return;
+        }
+        assert_eq!(mode, "export");
+        let snapshot = live.clone();
+        let bytes = write_output_to(&snapshot, std::io::sink()).expect("the snapshot exports");
+        assert!(bytes > 100 * 1024 * 1024);
+        std::hint::black_box((&live, &snapshot));
+    }
+
+    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    fn export_probe_max_rss(mode: &str) -> u64 {
+        let output = std::process::Command::new("/usr/bin/time")
+            .env("LC_ALL", "C")
+            .env("FIREEMU_EXPORT_RSS_PROBE", mode)
+            .arg("-l")
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "firestore::tests::one_hundred_thousand_document_export_rss_probe",
+                "--exact",
+                "--ignored",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let lines: Vec<_> = stderr
+            .lines()
+            .filter(|line| line.trim_end().ends_with("maximum resident set size"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{stderr}");
+        lines[0].split_whitespace().next().unwrap().parse().unwrap()
+    }
+
+    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    #[test]
+    #[ignore = "release-only RSS qualification; allocates about 300 MiB"]
+    fn one_hundred_thousand_document_export_holds_at_most_two_dataset_copies() {
+        let empty = export_probe_max_rss("empty");
+        let built = export_probe_max_rss("build");
+        let exported = export_probe_max_rss("export");
+        let one_dataset = built.checked_sub(empty).expect("dataset exceeds baseline");
+        let export_increment = exported
+            .checked_sub(built)
+            .expect("snapshot export exceeds the live dataset");
+        eprintln!(
+            "export RSS empty={empty}, live={built}, exported={exported}, dataset={one_dataset}, export_increment={export_increment}"
+        );
+        assert!(
+            u128::from(export_increment) * 10 <= u128::from(one_dataset) * 12,
+            "export retained more than one additional dataset copy"
         );
     }
 

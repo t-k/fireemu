@@ -40,8 +40,8 @@ use fireemu_core_export::auth::{
     ACCOUNTS_FILE, CONFIG_FILE,
 };
 use fireemu_core_export::firestore::{
-    read_output, write_output, ExportDocument, OverallMetadata, PartitionMetadata, EXPORT_NAME,
-    OUTPUT_FILE, PARTITION_DIR, PARTITION_METADATA,
+    for_each_output, write_output_to, ExportDocument, OverallMetadata, PartitionMetadata,
+    EXPORT_NAME, OUTPUT_FILE, PARTITION_DIR, PARTITION_METADATA,
 };
 use fireemu_core_export::metadata::{
     ExportMetadata, Product, Section, AUTH_PATH, FIRESTORE_OVERALL_METADATA, FIRESTORE_PATH,
@@ -291,19 +291,21 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
             Product::Firestore => {
                 let mut databases = BTreeMap::new();
                 let mut remaining_bytes = IMPORT_FIRESTORE_BYTES_BUDGET;
-                let documents = read_firestore_section(dir, section, &mut remaining_bytes)?;
-                collect_documents(
+                read_firestore_section(
+                    dir,
+                    section,
+                    &mut remaining_bytes,
                     &mut databases,
-                    documents,
                     DEFAULT_DATABASE,
                     &mut prepared.notices,
                     project,
                 )?;
                 for (database, named) in manifest.named_databases() {
-                    let documents = read_firestore_section(dir, named, &mut remaining_bytes)?;
-                    collect_documents(
+                    read_firestore_section(
+                        dir,
+                        named,
+                        &mut remaining_bytes,
                         &mut databases,
-                        documents,
                         database,
                         &mut prepared.notices,
                         project,
@@ -476,7 +478,7 @@ fn open_file_inside(root: &Path, path: &Path) -> Result<std::fs::File, String> {
     let descriptor = rustix::fs::openat(
         &directory,
         *leaf,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
     )
     .map_err(|e| format!("cannot read it without following links: {e}"))?;
@@ -691,7 +693,11 @@ fn read_firestore_section(
     dir: &Path,
     section: &Section,
     remaining_bytes: &mut u64,
-) -> Result<Vec<ExportDocument>, ArtifactError> {
+    databases: &mut BTreeMap<(String, String), Vec<ImportedDocument>>,
+    database: &str,
+    notices: &mut Vec<String>,
+    run_project: &str,
+) -> Result<(), ArtifactError> {
     let metadata_file = section
         .metadata_file
         .clone()
@@ -712,78 +718,120 @@ fn read_firestore_section(
     let partition_dir = partition_path
         .parent()
         .map_or_else(|| section_dir.clone(), Path::to_path_buf);
-    let mut documents = Vec::new();
+    let mut foreign = BTreeSet::new();
+    let mut entity_count = 0u64;
+    let mut byte_count = 0u64;
     for output in &partition.output_files {
         let output_path = partition_dir.join(output);
-        let bytes = read_inside_budgeted(
-            dir,
-            &output_path,
-            remaining_bytes,
-            IMPORT_FIRESTORE_BYTES_BUDGET,
-            IMPORT_FIRESTORE_BYTES_BUDGET,
-            "output files",
-        )
-        .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
-        documents.extend(
-            read_output(&bytes)
-                .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?,
-        );
-    }
-    Ok(documents)
-}
-
-/// Turns the decoded entities into per-database import documents, validating every path.
-fn collect_documents(
-    databases: &mut BTreeMap<(String, String), Vec<ImportedDocument>>,
-    documents: Vec<ExportDocument>,
-    database: &str,
-    notices: &mut Vec<String>,
-    run_project: &str,
-) -> Result<(), ArtifactError> {
-    let mut foreign = BTreeSet::new();
-    for document in documents {
-        if document.project != run_project {
-            foreign.insert(document.project.clone());
+        let file = open_file_inside(dir, &output_path)
+            .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
+        let len = file
+            .metadata()
+            .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?
+            .len();
+        if len > *remaining_bytes {
+            return Err(ArtifactError::new(
+                "firestore",
+                &output_path,
+                format!(
+                    "the output files exceed the {IMPORT_FIRESTORE_BYTES_BUDGET} byte cumulative import limit"
+                ),
+            ));
         }
-        let project = ProjectId::try_new(document.project.clone()).map_err(|e| {
-            ArtifactError::new(
+        let mut limited = std::io::Read::take(file, remaining_bytes.saturating_add(1));
+        let decoded = for_each_output(&mut limited, |document| {
+            collect_document(databases, document, database, &mut foreign, run_project)?;
+            entity_count = entity_count.saturating_add(1);
+            Ok(())
+        });
+        let consumed = remaining_bytes
+            .saturating_add(1)
+            .saturating_sub(limited.limit());
+        if consumed > *remaining_bytes {
+            return Err(ArtifactError::new(
                 "firestore",
-                PathBuf::from(FIRESTORE_PATH),
-                format!("project id {:?}: {e}", document.project),
-            )
-        })?;
-        let database_id = DatabaseId::try_new(database).map_err(|e| {
-            ArtifactError::new(
-                "firestore",
-                PathBuf::from(FIRESTORE_PATH),
-                format!("database id {database:?}: {e}"),
-            )
-        })?;
-        let relative = document.relative_path();
-        let path = DocumentPath::parse(&project, &database_id, &relative).map_err(|e| {
-            ArtifactError::new(
-                "firestore",
-                PathBuf::from(FIRESTORE_PATH),
-                format!("document path {relative:?}: {e}"),
-            )
-        })?;
-        databases
-            .entry((document.project.clone(), database.to_owned()))
-            .or_default()
-            .push(ImportedDocument {
-                path,
-                fields: document.fields,
-                // The official managed export records no document timestamps at all, so an
-                // import necessarily stamps them with the commit it installs them in.
-                create_time: None,
-                update_time: None,
-            });
+                &output_path,
+                format!(
+                    "the output files exceed the {IMPORT_FIRESTORE_BYTES_BUDGET} byte cumulative import limit"
+                ),
+            ));
+        }
+        *remaining_bytes = remaining_bytes.saturating_sub(consumed);
+        byte_count = byte_count.saturating_add(consumed);
+        decoded.map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))??;
+    }
+    if entity_count != overall.entity_count {
+        return Err(ArtifactError::new(
+            "firestore",
+            &overall_path,
+            format!(
+                "the partition entity count is {entity_count}, but its overall metadata records {}",
+                overall.entity_count
+            ),
+        ));
+    }
+    if byte_count != overall.byte_count {
+        return Err(ArtifactError::new(
+            "firestore",
+            &overall_path,
+            format!(
+                "the partition byte count is {byte_count}, but its overall metadata records {}",
+                overall.byte_count
+            ),
+        ));
     }
     for project in foreign {
         notices.push(format!(
             "the Firestore export holds documents of the project {project}, not the {run_project} this run serves; they were imported under {project}, so point the SDK at that project to read them"
         ));
     }
+    Ok(())
+}
+
+/// Turns one decoded entity into an import document, validating its project and path.
+fn collect_document(
+    databases: &mut BTreeMap<(String, String), Vec<ImportedDocument>>,
+    document: ExportDocument,
+    database: &str,
+    foreign: &mut BTreeSet<String>,
+    run_project: &str,
+) -> Result<(), ArtifactError> {
+    if document.project != run_project {
+        foreign.insert(document.project.clone());
+    }
+    let project = ProjectId::try_new(document.project.clone()).map_err(|e| {
+        ArtifactError::new(
+            "firestore",
+            PathBuf::from(FIRESTORE_PATH),
+            format!("project id {:?}: {e}", document.project),
+        )
+    })?;
+    let database_id = DatabaseId::try_new(database).map_err(|e| {
+        ArtifactError::new(
+            "firestore",
+            PathBuf::from(FIRESTORE_PATH),
+            format!("database id {database:?}: {e}"),
+        )
+    })?;
+    let relative = document.relative_path();
+    let path = DocumentPath::parse(&project, &database_id, &relative).map_err(|e| {
+        ArtifactError::new(
+            "firestore",
+            PathBuf::from(FIRESTORE_PATH),
+            format!("document path {relative:?}: {e}"),
+        )
+    })?;
+    databases
+        .entry((document.project, database.to_owned()))
+        .or_default()
+        .push(ImportedDocument {
+            path,
+            fields: document.fields,
+            // The official managed export records no document timestamps at all, so an
+            // import necessarily stamps them with the commit it installs them in.
+            create_time: None,
+            update_time: None,
+        });
     Ok(())
 }
 
@@ -1438,10 +1486,14 @@ fn export_firestore(
             .map_err(|e| ArtifactError::new("firestore", &partition_dir, e))?;
 
         let output_path = partition_dir.join(OUTPUT_FILE);
-        let output = write_output(documents)
+        let mut output = std::io::BufWriter::new(
+            create_private_file(&output_path)
+                .map_err(|e| ArtifactError::new("firestore", &output_path, e))?,
+        );
+        let output_bytes = write_output_to(documents, &mut output)
             .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?;
-        write_private_file(&output_path, &output)
-            .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
+        std::io::Write::flush(&mut output)
+            .map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))?;
 
         let partition = PartitionMetadata {
             export_name: EXPORT_NAME.to_owned(),
@@ -1456,7 +1508,7 @@ fn export_firestore(
         let overall = OverallMetadata {
             metadata_file: format!("{PARTITION_DIR}/{PARTITION_METADATA}"),
             entity_count: documents.len() as u64,
-            byte_count: output.len() as u64,
+            byte_count: output_bytes,
         };
         let overall_path = section_dir.join(FIRESTORE_OVERALL_METADATA);
         write_private_file(&overall_path, &overall.to_bytes())
@@ -2152,8 +2204,7 @@ fn create_private_dir(dir: &Path) -> Result<(), String> {
 
 /// Writes a file owner-only, replacing what was there.
 #[cfg(unix)]
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write as _;
+fn create_private_file(path: &Path) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt as _;
     if let Some(parent) = path.parent() {
         create_private_dir(parent)?;
@@ -2165,23 +2216,29 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("cannot replace it: {e}")),
     }
-    let mut file = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(path)
-        .map_err(|e| format!("cannot write it: {e}"))?;
-    file.write_all(bytes)
-        .map_err(|e| format!("cannot write it: {e}"))?;
-    Ok(())
+        .map_err(|e| format!("cannot write it: {e}"))
 }
 
 #[cfg(not(unix))]
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn create_private_file(path: &Path) -> Result<std::fs::File, String> {
     if let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
-    std::fs::write(path, bytes).map_err(|e| format!("cannot write it: {e}"))
+    std::fs::File::create(path).map_err(|e| format!("cannot write it: {e}"))
+}
+
+/// Writes a file owner-only, replacing what was there.
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut file = create_private_file(path)?;
+    file.write_all(bytes)
+        .map_err(|e| format!("cannot write it: {e}"))?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2213,6 +2270,8 @@ mod tests {
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
     use fireemu_export_publication::PublicationStage;
 
+    #[cfg(unix)]
+    use super::open_file_inside;
     #[cfg(unix)]
     use super::trusted_temp::TrustedTempDir;
 
@@ -2463,6 +2522,25 @@ mod tests {
         let error = scan_import_tree(&root, &root, "test", 0, 1, 0, None).unwrap_err();
         assert!(error.message.contains("not a regular file"));
         drop(socket);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_replacing_an_import_file_is_rejected_without_blocking() {
+        let root = budget_dir("fifo-leaf");
+        let fifo = root.join("output-0");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+
+        let started = std::time::Instant::now();
+        let error = open_file_inside(&root, &fifo).unwrap_err();
+
+        assert!(error.contains("not a regular file"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
         let _ = std::fs::remove_dir_all(root);
     }
 

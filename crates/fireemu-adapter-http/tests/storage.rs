@@ -175,6 +175,24 @@ fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed
         anonymous_multipart_upload_to(&s, "unknown.example.test", "unknown.txt").status,
         403
     );
+    let (owner_content_type, owner_body) = multipart(&json!({}), "text/plain", b"owner");
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "POST",
+                "/v0/b/unknown.example.test/o?name=owner.txt&uploadType=multipart",
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-type", &owner_content_type),
+                    ("x-goog-upload-protocol", "multipart"),
+                ],
+                &owner_body,
+            ),
+        )
+        .status,
+        200
+    );
     let store = s.store.lock().unwrap();
     assert!(store
         .get(

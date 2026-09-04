@@ -82,7 +82,10 @@ enum StorageRulesSnapshotMode {
         slot: Arc<RulesetSlot>,
         loaded: LoadedRules,
     },
-    PerBucket(BTreeMap<String, (Arc<RulesetSlot>, LoadedRules)>),
+    PerBucket {
+        slots: BTreeMap<String, Arc<RulesetSlot>>,
+        loaded: Vec<(Arc<RulesetSlot>, LoadedRules)>,
+    },
 }
 
 /// Captured Storage Rules registry used by the session snapshot protocol.
@@ -95,8 +98,8 @@ impl StorageRulesRegistrySnapshot {
     pub fn retained_bytes(&self) -> u64 {
         match &self.0 {
             StorageRulesSnapshotMode::Global { loaded, .. } => loaded.retained_bytes(),
-            StorageRulesSnapshotMode::PerBucket(slots) => slots
-                .values()
+            StorageRulesSnapshotMode::PerBucket { loaded, .. } => loaded
+                .iter()
                 .map(|(_, loaded)| loaded.retained_bytes())
                 .fold(0, u64::saturating_add),
         }
@@ -141,7 +144,12 @@ impl StorageRulesRegistry {
             .mode
             .write()
             .map_err(|_| "storage rules registry is poisoned".to_owned())?;
-        *mode = StorageRulesMode::Global(Arc::new(RulesetSlot::new(loaded)));
+        match &*mode {
+            StorageRulesMode::Global(slot) => return slot.replace_loaded(loaded).map(|_| ()),
+            StorageRulesMode::PerBucket(_) => {
+                *mode = StorageRulesMode::Global(Arc::new(RulesetSlot::new(loaded)));
+            }
+        }
         Ok(())
     }
 
@@ -182,14 +190,17 @@ impl StorageRulesRegistry {
                 loaded: slot.snapshot()?.loaded().as_ref().clone(),
             },
             StorageRulesMode::PerBucket(slots) => {
-                let mut captured = BTreeMap::new();
-                for (bucket, slot) in slots {
-                    captured.insert(
-                        bucket.clone(),
-                        (slot.clone(), slot.snapshot()?.loaded().as_ref().clone()),
-                    );
+                let mut loaded: Vec<(Arc<RulesetSlot>, LoadedRules)> = Vec::new();
+                for slot in slots.values() {
+                    if loaded.iter().any(|(seen, _)| Arc::ptr_eq(seen, slot)) {
+                        continue;
+                    }
+                    loaded.push((slot.clone(), slot.snapshot()?.loaded().as_ref().clone()));
                 }
-                StorageRulesSnapshotMode::PerBucket(captured)
+                StorageRulesSnapshotMode::PerBucket {
+                    slots: slots.clone(),
+                    loaded,
+                }
             }
         };
         Ok(StorageRulesRegistrySnapshot(snapshot))
@@ -202,17 +213,11 @@ impl StorageRulesRegistry {
                 slot.replace_loaded(loaded.clone())?;
                 StorageRulesMode::Global(slot.clone())
             }
-            StorageRulesSnapshotMode::PerBucket(slots) => {
-                let mut restored = BTreeMap::new();
-                let mut replaced: Vec<Arc<RulesetSlot>> = Vec::new();
-                for (bucket, (slot, loaded)) in slots {
-                    if !replaced.iter().any(|seen| Arc::ptr_eq(seen, slot)) {
-                        slot.replace_loaded(loaded.clone())?;
-                        replaced.push(slot.clone());
-                    }
-                    restored.insert(bucket.clone(), slot.clone());
+            StorageRulesSnapshotMode::PerBucket { slots, loaded } => {
+                for (slot, loaded) in loaded {
+                    slot.replace_loaded(loaded.clone())?;
                 }
-                StorageRulesMode::PerBucket(restored)
+                StorageRulesMode::PerBucket(slots.clone())
             }
         };
         let mut mode = self
@@ -653,7 +658,7 @@ fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
         return set_rules_error("There was an error updating rules, see logs for more details");
     };
     match state.rules.replace_loaded(loaded) {
-        Ok(_) => {}
+        Ok(()) => {}
         Err(_) => {
             return StorageResponse::json(500, &json!({"message": "Internal error updating rules"}))
         }
@@ -1500,6 +1505,9 @@ impl StorageState {
         resource: Option<RulesValue>,
         request_resource: RulesValue,
     ) -> Result<(), StorageResponse> {
+        if matches!(principal, Principal::Owner) {
+            return Ok(());
+        }
         let selected = self
             .rules
             .slot_for_bucket(bucket.as_str())
@@ -1511,9 +1519,6 @@ impl StorageState {
                 "Permission denied. Storage Emulator has no loaded ruleset.",
             ));
         };
-        if matches!(principal, Principal::Owner) {
-            return Ok(());
-        }
         let rules = slot
             .snapshot()
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
@@ -3619,4 +3624,76 @@ fn xml_style_get(
     let bytes = store.shared_bytes(&meta);
     drop(store);
     Ok(send_file_bytes(bytes, &meta, req))
+}
+
+#[cfg(test)]
+mod storage_rules_registry_tests {
+    use super::{StorageRulesRegistry, StorageRulesSnapshotMode};
+    use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    const ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
+    const DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if false; } } }";
+
+    fn slot(source: &str) -> Arc<RulesetSlot> {
+        Arc::new(RulesetSlot::new(LoadedRules::from_source(source).unwrap()))
+    }
+
+    #[test]
+    fn a_snapshot_restores_target_mode_after_a_global_control_update() {
+        let public = slot(ALLOW);
+        let private = slot(DENY);
+        let registry = StorageRulesRegistry::per_bucket(BTreeMap::from([
+            ("public.example.test".to_owned(), public.clone()),
+            ("private.example.test".to_owned(), private.clone()),
+        ]));
+        let snapshot = registry.capture().unwrap();
+
+        registry.replace_source(ALLOW).unwrap();
+        assert!(registry
+            .slot_for_bucket("unknown.example.test")
+            .unwrap()
+            .is_some());
+
+        registry.restore(&snapshot).unwrap();
+        assert!(Arc::ptr_eq(
+            &registry
+                .slot_for_bucket("public.example.test")
+                .unwrap()
+                .unwrap(),
+            &public
+        ));
+        assert!(Arc::ptr_eq(
+            &registry
+                .slot_for_bucket("private.example.test")
+                .unwrap()
+                .unwrap(),
+            &private
+        ));
+        assert!(registry
+            .slot_for_bucket("unknown.example.test")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn one_target_slot_is_captured_once_for_its_bucket_group() {
+        let shared = slot(ALLOW);
+        let registry = StorageRulesRegistry::per_bucket(BTreeMap::from([
+            ("one.example.test".to_owned(), shared.clone()),
+            ("two.example.test".to_owned(), shared),
+        ]));
+        let snapshot = registry.capture().unwrap();
+
+        let StorageRulesSnapshotMode::PerBucket { slots, loaded } = &snapshot.0 else {
+            panic!("expected target mode")
+        };
+        assert!(Arc::ptr_eq(
+            &slots["one.example.test"],
+            &slots["two.example.test"]
+        ));
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(snapshot.retained_bytes(), loaded[0].1.retained_bytes());
+    }
 }

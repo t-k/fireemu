@@ -673,6 +673,11 @@ pub struct FunctionsCodebase {
 /// process and memory limits.
 pub const MAX_SELECTED_FUNCTIONS_CODEBASES: usize = 32;
 
+/// Maximum deploy targets loaded into one Storage rules registry.
+pub const MAX_STORAGE_RULE_TARGETS: usize = 64;
+/// Maximum concrete buckets loaded into one Storage rules registry.
+pub const MAX_STORAGE_RULE_BUCKETS: usize = 1024;
+
 /// What applying a `firebase.json` produced besides the effective configuration: the
 /// notices to print once, in file order. Anything fireemu cannot honour is either an error
 /// (a selected product it does not serve) or exactly one of these lines; nothing is silent.
@@ -942,6 +947,17 @@ impl RuntimeConfig {
             None => Vec::new(),
             Some(Value::Object(o)) => vec![(o, "storage".to_owned())],
             Some(Value::Array(a)) => {
+                if a.is_empty() {
+                    return Err(ConfigError(
+                        "firebase.json: storage must contain at least one target".to_owned(),
+                    ));
+                }
+                if a.len() > MAX_STORAGE_RULE_TARGETS {
+                    return Err(ConfigError(format!(
+                        "firebase.json has {} Storage rules targets, exceeding fireemu's local safety budget of {MAX_STORAGE_RULE_TARGETS}",
+                        a.len()
+                    )));
+                }
                 let mut out = Vec::with_capacity(a.len());
                 for (i, e) in a.iter().enumerate() {
                     let o = e.as_object().ok_or_else(|| {
@@ -1060,6 +1076,18 @@ impl RuntimeConfig {
                         ))
                     },
                 )?;
+                fireemu_core_storage::name::BucketName::try_new(bucket.to_owned()).map_err(
+                    |reason| {
+                        ConfigError(format!(
+                            ".firebaserc: targets.{project}.storage.{target}[{index}] is not a valid bucket name: {reason}"
+                        ))
+                    },
+                )?;
+                if by_bucket.len() >= MAX_STORAGE_RULE_BUCKETS {
+                    return Err(ConfigError(format!(
+                        ".firebaserc has more than {MAX_STORAGE_RULE_BUCKETS} Storage buckets selected for project {project}"
+                    )));
+                }
                 if by_bucket.insert(bucket.to_owned(), path.clone()).is_some() {
                     return Err(ConfigError(format!(
                         ".firebaserc: Storage bucket {bucket:?} belongs to more than one target"
@@ -2625,6 +2653,7 @@ mod tests {
     fn storage_target_configuration_is_complete_and_unambiguous() {
         let base = std::path::Path::new("/proj");
         for malformed in [
+            json!({"storage": []}),
             json!({"storage": [{"rules": "storage.rules"}]}),
             json!({"storage": [{"target": "uploads"}]}),
             json!({"storage": [
@@ -2652,6 +2681,7 @@ mod tests {
             json!({"targets": []}),
             json!({"targets": {"demo-app": {"storage": {"uploads": []}}}}),
             json!({"targets": {"demo-app": {"storage": {"uploads": [1]}}}}),
+            json!({"targets": {"demo-app": {"storage": {"uploads": ["Uppercase.example.test"]}}}}),
         ] {
             assert!(
                 cfg.clone()
@@ -2660,6 +2690,15 @@ mod tests {
                 "{malformed}"
             );
         }
+        let too_many = (0..=MAX_STORAGE_RULE_BUCKETS)
+            .map(|index| Value::String(format!("bucket-{index}.example.test")))
+            .collect::<Vec<_>>();
+        assert!(cfg
+            .resolve_storage_rules_targets(
+                &json!({"targets": {"demo-app": {"storage": {"uploads": too_many}}}}),
+                "demo-app",
+            )
+            .is_err());
     }
 
     /// Every `firebase.json` in the corpus `tools/config-schema-check` validates is loaded

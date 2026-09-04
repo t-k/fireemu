@@ -101,7 +101,10 @@ impl SnapshotHook for StorageRules {
 
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
         part.downcast_ref::<fireemu_adapter_http::storage::StorageRulesRegistrySnapshot>()
-            .map_or(0, |snapshot| snapshot.retained_bytes())
+            .map_or(
+                0,
+                fireemu_adapter_http::storage::StorageRulesRegistrySnapshot::retained_bytes,
+            )
     }
 }
 

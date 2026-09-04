@@ -615,6 +615,8 @@
       "resumable uploads are authorized at finalization with the received bytes; a refusal is terminal for the session and no object is published",
       "list requires rules_version 2",
       "the Firebase protocol goes through the rules; the JSON API is a fully privileged surface on which rules never run, whatever credential is presented, exactly as the official emulator serves it",
+      "object-form firebase.json applies one ruleset to every bucket; array form resolves every target through .firebaserc.targets[project].storage and selects an isolated, hot-reloadable ruleset by request bucket; an unmapped bucket is denied for end-user requests before mutation or event publication, while the explicit owner credential keeps its documented Rules bypass",
+      "the official /internal/setRules endpoint and fireemu's /v1/storage/rules extension replace target mode with one global ruleset, as firebase-tools rebuilds its rules manager; configured target-file watchers retire after that explicit runtime override, while a global configured file remains watched across global updates",
       "firestore.get() / firestore.exists() over the latest Firestore state of the project (STORAGE-RULES-FIRESTORE-ACCESS: two per request)"
     ],
     "notes": [
@@ -629,8 +631,10 @@
     "status": "partial",
     "precision": "boundary-conformance",
     "implemented": [
-      "firebase.json for every served product: firestore in object or array (named-database) form with rules and indexes (also the legacy index spelling), storage in object or array form with target / bucket / rules, functions in object or array (multi-codebase) form with source, codebase, runtime and ignore",
+      "firebase.json for every served product: firestore in object or array (named-database) form with rules and indexes (also the legacy index spelling), storage in global object or target-based array form with .firebaserc bucket expansion, functions in object or array (multi-codebase) form with source, codebase, runtime and ignore",
       "named Firestore databases load, enforce and hot-reload their own isolated rules and index files",
+      "target-based Storage rules load and hot-reload one isolated slot per target; --only storage:<target> follows the emulator controller by selecting Storage without narrowing the loaded target set",
+      "target configuration is bounded to 64 targets and 1024 concrete buckets per process; these are explicit local resource-safety budgets absent from firebase-tools 15.28.2",
       "every selected Functions codebase declared in firebase.json runs in the daemon, one runner process each; --only functions:<codebase> narrows the run to one; firebase-tools 15.28.2 has no codebase-count limit, while fireemu refuses more than 32 simultaneously selected codebases before starting any runner as an explicit local resource-safety divergence",
       "emulators.<name>.host and .port for firestore, auth, storage, functions, hub and ui, emulators.ui.enabled, and emulators.singleProjectMode",
       "loopback-only hosts, as a published divergence from firebase-tools (which binds any host as given): emulators.<name>.host and the canonical bind key accept 127.0.0.1, localhost and ::1; 0.0.0.0, :: or a LAN address exits 1 naming the key, because the daemon serves without a credential on loopback and has no routable mode",
@@ -641,7 +645,6 @@
       "spec/config/firebase-json.schema.json with a valid and an invalid corpus, checked by tools/config-schema-check and replayed through the loader by a unit test"
     ],
     "unimplemented": [
-      "one Storage ruleset covers every bucket, so a per-target rules file is reported and not loaded",
       "emulators.singleProjectMode is recorded and published but enforces nothing on its own: fireemu isolates every project into its own session, which is stricter",
       "hosting, database and the other deferred products are not parsed beyond reporting them"
     ],

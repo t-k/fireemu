@@ -8,6 +8,7 @@
     "smoke:client": "node client.mjs",
     "smoke:lite": "node lite.mjs",
     "smoke:storage": "node storage.mjs",
+    "smoke:storage-targets": "node storage-targets.mjs",
     "smoke:functions": "node functions.mjs",
     "smoke:pubsub": "node pubsub.mjs",
     "smoke:appcheck": "node appcheck.mjs",

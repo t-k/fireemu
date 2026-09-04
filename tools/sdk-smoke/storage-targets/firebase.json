@@ -1,0 +1,6 @@
+{
+  "storage": [
+    { "target": "public", "rules": "public.rules" },
+    { "target": "private", "rules": "private.rules" }
+  ]
+}

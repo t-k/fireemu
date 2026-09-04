@@ -134,6 +134,7 @@ send({
             {"name": "hold", "generation": 2, "concurrency": None, "platformOptions": {"availableMemoryMb": 2048}, "trigger": {"type": "http", "callable": False}},
             {"name": "add", "trigger": {"type": "http", "callable": True, "enforceAppCheck": False, "consumeAppCheckToken": "disabled"}},
             {"name": "guarded", "trigger": {"type": "http", "callable": True, "enforceAppCheck": True, "consumeAppCheckToken": consume}},
+            {"name": "guardedV2", "generation": 2, "trigger": {"type": "http", "callable": True, "enforceAppCheck": True, "consumeAppCheckToken": consume}},
         ]
     },
 })

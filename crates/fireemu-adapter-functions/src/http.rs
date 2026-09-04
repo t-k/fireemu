@@ -3,7 +3,10 @@
 //! proxy speaks plain HTTP/1.1 with `Connection: close` (one request per connection).
 
 use std::convert::Infallible;
+use std::future::Future as _;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -20,8 +23,7 @@ pub use fireemu_core_session::loopback::origin_is_local;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt as _;
+use tokio_stream::{Stream, StreamExt as _};
 
 use crate::runtime::FunctionsRuntime;
 
@@ -150,7 +152,8 @@ fn with_local_cors(mut response: Response<OutBody>, origin: Option<&str>) -> Res
 /// Encodes a daemon-side callable refusal the same way the v2 SDK wrapper answers a
 /// streaming request. The wrapper writes one SSE record without replacing the response's
 /// default `200` status, even when token admission fails before the handler starts.
-fn streaming_callable_refusal(response: ProxiedResponse) -> Response<OutBody> {
+fn streaming_callable_refusal() -> Response<OutBody> {
+    let response = crate::callable::unauthenticated_response();
     let mut body = Vec::with_capacity("data: ".len() + response.body.len() + 2);
     body.extend_from_slice(b"data: ");
     body.extend_from_slice(&response.body);
@@ -158,13 +161,30 @@ fn streaming_callable_refusal(response: ProxiedResponse) -> Response<OutBody> {
     Response::new(full(Bytes::from(body)))
 }
 
-fn http_trigger_kinds(runtime: &FunctionsRuntime, function: &str) -> (bool, bool) {
-    let trigger = runtime.manifest().get(function).map(|entry| &entry.trigger);
+fn callable_credential_refusal(
+    denial: Response<OutBody>,
+    streaming: bool,
+    origin: Option<&str>,
+) -> Response<OutBody> {
+    with_local_cors(
+        if streaming {
+            streaming_callable_refusal()
+        } else {
+            denial
+        },
+        origin,
+    )
+}
+
+fn http_trigger_kinds(runtime: &FunctionsRuntime, function: &str) -> (bool, bool, bool) {
+    let entry = runtime.manifest().get(function);
+    let trigger = entry.map(|entry| &entry.trigger);
+    let callable = matches!(
+        trigger,
+        Some(fireemu_core_functions::manifest::Trigger::Http { callable: true, .. })
+    );
     (
-        matches!(
-            trigger,
-            Some(fireemu_core_functions::manifest::Trigger::Http { callable: true, .. })
-        ),
+        callable,
         matches!(
             trigger,
             Some(fireemu_core_functions::manifest::Trigger::Http {
@@ -172,7 +192,18 @@ fn http_trigger_kinds(runtime: &FunctionsRuntime, function: &str) -> (bool, bool
                 ..
             })
         ),
+        callable
+            && entry.is_some_and(|entry| {
+                entry.generation == fireemu_core_functions::manifest::FunctionGeneration::Second
+            }),
     )
+}
+
+fn accepts_callable_stream(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get(hyper::header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        == Some("text/event-stream")
 }
 
 fn local_request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
@@ -205,7 +236,48 @@ pub struct ProxiedStreamResponse {
     /// Headers with hop-by-hop framing removed.
     pub headers: Vec<(String, String)>,
     /// A bounded, backpressured sequence of response bytes.
-    pub body: mpsc::Receiver<Result<Bytes, std::io::Error>>,
+    pub body: mpsc::Receiver<Bytes>,
+    /// A terminal error channel independent of body backpressure.
+    pub terminal: oneshot::Receiver<Result<(), std::io::Error>>,
+}
+
+struct StreamResponseBody {
+    body: mpsc::Receiver<Bytes>,
+    terminal: Option<oneshot::Receiver<Result<(), std::io::Error>>>,
+    failed: bool,
+}
+
+impl Stream for StreamResponseBody {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.failed {
+            return Poll::Ready(None);
+        }
+        if let Some(terminal) = &mut this.terminal {
+            match Pin::new(terminal).poll(cx) {
+                Poll::Ready(Ok(Ok(()))) => this.terminal = None,
+                Poll::Ready(Ok(Err(error))) => {
+                    this.terminal = None;
+                    this.failed = true;
+                    return Poll::Ready(Some(Err(error)));
+                }
+                Poll::Ready(Err(_)) => {
+                    this.terminal = None;
+                    this.failed = true;
+                    return Poll::Ready(Some(Err(std::io::Error::other(
+                        "function stream pump stopped",
+                    ))));
+                }
+                Poll::Pending => {}
+            }
+        }
+        match this.body.poll_recv(cx) {
+            Poll::Ready(None) if this.terminal.is_some() => Poll::Pending,
+            result => result.map(|item| item.map(Ok)),
+        }
+    }
 }
 
 /// A public stream plus the private lifecycle signal its runtime must retain.
@@ -253,6 +325,10 @@ pub async fn forward(
         .map_err(|e| format!("cannot reach the functions runner at {addr}: {e}"))?;
     let mut req = format!("{method} {path_and_query} HTTP/1.1\r\n");
     let mut has_host = false;
+    let connection_named = connection_tokens(headers.iter().filter_map(|(name, value)| {
+        name.eq_ignore_ascii_case("connection")
+            .then_some(value.as_str())
+    }));
     for (k, v) in headers {
         // This writer frames the request by hand. Everything it is handed today comes from
         // hyper, which already refuses a control character in a field name or value, but the
@@ -261,14 +337,13 @@ pub async fn forward(
         if !is_framable_name(k) || !is_framable_value(v) {
             return Err(format!("refusing to forward the unframable header {k:?}"));
         }
-        let lower = k.to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "connection" | "content-length" | "transfer-encoding" | "keep-alive" | "expect"
-        ) {
+        if is_hop_by_hop(k, &connection_named)
+            || k.eq_ignore_ascii_case("content-length")
+            || k.eq_ignore_ascii_case("expect")
+        {
             continue;
         }
-        if lower == "host" {
+        if k.eq_ignore_ascii_case("host") {
             has_host = true;
         }
         let _ = write!(req, "{k}: {v}\r\n");
@@ -314,6 +389,31 @@ async fn before_stream_deadline<T>(
     }
 }
 
+fn connection_tokens<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
+    values
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|name| is_framable_name(name))
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn is_hop_by_hop(name: &str, connection_named: &[String]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    ) || connection_named.contains(&lower)
+}
+
 fn streaming_request(
     addr: &str,
     method: &str,
@@ -323,20 +423,23 @@ fn streaming_request(
 ) -> Result<Request<Full<Bytes>>, String> {
     let mut builder = Request::builder().method(method).uri(path_and_query);
     let mut has_host = false;
+    let connection_named = connection_tokens(headers.iter().filter_map(|(name, value)| {
+        name.eq_ignore_ascii_case("connection")
+            .then_some(value.as_str())
+    }));
     for (name, value) in headers {
         if !is_framable_name(name) || !is_framable_value(value) {
             return Err(format!(
                 "refusing to forward the unframable header {name:?}"
             ));
         }
-        let lower = name.to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "connection" | "content-length" | "transfer-encoding" | "keep-alive" | "expect"
-        ) {
+        if is_hop_by_hop(name, &connection_named)
+            || name.eq_ignore_ascii_case("content-length")
+            || name.eq_ignore_ascii_case("expect")
+        {
             continue;
         }
-        if lower == "host" {
+        if name.eq_ignore_ascii_case("host") {
             has_host = true;
         }
         builder = builder.header(name, value);
@@ -357,9 +460,15 @@ enum NextStreamFrame {
     TimedOut,
 }
 
+enum StreamSend {
+    Sent,
+    ClientGone,
+    TimedOut,
+}
+
 async fn next_stream_frame(
     upstream: &mut Incoming,
-    body_tx: &mpsc::Sender<Result<Bytes, std::io::Error>>,
+    body_tx: &mpsc::Sender<Bytes>,
     deadline: Option<tokio::time::Instant>,
 ) -> NextStreamFrame {
     match deadline {
@@ -382,9 +491,34 @@ async fn next_stream_frame(
     }
 }
 
+async fn send_stream_data(
+    body_tx: &mpsc::Sender<Bytes>,
+    data: Bytes,
+    deadline: Option<tokio::time::Instant>,
+) -> StreamSend {
+    match deadline {
+        Some(deadline) => {
+            tokio::select! {
+                biased;
+                () = body_tx.closed() => StreamSend::ClientGone,
+                sent = tokio::time::timeout_at(deadline, body_tx.send(data)) => match sent {
+                    Ok(Ok(())) => StreamSend::Sent,
+                    Ok(Err(_)) => StreamSend::ClientGone,
+                    Err(_) => StreamSend::TimedOut,
+                }
+            }
+        }
+        None => body_tx
+            .send(data)
+            .await
+            .map_or(StreamSend::ClientGone, |()| StreamSend::Sent),
+    }
+}
+
 async fn pump_stream(
     mut upstream: Incoming,
-    body_tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
+    body_tx: mpsc::Sender<Bytes>,
+    terminal_tx: oneshot::Sender<Result<(), std::io::Error>>,
     completion_tx: oneshot::Sender<StreamCompletion>,
     connection: tokio::task::JoinHandle<Result<(), hyper::Error>>,
     deadline: Option<tokio::time::Instant>,
@@ -394,38 +528,23 @@ async fn pump_stream(
     let outcome = loop {
         match next_stream_frame(&mut upstream, &body_tx, deadline).await {
             NextStreamFrame::ClientGone => break StreamCompletion::ClientGone,
-            NextStreamFrame::TimedOut => {
-                let _ = body_tx
-                    .send(Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "function stream timed out",
-                    )))
-                    .await;
-                break StreamCompletion::TimedOut;
-            }
+            NextStreamFrame::TimedOut => break StreamCompletion::TimedOut,
             NextStreamFrame::Frame(Some(Ok(frame))) => {
                 let Ok(data) = frame.into_data() else {
                     continue;
                 };
                 streamed = streamed.saturating_add(data.len() as u64);
                 if streamed > response_limit {
-                    let _ = body_tx
-                        .send(Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("function stream exceeds {response_limit} bytes"),
-                        )))
-                        .await;
                     break StreamCompletion::TooLarge;
                 }
-                if body_tx.send(Ok(data)).await.is_err() {
-                    break StreamCompletion::ClientGone;
+                match send_stream_data(&body_tx, data, deadline).await {
+                    StreamSend::Sent => {}
+                    StreamSend::ClientGone => break StreamCompletion::ClientGone,
+                    StreamSend::TimedOut => break StreamCompletion::TimedOut,
                 }
             }
             NextStreamFrame::Frame(Some(Err(error))) => {
                 let message = format!("reading the runner's response stream: {error}");
-                let _ = body_tx
-                    .send(Err(std::io::Error::other(message.clone())))
-                    .await;
                 break StreamCompletion::Upstream(message);
             }
             NextStreamFrame::Frame(None) => break StreamCompletion::Complete,
@@ -433,6 +552,19 @@ async fn pump_stream(
     };
     connection.abort();
     let _ = connection.await;
+    let terminal = match &outcome {
+        StreamCompletion::TimedOut => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "function stream timed out",
+        )),
+        StreamCompletion::TooLarge => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("function stream exceeds {response_limit} bytes"),
+        )),
+        StreamCompletion::Upstream(error) => Err(std::io::Error::other(error.clone())),
+        StreamCompletion::Complete | StreamCompletion::ClientGone => Ok(()),
+    };
+    let _ = terminal_tx.send(terminal);
     let _ = completion_tx.send(outcome);
 }
 
@@ -500,15 +632,35 @@ async fn forward_stream_with_limit(
             return Err(error);
         }
     };
+    let encoded = response
+        .headers()
+        .get_all(hyper::header::CONTENT_ENCODING)
+        .iter()
+        .any(|value| {
+            value
+                .to_str()
+                .map_or(true, |value| !value.eq_ignore_ascii_case("identity"))
+        });
+    if encoded {
+        connection.abort();
+        let _ = connection.await;
+        return Err(StreamStartError::Upstream(
+            "refusing a streamed response with a non-identity content encoding".to_owned(),
+        ));
+    }
     let status = response.status().as_u16();
+    let connection_named = connection_tokens(
+        response
+            .headers()
+            .get_all(hyper::header::CONNECTION)
+            .iter()
+            .filter_map(|value| value.to_str().ok()),
+    );
     let response_headers = response
         .headers()
         .iter()
         .filter(|(name, _)| {
-            !matches!(
-                name.as_str(),
-                "connection" | "content-length" | "transfer-encoding" | "keep-alive"
-            )
+            !is_hop_by_hop(name.as_str(), &connection_named) && name.as_str() != "content-length"
         })
         .filter_map(|(name, value)| {
             value
@@ -519,10 +671,12 @@ async fn forward_stream_with_limit(
         .collect();
     let upstream = response.into_body();
     let (body_tx, body_rx) = mpsc::channel(1);
+    let (terminal_tx, terminal_rx) = oneshot::channel();
     let (completion_tx, completion_rx) = oneshot::channel();
     tokio::spawn(pump_stream(
         upstream,
         body_tx,
+        terminal_tx,
         completion_tx,
         connection,
         deadline,
@@ -533,6 +687,7 @@ async fn forward_stream_with_limit(
             status,
             headers: response_headers,
             body: body_rx,
+            terminal: terminal_rx,
         },
         completion: completion_rx,
     })
@@ -569,21 +724,31 @@ pub fn parse_response(raw: &[u8], method: &str) -> Result<ProxiedResponse, Strin
         .nth(1)
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| format!("malformed status line {status_line:?}"))?;
-    let mut headers = Vec::new();
+    let mut raw_headers = Vec::new();
     let mut chunked = false;
     let mut content_length: Option<usize> = None;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim();
             let v = v.trim();
+            raw_headers.push((k.to_owned(), v.to_owned()));
             match k.to_ascii_lowercase().as_str() {
                 "transfer-encoding" => chunked = v.eq_ignore_ascii_case("chunked"),
                 "content-length" => content_length = v.parse().ok(),
-                "connection" | "keep-alive" => {}
-                _ => headers.push((k.to_owned(), v.to_owned())),
+                _ => {}
             }
         }
     }
+    let connection_named = connection_tokens(raw_headers.iter().filter_map(|(name, value)| {
+        name.eq_ignore_ascii_case("connection")
+            .then_some(value.as_str())
+    }));
+    let headers = raw_headers
+        .into_iter()
+        .filter(|(name, _)| {
+            !is_hop_by_hop(name, &connection_named) && !name.eq_ignore_ascii_case("content-length")
+        })
+        .collect();
     let rest = &raw[header_end + 4..];
     let bodyless = method.eq_ignore_ascii_case("HEAD")
         || matches!(status, 204 | 304)
@@ -903,7 +1068,12 @@ fn streaming_response(response: ProxiedStreamResponse) -> Response<OutBody> {
     for (name, value) in response.headers {
         builder = builder.header(name, value);
     }
-    let frames = ReceiverStream::new(response.body).map(|item| {
+    let bytes = StreamResponseBody {
+        body: response.body,
+        terminal: Some(response.terminal),
+        failed: false,
+    };
+    let frames = bytes.map(|item| {
         item.map(Frame::data)
             .map_err(|error| Box::new(error) as BoxError)
     });
@@ -959,13 +1129,8 @@ async fn respond(
     // loopback origins this port serves. A callable answers its own preflight (v2 `onCall`
     // enables CORS itself, and the recorded oracle shows `POST` where an `onRequest` shows the
     // whole method list), so a callable's request is forwarded untouched.
-    let (callable, plain_http) = http_trigger_kinds(&runtime, function);
-    let streaming = callable
-        && req
-            .headers()
-            .get(hyper::header::ACCEPT)
-            .and_then(|value| value.to_str().ok())
-            == Some("text/event-stream");
+    let (callable, plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
+    let streaming = streaming_callable && accepts_callable_stream(req.headers());
     if callable && method == "OPTIONS" {
         return Ok(match callable_preflight(req.headers()) {
             Some(answer) => answer,
@@ -992,14 +1157,10 @@ async fn respond(
         Ok(headers) => headers,
         Err(denial) => {
             drain_refused_body(req.into_body()).await;
-            let denial = if streaming {
-                streaming_callable_refusal(crate::callable::unauthenticated_response())
-            } else {
-                *denial
-            };
-            return Ok(with_local_cors(
-                denial,
-                callable.then_some(origin.as_deref()).flatten(),
+            return Ok(callable_credential_refusal(
+                *denial,
+                streaming,
+                origin.as_deref(),
             ));
         }
     };
@@ -1264,7 +1425,10 @@ mod admission_tests {
 
 #[cfg(test)]
 mod streaming_tests {
-    use super::{forward_stream_with_limit, StreamCompletion};
+    use super::{
+        forward_stream_with_limit, streaming_response, StreamCompletion, StreamStartError,
+    };
+    use http_body_util::BodyExt as _;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::time::{Duration, Instant};
@@ -1308,14 +1472,61 @@ mod streaming_tests {
         (address, task)
     }
 
+    async fn upstream_exchange(
+        response_headers: &'static str,
+        chunks: Vec<&'static [u8]>,
+        finish: bool,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut bytes = [0_u8; 1024];
+                let read = stream.read(&mut bytes).await.unwrap();
+                assert_ne!(read, 0, "client closed before sending the request");
+                request.extend_from_slice(&bytes[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream.write_all(response_headers.as_bytes()).await.unwrap();
+            for chunk in chunks {
+                if stream
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .await
+                    .is_err()
+                    || stream.write_all(chunk).await.is_err()
+                    || stream.write_all(b"\r\n").await.is_err()
+                    || stream.flush().await.is_err()
+                {
+                    return String::from_utf8_lossy(&request).into_owned();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            if finish {
+                let _ = stream.write_all(b"0\r\n\r\n").await;
+                let _ = stream.flush().await;
+            }
+            let mut discarded = Vec::new();
+            let _ = stream.read_to_end(&mut discarded).await;
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (address, task)
+    }
+
     #[tokio::test]
     async fn dropping_the_public_body_cancels_an_idle_upstream_stream() {
         let (address, upstream) = upstream(b"first", false).await;
         let started = forward_stream_with_limit(&address, "POST", "/callable", &[], &[], None, 64)
             .await
             .unwrap();
-        let mut body = started.response.body;
-        assert_eq!(body.recv().await.unwrap().unwrap(), "first");
+        let mut body = streaming_response(started.response).into_body();
+        assert_eq!(
+            body.frame().await.unwrap().unwrap().into_data().unwrap(),
+            "first"
+        );
         drop(body);
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(1), started.completion)
@@ -1336,9 +1547,9 @@ mod streaming_tests {
         let started = forward_stream_with_limit(&address, "POST", "/callable", &[], &[], None, 4)
             .await
             .unwrap();
-        let mut body = started.response.body;
-        let error = body.recv().await.unwrap().unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let mut body = streaming_response(started.response).into_body();
+        let error = body.frame().await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("exceeds 4 bytes"));
         assert_eq!(
             started.completion.await.unwrap(),
             StreamCompletion::TooLarge
@@ -1360,10 +1571,13 @@ mod streaming_tests {
         )
         .await
         .unwrap();
-        let mut body = started.response.body;
-        assert_eq!(body.recv().await.unwrap().unwrap(), "first");
-        let error = body.recv().await.unwrap().unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        let mut body = streaming_response(started.response).into_body();
+        assert_eq!(
+            body.frame().await.unwrap().unwrap().into_data().unwrap(),
+            "first"
+        );
+        let error = body.frame().await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("timed out"));
         assert_eq!(
             started.completion.await.unwrap(),
             StreamCompletion::TimedOut
@@ -1371,6 +1585,127 @@ mod streaming_tests {
         tokio::time::timeout(Duration::from_secs(1), upstream)
             .await
             .expect("the timed-out upstream socket closes")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_slow_reader_cannot_hold_admission_past_the_absolute_deadline() {
+        let (address, upstream) = upstream_exchange(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+            vec![b"first", b"second", b"third"],
+            false,
+        )
+        .await;
+        let started = forward_stream_with_limit(
+            &address,
+            "POST",
+            "/callable",
+            &[],
+            &[],
+            Some(Instant::now() + Duration::from_millis(100)),
+            64,
+        )
+        .await
+        .unwrap();
+        let response = started.response;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), started.completion)
+                .await
+                .expect("a full downstream channel cannot defeat the deadline")
+                .unwrap(),
+            StreamCompletion::TimedOut
+        );
+        let mut body = streaming_response(response).into_body();
+        let error = body
+            .frame()
+            .await
+            .expect("the timed-out body reports one terminal frame")
+            .expect_err("the terminal frame is an error");
+        assert!(error.to_string().contains("timed out"));
+        tokio::time::timeout(Duration::from_secs(1), upstream)
+            .await
+            .expect("the slow reader's upstream socket closes")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn streaming_strips_standard_and_connection_named_hop_by_hop_headers() {
+        let (address, upstream) = upstream_exchange(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: x-response-hop, keep-alive\r\nx-response-hop: private\r\nUpgrade: websocket\r\nTE: trailers\r\nTrailer: x-checksum\r\nProxy-Authenticate: Basic\r\nProxy-Authorization: Basic private\r\nx-response-keep: public\r\n\r\n",
+            vec![b"done"],
+            true,
+        )
+        .await;
+        let started = forward_stream_with_limit(
+            &address,
+            "POST",
+            "/callable",
+            &[
+                ("connection".to_owned(), "x-request-hop, upgrade".to_owned()),
+                ("x-request-hop".to_owned(), "private".to_owned()),
+                ("upgrade".to_owned(), "websocket".to_owned()),
+                ("te".to_owned(), "trailers".to_owned()),
+                ("trailer".to_owned(), "x-checksum".to_owned()),
+                ("proxy-authenticate".to_owned(), "Basic".to_owned()),
+                ("proxy-authorization".to_owned(), "Basic private".to_owned()),
+                ("x-request-keep".to_owned(), "public".to_owned()),
+            ],
+            &[],
+            None,
+            64,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            started.response.headers,
+            vec![("x-response-keep".to_owned(), "public".to_owned())]
+        );
+        let body = streaming_response(started.response)
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(body, "done");
+        assert_eq!(
+            started.completion.await.unwrap(),
+            StreamCompletion::Complete
+        );
+        let request = upstream.await.unwrap().to_ascii_lowercase();
+        assert!(request.contains("x-request-keep: public\r\n"));
+        assert!(request.contains("connection: close\r\n"));
+        for forbidden in [
+            "x-request-hop:",
+            "upgrade:",
+            "te:",
+            "trailer:",
+            "proxy-authenticate:",
+            "proxy-authorization:",
+        ] {
+            assert!(
+                !request.contains(forbidden),
+                "forwarded {forbidden}: {request}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_encoded_stream_is_refused_before_compressed_bytes_can_bypass_the_limit() {
+        let (address, upstream) = upstream_exchange(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Encoding: gzip\r\n\r\n",
+            vec![b"compressed"],
+            true,
+        )
+        .await;
+        let result =
+            forward_stream_with_limit(&address, "POST", "/callable", &[], &[], None, 64).await;
+        assert!(matches!(
+            result,
+            Err(StreamStartError::Upstream(error)) if error.contains("content encoding")
+        ));
+        tokio::time::timeout(Duration::from_secs(1), upstream)
+            .await
+            .expect("the refused encoded stream closes upstream")
             .unwrap();
     }
 }

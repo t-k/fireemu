@@ -1476,6 +1476,11 @@ fn http_responses_are_parsed_with_every_body_framing() {
         r.headers,
         vec![("Content-Type".to_owned(), "text/plain".to_owned())]
     );
+    let hop_by_hop = b"HTTP/1.1 200 OK\r\nConnection: x-private\r\nx-private: secret\r\nUpgrade: websocket\r\nTE: trailers\r\nTrailer: x-checksum\r\nProxy-Authenticate: Basic\r\nProxy-Authorization: Basic secret\r\nx-public: value\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq!(
+        parse_response(hop_by_hop, "GET").unwrap().headers,
+        vec![("x-public".to_owned(), "value".to_owned())]
+    );
     let sized = b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nnopIGNORED";
     assert_eq!(parse_response(sized, "GET").unwrap().body, b"nop");
     // HEAD and body-less statuses omit the declared body; a truncated GET is an error.

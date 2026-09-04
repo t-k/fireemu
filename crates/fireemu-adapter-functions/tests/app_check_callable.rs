@@ -406,7 +406,7 @@ async fn an_enforced_streaming_callable_returns_the_sdk_sse_error_without_invoki
     let denial = h
         .request(
             "POST",
-            "guarded",
+            "guardedV2",
             &[
                 ("accept", "text/event-stream"),
                 ("origin", "http://127.0.0.1:5173"),
@@ -432,6 +432,24 @@ async fn an_enforced_streaming_callable_returns_the_sdk_sse_error_without_invoki
         body.get("headers").is_none(),
         "the runner was never reached: {body}"
     );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn a_first_generation_callable_with_a_stream_accept_header_keeps_the_json_denial() {
+    let h = start(true).await;
+    let denial = h
+        .request("POST", "guarded", &[("accept", "text/event-stream")])
+        .await;
+
+    assert_eq!(denial.status, 401);
+    assert_eq!(
+        response_header(&denial, "content-type"),
+        Some("application/json; charset=utf-8")
+    );
+    let body: Value = serde_json::from_slice(&denial.body).expect("the v1 denial remains JSON");
+    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    assert_eq!(body["error"]["message"], "Unauthenticated");
     h.stop().await;
 }
 

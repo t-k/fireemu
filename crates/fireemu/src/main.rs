@@ -1904,6 +1904,392 @@ fn control_state(
     }
 }
 
+struct BoundStartup {
+    cfg: RuntimeConfig,
+    only: Selection,
+    verbosity: Verbosity,
+    import: Option<PathBuf>,
+    export_on_exit: Option<PathBuf>,
+    quiet: bool,
+    auth_wall_clock: Option<AuthWallClock>,
+    clock: Arc<Mutex<VirtualClock>>,
+    gateway: Gateway,
+    backend: Arc<LocalBackend>,
+    text_indexes: Arc<Mutex<fireemu_core_firestore::text_index::TextIndexCatalog>>,
+    faults: fireemu_core_session::fault::SharedFaultRegistry,
+    tenancy: fireemu_core_session::tenancy::SharedTenancy,
+    auth_store: Arc<Mutex<AuthStore>>,
+    registry: Arc<fireemu_core_auth::store::AuthRegistry>,
+    rules: Arc<RulesetSlot>,
+    database_rules: std::collections::BTreeMap<String, Arc<RulesetSlot>>,
+    storage_rules: Arc<RulesetSlot>,
+    barrier: Arc<fireemu_core_session::barrier::AdmissionBarrier>,
+    listeners: Listeners,
+    ui_listener: Option<tokio::net::TcpListener>,
+    ui_note: Option<String>,
+    addrs: BoundAddrs,
+    control_token: String,
+    storage_admin_capability: String,
+    app_check: Option<Arc<fireemu_adapter_http::app_check::AppCheckState>>,
+    app_check_gate: Option<fireemu_core_app_check::AppCheckGate>,
+    callable_trusted_protocol: bool,
+    functions_runtime: Option<Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>>,
+}
+
+fn assemble_suite(bound: BoundStartup, exec_mode: bool) -> Result<ReadySuite, String> {
+    let BoundStartup {
+        cfg,
+        only,
+        verbosity,
+        import,
+        export_on_exit,
+        quiet,
+        auth_wall_clock,
+        clock,
+        gateway,
+        backend,
+        text_indexes,
+        faults,
+        tenancy,
+        auth_store,
+        registry,
+        rules,
+        database_rules,
+        storage_rules,
+        barrier,
+        listeners,
+        ui_listener,
+        ui_note,
+        addrs,
+        control_token,
+        storage_admin_capability,
+        app_check,
+        app_check_gate,
+        callable_trusted_protocol,
+        functions_runtime,
+    } = bound;
+    let Listeners {
+        firestore: grpc_listener,
+        control: http_listener,
+        auth_selected,
+        storage: storage_listener,
+        functions: functions_listener,
+        pubsub: pubsub_listener,
+        hub: hub_listener,
+        logging: logging_listener,
+    } = listeners;
+    let http_addr = addrs.control;
+    let hub_addr = addrs.hub;
+    let ui_addr = addrs.ui;
+
+    // The Pub/Sub broker: real topic/subscription state served over gRPC. Its seed is the
+    // daemon seed with a fixed tag so its message and ack ids never coincide with another
+    // subsystem's stream. A published message also reaches subscribed Cloud Functions
+    // through the bridge (EVTINFRA-02), when a functions runtime is loaded.
+    let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
+        cfg.seed ^ 0x5053_5542,
+    )));
+    let pubsub_resources = if pubsub_listener.is_some() {
+        if let Some(runtime) = &functions_runtime {
+            let resources =
+                functions::function_pubsub_resources(runtime.project(), runtime.manifest())?;
+            let mut state = pubsub_state
+                .lock()
+                .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
+            functions::provision_function_pubsub_resources(&mut state, &resources)?;
+            resources
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    let pubsub_bridge: Option<Arc<dyn fireemu_adapter_pubsub::TopicDelivery>> =
+        functions_runtime.as_ref().map(|r| {
+            Arc::new(functions::PubSubBridge::new(r.clone()))
+                as Arc<dyn fireemu_adapter_pubsub::TopicDelivery>
+        });
+    let pubsub_handle = fireemu_adapter_pubsub::PubSubHandle::new(
+        pubsub_state.clone(),
+        clock.clone(),
+        pubsub_bridge,
+    );
+    let auth_policy = service_admission(
+        app_check_gate.as_ref(),
+        "auth",
+        only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
+    );
+    let firestore_policy = service_admission(
+        app_check_gate.as_ref(),
+        "firestore",
+        only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
+    );
+    let storage_policy = service_admission(
+        app_check_gate.as_ref(),
+        "storage",
+        only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
+    );
+    // Auth user events reach the functions runtime after each Auth request.
+    let auth = Arc::new(AuthState {
+        store: auth_store.clone(),
+        clock: clock.clone(),
+        wall_clock: auth_wall_clock,
+        totp_extension_enabled: cfg.auth_totp.is_some(),
+        barrier: Some(barrier.clone()),
+        events: functions_runtime.as_ref().map(functions::auth_sink),
+        blocking: functions_runtime.as_ref().map(|runtime| {
+            Arc::new(functions::BlockingAuthBridge::new(runtime.clone()))
+                as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
+        }),
+        operation_gate: Arc::new(Mutex::new(())),
+        control_token: Some(control_token.clone()),
+        registry: Some(registry.clone()),
+        allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Firebase,
+        stateless_refresh_tokens: cfg.profile == crate::config::CompatibilityProfile::Firebase,
+        query_limits: match cfg.profile {
+            crate::config::CompatibilityProfile::Firebase => {
+                fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded
+            }
+            crate::config::CompatibilityProfile::Strict => {
+                fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded
+            }
+        },
+        fake_custom_token_expiry: match cfg.profile {
+            crate::config::CompatibilityProfile::Firebase => {
+                fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore
+            }
+            crate::config::CompatibilityProfile::Strict => {
+                fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject
+            }
+        },
+        tenancy: Some(tenancy.clone()),
+        app_check: app_check.clone(),
+        app_check_policy: auth_policy,
+    });
+    // A fault plan that moves the clock wakes the functions runtime like the clock
+    // route does.
+    let clock_observer: Option<Arc<dyn Fn() + Send + Sync>> = functions_runtime.as_ref().map(|r| {
+        let r = r.clone();
+        Arc::new(move || r.on_clock_changed()) as Arc<dyn Fn() + Send + Sync>
+    });
+    if let Some(observer) = &clock_observer {
+        backend.set_clock_observer(observer.clone());
+    }
+    let storage = storage_state(
+        &cfg,
+        &clock,
+        &registry,
+        &tenancy,
+        &storage_rules,
+        functions_runtime
+            .as_ref()
+            .map(|r| functions::storage_sink(r, &tenancy)),
+        &backend,
+        &faults,
+        clock_observer,
+        storage_policy,
+        storage_admin_capability.clone(),
+    )?;
+    if let Some(runtime) = &functions_runtime {
+        runtime.set_faults(faults.for_project(runtime.project()));
+        if let Some(gate) = &app_check_gate {
+            // The callable baseline is `unenforced`: the daemon classifies and records
+            // every callable token, and the callable's own `enforceAppCheck` decides
+            // (specification section 13.4). The Auth verifier is a dedicated enforcer that
+            // never evaluates a rule: it exists to verify the ID token against the target
+            // project's users on the virtual clock, which is required whether or not
+            // Security Rules are enforced at all.
+            // The service label is the core's own constant: counters group callable
+            // observations by function name for exactly this label (section 15).
+            let policy = service_admission(
+                Some(gate),
+                fireemu_core_app_check::observe::FUNCTIONS_SERVICE,
+                fireemu_core_app_check::verify::BaselineMode::Unenforced,
+            )
+            .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;
+            let verifier = Arc::new(
+                RulesEnforcer::new(
+                    Arc::new(RulesetSlot::default()),
+                    auth_store.clone(),
+                    clock.clone(),
+                )
+                .with_registry(registry.clone()),
+            );
+            runtime.set_callable_trust(Arc::new(
+                fireemu_adapter_functions::callable::CallableTrust::new(
+                    policy,
+                    verifier,
+                    runtime.project(),
+                ),
+            ));
+        }
+    }
+    let control = Arc::new(control_state(
+        &cfg,
+        &clock,
+        &rules,
+        &database_rules,
+        &storage_rules,
+        &backend,
+        &auth_store,
+        &storage,
+        functions_runtime.as_ref(),
+        control_token.clone(),
+        faults.clone(),
+        text_indexes.clone(),
+        &registry,
+        tenancy.clone(),
+        app_check_gate.clone(),
+        &pubsub_state,
+        &pubsub_resources,
+    ));
+    // The Emulator Hub's locator file lives as long as this scope: dropping it removes
+    // the file, so a clean exit on either signal path leaves no stale discovery behind.
+    // The export seam: one object that owns everything an export reads, shared by the
+    // Hub's route, `emulators:export` and `--export-on-exit`.
+    let exporter = Arc::new(Exporter {
+        backend: backend.clone(),
+        auth: registry.clone(),
+        storage: storage.clone(),
+        clock: clock.clone(),
+        project: cfg.auth_project.clone(),
+        products: import_export::Products::from(&only),
+    });
+    // The import happens before the command starts and before the banner claims the
+    // suite is ready: a run that cannot install its fixture must not run at all.
+    if let Some(dir) = &import {
+        let prepared = import_export::prepare(dir, exporter.products, &cfg.auth_project)
+            .map_err(|e| format!("--import {}: {e}", dir.display()))?;
+        if !quiet {
+            for notice in &prepared.notices {
+                eprintln!("note: --import {}: {notice}", dir.display());
+            }
+        }
+        let summary = prepared.summary();
+        import_export::apply(prepared, &exporter.endpoints())
+            .map_err(|e| format!("--import {}: {e}", dir.display()))?;
+        if !quiet {
+            println!("  imported: {} ({summary})", dir.display());
+        }
+    }
+    let hub_state = Arc::new(hub::HubState {
+        project: cfg.auth_project.clone(),
+        addr: hub_addr.unwrap_or(http_addr),
+        emulators: hub_emulators(&addrs),
+        functions: functions_runtime.clone(),
+        export: Some(exporter.clone() as Arc<dyn hub::ExportRunner>),
+        control_token: control_token.clone(),
+    });
+    let _locator = hub_addr.map(|_| {
+        let (locator, note) = hub::Locator::write(&hub_state);
+        if let (Some(note), false) = (note, quiet) {
+            eprintln!("note: {note}");
+        }
+        locator
+    });
+    if !quiet {
+        print_banner(
+            &cfg,
+            if exec_mode { "exec" } else { "up" },
+            &addrs,
+            functions_runtime.as_deref(),
+        );
+        if let Some(state) = &app_check {
+            println!(
+            "  app check:        {} app(s)   FIREEMU_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",
+            cfg.app_check.apps.len(),
+            state.signer.kid()
+        );
+            println!(
+            "  app check modes:  auth={} firestore={} storage={}   (Firestore covers unary gRPC, REST, Write/Listen streams and WebChannel; Storage covers resumable uploads too){}",
+            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
+            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
+            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
+            if callable_trusted_protocol {
+                "\n  app check callables: the trusted callable protocol is active; enforceAppCheck is honoured per function"
+            } else {
+                ""
+            },
+        );
+        }
+        if let Some(addr) = ui_addr {
+            println!("  ui:               http://{addr}/ui");
+        }
+        if let Some(note) = ui_note {
+            println!("{note}");
+        }
+        print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        if let Some(runtime) = &functions_runtime {
+            let names: Vec<&str> = runtime
+                .manifest()
+                .functions
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect();
+            println!("  functions loaded: {}", names.join(", "));
+        }
+        if verbosity == Verbosity::Debug {
+            println!("  resolved config:  {:?}", RedactedRuntimeConfig(&cfg));
+            println!("  selection:        {only:?}");
+        }
+    }
+
+    let enforcer = cfg.rules_enforced.then(|| {
+        Arc::new(
+            RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
+                .with_registry(registry.clone())
+                .with_database_rules(database_rules.clone())
+                .with_token_acceptance(cfg.token_acceptance),
+        )
+    });
+    let mut service = GatewayService::local(gateway.clone(), backend.clone());
+    if let Some(e) = &enforcer {
+        service = service.with_rules(e.clone());
+    }
+    if let Some(policy) = &firestore_policy {
+        service = service.with_app_check(policy.clone());
+    }
+    let rest = Arc::new(RestState {
+        local: backend.clone(),
+        gateway: Arc::new(gateway),
+        rules: enforcer,
+        app_check: firestore_policy,
+    });
+    Ok(ReadySuite {
+        cfg,
+        only,
+        quiet,
+        export_on_exit,
+        clock,
+        backend,
+        auth,
+        storage,
+        control,
+        app_check,
+        functions_runtime,
+        exporter,
+        hub_state,
+        locator: _locator,
+        addrs,
+        control_token,
+        storage_admin_capability,
+        listeners: Listeners {
+            firestore: grpc_listener,
+            control: http_listener,
+            auth_selected,
+            storage: storage_listener,
+            functions: functions_listener,
+            pubsub: pubsub_listener,
+            hub: hub_listener,
+            logging: logging_listener,
+        },
+        ui_listener,
+        firestore_service: service,
+        rest,
+        pubsub: pubsub_handle,
+    })
+}
+
 struct ReadySuite {
     cfg: RuntimeConfig,
     only: Selection,
@@ -2431,302 +2817,27 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 store.set_signer(signer);
             }
         }
-        // The Pub/Sub broker: real topic/subscription state served over gRPC. Its seed is the
-        // daemon seed with a fixed tag so its message and ack ids never coincide with another
-        // subsystem's stream. A published message also reaches subscribed Cloud Functions
-        // through the bridge (EVTINFRA-02), when a functions runtime is loaded.
-        let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
-            cfg.seed ^ 0x5053_5542,
-        )));
-        let pubsub_resources = if pubsub_listener.is_some() {
-            if let Some(runtime) = &functions_runtime {
-                let resources = functions::function_pubsub_resources(
-                    runtime.project(),
-                    runtime.manifest(),
-                )?;
-                let mut state = pubsub_state
-                    .lock()
-                    .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
-                functions::provision_function_pubsub_resources(&mut state, &resources)?;
-                resources
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-        let pubsub_bridge: Option<Arc<dyn fireemu_adapter_pubsub::TopicDelivery>> =
-            functions_runtime.as_ref().map(|r| {
-                Arc::new(functions::PubSubBridge::new(r.clone()))
-                    as Arc<dyn fireemu_adapter_pubsub::TopicDelivery>
-            });
-        let pubsub_handle = fireemu_adapter_pubsub::PubSubHandle::new(
-            pubsub_state.clone(),
-            clock.clone(),
-            pubsub_bridge,
-        );
-        let auth_policy = service_admission(
-            app_check_gate.as_ref(),
-            "auth",
-            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
-        );
-        let firestore_policy = service_admission(
-            app_check_gate.as_ref(),
-            "firestore",
-            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
-        );
-        let storage_policy = service_admission(
-            app_check_gate.as_ref(),
-            "storage",
-            only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
-        );
-        // Auth user events reach the functions runtime after each Auth request.
-        let auth = Arc::new(AuthState {
-            store: auth_store.clone(),
-            clock: clock.clone(),
-            wall_clock: auth_wall_clock,
-            totp_extension_enabled: cfg.auth_totp.is_some(),
-            barrier: Some(barrier.clone()),
-            events: functions_runtime.as_ref().map(functions::auth_sink),
-            blocking: functions_runtime.as_ref().map(|runtime| {
-                Arc::new(functions::BlockingAuthBridge::new(runtime.clone()))
-                    as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
-            }),
-            operation_gate: Arc::new(Mutex::new(())),
-            control_token: Some(control_token.clone()),
-            registry: Some(registry.clone()),
-            allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Firebase,
-            stateless_refresh_tokens: cfg.profile
-                == crate::config::CompatibilityProfile::Firebase,
-            query_limits: match cfg.profile {
-                crate::config::CompatibilityProfile::Firebase => {
-                    fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded
-                }
-                crate::config::CompatibilityProfile::Strict => {
-                    fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded
-                }
-            },
-            fake_custom_token_expiry: match cfg.profile {
-                crate::config::CompatibilityProfile::Firebase => {
-                    fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore
-                }
-                crate::config::CompatibilityProfile::Strict => {
-                    fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject
-                }
-            },
-            tenancy: Some(tenancy.clone()),
-            app_check: app_check.clone(),
-            app_check_policy: auth_policy,
-        });
-        // A fault plan that moves the clock wakes the functions runtime like the clock
-        // route does.
-        let clock_observer: Option<Arc<dyn Fn() + Send + Sync>> =
-            functions_runtime.as_ref().map(|r| {
-                let r = r.clone();
-                Arc::new(move || r.on_clock_changed()) as Arc<dyn Fn() + Send + Sync>
-            });
-        if let Some(observer) = &clock_observer {
-            backend.set_clock_observer(observer.clone());
-        }
-        let storage = storage_state(
-            &cfg,
-            &clock,
-            &registry,
-            &tenancy,
-            &storage_rules,
-            functions_runtime
-                .as_ref()
-                .map(|r| functions::storage_sink(r, &tenancy)),
-            &backend,
-            &faults,
-            clock_observer,
-            storage_policy,
-            storage_admin_capability.clone(),
-        )?;
-        if let Some(runtime) = &functions_runtime {
-            runtime.set_faults(faults.for_project(runtime.project()));
-            if let Some(gate) = &app_check_gate {
-                // The callable baseline is `unenforced`: the daemon classifies and records
-                // every callable token, and the callable's own `enforceAppCheck` decides
-                // (specification section 13.4). The Auth verifier is a dedicated enforcer that
-                // never evaluates a rule: it exists to verify the ID token against the target
-                // project's users on the virtual clock, which is required whether or not
-                // Security Rules are enforced at all.
-                // The service label is the core's own constant: counters group callable
-                // observations by function name for exactly this label (section 15).
-                let policy = service_admission(
-                    Some(gate),
-                    fireemu_core_app_check::observe::FUNCTIONS_SERVICE,
-                    fireemu_core_app_check::verify::BaselineMode::Unenforced,
-                )
-                .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;
-                let verifier = Arc::new(
-                    RulesEnforcer::new(
-                        Arc::new(RulesetSlot::default()),
-                        auth_store.clone(),
-                        clock.clone(),
-                    )
-                    .with_registry(registry.clone()),
-                );
-                runtime.set_callable_trust(Arc::new(
-                    fireemu_adapter_functions::callable::CallableTrust::new(
-                        policy,
-                        verifier,
-                        runtime.project(),
-                    ),
-                ));
-            }
-        }
-        let control = Arc::new(control_state(
-            &cfg,
-            &clock,
-            &rules,
-            &database_rules,
-            &storage_rules,
-            &backend,
-            &auth_store,
-            &storage,
-            functions_runtime.as_ref(),
-            control_token.clone(),
-            faults.clone(),
-            text_indexes.clone(),
-            &registry,
-            tenancy.clone(),
-            app_check_gate.clone(),
-            &pubsub_state,
-            &pubsub_resources,
-        ));
-        // The Emulator Hub's locator file lives as long as this scope: dropping it removes
-        // the file, so a clean exit on either signal path leaves no stale discovery behind.
-        // The export seam: one object that owns everything an export reads, shared by the
-        // Hub's route, `emulators:export` and `--export-on-exit`.
-        let exporter = Arc::new(Exporter {
-            backend: backend.clone(),
-            auth: registry.clone(),
-            storage: storage.clone(),
-            clock: clock.clone(),
-            project: cfg.auth_project.clone(),
-            products: import_export::Products::from(&only),
-        });
-        // The import happens before the command starts and before the banner claims the
-        // suite is ready: a run that cannot install its fixture must not run at all.
-        if let Some(dir) = &import {
-            let prepared = import_export::prepare(dir, exporter.products, &cfg.auth_project)
-                .map_err(|e| format!("--import {}: {e}", dir.display()))?;
-            if !quiet {
-                for notice in &prepared.notices {
-                    eprintln!("note: --import {}: {notice}", dir.display());
-                }
-            }
-            let summary = prepared.summary();
-            import_export::apply(prepared, &exporter.endpoints())
-                .map_err(|e| format!("--import {}: {e}", dir.display()))?;
-            if !quiet {
-                println!("  imported: {} ({summary})", dir.display());
-            }
-        }
-        let hub_state = Arc::new(hub::HubState {
-            project: cfg.auth_project.clone(),
-            addr: hub_addr.unwrap_or(http_addr),
-            emulators: hub_emulators(&addrs),
-            functions: functions_runtime.clone(),
-            export: Some(exporter.clone() as Arc<dyn hub::ExportRunner>),
-            control_token: control_token.clone(),
-        });
-        let _locator = hub_addr.map(|_| {
-            let (locator, note) = hub::Locator::write(&hub_state);
-            if let (Some(note), false) = (note, quiet) {
-                eprintln!("note: {note}");
-            }
-            locator
-        });
-        if !quiet {
-            print_banner(
-                &cfg,
-                if exec.is_some() { "exec" } else { "up" },
-                &addrs,
-                functions_runtime.as_deref(),
-            );
-            if let Some(state) = &app_check {
-                println!(
-                    "  app check:        {} app(s)   FIREEMU_APP_CHECK_EMULATOR_HOST={http_addr}   JWKS: http://{http_addr}/v1/jwks (kid {})",
-                    cfg.app_check.apps.len(),
-                    state.signer.kid()
-                );
-                println!(
-                    "  app check modes:  auth={} firestore={} storage={}   (Firestore covers unary gRPC, REST, Write/Listen streams and WebChannel; Storage covers resumable uploads too){}",
-                    only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Auth),
-                    only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Firestore),
-                    only.app_check_mode(&cfg.app_check, crate::config::AppCheckService::Storage),
-                    if callable_trusted_protocol {
-                        "\n  app check callables: the trusted callable protocol is active; enforceAppCheck is honoured per function"
-                    } else {
-                        ""
-                    },
-                );
-            }
-            if let Some(addr) = ui_addr {
-                println!("  ui:               http://{addr}/ui");
-            }
-            if let Some(note) = ui_note {
-                println!("{note}");
-            }
-            print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
-            if let Some(runtime) = &functions_runtime {
-                let names: Vec<&str> = runtime
-                    .manifest()
-                    .functions
-                    .iter()
-                    .map(|f| f.name.as_str())
-                    .collect();
-                println!("  functions loaded: {}", names.join(", "));
-            }
-            if verbosity == Verbosity::Debug {
-                println!("  resolved config:  {:?}", RedactedRuntimeConfig(&cfg));
-                println!("  selection:        {only:?}");
-            }
-        }
-
-        let enforcer = cfg.rules_enforced.then(|| {
-            Arc::new(
-                RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
-                    .with_registry(registry.clone())
-                    .with_database_rules(database_rules.clone())
-                    .with_token_acceptance(cfg.token_acceptance),
-            )
-        });
-        let mut service = GatewayService::local(gateway.clone(), backend.clone());
-        if let Some(e) = &enforcer {
-            service = service.with_rules(e.clone());
-        }
-        if let Some(policy) = &firestore_policy {
-            service = service.with_app_check(policy.clone());
-        }
-        let rest = Arc::new(RestState {
-            local: backend.clone(),
-            gateway: Arc::new(gateway),
-            rules: enforcer,
-            app_check: firestore_policy,
-        });
-        serve_suite(
-            ReadySuite {
+        let ready = assemble_suite(
+            BoundStartup {
                 cfg,
                 only,
-                quiet,
+                verbosity,
+                import,
                 export_on_exit,
+                quiet,
+                auth_wall_clock,
                 clock,
+                gateway,
                 backend,
-                auth,
-                storage,
-                control,
-                app_check,
-                functions_runtime,
-                exporter,
-                hub_state,
-                locator: _locator,
-                addrs,
-                control_token,
-                storage_admin_capability,
+                text_indexes,
+                faults,
+                tenancy,
+                auth_store,
+                registry,
+                rules,
+                database_rules,
+                storage_rules,
+                barrier,
                 listeners: Listeners {
                     firestore: grpc_listener,
                     control: http_listener,
@@ -2738,13 +2849,18 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     logging: logging_listener,
                 },
                 ui_listener,
-                firestore_service: service,
-                rest,
-                pubsub: pubsub_handle,
+                ui_note,
+                addrs,
+                control_token,
+                storage_admin_capability,
+                app_check,
+                app_check_gate,
+                callable_trusted_protocol,
+                functions_runtime,
             },
-            exec,
-        )
-        .await
+            exec.is_some(),
+        )?;
+        serve_suite(ready, exec).await
     });
     match result {
         Ok(code) => ExitCode::from(u8::try_from(code.clamp(0, 255)).unwrap_or(1)),

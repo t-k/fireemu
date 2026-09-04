@@ -50,7 +50,7 @@
     "verification/quint/tests/await_idle_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "12d626b1a92c4f51dfddaf289b24f97f2ece59b0fbadcc9888104573dbac7215",
+    ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
     "crates/fireemu-adapter-functions/src/runtime.rs": "24b8690abf4fbb51daa561e688cec43b18c5dbf4ec70a9470e89e6a32140b9f7",
     "crates/fireemu-adapter-http/src/control.rs": "7eed0cd24f54b06d44a268bcc4230b1ea36e71939ba10123c4957569b58dd629",
     "crates/fireemu-core-session/src/idle.rs": "53bd98a30a3d61cf0be88222f4d3700e84cdc46636e885c5f4fb1945532104b8",

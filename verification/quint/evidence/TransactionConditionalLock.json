@@ -51,7 +51,7 @@
     "verification/quint/tests/transaction_conditional_lock_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "12d626b1a92c4f51dfddaf289b24f97f2ece59b0fbadcc9888104573dbac7215",
+    ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
     "conformance/fixtures/firestore/transaction-read-set-abort.json": "d04ff10ca155a770c02b5a2c8ee78b21f44a83aa2c206168e01d13998ce53536",
     "conformance/fixtures/functions/concurrent-conditional-lock.json": "5fab49ede191c66808eccb7c3f46fa616e5db23884c6f4f8e8d1fa0640fb2759",
     "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",

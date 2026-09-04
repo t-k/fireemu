@@ -47,7 +47,7 @@
     "verification/quint/tests/atomic_commit_outbox_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "12d626b1a92c4f51dfddaf289b24f97f2ece59b0fbadcc9888104573dbac7215",
+    ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
     "crates/fireemu-core-firestore/src/store.rs": "8179e53697bbb952adf85403fd74bb78d202b929c52a9ab7d7ae5549add8fa55",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",

@@ -51,7 +51,7 @@
     "verification/quint/tests/regex_evaluation_cache_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "12d626b1a92c4f51dfddaf289b24f97f2ece59b0fbadcc9888104573dbac7215",
+    ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
     "crates/fireemu-core-rules/src/ast.rs": "8de818d1b4e4d22a5ebfb015f3863f746d5b98bfc8d33c9501bd0e95d23c0c3e",
     "crates/fireemu-core-rules/src/eval.rs": "50f3ffd912a5d1a4cc25c39c7928a501b0e4813456dd90abe08866386aecaad6",
     "crates/fireemu-core-rules/src/parse.rs": "ebcf63731625d6b5237f4a4d1fddfb89ce776d0ce42aa71434b534f61ae2c45c",

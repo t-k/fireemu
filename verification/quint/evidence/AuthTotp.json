@@ -50,7 +50,7 @@
     "verification/quint/tests/auth_totp_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "12d626b1a92c4f51dfddaf289b24f97f2ece59b0fbadcc9888104573dbac7215",
+    ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
     "crates/fireemu-core-auth/src/mfa.rs": "214c5b296965f4b0b44f9c8df40e49579a24d1ae1d2c9e77c8648d05ac808400",
     "crates/fireemu-core-auth/src/store.rs": "66ee3bb3da0eea90821fd7b7d77e98b51378238149e0adaf398711999019ca22",
     "crates/fireemu-core-auth/src/totp.rs": "71d3b816fd50d184455dd33f7689ea0c5c9fb6b25c77ac7e069175ca174b73e4",

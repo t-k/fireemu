@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 pub use fireemu_core_session::loopback::origin_is_local;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot, Notify};
+use tokio::sync::{mpsc, oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
@@ -64,6 +64,16 @@ pub const MAX_FORM_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_SESSIONS: usize = 256;
 /// Maximum unacknowledged arrays per session before it is closed.
 pub const MAX_QUEUED_ARRAYS: usize = 4096;
+/// Maximum UTF-8 bytes in one numbered outbound array. This is a local memory-safety bound,
+/// not a production Firestore protocol limit.
+pub const MAX_OUTBOUND_ARRAY_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum UTF-8 bytes retained for unacknowledged arrays in one session.
+pub const MAX_UNACKNOWLEDGED_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum UTF-8 bytes in one framed backchannel data batch.
+pub const MAX_BACKCHANNEL_BATCH_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum concurrently owned replay-copy bytes per session. Keeping this equal to one maximum
+/// batch prevents replaced response bodies from multiplying a large replay allocation.
+pub const MAX_CONCURRENT_REPLAY_BYTES: usize = MAX_BACKCHANNEL_BATCH_BYTES;
 /// Maximum maps per forward request and maximum gap of buffered map ids.
 const MAX_MAPS_PER_REQUEST: u64 = 1000;
 /// Maximum completed target lifetimes retained solely for diagnostics.
@@ -699,15 +709,53 @@ struct StreamEnd {
     terminal_aid: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct DeliveryState {
     outbound: VecDeque<(u64, String)>,
+    retained_bytes: usize,
     next_aid: u64,
     committed_aid: u64,
     acknowledged_aid: u64,
     stream_end: Option<StreamEnd>,
     terminal_expiry_cancel: Option<oneshot::Sender<()>>,
     terminal_expiry_tasks: Arc<AtomicUsize>,
+    replay_copy_budget: Arc<Semaphore>,
+}
+
+impl Default for DeliveryState {
+    fn default() -> Self {
+        Self {
+            outbound: VecDeque::new(),
+            retained_bytes: 0,
+            next_aid: 0,
+            committed_aid: 0,
+            acknowledged_aid: 0,
+            stream_end: None,
+            terminal_expiry_cancel: None,
+            terminal_expiry_tasks: Arc::new(AtomicUsize::new(0)),
+            replay_copy_budget: Arc::new(Semaphore::new(MAX_CONCURRENT_REPLAY_BYTES)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingBatch {
+    first_aid: u64,
+    last_aid: u64,
+    count: usize,
+    framed_bytes: usize,
+    body_utf16_units: usize,
+}
+
+struct BudgetedChunk {
+    bytes: Vec<u8>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for BudgetedChunk {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 struct BackchannelOwner {
@@ -838,19 +886,26 @@ impl Session {
     }
 
     fn push(&self, payload: &Value) -> Result<u64, ()> {
-        let (aid, bytes, overflow, queued_first, queued_last, queued_count) = {
+        let (aid, bytes, queued_first, queued_last, queued_count) = {
             let Ok(mut delivery) = self.delivery.lock() else {
                 return Err(());
             };
-            delivery.next_aid = delivery.next_aid.checked_add(1).ok_or(())?;
-            let aid = delivery.next_aid;
+            let aid = delivery.next_aid.checked_add(1).ok_or(())?;
             let text = json!([aid, payload]).to_string();
             let bytes = text.len();
+            let retained_bytes = delivery.retained_bytes.checked_add(bytes).ok_or(())?;
+            if bytes > MAX_OUTBOUND_ARRAY_BYTES
+                || retained_bytes > MAX_UNACKNOWLEDGED_BYTES
+                || delivery.outbound.len() >= MAX_QUEUED_ARRAYS
+            {
+                return Err(());
+            }
+            delivery.next_aid = aid;
+            delivery.retained_bytes = retained_bytes;
             delivery.outbound.push_back((aid, text));
             (
                 aid,
                 bytes,
-                delivery.outbound.len() > MAX_QUEUED_ARRAYS,
                 delivery.outbound.front().map(|(id, _)| *id),
                 delivery.outbound.back().map(|(id, _)| *id),
                 delivery.outbound.len(),
@@ -867,9 +922,6 @@ impl Session {
         self.touch();
         // `notify_one` keeps a permit when no back channel is waiting yet (no lost wakeups).
         self.notify.notify_one();
-        if overflow {
-            return Err(());
-        }
         Ok(aid)
     }
 
@@ -896,7 +948,9 @@ impl Session {
                 ));
             }
             while delivery.outbound.front().is_some_and(|(id, _)| *id <= aid) {
-                delivery.outbound.pop_front();
+                if let Some((_, text)) = delivery.outbound.pop_front() {
+                    delivery.retained_bytes = delivery.retained_bytes.saturating_sub(text.len());
+                }
             }
             delivery.acknowledged_aid = delivery.acknowledged_aid.max(aid);
             let terminal_acknowledged = delivery
@@ -906,6 +960,7 @@ impl Session {
                 owner.generation = owner.generation.saturating_add(1);
                 self.terminated.store(true, Ordering::SeqCst);
                 delivery.outbound.clear();
+                delivery.retained_bytes = 0;
                 (owner.cancel.take(), delivery.terminal_expiry_cancel.take())
             } else {
                 (None, None)
@@ -945,24 +1000,99 @@ impl Session {
         Ok(())
     }
 
-    /// Serializes unacknowledged arrays after `aid` without cloning the retained strings.
-    fn pending_chunk_after(&self, aid: u64) -> Option<(u64, usize, String)> {
+    fn pending_batch_plan_after(&self, aid: u64) -> Option<PendingBatch> {
         let delivery = self.delivery.lock().ok()?;
         let pending = delivery.outbound.iter().skip_while(|(id, _)| *id <= aid);
-        let mut body = String::new();
-        body.push('[');
+        let mut first = None;
         let mut last = None;
         let mut count = 0;
+        let mut body_bytes = 2usize;
+        let mut body_utf16_units = 2usize;
         for (id, text) in pending {
-            if count != 0 {
-                body.push(',');
+            let separator = usize::from(count != 0);
+            let candidate_body_bytes =
+                body_bytes.checked_add(separator)?.checked_add(text.len())?;
+            let candidate_utf16_units = body_utf16_units
+                .checked_add(separator)?
+                .checked_add(text.encode_utf16().count())?;
+            let framed_bytes = candidate_body_bytes
+                .checked_add(decimal_digits(candidate_utf16_units))?
+                .checked_add(1)?;
+            if framed_bytes > MAX_BACKCHANNEL_BATCH_BYTES {
+                break;
             }
-            body.push_str(text);
+            first.get_or_insert(*id);
             last = Some(*id);
             count += 1;
+            body_bytes = candidate_body_bytes;
+            body_utf16_units = candidate_utf16_units;
         }
-        body.push(']');
-        last.map(|last| (last, count, body))
+        Some(PendingBatch {
+            first_aid: first?,
+            last_aid: last?,
+            count,
+            framed_bytes: body_bytes
+                .checked_add(decimal_digits(body_utf16_units))?
+                .checked_add(1)?,
+            body_utf16_units,
+        })
+    }
+
+    fn replay_copy_budget(&self) -> Option<Arc<Semaphore>> {
+        self.delivery
+            .lock()
+            .ok()
+            .map(|delivery| delivery.replay_copy_budget.clone())
+    }
+
+    fn serialize_pending_batch(
+        &self,
+        plan: PendingBatch,
+        permit: OwnedSemaphorePermit,
+    ) -> Option<bytes::Bytes> {
+        let delivery = self.delivery.lock().ok()?;
+        let pending = delivery
+            .outbound
+            .iter()
+            .skip_while(|(id, _)| *id < plan.first_aid)
+            .take_while(|(id, _)| *id <= plan.last_aid);
+        let mut frame = Vec::with_capacity(plan.framed_bytes);
+        frame.extend_from_slice(plan.body_utf16_units.to_string().as_bytes());
+        frame.push(b'\n');
+        frame.push(b'[');
+        let mut expected_aid = plan.first_aid;
+        let mut count = 0;
+        for (id, text) in pending {
+            if *id != expected_aid {
+                return None;
+            }
+            if count != 0 {
+                frame.push(b',');
+            }
+            frame.extend_from_slice(text.as_bytes());
+            expected_aid = expected_aid.checked_add(1)?;
+            count += 1;
+        }
+        frame.push(b']');
+        if count != plan.count || frame.len() != plan.framed_bytes {
+            return None;
+        }
+        Some(bytes::Bytes::from_owner(BudgetedChunk {
+            bytes: frame,
+            _permit: permit,
+        }))
+    }
+
+    #[cfg(test)]
+    fn pending_chunk_after(&self, aid: u64) -> Option<(u64, usize, String)> {
+        let plan = self.pending_batch_plan_after(aid)?;
+        let budget = self.replay_copy_budget()?;
+        let permit = budget
+            .try_acquire_many_owned(plan.framed_bytes.try_into().ok()?)
+            .ok()?;
+        let frame = self.serialize_pending_batch(plan, permit)?;
+        let text = std::str::from_utf8(&frame).ok()?.split_once('\n')?.1;
+        Some((plan.last_aid, plan.count, text.to_owned()))
     }
 
     fn last_aid(&self) -> u64 {
@@ -1056,6 +1186,7 @@ impl Session {
         }
         if let Ok(mut delivery) = self.delivery.lock() {
             delivery.outbound.clear();
+            delivery.retained_bytes = 0;
             if let Some(cancel) = delivery.terminal_expiry_cancel.take() {
                 let _ = cancel.send(());
             }
@@ -1128,10 +1259,10 @@ pub struct Hub {
 }
 
 fn terminate_registered_sessions(sessions: &SessionRegistry) {
-    let sessions = sessions
-        .lock()
-        .map(|mut sessions| sessions.drain().map(|(_, session)| session).collect())
-        .unwrap_or_else(|_| Vec::new());
+    let sessions = sessions.lock().map_or_else(
+        |_| Vec::new(),
+        |mut sessions| sessions.drain().map(|(_, session)| session).collect(),
+    );
     for session in sessions {
         session.terminate();
     }
@@ -1168,6 +1299,12 @@ pub struct ChannelRequest {
 /// slicing sees).
 fn chunk(text: &str) -> String {
     format!("{}\n{}", text.encode_utf16().count(), text)
+}
+
+fn decimal_digits(value: usize) -> usize {
+    value
+        .checked_ilog10()
+        .map_or(1, |digits| digits as usize + 1)
 }
 
 /// Percent-decodes a form value (`+` is a space).
@@ -1718,6 +1855,29 @@ async fn send_backchannel_chunk(
     }
 }
 
+async fn reserve_pending_batch(
+    session: &Session,
+    plan: PendingBatch,
+    cancelled: &mut oneshot::Receiver<()>,
+) -> Result<bytes::Bytes, &'static str> {
+    let Some(copy_budget) = session.replay_copy_budget() else {
+        return Err("session lock poisoned");
+    };
+    let Ok(permit_count) = u32::try_from(plan.framed_bytes) else {
+        return Err("copy budget overflow");
+    };
+    let permit = tokio::select! {
+        biased;
+        _ = &mut *cancelled => return Err("superseded"),
+        permit = copy_budget.acquire_many_owned(permit_count) => {
+            permit.map_err(|_| "copy budget closed")?
+        },
+    };
+    session
+        .serialize_pending_batch(plan, permit)
+        .ok_or("pending batch changed")
+}
+
 /// Serves one back channel until the client goes away, the session closes, a newer back
 /// channel takes over, or (long polling) one batch was delivered.
 async fn backchannel_loop(
@@ -1737,31 +1897,29 @@ async fn backchannel_loop(
         {
             return "superseded";
         }
-        let pending = session.pending_chunk_after(*cursor);
-        if let Some((last, count, text)) = &pending {
-            let first = last.saturating_sub(*count as u64).saturating_add(1);
+        let pending = session.pending_batch_plan_after(*cursor);
+        if let Some(plan) = pending {
             session.trace_event(&TraceEvent::BackchannelQueued {
                 session: session.trace_id,
                 generation,
-                first_aid: first,
-                last_aid: *last,
-                count: *count,
+                first_aid: plan.first_aid,
+                last_aid: plan.last_aid,
+                count: plan.count,
             });
-            if let Err(outcome) = send_backchannel_chunk(
-                session,
-                generation,
-                *last,
-                tx,
-                cancelled,
-                bytes::Bytes::from(chunk(text)),
-            )
-            .await
+            let body = match reserve_pending_batch(session, plan, cancelled).await {
+                Ok(body) => body,
+                Err("pending batch changed") => continue,
+                Err(outcome) => return outcome,
+            };
+            if let Err(outcome) =
+                send_backchannel_chunk(session, generation, plan.last_aid, tx, cancelled, body)
+                    .await
             {
                 return outcome;
             }
             // The cursor is the last id actually sent; arrays pushed meanwhile are picked
             // up by the next iteration.
-            *cursor = *last;
+            *cursor = plan.last_aid;
             if long_poll {
                 return "long poll batch";
             }
@@ -2281,6 +2439,159 @@ mod tests {
             Some((3, 2, "[[2,[\"second\"]],[3,[\"third\"]]]".to_owned()))
         );
         assert_eq!(session.pending_chunk_after(3), None);
+    }
+
+    #[test]
+    fn outbound_byte_admission_is_atomic_and_acknowledgement_refunds_it() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "byte-admission".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Listen,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState::default()),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+
+        assert!(session
+            .push(&json!({"value": "x".repeat(MAX_OUTBOUND_ARRAY_BYTES)}))
+            .is_err());
+        {
+            let delivery = session.delivery.lock().unwrap();
+            assert_eq!(delivery.next_aid, 0);
+            assert_eq!(delivery.retained_bytes, 0);
+            assert!(delivery.outbound.is_empty());
+        }
+
+        session.push(&json!({"value": "first"})).unwrap();
+        session.push(&json!({"value": "second"})).unwrap();
+        let second_bytes = {
+            let mut delivery = session.delivery.lock().unwrap();
+            delivery.committed_aid = 2;
+            delivery.outbound[1].1.len()
+        };
+        session.acknowledge(1).unwrap();
+        assert_eq!(
+            session.delivery.lock().unwrap().retained_bytes,
+            second_bytes
+        );
+        session.acknowledge(2).unwrap();
+        assert_eq!(session.delivery.lock().unwrap().retained_bytes, 0);
+
+        let large = json!({"value": "x".repeat(MAX_OUTBOUND_ARRAY_BYTES / 2)});
+        let mut accepted = 0usize;
+        while session.push(&large).is_ok() {
+            accepted += 1;
+        }
+        let before = {
+            let delivery = session.delivery.lock().unwrap();
+            assert!(delivery.retained_bytes <= MAX_UNACKNOWLEDGED_BYTES);
+            assert!(accepted > 1);
+            (
+                delivery.next_aid,
+                delivery.retained_bytes,
+                delivery.outbound.len(),
+            )
+        };
+        assert!(session.push(&large).is_err());
+        let delivery = session.delivery.lock().unwrap();
+        assert_eq!(
+            (
+                delivery.next_aid,
+                delivery.retained_bytes,
+                delivery.outbound.len()
+            ),
+            before,
+            "a refused session-budget insertion must not mutate queue state"
+        );
+    }
+
+    #[tokio::test]
+    async fn large_pending_sequences_are_contiguous_bounded_and_copy_limited() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let payload = "x".repeat(MAX_BACKCHANNEL_BATCH_BYTES / 3);
+        let outbound = (1..=5)
+            .map(|aid| (aid, format!("[{aid},\"{payload}\"]")))
+            .collect::<VecDeque<_>>();
+        let retained_bytes = outbound.iter().map(|(_, text)| text.len()).sum();
+        let session = Session {
+            sid: "bounded-batches".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Listen,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound,
+                next_aid: 5,
+                committed_aid: 0,
+                retained_bytes,
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+
+        let first = session.pending_batch_plan_after(0).unwrap();
+        assert_eq!((first.first_aid, first.last_aid), (1, 2));
+        assert!(first.framed_bytes <= MAX_BACKCHANNEL_BATCH_BYTES);
+        let budget = session.replay_copy_budget().unwrap();
+        let permit = budget
+            .clone()
+            .acquire_many_owned(first.framed_bytes.try_into().unwrap())
+            .await
+            .unwrap();
+        let first_body = session.serialize_pending_batch(first, permit).unwrap();
+        let first_json = std::str::from_utf8(&first_body)
+            .unwrap()
+            .split_once('\n')
+            .unwrap()
+            .1;
+        let first_arrays: Value = serde_json::from_str(first_json).unwrap();
+        assert_eq!(first_arrays[0][0], 1);
+        assert_eq!(first_arrays[1][0], 2);
+
+        assert!(tokio::time::timeout(
+            Duration::from_millis(20),
+            budget
+                .clone()
+                .acquire_many_owned(first.framed_bytes.try_into().unwrap())
+        )
+        .await
+        .is_err());
+        drop(first_body);
+        let _next_copy = tokio::time::timeout(
+            Duration::from_millis(20),
+            budget.acquire_many_owned(first.framed_bytes.try_into().unwrap()),
+        )
+        .await
+        .expect("dropping the response bytes refunds the concurrent copy budget")
+        .unwrap();
+
+        let second = session.pending_batch_plan_after(first.last_aid).unwrap();
+        assert_eq!(second.first_aid, first.last_aid + 1);
+        assert!(second.framed_bytes <= MAX_BACKCHANNEL_BATCH_BYTES);
     }
 
     #[tokio::test]

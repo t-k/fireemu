@@ -432,6 +432,21 @@
       "id": "M-APPCHECK-016",
       "fault": "a resumable upload session accepts a continuation from another app",
       "critical": true
+    },
+    {
+      "id": "M-WEBCHANNEL-EXPIRY-001",
+      "fault": "terminal acknowledgement or termination leaves its expiry task sleeping",
+      "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-BYTE-001",
+      "fault": "an outbound array is inserted before the retained-byte limit is checked",
+      "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-COPY-001",
+      "fault": "a replay response releases its concurrent-copy permit before the response bytes are dropped",
+      "critical": false
     }
   ]
 }

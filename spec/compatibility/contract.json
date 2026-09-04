@@ -479,7 +479,7 @@
         },
         {
           "id": "FS-CLAIM-WEBCHANNEL",
-          "statement": "The browser web SDK's WebChannel v8 transport is served on the Firestore port, and a target refused on its own merits is removed without closing the channel.",
+          "statement": "The browser web SDK's WebChannel v8 transport is served on the Firestore port, and a target refused on its own merits is removed without closing the channel. Unacknowledged arrays remain replayable by their original AIDs while explicit local byte budgets bound retained data, each response batch, and concurrently owned replay copies.",
           "capabilities": [
             {
               "id": "FS-WEB-1",
@@ -498,6 +498,10 @@
             {
               "behaviour": "a target removed with its own cause (a missing composite index, a malformed query, a Rules denial) while the channel keeps serving its other targets",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "local memory-safety limits of 2 MiB per outbound array, 16 MiB of unacknowledged arrays per session, 4 MiB per framed backchannel batch and 4 MiB of concurrently owned replay copies per session; overflow closes the affected channel without weakening Security Rules",
+              "precision": "resource-safety-divergence"
             }
           ],
           "productionOnly": [],

@@ -526,7 +526,8 @@
   "FS-WEB-1": {
     "notes": [
       "WebChannel v8 transport of the browser web SDK (Listen / Write) on the Firestore port; resume as in FS-LSN-1",
-      "a target refused on its own merits, including one that rides along with the opening handshake, is delivered as TargetChange REMOVE through the first back channel and the session stays open; only a stream-level error closes it"
+      "a target refused on its own merits, including one that rides along with the opening handshake, is delivered as TargetChange REMOVE through the first back channel and the session stays open; only a stream-level error closes it",
+      "unacknowledged arrays keep their AIDs for response-loss replay and are bounded by explicit fireemu-only memory limits: 2 MiB per array, 16 MiB retained per session, 4 MiB per framed response batch and 4 MiB of concurrently owned replay copies per session; terminal expiry tasks are cancelled by acknowledgement, explicit termination, removal and Hub shutdown"
     ],
     "status": "implemented"
   },

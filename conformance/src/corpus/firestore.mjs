@@ -459,8 +459,8 @@ const listenerReplacementHandoff = {
     await ctx.step("overlapping-listeners-handoff-after-both-initial-callbacks", async () => {
       await item.update({ revision: 2 });
       const events = [];
-      const firstInitial = deferred();
-      const replacementInitial = deferred();
+      const hydratingCurrent = deferred();
+      const clientCurrent = deferred();
       const replacementUpdate = deferred();
       let unsubscribeFirst = () => {};
       let unsubscribeReplacement = () => {};
@@ -469,26 +469,27 @@ const listenerReplacementHandoff = {
           watched,
           (snapshot) => {
             record(events, "hydrating", snapshot);
-            firstInitial.resolve();
+            const revisions = new Set(snapshot.docs.map((candidate) => candidate.get("revision")));
+            if (revisions.has(2)) hydratingCurrent.resolve();
           },
-          firstInitial.reject,
+          hydratingCurrent.reject,
         );
         unsubscribeReplacement = onSnapshot(
           watched,
           (snapshot) => {
             record(events, "client", snapshot);
             const revisions = new Set(snapshot.docs.map((candidate) => candidate.get("revision")));
-            if (revisions.has(2)) replacementInitial.resolve();
+            if (revisions.has(2)) clientCurrent.resolve();
             if (revisions.has(3)) replacementUpdate.resolve();
           },
           (error) => {
-            replacementInitial.reject(error);
+            clientCurrent.reject(error);
             replacementUpdate.reject(error);
           },
         );
         await bounded(
-          Promise.all([firstInitial.promise, replacementInitial.promise]),
-          "overlapping listener initial callbacks",
+          Promise.all([hydratingCurrent.promise, clientCurrent.promise]),
+          "overlapping listeners reaching the current revision",
         );
         unsubscribeFirst();
         await item.update({ revision: 3 });

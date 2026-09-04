@@ -969,9 +969,12 @@ impl Session {
         if let Ok(mut inbound) = self.inbound.lock() {
             inbound.take();
         }
+        if let Ok(mut maps) = self.maps.lock() {
+            maps.1.clear();
+        }
         if terminal_acknowledged {
             self.terminate();
-        } else {
+        } else if !self.is_terminated() {
             schedule_terminal_expiry(self, TERMINAL_DELIVERY_TTL);
         }
         self.notify.notify_waiters();
@@ -980,7 +983,15 @@ impl Session {
 
     /// Permanently ends both the application stream and the `WebChannel` transport.
     fn terminate(&self) {
-        self.terminated.store(true, Ordering::SeqCst);
+        if let Ok(mut owner) = self.backchannel_owner.lock() {
+            owner.generation = owner.generation.saturating_add(1);
+            self.terminated.store(true, Ordering::SeqCst);
+            if let Some(cancel) = owner.cancel.take() {
+                let _ = cancel.send(());
+            }
+        } else {
+            self.terminated.store(true, Ordering::SeqCst);
+        }
         if let Ok(mut inbound) = self.inbound.lock() {
             inbound.take();
         }
@@ -989,11 +1000,6 @@ impl Session {
         }
         if let Ok(mut maps) = self.maps.lock() {
             maps.1.clear();
-        }
-        if let Ok(mut owner) = self.backchannel_owner.lock() {
-            if let Some(cancel) = owner.cancel.take() {
-                let _ = cancel.send(());
-            }
         }
         self.notify.notify_waiters();
         self.notify.notify_one();
@@ -1551,7 +1557,7 @@ fn commit_backchannel_chunk(
         let Ok(owner) = session.backchannel_owner.lock() else {
             return false;
         };
-        if owner.generation != generation {
+        if owner.generation != generation || session.is_terminated() {
             return false;
         }
         let Ok(mut delivery) = session.delivery.lock() else {
@@ -2293,6 +2299,48 @@ mod tests {
 
         assert_eq!(outcome, "superseded");
         assert_eq!(cursor, 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn termination_invalidates_a_reserved_backchannel_commit() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "terminating-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(1, "[1,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 1,
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 1,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((1, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let permit = tx.reserve().await.unwrap();
+
+        session.terminate();
+
+        assert!(!commit_backchannel_chunk(
+            &session,
+            1,
+            1,
+            permit,
+            bytes::Bytes::from_static(b"terminal"),
+        ));
         assert!(rx.try_recv().is_err());
     }
 

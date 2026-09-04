@@ -93,7 +93,7 @@ const expectPathIsolation = async (scope, references) => {
 const expectPermissionDenied = async (label, operation) => {
   const openingWriteSessions = diagnostics.writeSessionOpeningCount();
   try {
-    await operation();
+    await bounded(operation(), label);
   } catch (error) {
     if (error?.code !== "permission-denied") throw error;
     if (label.endsWith("-write")) {

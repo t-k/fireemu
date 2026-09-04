@@ -1270,7 +1270,8 @@ fn verify_model_cli_checks_event_delivery_with_tlc() {
 #[test]
 #[ignore = "requires Java and the pinned local Quint CLI"]
 fn interrupted_real_mutation_reaps_the_owned_backend() {
-    let before = matching_processes("fireemu-quint-apalache-");
+    let backend_pattern = r"apalache\.jar server --port=0";
+    let before = matching_processes(backend_pattern);
     let child = Command::new(process_group_launcher_path())
         .arg(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
         .args(["mutate-model", "--model", "EventDelivery", "--root"])
@@ -1291,7 +1292,7 @@ fn interrupted_real_mutation_reaps_the_owned_backend() {
     let child = AuthorityChild::new(child);
     let mut owned = Vec::new();
     assert!(wait_until(Duration::from_secs(30), || {
-        owned = matching_processes("fireemu-quint-apalache-")
+        owned = matching_processes(backend_pattern)
             .into_iter()
             .filter(|pid| !before.contains(pid))
             .collect();

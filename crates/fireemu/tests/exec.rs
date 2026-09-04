@@ -656,7 +656,11 @@ fn the_emulator_ui_is_opt_in_for_exec_and_stops_with_the_command() {
         ("ui-flag", true, false, "open"),
         ("explicit-fireemu-port", false, true, "open"),
     ] {
-        let ui_port = free_port();
+        let unrelated_listener =
+            (label == "default").then(|| std::net::TcpListener::bind("127.0.0.1:0").unwrap());
+        let ui_port = unrelated_listener
+            .as_ref()
+            .map_or_else(free_port, |listener| listener.local_addr().unwrap().port());
         let dir = scratch(&format!("ui-{label}"));
         let config = dir.join("fireemu.json");
         std::fs::write(
@@ -678,7 +682,7 @@ fn the_emulator_ui_is_opt_in_for_exec_and_stops_with_the_command() {
         .unwrap();
         let probe = dir.join("probe.txt");
         let script = format!(
-            "(exec 3<>/dev/tcp/127.0.0.1/{ui_port}) 2>/dev/null && echo open > {} || echo closed > {}",
+            "curl --fail --silent --max-time 1 http://127.0.0.1:{ui_port}/ui 2>/dev/null | grep --fixed-strings --quiet 'window.__FIREEMU__ = ' && echo open > {} || echo closed > {}",
             probe.display(),
             probe.display()
         );
@@ -701,6 +705,7 @@ fn the_emulator_ui_is_opt_in_for_exec_and_stops_with_the_command() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(std::fs::read_to_string(&probe).unwrap().trim(), expected);
+        drop(unrelated_listener);
         assert!(
             refused(&format!("127.0.0.1:{ui_port}")),
             "{label}: the UI listener survived exec"

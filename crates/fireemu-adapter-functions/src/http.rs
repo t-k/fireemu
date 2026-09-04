@@ -1056,6 +1056,43 @@ async fn drain_refused_body(mut body: Incoming) {
     let _ = tokio::time::timeout(REQUEST_READ_TIMEOUT, drain).await;
 }
 
+async fn respond_support_surface(
+    runtime: Arc<FunctionsRuntime>,
+    req: Request<Incoming>,
+    body_limit: usize,
+    surface: HttpSurface,
+) -> Response<OutBody> {
+    let path = req.uri().path().to_owned();
+    match surface {
+        HttpSurface::Eventarc => {
+            if req.method() != hyper::Method::POST {
+                drain_refused_body(req.into_body()).await;
+                return simple(StatusCode::NOT_FOUND, "Not Found");
+            }
+            let Some(channel) = crate::eventarc::publish_channel(&path) else {
+                drain_refused_body(req.into_body()).await;
+                return simple(StatusCode::NOT_FOUND, "Not Found");
+            };
+            match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => publish_events(&runtime, &channel, &body),
+                Err(answer) => *answer,
+            }
+        }
+        HttpSurface::Tasks => {
+            let Some(route) = crate::tasks::route(&path) else {
+                drain_refused_body(req.into_body()).await;
+                return simple(StatusCode::NOT_FOUND, "Not Found");
+            };
+            let method = req.method().clone();
+            match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => task_route(&runtime, &route, &method, &body),
+                Err(answer) => *answer,
+            }
+        }
+        HttpSurface::Functions => simple(StatusCode::NOT_FOUND, "Not Found"),
+    }
+}
+
 fn buffered_response(
     response: ProxiedResponse,
     plain_http: bool,
@@ -1118,33 +1155,8 @@ async fn respond(
         Ok(origin) => origin,
         Err(refusal) => return Ok(*refusal),
     };
-    match surface {
-        HttpSurface::Eventarc => {
-            if req.method() != hyper::Method::POST {
-                drain_refused_body(req.into_body()).await;
-                return Ok(simple(StatusCode::NOT_FOUND, "Not Found"));
-            }
-            let Some(channel) = crate::eventarc::publish_channel(&path) else {
-                drain_refused_body(req.into_body()).await;
-                return Ok(simple(StatusCode::NOT_FOUND, "Not Found"));
-            };
-            return Ok(match collect_body(req.into_body(), body_limit).await {
-                Ok(body) => publish_events(&runtime, &channel, &body),
-                Err(answer) => *answer,
-            });
-        }
-        HttpSurface::Tasks => {
-            let Some(route) = crate::tasks::route(&path) else {
-                drain_refused_body(req.into_body()).await;
-                return Ok(simple(StatusCode::NOT_FOUND, "Not Found"));
-            };
-            let method = req.method().clone();
-            return Ok(match collect_body(req.into_body(), body_limit).await {
-                Ok(body) => task_route(&runtime, &route, &method, &body),
-                Err(answer) => *answer,
-            });
-        }
-        HttpSurface::Functions => {}
+    if surface != HttpSurface::Functions {
+        return Ok(respond_support_surface(runtime, req, body_limit, surface).await);
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,

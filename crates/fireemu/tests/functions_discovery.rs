@@ -98,6 +98,36 @@ fn invoke_blocking_runner(port: u16, function: &str, body: &str) -> (u16, serde_
     (response.status, body)
 }
 
+fn assert_blocking_sign_in_contract(port: u16, before_create_body: &str) {
+    let sign_in_body = before_create_body.replace(
+        "providers/cloud.auth/eventTypes/user.beforeCreate",
+        "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
+    );
+    let (status, response) = invoke_blocking_runner(port, "fxBeforeSignInContext", &sign_in_body);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userRecord"]["sessionClaims"]["contextObserved"],
+        true
+    );
+    let (status, response) = invoke_blocking_runner(port, "fxSessionClaimsAtLimit", &sign_in_body);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        response["userRecord"]["sessionClaims"]
+            .to_string()
+            .encode_utf16()
+            .count(),
+        1000
+    );
+    for function in ["fxSessionClaimsOverLimit", "fxCombinedClaimsOverLimit"] {
+        let (status, response) = invoke_blocking_runner(port, function, &sign_in_body);
+        assert_eq!(status, 400, "{function}: {response}");
+        assert_eq!(
+            response["error"]["status"], "INVALID_ARGUMENT",
+            "{function}"
+        );
+    }
+}
+
 /// Functions scenario 5: an export whose product fireemu does not serve is named, not
 /// dropped -- and by default it stops the run rather than pretending the trigger is live.
 #[test]
@@ -310,33 +340,7 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
         );
         assert_eq!(response["userRecord"]["updateMask"], "displayName");
     }
-    let sign_in_body = body.replace(
-        "providers/cloud.auth/eventTypes/user.beforeCreate",
-        "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
-    );
-    let (status, response) = invoke_blocking_runner(port, "fxBeforeSignInContext", &sign_in_body);
-    assert_eq!(status, 200, "{response}");
-    assert_eq!(
-        response["userRecord"]["sessionClaims"]["contextObserved"],
-        true
-    );
-    let (status, response) = invoke_blocking_runner(port, "fxSessionClaimsAtLimit", &sign_in_body);
-    assert_eq!(status, 200, "{response}");
-    assert_eq!(
-        response["userRecord"]["sessionClaims"]
-            .to_string()
-            .encode_utf16()
-            .count(),
-        1000
-    );
-    for function in ["fxSessionClaimsOverLimit", "fxCombinedClaimsOverLimit"] {
-        let (status, response) = invoke_blocking_runner(port, function, &sign_in_body);
-        assert_eq!(status, 400, "{function}: {response}");
-        assert_eq!(
-            response["error"]["status"], "INVALID_ARGUMENT",
-            "{function}"
-        );
-    }
+    assert_blocking_sign_in_contract(port, &body);
     for (function, status, canonical, message) in [
         (
             "fxPermissionDenied",

@@ -1780,6 +1780,7 @@
       "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only and with a bounded history, both documented divergences.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
+        "https://firebase.google.com/docs/functions/writing-and-viewing-logs",
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
@@ -1794,7 +1795,7 @@
       "claims": [
         {
           "id": "LOGGING-CLAIM-STREAM",
-          "statement": "The Logging emulator serves the EmulatorLog wire format of firebase-tools 15.28.2 over a WebSocket on the official logging port, exports FIREBASE_LOGGING_EMULATOR_HOST and is discoverable through the Emulator Hub.",
+          "statement": "The Logging emulator serves the EmulatorLog wire format of firebase-tools 15.28.2 over a WebSocket on the official logging port, preserves production Firebase Functions structured logger fields and severities, exports FIREBASE_LOGGING_EMULATOR_HOST and is discoverable through the Emulator Hub.",
           "capabilities": [
             {
               "id": "LOG-01",
@@ -1835,6 +1836,10 @@
             },
             {
               "behaviour": "individual runner messages are truncated on a UTF-8 boundary at a conservative 256 KiB cap derived from Cloud Logging's approximate limit for the entire LogEntry",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "structured runner entries deeper than 64 levels are retained as bounded plain text rather than recursively decoded, and a user metadata field is nested under data.metadata.user whenever trusted attribution is present",
               "precision": "conservative"
             }
           ],

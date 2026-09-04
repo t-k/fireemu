@@ -1977,7 +1977,7 @@ async fn start_codebase(
             .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
     };
     if let Some(port) = cfg.functions_inspect_port {
-        command.insert(1, format!("--inspect={port}"));
+        command.insert(1, format!("--inspect=127.0.0.1:{port}"));
     }
     command.push("--source".to_owned());
     command.push(source.clone());
@@ -2094,6 +2094,15 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
+    if let Some(expected) = cfg.functions_inspect_port {
+        let actual = runner.hello().inspector_port;
+        if actual != Some(expected) {
+            runner.kill_now();
+            return Err(format!(
+                "the Functions codebase {label:?}: requested debugger port {expected} is not active"
+            ));
+        }
+    }
     let configured = (|| {
         let manifest_json = match &cfg.functions_manifest {
             Some(path) => {

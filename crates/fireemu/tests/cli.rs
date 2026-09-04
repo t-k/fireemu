@@ -589,6 +589,22 @@ fn inspect_functions_passes_the_node_inspector_through_to_the_runner() {
     assert!(out.status.success(), "{}", stderr(&out));
     let out = exec_with(&["--inspect-functions", "9330"], &["true"]);
     assert!(out.status.success(), "{}", stderr(&out));
+    for port in ["1024", "65535"] {
+        let out = exec_with(&["--inspect-functions", port], &["true"]);
+        assert!(out.status.success(), "{port}: {}", stderr(&out));
+    }
+
+    for port in ["0", "1023", "65536"] {
+        let out = exec_with(&["--inspect-functions", port], &["true"]);
+        assert_eq!(out.status.code(), Some(2), "{port}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!(
+                "{port:?} is not a valid port for debugging, please pass an integer between 1024 and 65535"
+            )),
+            "{port}: {}",
+            stderr(&out)
+        );
+    }
 
     // A configured runner that is not Node cannot take `--inspect`, and says so instead of
     // starting without the inspector the caller asked for.

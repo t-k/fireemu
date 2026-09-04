@@ -176,6 +176,43 @@ fn exec_command_with_logging_port(
         .unwrap()
 }
 
+fn exec_command_with_inspector_port(
+    source: &Path,
+    command: &[&str],
+    inspector_port: u16,
+) -> Output {
+    let mut args: Vec<String> = vec!["exec".into()];
+    for a in [
+        "--firestore-port",
+        "0",
+        "--http-port",
+        "0",
+        "--storage-port",
+        "0",
+        "--functions-port",
+        "0",
+        "--ui-port",
+        "0",
+        "--hub-port",
+        "0",
+        "--logging-port",
+        "0",
+    ] {
+        args.push(a.into());
+    }
+    args.push("--inspect-functions".into());
+    args.push(inspector_port.to_string());
+    args.push("--functions".into());
+    args.push(source.display().to_string());
+    args.push("--".into());
+    args.extend(command.iter().map(|argument| (*argument).to_owned()));
+    Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(&args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
@@ -212,6 +249,48 @@ fn a_real_node_invocation_reaches_the_logging_websocket_with_function_metadata()
         );
     }
     unreachable!("the final failed attempt panics");
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds() {
+    let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/sdk-smoke/functions-project/inspector-e2e.mjs");
+    let probe = probe.display().to_string();
+    for attempt in 0..3 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let inspector_port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let port = inspector_port.to_string();
+        let out = exec_command_with_inspector_port(
+            &fixture("inspect-sequential"),
+            &["node", &probe, &port],
+            inspector_port,
+        );
+        let error = stderr(&out);
+        if !out.status.success()
+            && error.contains(&format!(
+                "Address already in use: 127.0.0.1:{inspector_port}"
+            ))
+            && attempt < 2
+        {
+            continue;
+        }
+        assert!(
+            out.status.success(),
+            "stdout:\n{}\nstderr:\n{error}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        for name in ["alpha", "beta", "http"] {
+            assert!(error.contains(&format!("{name} active=1")), "{error}");
+        }
+        assert!(!error.contains("active=2"), "{error}");
+        assert!(!error.contains("active=3"), "{error}");
+        std::net::TcpListener::bind(("127.0.0.1", inspector_port))
+            .unwrap_or_else(|cause| panic!("inspector port remained open: {cause}"));
+        return;
+    }
+    unreachable!("the final failed attempt asserts");
 }
 
 fn invoke_blocking_runner(port: u16, function: &str, body: &str) -> (u16, serde_json::Value) {

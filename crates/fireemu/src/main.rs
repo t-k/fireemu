@@ -518,6 +518,20 @@ enum ExportOnExit {
 
 /// The Node inspector port `--inspect-functions` defaults to, as in the official CLI.
 const DEFAULT_INSPECT_PORT: u16 = 9229;
+const MIN_INSPECT_PORT: u16 = 1024;
+
+fn inspect_port_arg(raw: &str) -> Result<u16, CliError> {
+    let invalid = || {
+        CliError::usage(format!(
+            "{raw:?} is not a valid port for debugging, please pass an integer between 1024 and 65535"
+        ))
+    };
+    let port = raw.parse::<u16>().map_err(|_| invalid())?;
+    if port < MIN_INSPECT_PORT {
+        return Err(invalid());
+    }
+    Ok(port)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OptionContext {
@@ -611,11 +625,7 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--inspect-functions" => {
                 let (port, step) = match optional_value(args, i + 1) {
-                    Some(v) => (
-                        v.parse()
-                            .map_err(|e| CliError::usage(format!("--inspect-functions: {e}")))?,
-                        2,
-                    ),
+                    Some(v) => (inspect_port_arg(v)?, 2),
                     None => (DEFAULT_INSPECT_PORT, 1),
                 };
                 raw.inspect_functions = Some(port);

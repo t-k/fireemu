@@ -23,6 +23,8 @@ use crate::protocol::{read_frame, write_frame};
 pub struct Hello {
     /// Runner name (`node`).
     pub runner: String,
+    /// Active Node inspector port, if the runner was started in debug mode.
+    pub inspector_port: Option<u16>,
     /// Port of the runner's HTTP server (HTTP / callable functions), if any.
     pub http_port: Option<u16>,
     /// Discovered manifest (canonical JSON), if the runner performed discovery.
@@ -459,6 +461,10 @@ impl Runner {
                                     .and_then(Value::as_str)
                                     .unwrap_or("unknown")
                                     .to_owned(),
+                                inspector_port: frame
+                                    .get("inspectorPort")
+                                    .and_then(Value::as_u64)
+                                    .and_then(|p| u16::try_from(p).ok()),
                                 http_port: frame
                                     .get("httpPort")
                                     .and_then(Value::as_u64)

@@ -862,12 +862,20 @@ fn support_services_without_a_functions_codebase_are_accepted_no_ops() {
     for service in ["eventarc", "tasks"] {
         let dir = scratch(&format!("support-noop-{service}"));
         let out = dir.join("env.txt");
+        let firebase_json = dir.join("firebase.json");
+        std::fs::write(
+            &firebase_json,
+            serde_json::json!({"emulators": {(service): {}}}).to_string(),
+        )
+        .unwrap();
         let output = daemon()
             .args([
                 "--project",
                 "demo-support-noop",
                 "--only",
                 service,
+                "--firebase-json",
+                firebase_json.to_str().unwrap(),
                 "--http-port",
                 "0",
                 "--hub-port",
@@ -891,6 +899,22 @@ fn support_services_without_a_functions_codebase_are_accepted_no_ops() {
             "{service}"
         );
         assert!(!env.contains_key("CLOUD_TASKS_EMULATOR_HOST"), "{service}");
+    }
+}
+
+#[test]
+fn an_unconfigured_support_service_is_not_a_standalone_target() {
+    for service in ["eventarc", "tasks"] {
+        let output = daemon()
+            .args(["--only", service, "--", "true"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{service}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("No emulators to start"),
+            "{service}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 

@@ -168,9 +168,17 @@ pub struct RuntimeConfig {
     /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
     /// when a Functions codebase is loaded; its default port is 9299.
     pub eventarc_addr: String,
+    /// Whether an Eventarc emulator entry or port was configured independently of Functions.
+    pub eventarc_enabled: bool,
+    /// Whether the Eventarc port is fixed rather than dynamically relocatable.
+    pub eventarc_addr_explicit: bool,
     /// Cloud Tasks HTTP bind address. The pinned official suite starts this dependency only
     /// when a Functions codebase is loaded; its default port is 9499.
     pub tasks_addr: String,
+    /// Whether a Cloud Tasks emulator entry or port was configured independently of Functions.
+    pub tasks_enabled: bool,
+    /// Whether the Cloud Tasks port is fixed rather than dynamically relocatable.
+    pub tasks_addr_explicit: bool,
     /// Pub/Sub gRPC bind address (`emulators.pubsub`, `daemon.pubsubPort`). The official
     /// emulator default port is 8085.
     pub pubsub_addr: String,
@@ -399,7 +407,11 @@ impl Default for RuntimeConfig {
             rules_enforced: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
             eventarc_addr: "127.0.0.1:9299".to_owned(),
+            eventarc_enabled: false,
+            eventarc_addr_explicit: false,
             tasks_addr: "127.0.0.1:9499".to_owned(),
+            tasks_enabled: false,
+            tasks_addr_explicit: false,
             pubsub_addr: "127.0.0.1:8085".to_owned(),
             pubsub_enabled: false,
             hub_addr: format!("127.0.0.1:{DEFAULT_HUB_PORT}"),
@@ -512,6 +524,10 @@ pub struct Selection {
     pub storage: bool,
     /// The functions codebase is loaded and `FIREEMU_FUNCTIONS_HOST` exported.
     pub functions: bool,
+    /// Whether `--only` named the Eventarc support emulator.
+    pub eventarc: bool,
+    /// Whether `--only` named the Cloud Tasks support emulator.
+    pub tasks: bool,
     /// The Pub/Sub gRPC emulator is served and `PUBSUB_EMULATOR_HOST` exported.
     pub pubsub: bool,
     /// App Check: a logical selection, because the exchange and the JWKS share the
@@ -534,6 +550,8 @@ impl Default for Selection {
             auth: true,
             storage: true,
             functions: true,
+            eventarc: false,
+            tasks: false,
             pubsub: true,
             appcheck: true,
             explicit: false,
@@ -554,6 +572,8 @@ impl Selection {
             auth: false,
             storage: false,
             functions: false,
+            eventarc: false,
+            tasks: false,
             pubsub: false,
             appcheck: false,
             explicit: true,
@@ -595,7 +615,8 @@ impl Selection {
                 // The official controller accepts these names but creates both listeners
                 // only when at least one Functions backend is loaded. They therefore do not
                 // select Functions or carry independent Selection flags.
-                "eventarc" | "tasks" => {}
+                "eventarc" => sel.eventarc = true,
+                "tasks" => sel.tasks = true,
                 "pubsub" => sel.pubsub = true,
                 "appcheck" => sel.appcheck = true,
                 other => {
@@ -827,9 +848,17 @@ impl RuntimeConfig {
                     }
                     "eventarc" => {
                         self.eventarc_addr = emulator_addr(entry, name, &self.eventarc_addr)?;
+                        self.eventarc_enabled = true;
+                        self.eventarc_addr_explicit = entry
+                            .as_object()
+                            .is_some_and(|entry| entry.contains_key("port"));
                     }
                     "tasks" => {
                         self.tasks_addr = emulator_addr(entry, name, &self.tasks_addr)?;
+                        self.tasks_enabled = true;
+                        self.tasks_addr_explicit = entry
+                            .as_object()
+                            .is_some_and(|entry| entry.contains_key("port"));
                     }
                     "pubsub" => {
                         self.pubsub_addr = emulator_addr(entry, name, &self.pubsub_addr)?;
@@ -1472,9 +1501,13 @@ impl RuntimeConfig {
         }
         if let Some(port) = d.get("eventarcPort").and_then(Value::as_u64) {
             cfg.eventarc_addr = format!("127.0.0.1:{port}");
+            cfg.eventarc_enabled = true;
+            cfg.eventarc_addr_explicit = true;
         }
         if let Some(port) = d.get("tasksPort").and_then(Value::as_u64) {
             cfg.tasks_addr = format!("127.0.0.1:{port}");
+            cfg.tasks_enabled = true;
+            cfg.tasks_addr_explicit = true;
         }
         if let Some(port) = d.get("pubsubPort").and_then(Value::as_u64) {
             cfg.pubsub_addr = format!("127.0.0.1:{port}");
@@ -2286,6 +2319,21 @@ mod tests {
     }
 
     #[test]
+    fn canonical_support_service_ports_are_loaded_as_explicit_addresses() {
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "daemon": {"eventarcPort": 9300, "tasksPort": 9500}
+        }))
+        .unwrap();
+        assert_eq!(cfg.eventarc_addr, "127.0.0.1:9300");
+        assert!(cfg.eventarc_enabled);
+        assert!(cfg.eventarc_addr_explicit);
+        assert_eq!(cfg.tasks_addr, "127.0.0.1:9500");
+        assert!(cfg.tasks_enabled);
+        assert!(cfg.tasks_addr_explicit);
+    }
+
+    #[test]
     fn only_instance_rsa_signing_is_accepted_and_unsigned_modes_are_refused() {
         assert_eq!(
             app_check(&json!({"enabled": true, "tokenSigning": "instance-rsa"}))
@@ -2963,7 +3011,11 @@ mod tests {
         assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
         assert_eq!(cfg.functions_addr, "127.0.0.1:5002");
         assert_eq!(cfg.eventarc_addr, "127.0.0.1:9300");
+        assert!(cfg.eventarc_enabled);
+        assert!(cfg.eventarc_addr_explicit);
         assert_eq!(cfg.tasks_addr, "127.0.0.1:9500");
+        assert!(cfg.tasks_enabled);
+        assert!(cfg.tasks_addr_explicit);
         assert_eq!(cfg.hub_addr, "127.0.0.1:4401");
         assert!(
             cfg.hub_addr_explicit,

@@ -60,6 +60,30 @@ struct RequestPermit {
     _bytes: OwnedSemaphorePermit,
 }
 
+/// One process-wide ingress budget shared by the Functions, Eventarc and Tasks listeners.
+#[derive(Clone)]
+pub struct HttpAdmission {
+    requests: RequestAdmission,
+    connections: Arc<Semaphore>,
+}
+
+impl HttpAdmission {
+    /// Creates the bounded ingress budget for one Functions runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            requests: RequestAdmission::new(),
+            connections: Arc::new(Semaphore::new(MAX_FUNCTION_CONNECTIONS)),
+        }
+    }
+}
+
+impl Default for HttpAdmission {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RequestAdmission {
     fn new() -> Self {
         Self::with_limits(MAX_CONCURRENT_BODY_READS, MAX_RESERVED_BODY_BYTES)
@@ -1372,18 +1396,18 @@ async fn serve_surface(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
     surface: HttpSurface,
+    admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    let request_admission = RequestAdmission::new();
-    let connection_slots = Arc::new(Semaphore::new(MAX_FUNCTION_CONNECTIONS));
     loop {
         let (stream, _) = listener.accept().await?;
-        let connection = connection_slots
+        let connection = admission
+            .connections
             .clone()
             .acquire_owned()
             .await
             .expect("the connection semaphore is never closed");
         let runtime = runtime.clone();
-        let request_admission = request_admission.clone();
+        let request_admission = admission.requests.clone();
         tokio::spawn(async move {
             let _connection = connection;
             let io = TokioIo::new(stream);
@@ -1411,30 +1435,33 @@ async fn serve_surface(
 pub async fn serve_functions(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Functions).await
+    serve_surface(listener, runtime, HttpSurface::Functions, admission).await
 }
 
 /// Serves only the Eventarc channel publication routes on the official Eventarc listener.
 pub async fn serve_eventarc(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Eventarc).await
+    serve_surface(listener, runtime, HttpSurface::Eventarc, admission).await
 }
 
 /// Serves only the Cloud Tasks queue routes on the official Tasks listener.
 pub async fn serve_tasks(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Tasks).await
+    serve_surface(listener, runtime, HttpSurface::Tasks, admission).await
 }
 
 #[cfg(test)]
 mod admission_tests {
     use super::{
-        request_body_limit, HttpSurface, RequestAdmission, MAX_FUNCTION_BODY_BYTES,
+        request_body_limit, HttpAdmission, HttpSurface, RequestAdmission, MAX_FUNCTION_BODY_BYTES,
         MAX_TASK_BODY_BYTES,
     };
     use std::time::Duration;
@@ -1474,6 +1501,30 @@ mod admission_tests {
             .await
             .expect("dropping an admitted request releases both permits");
         drop(second);
+    }
+
+    #[tokio::test]
+    async fn cloned_surface_admission_shares_one_process_budget() {
+        let admission = HttpAdmission {
+            requests: RequestAdmission::with_limits(1, 8),
+            connections: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        };
+        let other_surface = admission.clone();
+        let request = admission.requests.acquire(8).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), other_surface.requests.acquire(1))
+                .await
+                .is_err()
+        );
+        drop(request);
+        let connection = admission.connections.acquire().await.unwrap();
+        assert!(tokio::time::timeout(
+            Duration::from_millis(20),
+            other_surface.connections.acquire()
+        )
+        .await
+        .is_err());
+        drop(connection);
     }
 
     #[tokio::test]

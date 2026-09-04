@@ -263,13 +263,20 @@ impl Harness {
     }
 
     async fn post_raw_to(&self, addr: std::net::SocketAddr, path: &str, body: &[u8]) -> u16 {
+        self.raw_to_from(addr, path, body, None).await.status
+    }
+
+    async fn raw_to_from(
+        &self,
+        addr: std::net::SocketAddr,
+        path: &str,
+        body: &[u8],
+        origin: Option<&str>,
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let head = format!(
-            "POST {path} HTTP/1.1\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-            addr,
-            body.len()
-        );
+        let origin = origin.map_or_else(String::new, |value| format!("origin: {value}\r\n"));
+        let head = format!("POST {path} HTTP/1.1\r\nhost: {addr}\r\n{origin}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
         let mut stream = tokio::net::TcpStream::connect(addr)
             .await
             .expect("the functions port accepts");
@@ -289,7 +296,6 @@ impl Harness {
             .expect("the response is read");
         fireemu_adapter_functions::http::parse_response(&raw, "POST")
             .expect("a well-formed response")
-            .status
     }
 }
 
@@ -380,6 +386,7 @@ async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
     let server = tokio::spawn(fireemu_adapter_functions::http::serve_functions(
         listener,
         runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
     ));
     Harness {
         addr,
@@ -511,6 +518,7 @@ async fn a_cloud_tasks_request_uses_the_official_express_json_limit() {
     let tasks_server = tokio::spawn(fireemu_adapter_functions::http::serve_tasks(
         tasks_listener,
         h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
     ));
     let mut boundary = br#"{"padding":""#.to_vec();
     boundary.extend(std::iter::repeat_n(
@@ -551,6 +559,7 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
     let eventarc_server = tokio::spawn(fireemu_adapter_functions::http::serve_eventarc(
         eventarc_listener,
         h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
     ));
     let tasks_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -559,6 +568,7 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
     let tasks_server = tokio::spawn(fireemu_adapter_functions::http::serve_tasks(
         tasks_listener,
         h.runtime.clone(),
+        fireemu_adapter_functions::http::HttpAdmission::new(),
     ));
 
     let functions_path = "/demo-app/us-central1/echo";
@@ -570,7 +580,12 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
             .await,
         200
     );
-    assert_eq!(h.post_raw_to(tasks_addr, tasks_path, b"{}").await, 200);
+    let tasks_response = h.raw_to_from(tasks_addr, tasks_path, b"{}", None).await;
+    assert_eq!(tasks_response.status, 404);
+    assert!(
+        String::from_utf8_lossy(&tasks_response.body).contains("no onTaskDispatched function"),
+        "the Tasks listener must produce its own resource error"
+    );
 
     let foreign_body = vec![b'x'; fireemu_adapter_functions::http::MAX_TASK_BODY_BYTES + 1];
     for (surface, addr, paths) in [
@@ -585,6 +600,24 @@ async fn support_service_routes_are_isolated_from_the_functions_listener() {
                 "{surface} accepted the foreign route {path}"
             );
         }
+    }
+    for (surface, addr, path, body) in [
+        (
+            "eventarc",
+            eventarc_addr,
+            eventarc_path,
+            br#"{"events":[]}"#.as_slice(),
+        ),
+        ("tasks", tasks_addr, tasks_path, b"{}".as_slice()),
+    ] {
+        let response = h
+            .raw_to_from(addr, path, body, Some("https://attacker.example"))
+            .await;
+        assert_eq!(
+            response.status, 403,
+            "{surface} accepted a non-loopback browser origin"
+        );
+        assert_eq!(response.body, b"forbidden origin");
     }
 
     eventarc_server.abort();

@@ -766,9 +766,13 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.eventarc_port {
         cfg.eventarc_addr = with_port(&cfg.eventarc_addr, p);
+        cfg.eventarc_enabled = true;
+        cfg.eventarc_addr_explicit = true;
     }
     if let Some(p) = raw.tasks_port {
         cfg.tasks_addr = with_port(&cfg.tasks_addr, p);
+        cfg.tasks_enabled = true;
+        cfg.tasks_addr_explicit = true;
     }
     if let Some(p) = raw.pubsub_port {
         cfg.pubsub_addr = with_port(&cfg.pubsub_addr, p);
@@ -869,6 +873,20 @@ fn parse_options(
         // `--functions <dir>` names exactly one codebase, whatever `firebase.json` declares.
         cfg.functions_source = Some(dir);
         cfg.functions_loaded.clear();
+    }
+    let primary_selected = only.firestore
+        || only.auth
+        || only.storage
+        || only.functions
+        || only.pubsub
+        || only.appcheck;
+    let configured_support_selected =
+        (only.eventarc && cfg.eventarc_enabled) || (only.tasks && cfg.tasks_enabled);
+    if only.explicit && !primary_selected && !configured_support_selected {
+        return Err(CliError::refused(
+            "No emulators to start: Eventarc and Cloud Tasks are support emulators and a standalone --only selection must name a configured emulators.eventarc or emulators.tasks entry"
+                .to_owned(),
+        ));
     }
     if raw.inspect_functions.is_some() || raw.inspect_functions_dynamic {
         apply_inspect_functions(&mut cfg, raw.inspect_functions)?;
@@ -1708,6 +1726,38 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
                 .map_err(|e| format!("bind {addr}: {e}"))
         }
     };
+    let bind_relocatable = |addr: &str, explicit: bool, service: &'static str| {
+        let addr = addr.to_owned();
+        async move {
+            if explicit || addr.ends_with(":0") {
+                return tokio::net::TcpListener::bind(&addr)
+                    .await
+                    .map_err(|e| format!("bind {addr}: {e}"));
+            }
+            let (host, port) = addr
+                .rsplit_once(':')
+                .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
+                .ok_or_else(|| format!("bind {addr}: invalid address"))?;
+            for candidate in port..=u16::MAX {
+                let candidate_addr = format!("{host}:{candidate}");
+                match tokio::net::TcpListener::bind(&candidate_addr).await {
+                    Ok(listener) => {
+                        if candidate != port {
+                            eprintln!(
+                                "warning: {service} unable to start on port {port}, starting on {candidate} instead"
+                            );
+                        }
+                        return Ok(listener);
+                    }
+                    Err(_) if candidate < u16::MAX => {}
+                    Err(error) => return Err(format!("bind {candidate_addr}: {error}")),
+                }
+            }
+            Err(format!(
+                "could not find an open {service} port in {port}-65535"
+            ))
+        }
+    };
     // An explicit Hub address wins over every port-zero listener. The default remains late
     // and best effort: a selected product configured on 4400 must win and disable discovery.
     let prebound_hub = if cfg.hub_addr_explicit {
@@ -1740,12 +1790,26 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     // loaded, even if `--only` did not name them. Naming either one without Functions is an
     // accepted no-op and binds neither listener.
     let eventarc = if functions.is_some() {
-        Some(bind(&cfg.eventarc_addr).await?)
+        Some(
+            bind_relocatable(
+                &cfg.eventarc_addr,
+                cfg.eventarc_addr_explicit,
+                "Eventarc emulator",
+            )
+            .await?,
+        )
     } else {
         None
     };
     let tasks = if functions.is_some() {
-        Some(bind(&cfg.tasks_addr).await?)
+        Some(
+            bind_relocatable(
+                &cfg.tasks_addr,
+                cfg.tasks_addr_explicit,
+                "Cloud Tasks emulator",
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -2243,6 +2307,29 @@ mod config_reload_tests {
         assert!(runtime_thread_counts(8, Some("many"), None).is_err());
     }
 
+    #[test]
+    fn support_service_cli_ports_override_configured_addresses() {
+        let mut cfg = RuntimeConfig {
+            eventarc_addr: "localhost:9300".to_owned(),
+            tasks_addr: "localhost:9500".to_owned(),
+            ..RuntimeConfig::default()
+        };
+        let raw = RawOptions {
+            eventarc_port: Some(9301),
+            tasks_port: Some(9501),
+            ..RawOptions::default()
+        };
+
+        apply_port_overrides(&mut cfg, &raw);
+
+        assert_eq!(cfg.eventarc_addr, "localhost:9301");
+        assert!(cfg.eventarc_enabled);
+        assert!(cfg.eventarc_addr_explicit);
+        assert_eq!(cfg.tasks_addr, "localhost:9501");
+        assert!(cfg.tasks_enabled);
+        assert!(cfg.tasks_addr_explicit);
+    }
+
     #[tokio::test]
     async fn a_selected_product_wins_a_port_shared_with_the_default_hub() {
         let only = Selection {
@@ -2250,6 +2337,8 @@ mod config_reload_tests {
             auth: false,
             storage: false,
             functions: false,
+            eventarc: false,
+            tasks: false,
             pubsub: false,
             appcheck: false,
             explicit: true,

@@ -135,7 +135,6 @@ send({
             {"name": "add", "trigger": {"type": "http", "callable": True, "enforceAppCheck": False, "consumeAppCheckToken": "disabled"}},
             {"name": "guarded", "trigger": {"type": "http", "callable": True, "enforceAppCheck": True, "consumeAppCheckToken": consume}},
             {"name": "guardedV2", "generation": 2, "trigger": {"type": "http", "callable": True, "enforceAppCheck": True, "consumeAppCheckToken": consume}},
-            {"name": "taskA", "generation": 2, "trigger": {"type": "tasks"}},
         ]
     },
 })

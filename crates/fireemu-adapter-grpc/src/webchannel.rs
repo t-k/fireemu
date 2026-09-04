@@ -74,6 +74,10 @@ pub const MAX_BACKCHANNEL_BATCH_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum concurrently owned replay-copy bytes per session. Keeping this equal to one maximum
 /// batch prevents replaced response bodies from multiplying a large replay allocation.
 pub const MAX_CONCURRENT_REPLAY_BYTES: usize = MAX_BACKCHANNEL_BATCH_BYTES;
+/// Maximum unacknowledged `WebChannel` bytes retained by one Hub across every session.
+pub const MAX_PROCESS_UNACKNOWLEDGED_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum replay-copy bytes owned by response bodies across one Hub.
+pub const MAX_PROCESS_REPLAY_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum maps per forward request and maximum gap of buffered map ids.
 const MAX_MAPS_PER_REQUEST: u64 = 1000;
 /// Maximum completed target lifetimes retained solely for diagnostics.
@@ -712,6 +716,7 @@ struct StreamEnd {
 #[derive(Debug)]
 struct DeliveryState {
     outbound: VecDeque<(u64, String)>,
+    retained_permits: VecDeque<(u64, OwnedSemaphorePermit)>,
     retained_bytes: usize,
     next_aid: u64,
     committed_aid: u64,
@@ -720,12 +725,21 @@ struct DeliveryState {
     terminal_expiry_cancel: Option<oneshot::Sender<()>>,
     terminal_expiry_tasks: Arc<AtomicUsize>,
     replay_copy_budget: Arc<Semaphore>,
+    process_retained_budget: Arc<Semaphore>,
+    process_replay_budget: Arc<Semaphore>,
 }
 
 impl Default for DeliveryState {
     fn default() -> Self {
+        Self::with_budgets(&WebChannelBudgets::default())
+    }
+}
+
+impl DeliveryState {
+    fn with_budgets(budgets: &WebChannelBudgets) -> Self {
         Self {
             outbound: VecDeque::new(),
+            retained_permits: VecDeque::new(),
             retained_bytes: 0,
             next_aid: 0,
             committed_aid: 0,
@@ -734,6 +748,23 @@ impl Default for DeliveryState {
             terminal_expiry_cancel: None,
             terminal_expiry_tasks: Arc::new(AtomicUsize::new(0)),
             replay_copy_budget: Arc::new(Semaphore::new(MAX_CONCURRENT_REPLAY_BYTES)),
+            process_retained_budget: budgets.retained.clone(),
+            process_replay_budget: budgets.replay.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WebChannelBudgets {
+    retained: Arc<Semaphore>,
+    replay: Arc<Semaphore>,
+}
+
+impl Default for WebChannelBudgets {
+    fn default() -> Self {
+        Self {
+            retained: Arc::new(Semaphore::new(MAX_PROCESS_UNACKNOWLEDGED_BYTES)),
+            replay: Arc::new(Semaphore::new(MAX_PROCESS_REPLAY_BYTES)),
         }
     }
 }
@@ -749,7 +780,8 @@ struct PendingBatch {
 
 struct BudgetedChunk {
     bytes: Vec<u8>,
-    _permit: OwnedSemaphorePermit,
+    _session_permit: OwnedSemaphorePermit,
+    _process_permit: OwnedSemaphorePermit,
 }
 
 impl AsRef<[u8]> for BudgetedChunk {
@@ -900,9 +932,16 @@ impl Session {
             {
                 return Err(());
             }
+            let permit_count = u32::try_from(bytes).map_err(|_| ())?;
+            let retained_permit = delivery
+                .process_retained_budget
+                .clone()
+                .try_acquire_many_owned(permit_count)
+                .map_err(|_| ())?;
             delivery.next_aid = aid;
             delivery.retained_bytes = retained_bytes;
             delivery.outbound.push_back((aid, text));
+            delivery.retained_permits.push_back((aid, retained_permit));
             (
                 aid,
                 bytes,
@@ -952,6 +991,13 @@ impl Session {
                     delivery.retained_bytes = delivery.retained_bytes.saturating_sub(text.len());
                 }
             }
+            while delivery
+                .retained_permits
+                .front()
+                .is_some_and(|(id, _)| *id <= aid)
+            {
+                delivery.retained_permits.pop_front();
+            }
             delivery.acknowledged_aid = delivery.acknowledged_aid.max(aid);
             let terminal_acknowledged = delivery
                 .stream_end
@@ -960,6 +1006,7 @@ impl Session {
                 owner.generation = owner.generation.saturating_add(1);
                 self.terminated.store(true, Ordering::SeqCst);
                 delivery.outbound.clear();
+                delivery.retained_permits.clear();
                 delivery.retained_bytes = 0;
                 (owner.cancel.take(), delivery.terminal_expiry_cancel.take())
             } else {
@@ -1038,17 +1085,20 @@ impl Session {
         })
     }
 
-    fn replay_copy_budget(&self) -> Option<Arc<Semaphore>> {
-        self.delivery
-            .lock()
-            .ok()
-            .map(|delivery| delivery.replay_copy_budget.clone())
+    fn replay_copy_budgets(&self) -> Option<(Arc<Semaphore>, Arc<Semaphore>)> {
+        self.delivery.lock().ok().map(|delivery| {
+            (
+                delivery.replay_copy_budget.clone(),
+                delivery.process_replay_budget.clone(),
+            )
+        })
     }
 
     fn serialize_pending_batch(
         &self,
         plan: PendingBatch,
-        permit: OwnedSemaphorePermit,
+        session_permit: OwnedSemaphorePermit,
+        process_permit: OwnedSemaphorePermit,
     ) -> Option<bytes::Bytes> {
         let delivery = self.delivery.lock().ok()?;
         let pending = delivery
@@ -1079,18 +1129,22 @@ impl Session {
         }
         Some(bytes::Bytes::from_owner(BudgetedChunk {
             bytes: frame,
-            _permit: permit,
+            _session_permit: session_permit,
+            _process_permit: process_permit,
         }))
     }
 
     #[cfg(test)]
     fn pending_chunk_after(&self, aid: u64) -> Option<(u64, usize, String)> {
         let plan = self.pending_batch_plan_after(aid)?;
-        let budget = self.replay_copy_budget()?;
-        let permit = budget
+        let (session_budget, process_budget) = self.replay_copy_budgets()?;
+        let session_permit = session_budget
             .try_acquire_many_owned(plan.framed_bytes.try_into().ok()?)
             .ok()?;
-        let frame = self.serialize_pending_batch(plan, permit)?;
+        let process_permit = process_budget
+            .try_acquire_many_owned(plan.framed_bytes.try_into().ok()?)
+            .ok()?;
+        let frame = self.serialize_pending_batch(plan, session_permit, process_permit)?;
         let text = std::str::from_utf8(&frame).ok()?.split_once('\n')?.1;
         Some((plan.last_aid, plan.count, text.to_owned()))
     }
@@ -1186,6 +1240,7 @@ impl Session {
         }
         if let Ok(mut delivery) = self.delivery.lock() {
             delivery.outbound.clear();
+            delivery.retained_permits.clear();
             delivery.retained_bytes = 0;
             if let Some(cancel) = delivery.terminal_expiry_cancel.take() {
                 let _ = cancel.send(());
@@ -1256,6 +1311,7 @@ fn schedule_terminal_expiry(session: &Arc<Session>, delay: Duration) {
 pub struct Hub {
     state: Arc<RestState>,
     sessions: Arc<SessionRegistry>,
+    budgets: WebChannelBudgets,
 }
 
 fn terminate_registered_sessions(sessions: &SessionRegistry) {
@@ -1415,6 +1471,7 @@ impl Hub {
         Self {
             state,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            budgets: WebChannelBudgets::default(),
         }
     }
 
@@ -1636,7 +1693,7 @@ impl Hub {
             kind: req.kind,
             origin: req.origin.clone(),
             inbound: Mutex::new(Some(inbound_tx)),
-            delivery: Mutex::new(DeliveryState::default()),
+            delivery: Mutex::new(DeliveryState::with_budgets(&self.budgets)),
             backchannel_owner: Mutex::new(BackchannelOwner {
                 generation: 0,
                 cancel: None,
@@ -1800,45 +1857,84 @@ impl Hub {
 /// The permit makes enqueue synchronous. Holding the ownership lock across the generation
 /// check and `send` gives replacement one linearization point without holding a lock across
 /// an await.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackchannelCommit {
+    Committed,
+    Superseded,
+    BatchChanged,
+}
+
 fn commit_backchannel_chunk(
     session: &Session,
     generation: u64,
     last_aid: u64,
+    batch: Option<PendingBatch>,
     permit: mpsc::Permit<'_, Result<bytes::Bytes, Status>>,
     body: bytes::Bytes,
-) -> bool {
-    let committed = {
+) -> BackchannelCommit {
+    {
         let Ok(owner) = session.backchannel_owner.lock() else {
-            return false;
+            return BackchannelCommit::Superseded;
         };
         if owner.generation != generation || session.is_terminated() {
-            return false;
+            return BackchannelCommit::Superseded;
         }
         let Ok(mut delivery) = session.delivery.lock() else {
-            return false;
+            return BackchannelCommit::Superseded;
         };
         if last_aid > delivery.next_aid {
-            return false;
+            return BackchannelCommit::BatchChanged;
+        }
+        if let Some(batch) = batch {
+            let mut expected_aid = batch.first_aid;
+            let mut retained_count = 0usize;
+            for (aid, _) in delivery
+                .outbound
+                .iter()
+                .skip_while(|(aid, _)| *aid < batch.first_aid)
+                .take(batch.count)
+            {
+                if *aid != expected_aid {
+                    return BackchannelCommit::BatchChanged;
+                }
+                retained_count += 1;
+                expected_aid = expected_aid.saturating_add(1);
+            }
+            if delivery.acknowledged_aid >= batch.first_aid
+                || batch.last_aid != last_aid
+                || retained_count != batch.count
+                || expected_aid.saturating_sub(1) != batch.last_aid
+            {
+                return BackchannelCommit::BatchChanged;
+            }
         }
         permit.send(Ok(body));
         delivery.committed_aid = delivery.committed_aid.max(last_aid);
-        true
-    };
-    if !committed {
-        return false;
     }
     session.trace_event(&TraceEvent::BackchannelCommitted {
         session: session.trace_id,
         generation,
         last_aid,
     });
-    true
+    BackchannelCommit::Committed
+}
+
+async fn send_backchannel_noop(
+    session: &Session,
+    generation: u64,
+    cursor: u64,
+    tx: &mpsc::Sender<Result<bytes::Bytes, Status>>,
+    cancelled: &mut oneshot::Receiver<()>,
+) -> Result<(), &'static str> {
+    let body = bytes::Bytes::from(chunk(&json!([[cursor, ["noop"]]]).to_string()));
+    send_backchannel_chunk(session, generation, cursor, None, tx, cancelled, body).await
 }
 
 async fn send_backchannel_chunk(
     session: &Session,
     generation: u64,
     last_aid: u64,
+    batch: Option<PendingBatch>,
     tx: &mpsc::Sender<Result<bytes::Bytes, Status>>,
     cancelled: &mut oneshot::Receiver<()>,
     body: bytes::Bytes,
@@ -1848,10 +1944,10 @@ async fn send_backchannel_chunk(
         _ = &mut *cancelled => return Err("superseded"),
         permit = tx.reserve() => permit.map_err(|_| "receiver gone")?,
     };
-    if commit_backchannel_chunk(session, generation, last_aid, permit, body) {
-        Ok(())
-    } else {
-        Err("superseded")
+    match commit_backchannel_chunk(session, generation, last_aid, batch, permit, body) {
+        BackchannelCommit::Committed => Ok(()),
+        BackchannelCommit::Superseded => Err("superseded"),
+        BackchannelCommit::BatchChanged => Err("pending batch changed"),
     }
 }
 
@@ -1860,7 +1956,7 @@ async fn reserve_pending_batch(
     plan: PendingBatch,
     cancelled: &mut oneshot::Receiver<()>,
 ) -> Result<bytes::Bytes, &'static str> {
-    let Some(copy_budget) = session.replay_copy_budget() else {
+    let Some((session_budget, process_budget)) = session.replay_copy_budgets() else {
         return Err("session lock poisoned");
     };
     let Ok(permit_count) = u32::try_from(plan.framed_bytes) else {
@@ -1869,12 +1965,19 @@ async fn reserve_pending_batch(
     let permit = tokio::select! {
         biased;
         _ = &mut *cancelled => return Err("superseded"),
-        permit = copy_budget.acquire_many_owned(permit_count) => {
+        permit = session_budget.acquire_many_owned(permit_count) => {
+            permit.map_err(|_| "copy budget closed")?
+        },
+    };
+    let process_permit = tokio::select! {
+        biased;
+        _ = &mut *cancelled => return Err("superseded"),
+        permit = process_budget.acquire_many_owned(permit_count) => {
             permit.map_err(|_| "copy budget closed")?
         },
     };
     session
-        .serialize_pending_batch(plan, permit)
+        .serialize_pending_batch(plan, permit, process_permit)
         .ok_or("pending batch changed")
 }
 
@@ -1911,11 +2014,20 @@ async fn backchannel_loop(
                 Err("pending batch changed") => continue,
                 Err(outcome) => return outcome,
             };
-            if let Err(outcome) =
-                send_backchannel_chunk(session, generation, plan.last_aid, tx, cancelled, body)
-                    .await
+            match send_backchannel_chunk(
+                session,
+                generation,
+                plan.last_aid,
+                Some(plan),
+                tx,
+                cancelled,
+                body,
+            )
+            .await
             {
-                return outcome;
+                Ok(()) => {}
+                Err("pending batch changed") => continue,
+                Err(outcome) => return outcome,
             }
             // The cursor is the last id actually sent; arrays pushed meanwhile are picked
             // up by the next iteration.
@@ -1929,16 +2041,8 @@ async fn backchannel_loop(
             && !session.is_terminated()
             && pending.is_none()
         {
-            let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
-            if let Err(outcome) = send_backchannel_chunk(
-                session,
-                generation,
-                session.last_aid(),
-                tx,
-                cancelled,
-                bytes::Bytes::from(chunk(&noop)),
-            )
-            .await
+            if let Err(outcome) =
+                send_backchannel_noop(session, generation, *cursor, tx, cancelled).await
             {
                 return outcome;
             }
@@ -1967,16 +2071,8 @@ async fn backchannel_loop(
         if waited.is_err() {
             // Silence: a framed keep-alive (a completed request with no bytes would be
             // treated as an error by the client).
-            let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
-            if let Err(outcome) = send_backchannel_chunk(
-                session,
-                generation,
-                session.last_aid(),
-                tx,
-                cancelled,
-                bytes::Bytes::from(chunk(&noop)),
-            )
-            .await
+            if let Err(outcome) =
+                send_backchannel_noop(session, generation, *cursor, tx, cancelled).await
             {
                 return outcome;
             }
@@ -2182,6 +2278,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_session(sid: &str, delivery: DeliveryState) -> Session {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        Session {
+            sid: sid.to_owned(),
+            trace_id: next_trace_session_id(),
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Listen,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(delivery),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        }
+    }
 
     fn terminal_session(
         sid: &str,
@@ -2518,6 +2638,115 @@ mod tests {
         );
     }
 
+    #[test]
+    fn process_retention_budget_is_shared_refunded_and_session_isolated() {
+        let payload = json!({"value": "x".repeat(128)});
+        let one_array_bytes = json!([1, &payload]).to_string().len();
+        let budgets = WebChannelBudgets {
+            retained: Arc::new(Semaphore::new(one_array_bytes)),
+            replay: Arc::new(Semaphore::new(MAX_PROCESS_REPLAY_BYTES)),
+        };
+        let first = test_session("global-first", DeliveryState::with_budgets(&budgets));
+        let second = test_session("global-second", DeliveryState::with_budgets(&budgets));
+
+        assert_eq!(first.push(&payload), Ok(1));
+        assert!(second.push(&payload).is_err());
+        assert!(!second.is_terminated());
+        assert!(second.delivery.lock().unwrap().outbound.is_empty());
+
+        first.delivery.lock().unwrap().committed_aid = 1;
+        first.acknowledge(1).unwrap();
+        assert_eq!(second.push(&payload), Ok(1));
+        assert!(first.delivery.lock().unwrap().outbound.is_empty());
+    }
+
+    #[tokio::test]
+    async fn process_replay_budget_is_shared_until_response_bytes_are_dropped() {
+        let text = "[1,[\"payload\"]]".to_owned();
+        let outbound = VecDeque::from([(1, text.clone())]);
+        let retained_bytes = text.len();
+        let provisional = test_session(
+            "provisional",
+            DeliveryState {
+                outbound: outbound.clone(),
+                retained_bytes,
+                next_aid: 1,
+                ..DeliveryState::default()
+            },
+        );
+        let framed_bytes = provisional
+            .pending_batch_plan_after(0)
+            .unwrap()
+            .framed_bytes;
+        let budgets = WebChannelBudgets {
+            retained: Arc::new(Semaphore::new(MAX_PROCESS_UNACKNOWLEDGED_BYTES)),
+            replay: Arc::new(Semaphore::new(framed_bytes)),
+        };
+        let build = |sid: &str| {
+            test_session(
+                sid,
+                DeliveryState {
+                    outbound: outbound.clone(),
+                    retained_bytes,
+                    next_aid: 1,
+                    ..DeliveryState::with_budgets(&budgets)
+                },
+            )
+        };
+        let first = build("copy-first");
+        let second = build("copy-second");
+        let first_plan = first.pending_batch_plan_after(0).unwrap();
+        let (first_session_budget, first_process_budget) = first.replay_copy_budgets().unwrap();
+        let count = first_plan.framed_bytes.try_into().unwrap();
+        let first_body = first
+            .serialize_pending_batch(
+                first_plan,
+                first_session_budget
+                    .acquire_many_owned(count)
+                    .await
+                    .unwrap(),
+                first_process_budget
+                    .acquire_many_owned(count)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+        let (_, second_process_budget) = second.replay_copy_budgets().unwrap();
+
+        assert!(tokio::time::timeout(
+            Duration::from_millis(20),
+            second_process_budget.clone().acquire_many_owned(count)
+        )
+        .await
+        .is_err());
+
+        let second_plan = second.pending_batch_plan_after(0).unwrap();
+        let (cancel, mut cancelled) = oneshot::channel();
+        let mut waiting = Box::pin(reserve_pending_batch(&second, second_plan, &mut cancelled));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        cancel.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(20), waiting)
+                .await
+                .expect("replacement cancels a replay-budget waiter")
+                .unwrap_err(),
+            "superseded"
+        );
+
+        drop(first_body);
+        let _permit = tokio::time::timeout(
+            Duration::from_millis(20),
+            second_process_budget.acquire_many_owned(count),
+        )
+        .await
+        .expect("dropping response bytes refunds the Hub replay budget")
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn large_pending_sequences_are_contiguous_bounded_and_copy_limited() {
         let (inbound, _inbound_rx) = mpsc::channel(1);
@@ -2556,13 +2785,19 @@ mod tests {
         let first = session.pending_batch_plan_after(0).unwrap();
         assert_eq!((first.first_aid, first.last_aid), (1, 2));
         assert!(first.framed_bytes <= MAX_BACKCHANNEL_BATCH_BYTES);
-        let budget = session.replay_copy_budget().unwrap();
-        let permit = budget
+        let (session_budget, process_budget) = session.replay_copy_budgets().unwrap();
+        let session_permit = session_budget
             .clone()
             .acquire_many_owned(first.framed_bytes.try_into().unwrap())
             .await
             .unwrap();
-        let first_body = session.serialize_pending_batch(first, permit).unwrap();
+        let process_permit = process_budget
+            .acquire_many_owned(first.framed_bytes.try_into().unwrap())
+            .await
+            .unwrap();
+        let first_body = session
+            .serialize_pending_batch(first, session_permit, process_permit)
+            .unwrap();
         let first_json = std::str::from_utf8(&first_body)
             .unwrap()
             .split_once('\n')
@@ -2574,7 +2809,7 @@ mod tests {
 
         assert!(tokio::time::timeout(
             Duration::from_millis(20),
-            budget
+            session_budget
                 .clone()
                 .acquire_many_owned(first.framed_bytes.try_into().unwrap())
         )
@@ -2583,7 +2818,7 @@ mod tests {
         drop(first_body);
         let _next_copy = tokio::time::timeout(
             Duration::from_millis(20),
-            budget.acquire_many_owned(first.framed_bytes.try_into().unwrap()),
+            session_budget.acquire_many_owned(first.framed_bytes.try_into().unwrap()),
         )
         .await
         .expect("dropping the response bytes refunds the concurrent copy budget")
@@ -2592,6 +2827,133 @@ mod tests {
         let second = session.pending_batch_plan_after(first.last_aid).unwrap();
         assert_eq!(second.first_aid, first.last_aid + 1);
         assert!(second.framed_bytes <= MAX_BACKCHANNEL_BATCH_BYTES);
+    }
+
+    #[test]
+    fn non_ascii_batch_prefix_uses_utf16_units_at_the_byte_limit() {
+        let payload = "界😀".repeat(200_000);
+        let outbound = (1..=3)
+            .map(|aid| (aid, format!("[{aid},\"{payload}\"]")))
+            .collect::<VecDeque<_>>();
+        assert!(outbound
+            .iter()
+            .all(|(_, text)| { text.len() <= MAX_OUTBOUND_ARRAY_BYTES }));
+        let retained_bytes = outbound.iter().map(|(_, text)| text.len()).sum();
+        let session = test_session(
+            "utf16-boundary",
+            DeliveryState {
+                outbound,
+                retained_bytes,
+                next_aid: 3,
+                ..DeliveryState::default()
+            },
+        );
+
+        let plan = session.pending_batch_plan_after(0).unwrap();
+        assert_eq!((plan.first_aid, plan.last_aid, plan.count), (1, 2, 2));
+        assert!(plan.framed_bytes <= MAX_BACKCHANNEL_BATCH_BYTES);
+        let (session_budget, process_budget) = session.replay_copy_budgets().unwrap();
+        let count = plan.framed_bytes.try_into().unwrap();
+        let frame = session
+            .serialize_pending_batch(
+                plan,
+                session_budget.try_acquire_many_owned(count).unwrap(),
+                process_budget.try_acquire_many_owned(count).unwrap(),
+            )
+            .unwrap();
+        let (prefix, body) = std::str::from_utf8(&frame)
+            .unwrap()
+            .split_once('\n')
+            .unwrap();
+
+        assert_eq!(
+            prefix.parse::<usize>().unwrap(),
+            body.encode_utf16().count()
+        );
+        assert_eq!(frame.len(), plan.framed_bytes);
+        let arrays: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(arrays.as_array().unwrap().len(), 2);
+        assert_eq!(
+            session
+                .pending_batch_plan_after(plan.last_aid)
+                .unwrap()
+                .first_aid,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn acknowledgement_between_serialization_and_commit_refuses_the_stale_batch() {
+        let outbound = VecDeque::from([
+            (1, "[1,[\"one\"]]".to_owned()),
+            (2, "[2,[\"two\"]]".to_owned()),
+            (3, "[3,[\"three\"]]".to_owned()),
+        ]);
+        let retained_bytes = outbound.iter().map(|(_, text)| text.len()).sum();
+        let mut delivery = DeliveryState {
+            outbound,
+            retained_bytes,
+            next_aid: 3,
+            committed_aid: 3,
+            ..DeliveryState::default()
+        };
+        delivery.retained_permits.clear();
+        let session = test_session("stale-batch", delivery);
+        session.backchannel_owner.lock().unwrap().generation = 1;
+        let plan = session.pending_batch_plan_after(0).unwrap();
+        let (session_budget, process_budget) = session.replay_copy_budgets().unwrap();
+        let count = plan.framed_bytes.try_into().unwrap();
+        let body = session
+            .serialize_pending_batch(
+                plan,
+                session_budget.acquire_many_owned(count).await.unwrap(),
+                process_budget.acquire_many_owned(count).await.unwrap(),
+            )
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let permit = tx.reserve().await.unwrap();
+
+        session.acknowledge(1).unwrap();
+        assert_eq!(
+            commit_backchannel_chunk(&session, 1, plan.last_aid, Some(plan), permit, body),
+            BackchannelCommit::BatchChanged
+        );
+        assert!(rx.try_recv().is_err());
+        let replacement = session.pending_batch_plan_after(0).unwrap();
+        assert_eq!((replacement.first_aid, replacement.last_aid), (2, 3));
+    }
+
+    #[tokio::test]
+    async fn keepalive_commit_never_acknowledges_data_pushed_after_the_empty_decision() {
+        let session = test_session("keepalive-race", DeliveryState::default());
+        session.backchannel_owner.lock().unwrap().generation = 1;
+        let cursor = 0;
+        assert!(session.pending_batch_plan_after(cursor).is_none());
+        assert_eq!(session.push(&json!({"value": "late"})), Ok(1));
+        let noop = json!([[cursor, ["noop"]]]).to_string();
+        let (tx, mut rx) = mpsc::channel(1);
+        let permit = tx.reserve().await.unwrap();
+
+        assert_eq!(
+            commit_backchannel_chunk(
+                &session,
+                1,
+                cursor,
+                None,
+                permit,
+                bytes::Bytes::from(chunk(&noop)),
+            ),
+            BackchannelCommit::Committed
+        );
+        assert_eq!(rx.recv().await.unwrap().unwrap(), chunk(&noop));
+        assert_eq!(
+            session.acknowledge(1).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(
+            session.pending_batch_plan_after(cursor).unwrap().first_aid,
+            1
+        );
     }
 
     #[tokio::test]
@@ -3078,13 +3440,17 @@ mod tests {
 
         session.terminate();
 
-        assert!(!commit_backchannel_chunk(
-            &session,
-            1,
-            1,
-            permit,
-            bytes::Bytes::from_static(b"terminal"),
-        ));
+        assert_eq!(
+            commit_backchannel_chunk(
+                &session,
+                1,
+                1,
+                None,
+                permit,
+                bytes::Bytes::from_static(b"terminal"),
+            ),
+            BackchannelCommit::Superseded
+        );
         assert!(rx.try_recv().is_err());
     }
 
@@ -3123,23 +3489,31 @@ mod tests {
         assert!(session.backchannel_attached());
         assert!(!session.finish_backchannel(1));
         assert!(session.backchannel_attached());
-        assert!(!commit_backchannel_chunk(
-            &session,
-            1,
-            1,
-            old_permit,
-            bytes::Bytes::from_static(b"old"),
-        ));
+        assert_eq!(
+            commit_backchannel_chunk(
+                &session,
+                1,
+                1,
+                None,
+                old_permit,
+                bytes::Bytes::from_static(b"old"),
+            ),
+            BackchannelCommit::Superseded
+        );
         assert!(rx.try_recv().is_err());
 
         let replacement_permit = tx.reserve().await.unwrap();
-        assert!(commit_backchannel_chunk(
-            &session,
-            replacement_generation,
-            1,
-            replacement_permit,
-            bytes::Bytes::from_static(b"new"),
-        ));
+        assert_eq!(
+            commit_backchannel_chunk(
+                &session,
+                replacement_generation,
+                1,
+                None,
+                replacement_permit,
+                bytes::Bytes::from_static(b"new"),
+            ),
+            BackchannelCommit::Committed
+        );
         assert_eq!(
             rx.recv().await.unwrap().unwrap(),
             bytes::Bytes::from_static(b"new")

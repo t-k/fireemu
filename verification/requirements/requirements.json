@@ -1016,11 +1016,11 @@
     },
     {
       "id": "FS-WEB-BOUND-001",
-      "statement": "Firestore WebChannel bounds every outbound array, each session's unacknowledged bytes, every framed response batch, concurrently owned replay copies and terminal-expiry work while preserving contiguous AIDs and exact response-loss replay.",
+      "statement": "Firestore WebChannel bounds every outbound array, each session's and Hub's unacknowledged bytes, every framed response batch, each session's and Hub's concurrently owned replay copies, and terminal-expiry work while preserving contiguous AIDs and exact response-loss replay.",
       "criticality": "important",
       "owner": "adapter-grpc",
       "status": "implemented",
-      "note": "The byte ceilings are explicit fireemu-only resource-safety limits rather than inferred production protocol limits. Admission happens before queue mutation, acknowledgement refunds retained bytes, response chunks own semaphore permits for their complete lifetime, and every early terminal path cancels its expiry task.",
+      "note": "The byte ceilings are explicit fireemu-only resource-safety limits rather than inferred production protocol limits. Admission happens before queue mutation against both the session and Hub budgets, acknowledgement refunds retained bytes, response chunks own both semaphore permits for their complete lifetime, stale serialized batches cannot commit after acknowledgement, keepalives cannot acknowledge newly queued data, and every early terminal path cancels its expiry task.",
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-grpc/src/webchannel.rs",
@@ -1029,7 +1029,9 @@
         "mutation": [
           "M-WEBCHANNEL-EXPIRY-001",
           "M-WEBCHANNEL-BYTE-001",
-          "M-WEBCHANNEL-COPY-001"
+          "M-WEBCHANNEL-COPY-001",
+          "M-WEBCHANNEL-NOOP-001",
+          "M-WEBCHANNEL-COMMIT-001"
         ]
       }
     },

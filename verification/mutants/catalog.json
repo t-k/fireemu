@@ -447,6 +447,16 @@
       "id": "M-WEBCHANNEL-COPY-001",
       "fault": "a replay response releases its concurrent-copy permit before the response bytes are dropped",
       "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-NOOP-001",
+      "fault": "a keepalive commits the newest generated AID instead of the last AID sent by that back channel",
+      "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-COMMIT-001",
+      "fault": "a serialized replay batch commits after acknowledgement removed one of its AIDs",
+      "critical": false
     }
   ]
 }

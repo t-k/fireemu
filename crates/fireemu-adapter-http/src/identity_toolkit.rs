@@ -624,7 +624,18 @@ fn issue_tokens_with(
     extra: Option<&CustomClaims>,
     provider: Option<fireemu_core_auth::store::Provider>,
 ) -> Result<Value, JsonResponse> {
-    issue_tokens_replacing(store, uid, second, at, extra, provider, None, None)
+    issue_tokens_replacing(
+        store,
+        uid,
+        second,
+        at,
+        TokenIssue {
+            extra,
+            provider,
+            sign_in_attributes: None,
+            provisional_refresh: None,
+        },
+    )
 }
 
 fn issue_tokens_with_sign_in_attributes(
@@ -641,11 +652,20 @@ fn issue_tokens_with_sign_in_attributes(
         uid,
         second,
         at,
-        extra,
-        provider,
-        sign_in_attributes,
-        None,
+        TokenIssue {
+            extra,
+            provider,
+            sign_in_attributes,
+            provisional_refresh: None,
+        },
     )
+}
+
+struct TokenIssue<'a> {
+    extra: Option<&'a CustomClaims>,
+    provider: Option<fireemu_core_auth::store::Provider>,
+    sign_in_attributes: Option<&'a ClaimValue>,
+    provisional_refresh: Option<&'a str>,
 }
 
 /// Issues policy-adjusted tokens and retires the replayed authentication's provisional
@@ -655,19 +675,16 @@ fn issue_tokens_replacing(
     uid: &LocalId,
     second: Option<&SecondFactorAssertion>,
     at: LogicalInstant,
-    extra: Option<&CustomClaims>,
-    provider: Option<fireemu_core_auth::store::Provider>,
-    sign_in_attributes: Option<&ClaimValue>,
-    provisional_refresh: Option<&str>,
+    issue: TokenIssue<'_>,
 ) -> Result<Value, JsonResponse> {
     let mut claims = store
         .id_token_claims(uid, second, at)
         .map_err(|e| auth_error(&e))?;
-    if let Some(p) = &provider {
+    if let Some(p) = &issue.provider {
         p.id().clone_into(&mut claims.firebase.sign_in_provider);
     }
-    claims.firebase.sign_in_attributes = sign_in_attributes.cloned();
-    if let Some(extra) = extra {
+    claims.firebase.sign_in_attributes = issue.sign_in_attributes.cloned();
+    if let Some(extra) = issue.extra {
         for (k, v) in extra.entries() {
             claims
                 .custom
@@ -675,13 +692,18 @@ fn issue_tokens_replacing(
                 .map_err(|e| error(400, &format!("INVALID_CUSTOM_TOKEN : {e}")))?;
         }
     }
-    let refresh_claims = extra.cloned().unwrap_or_default();
+    let refresh_claims = issue.extra.cloned().unwrap_or_default();
     let second = second.cloned();
-    let refresh = match provisional_refresh {
-        Some(provisional) => {
-            store.replace_refresh_session(provisional, uid, at, provider, refresh_claims, second)
-        }
-        None => store.issue_refresh_session(uid, at, provider, refresh_claims, second),
+    let refresh = match issue.provisional_refresh {
+        Some(provisional) => store.replace_refresh_session(
+            provisional,
+            uid,
+            at,
+            issue.provider,
+            refresh_claims,
+            second,
+        ),
+        None => store.issue_refresh_session(uid, at, issue.provider, refresh_claims, second),
     }
     .map_err(|e| auth_error(&e))?;
     Ok(json!({
@@ -1326,10 +1348,12 @@ fn dispatch_with_blocking_hook(
                     &uid,
                     session.second_factor.as_ref(),
                     at,
-                    Some(&session.extra_claims),
-                    Some(provider),
-                    session.sign_in_attributes.as_ref(),
-                    Some(provisional_refresh),
+                    TokenIssue {
+                        extra: Some(&session.extra_claims),
+                        provider: Some(provider),
+                        sign_in_attributes: session.sign_in_attributes.as_ref(),
+                        provisional_refresh: Some(provisional_refresh),
+                    },
                 ) {
                     Ok(tokens) => tokens,
                     Err(refusal) => return refusal,

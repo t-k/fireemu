@@ -55,7 +55,7 @@
     "conformance/fixtures/firestore/transaction-read-set-abort.json": "d04ff10ca155a770c02b5a2c8ee78b21f44a83aa2c206168e01d13998ce53536",
     "conformance/fixtures/functions/concurrent-conditional-lock.json": "5fab49ede191c66808eccb7c3f46fa616e5db23884c6f4f8e8d1fa0640fb2759",
     "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",
-    "conformance/src/corpus/firestore.mjs": "11d359a57a3c716989845399663a30c2d1c61d3add71fdc3748d6ac53777ea76",
+    "conformance/src/corpus/firestore.mjs": "f079f9cb0ccbc7412b7f83f3a02c068428557aa6ea1aece01df35de47e0d12ee",
     "conformance/src/corpus/functions.mjs": "b36a9cd6c3df901e573f87cd822f40ce1ca47bafa1b3b385ac1efc7fb93204d6",
     "crates/fireemu-core-firestore/src/store.rs": "8179e53697bbb952adf85403fd74bb78d202b929c52a9ab7d7ae5549add8fa55",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",

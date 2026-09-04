@@ -59,6 +59,11 @@ const stopChild = async (child: ChildProcess): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   child.kill("SIGKILL");
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("official UI did not exit after SIGKILL");
 };
 
 test("the pinned official Emulator UI renders a live fireemu Functions log", async ({

@@ -211,6 +211,8 @@ pub struct RuntimeConfig {
     pub functions_runner: Option<Vec<String>>,
     /// Node inspector port requested by `--inspect-functions`; applied after executable selection.
     pub functions_inspect_port: Option<u16>,
+    /// Whether `--inspect-functions` requested one dynamic inspector port per codebase.
+    pub functions_inspect_dynamic: bool,
     /// Explicit manifest path (`functions.manifest`); default: runner discovery.
     pub functions_manifest: Option<String>,
     /// Maximum invocations running at once (`functions.maxGlobalConcurrency`).
@@ -406,6 +408,7 @@ impl Default for RuntimeConfig {
             functions_loaded: Vec::new(),
             functions_runner: None,
             functions_inspect_port: None,
+            functions_inspect_dynamic: false,
             functions_manifest: None,
             functions_max_running: 8,
             functions_unserved_triggers: "refuse".to_owned(),

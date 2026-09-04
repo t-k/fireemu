@@ -113,6 +113,38 @@ async fn concurrent_real_sdk_logs_keep_their_function_identity() {
     runner.shutdown().await;
 }
 
+#[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+async fn a_dynamic_inspector_port_is_reported_active_and_released_on_shutdown() {
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("inspect-sequential");
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            "--inspect=127.0.0.1:0".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![("GCLOUD_PROJECT".to_owned(), "demo-inspect".to_owned())],
+        hello_timeout: Duration::from_secs(20),
+    })
+    .await
+    .unwrap();
+    let port = runner
+        .hello()
+        .inspector_port
+        .expect("the runner reports Node's active dynamic inspector port");
+    TcpStream::connect(("127.0.0.1", port)).expect("the reported inspector port accepts traffic");
+    runner.shutdown().await;
+    std::net::TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|cause| panic!("dynamic inspector port remained open: {cause}"));
+}
+
 /// The fixture codebases live beside the smoke's functions project so that Node resolves
 /// `firebase-functions` through `tools/sdk-smoke/node_modules`.
 fn fixture(name: &str) -> PathBuf {

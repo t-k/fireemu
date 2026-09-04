@@ -1982,7 +1982,9 @@ async fn start_codebase(
         None => default_runner_for_codebase(codebase)
             .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
     };
-    if let Some(port) = cfg.functions_inspect_port {
+    if cfg.functions_inspect_dynamic {
+        command.insert(1, "--inspect=127.0.0.1:0".to_owned());
+    } else if let Some(port) = cfg.functions_inspect_port {
         command.insert(1, format!("--inspect=127.0.0.1:{port}"));
     }
     command.push("--source".to_owned());
@@ -2100,14 +2102,26 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
-    if let Some(expected) = cfg.functions_inspect_port {
+    if cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some() {
         let actual = runner.hello().inspector_port;
-        if actual != Some(expected) {
+        let port_matches = cfg
+            .functions_inspect_port
+            .is_none_or(|expected| actual == Some(expected));
+        if actual.is_none() || !port_matches {
             runner.kill_now();
-            return Err(format!(
-                "the Functions codebase {label:?}: requested debugger port {expected} is not active"
-            ));
+            return Err(match cfg.functions_inspect_port {
+                Some(expected) => format!(
+                    "the Functions codebase {label:?}: requested debugger port {expected} is not active"
+                ),
+                None => format!(
+                    "the Functions codebase {label:?}: the dynamically assigned debugger port is not active"
+                ),
+            });
         }
+        eprintln!(
+            "functions[{label}]: using debug port {}",
+            actual.expect("the active inspector port was checked above")
+        );
     }
     let configured = (|| {
         let manifest_json = match &cfg.functions_manifest {

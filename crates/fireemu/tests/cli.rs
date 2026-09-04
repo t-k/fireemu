@@ -587,6 +587,8 @@ fn inspect_functions_passes_the_node_inspector_through_to_the_runner() {
     // With no codebase there is no runner to start, so the flag only has to be accepted.
     let out = exec_with(&["--inspect-functions"], &["true"]);
     assert!(out.status.success(), "{}", stderr(&out));
+    let out = exec_with(&["--inspect-functions", "true"], &["true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
     let out = exec_with(&["--inspect-functions", "9330"], &["true"]);
     assert!(out.status.success(), "{}", stderr(&out));
     for port in ["1024", "65535"] {
@@ -912,6 +914,17 @@ fn a_multi_codebase_functions_section_names_the_codebase_to_load() {
     assert!(
         text.contains("Cannot debug on a single port with multiple codebases"),
         "{text}"
+    );
+
+    let out = exec_with(
+        &["--firebase-json", firebase, "--inspect-functions"],
+        &["true"],
+    );
+    let text = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        !text.contains("Cannot debug on a single port with multiple codebases"),
+        "dynamic inspector ports must permit multiple codebases: {text}"
     );
 
     // Every declared codebase is loaded, one runner process each, and the run says so. The

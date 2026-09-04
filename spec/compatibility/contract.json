@@ -1585,7 +1585,7 @@
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/schema/firebase-config.json"
       ],
       "issues": [
-        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md",
+        "docs.local/issues/closed/match-firebase-cli-config-and-emulator-hub.md",
         "docs.local/issues/closed/support-official-import-and-export-artifacts.md"
       ],
       "notes": [],
@@ -1726,7 +1726,7 @@
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
-        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md"
+        "docs.local/issues/closed/match-firebase-cli-config-and-emulator-hub.md"
       ],
       "notes": [],
       "gaps": [
@@ -1786,7 +1786,7 @@
         "https://github.com/firebase/firebase-tools/blob/v15.28.2/src/emulator/types.ts"
       ],
       "issues": [
-        "docs.local/issues/open/match-firebase-cli-config-and-emulator-hub.md",
+        "docs.local/issues/closed/match-firebase-cli-config-and-emulator-hub.md",
         "docs.local/issues/open/match-emulator-suite-ui-workflows.md"
       ],
       "notes": [],

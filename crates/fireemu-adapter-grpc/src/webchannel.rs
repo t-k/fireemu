@@ -872,7 +872,11 @@ impl Session {
     }
 
     fn acknowledge(&self, aid: u64) -> Result<(), Status> {
-        let (queued_first, queued_last, queued_count, terminal_acknowledged) = {
+        let (queued_first, queued_last, queued_count, terminal_acknowledged, cancelled) = {
+            let mut owner = self
+                .backchannel_owner
+                .lock()
+                .map_err(|_| Status::internal("session lock poisoned"))?;
             let mut delivery = self
                 .delivery
                 .lock()
@@ -886,13 +890,23 @@ impl Session {
                 delivery.outbound.pop_front();
             }
             delivery.acknowledged_aid = delivery.acknowledged_aid.max(aid);
+            let terminal_acknowledged = delivery
+                .stream_end
+                .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid);
+            let cancelled = if terminal_acknowledged {
+                owner.generation = owner.generation.saturating_add(1);
+                self.terminated.store(true, Ordering::SeqCst);
+                delivery.outbound.clear();
+                owner.cancel.take()
+            } else {
+                None
+            };
             (
                 delivery.outbound.front().map(|(id, _)| *id),
                 delivery.outbound.back().map(|(id, _)| *id),
                 delivery.outbound.len(),
-                delivery
-                    .stream_end
-                    .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid),
+                terminal_acknowledged,
+                cancelled,
             )
         };
         self.trace_event(&TraceEvent::ArrayAcknowledged {
@@ -903,7 +917,17 @@ impl Session {
             queued_count,
         });
         if terminal_acknowledged {
-            self.terminate();
+            if let Some(cancel) = cancelled {
+                let _ = cancel.send(());
+            }
+            if let Ok(mut inbound) = self.inbound.lock() {
+                inbound.take();
+            }
+            if let Ok(mut maps) = self.maps.lock() {
+                maps.1.clear();
+            }
+            self.notify.notify_waiters();
+            self.notify.notify_one();
         }
         Ok(())
     }
@@ -958,15 +982,22 @@ impl Session {
 
     /// Ends the application stream while preserving its final numbered array for delivery.
     fn end_stream(self: &Arc<Self>) {
-        let terminal_acknowledged = self.delivery.lock().is_ok_and(|mut delivery| {
+        let _terminal_acknowledged = self.backchannel_owner.lock().ok().and_then(|mut owner| {
+            let mut delivery = self.delivery.lock().ok()?;
             let terminal_aid = delivery.next_aid;
             delivery.stream_end.get_or_insert(StreamEnd {
                 ended_at: Instant::now(),
                 terminal_aid,
             });
-            delivery
+            let acknowledged = delivery
                 .stream_end
-                .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid)
+                .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid);
+            if acknowledged && owner.cancel.is_none() {
+                owner.generation = owner.generation.saturating_add(1);
+                self.terminated.store(true, Ordering::SeqCst);
+                delivery.outbound.clear();
+            }
+            Some(acknowledged)
         });
         if let Ok(mut inbound) = self.inbound.lock() {
             inbound.take();
@@ -974,9 +1005,7 @@ impl Session {
         if let Ok(mut maps) = self.maps.lock() {
             maps.1.clear();
         }
-        if terminal_acknowledged {
-            self.terminate();
-        } else if !self.is_terminated() {
+        if !self.is_terminated() {
             schedule_terminal_expiry(self, TERMINAL_DELIVERY_TTL);
         }
         self.notify.notify_waiters();
@@ -1659,7 +1688,24 @@ async fn backchannel_loop(
                 return "long poll batch";
             }
         }
-        if (session.is_stream_ended() || session.is_terminated()) && pending.is_none() {
+        if session.is_stream_ended() && !session.is_terminated() && pending.is_none() {
+            let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
+            if let Err(outcome) = send_backchannel_chunk(
+                session,
+                generation,
+                session.last_aid(),
+                tx,
+                cancelled,
+                bytes::Bytes::from(chunk(&noop)),
+            )
+            .await
+            {
+                return outcome;
+            }
+            session.terminate();
+            return "session ended";
+        }
+        if session.is_terminated() && pending.is_none() {
             return "session ended";
         }
         let idle = if long_poll { wait } else { KEEPALIVE };
@@ -2190,6 +2236,63 @@ mod tests {
         session.end_stream();
         assert!(session.is_terminated());
         assert!(session.delivery.lock().unwrap().outbound.is_empty());
+    }
+
+    #[tokio::test]
+    async fn acknowledged_stream_end_frames_the_attached_backchannel_before_termination() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Arc::new(Session {
+            sid: "ack-owner-end-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(2, "[2,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 2,
+                committed_aid: 2,
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((2, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        });
+
+        session.acknowledge(2).unwrap();
+        let (cancel, mut cancelled) = oneshot::channel();
+        let generation = session.replace_backchannel(cancel).unwrap();
+        session.end_stream();
+        assert!(!session.is_terminated());
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut cursor = 2;
+        let outcome = backchannel_loop(
+            &session,
+            generation,
+            true,
+            Duration::from_secs(1),
+            &tx,
+            &mut cursor,
+            &mut cancelled,
+        )
+        .await;
+
+        assert_eq!(outcome, "session ended");
+        assert_eq!(
+            rx.recv().await.unwrap().unwrap(),
+            bytes::Bytes::from_static(b"14\n[[2,[\"noop\"]]]")
+        );
+        assert!(session.is_terminated());
+        assert!(!session.backchannel_attached());
     }
 
     #[test]

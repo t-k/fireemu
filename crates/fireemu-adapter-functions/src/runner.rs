@@ -697,6 +697,10 @@ impl Runner {
 
     /// Asks the runner to exit, then kills it.
     pub async fn shutdown(&self) {
+        // Retire the runner synchronously with the shutdown request. The stdout reader also
+        // clears this flag on EOF, but waiting for that independent task would make the
+        // postcondition scheduler-dependent and briefly admit work into a retiring process.
+        self.alive.store(false, Ordering::SeqCst);
         // The polite part is bounded: a stalled runner or a full pipe must not keep the
         // daemon alive.
         let polite = async {

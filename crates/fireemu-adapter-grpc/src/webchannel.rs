@@ -980,6 +980,14 @@ impl Session {
         })
     }
 
+    fn terminal_acknowledged(&self) -> bool {
+        self.delivery.lock().is_ok_and(|delivery| {
+            delivery
+                .stream_end
+                .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid)
+        })
+    }
+
     /// Ends the application stream while preserving its final numbered array for delivery.
     fn end_stream(self: &Arc<Self>) {
         let _terminal_acknowledged = self.backchannel_owner.lock().ok().and_then(|mut owner| {
@@ -1688,7 +1696,11 @@ async fn backchannel_loop(
                 return "long poll batch";
             }
         }
-        if session.is_stream_ended() && !session.is_terminated() && pending.is_none() {
+        if session.is_stream_ended()
+            && session.terminal_acknowledged()
+            && !session.is_terminated()
+            && pending.is_none()
+        {
             let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
             if let Err(outcome) = send_backchannel_chunk(
                 session,
@@ -1712,6 +1724,7 @@ async fn backchannel_loop(
         let waited = tokio::select! {
             biased;
             _ = &mut *cancelled => return "superseded",
+            () = tx.closed() => return "receiver gone",
             waited = tokio::time::timeout(idle, session.notify.notified()) => waited,
         };
         if session
@@ -2293,6 +2306,83 @@ mod tests {
         );
         assert!(session.is_terminated());
         assert!(!session.backchannel_attached());
+    }
+
+    #[tokio::test]
+    async fn unacknowledged_streaming_terminal_array_replays_after_response_loss() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let terminal = "[1,[{\"error\":{\"status\":\"PERMISSION_DENIED\"}}]]";
+        let session = Arc::new(Session {
+            sid: "unacknowledged-stream-end".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(1, terminal.to_owned())]),
+                next_aid: 1,
+                stream_end: Some(StreamEnd {
+                    ended_at: Instant::now(),
+                    terminal_aid: 1,
+                }),
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 1,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((1, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        });
+        let (tx, mut rx) = mpsc::channel(1);
+        let (_cancel, mut cancelled) = oneshot::channel();
+        let first_session = session.clone();
+        let first = tokio::spawn(async move {
+            let mut cursor = 0;
+            backchannel_loop(
+                &first_session,
+                1,
+                false,
+                Duration::from_secs(1),
+                &tx,
+                &mut cursor,
+                &mut cancelled,
+            )
+            .await
+        });
+
+        let committed = rx.recv().await.unwrap().unwrap();
+        drop(rx);
+        assert_eq!(first.await.unwrap(), "receiver gone");
+        assert!(!session.is_terminated());
+        assert!(!session.terminal_acknowledged());
+        assert!(session.delivery.lock().unwrap().outbound.len() == 1);
+
+        let (cancel, mut cancelled) = oneshot::channel();
+        let generation = session.replace_backchannel(cancel).unwrap();
+        let (replay_tx, mut replay_rx) = mpsc::channel(1);
+        let mut replay_cursor = 0;
+        assert_eq!(
+            backchannel_loop(
+                &session,
+                generation,
+                true,
+                Duration::from_secs(1),
+                &replay_tx,
+                &mut replay_cursor,
+                &mut cancelled,
+            )
+            .await,
+            "long poll batch"
+        );
+        assert_eq!(replay_rx.recv().await.unwrap().unwrap(), committed);
+        assert!(!session.is_terminated());
     }
 
     #[test]

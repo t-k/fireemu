@@ -12,7 +12,7 @@
 //!
 //! Loom is a dev-time dependency only and is never linked into the release binary.
 
-#[cfg(loom)]
+#[cfg(all(test, loom))]
 mod scenarios {
     use loom::sync::{Arc, Mutex};
     use loom::thread;

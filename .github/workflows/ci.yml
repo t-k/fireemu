@@ -7,15 +7,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
-  # Spec 31.1 pull-request gate. Retries are never used (ADR-006).
-  pr:
+  lint:
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/normal
     steps:
       - uses: actions/checkout@v4
-      # rust-toolchain.toml pins the compiler; the action only makes sure rustup is present.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -23,10 +22,15 @@ jobs:
         run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
       - uses: Swatinem/rust-cache@v2
         with:
-          key: pr
+          shared-key: pr-normal
+          workspaces: . -> target/normal
+          cache-bin: "false"
+          save-if: "false"
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,cargo-deny
+          tool: cargo-deny
+      - name: CI workflow topology and cache ownership
+        run: ruby scripts/ci-workflow-contract.rb
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy
@@ -40,7 +44,26 @@ jobs:
       - name: core crates have zero external normal dependencies
         run: scripts/check-core-deps.sh
       - name: Cargo session isolation contract
-        run: scripts/cargo-session.test.sh
+        run: env -u CARGO_TARGET_DIR scripts/cargo-session.test.sh
+
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/normal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the pinned toolchain is the one in use
+        run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml)"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pr-normal
+          workspaces: . -> target/normal
+          cache-bin: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: tests (profile pr, retries 0)
         run: cargo nextest run --workspace --profile pr
       - name: limit catalog matches generated constants
@@ -51,19 +74,48 @@ jobs:
         run: cargo run -p compat-check
       - name: canonical config schema and examples
         run: cargo run -p config-schema-check
+
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the pinned toolchain is the one in use
+        run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml)"
+      - uses: Swatinem/rust-cache@v2
+        env:
+          RUSTFLAGS: --cfg loom -D warnings
+        with:
+          shared-key: pr-loom
+          workspaces: . -> target/loom
+          cache-bin: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: generated protobuf code matches vendored protos
         run: |
           sudo apt-get install -y protobuf-compiler
           cargo run -p proto-gen -- check
+        env:
+          CARGO_TARGET_DIR: target/verify
       - name: loom scenarios
         run: cargo test -p fireemu-verification-loom --release --target-dir target/loom
         env:
           RUSTFLAGS: --cfg loom -D warnings
 
+  # Keep one stable required status while the expensive gates run in parallel.
+  pr:
+    if: ${{ always() }}
+    needs: [lint, test, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every PR shard succeeded
+        run: |
+          test "${{ needs.lint.result }}" = success
+          test "${{ needs.test.result }}" = success
+          test "${{ needs.verify.result }}" = success
+
   # The platforms fireemu publishes binaries for, so a change that only breaks one of them is
-  # caught before a tag is cut rather than during a release. The Ubuntu `pr` job above stays
-  # the full gate -- formatting, lints, docs, licences, traceability, generated code, loom --
-  # and these two run the tests only, which keeps the matrix cheap.
+  # caught before a tag is cut rather than during a release. The Ubuntu `pr` status above joins
+  # the full lint, test and verification gates, while these two run the tests only.
   #
   # Linux arm64 is not here: it shares this source with linux x64 and is exercised in the
   # release workflow, which builds and tests it on a native arm64 runner.

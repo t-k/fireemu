@@ -396,6 +396,21 @@ fn functions_source_stamp(root: &Path, ignores: &[String]) -> Result<FunctionsSo
     functions_source_stamp_with_charge(root, ignores, &mut |_, _| Ok(()), &AtomicBool::new(false))
 }
 
+#[cfg(test)]
+fn functions_source_stamp_with_file_version(
+    root: &Path,
+    ignores: &[String],
+    file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
+) -> Result<FunctionsSourceStamp, String> {
+    functions_source_stamp_with_charge_and_file_version(
+        root,
+        ignores,
+        &mut |_, _| Ok(()),
+        &AtomicBool::new(false),
+        file_version,
+    )
+}
+
 struct FunctionsSourceTraversal<'a> {
     root: &'a Path,
     ignores: &'a [String],
@@ -431,6 +446,7 @@ impl FunctionsSourceTraversal<'_> {
         directory: &Path,
         stamp: &mut FunctionsSourceStamp,
         depth: usize,
+        file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
     ) -> Result<(), String> {
         for entry in self.entries(directory, "watch", depth)? {
             ensure_source_work_active(self.cancelled)?;
@@ -443,9 +459,9 @@ impl FunctionsSourceTraversal<'_> {
                 .file_type()
                 .map_err(|error| format!("watch {}: {error}", child.display()))?;
             if kind.is_dir() {
-                self.scan_directory(&child, stamp, depth.saturating_add(1))?;
+                self.scan_directory(&child, stamp, depth.saturating_add(1), file_version)?;
             } else if kind.is_file() {
-                self.hash_file(&entry, &child, relative, stamp)?;
+                self.hash_file(&entry, &child, relative, stamp, file_version)?;
             } else if kind.is_symlink() {
                 return Err(format!(
                     "watch {}: symbolic links outside node_modules are not supported",
@@ -462,6 +478,7 @@ impl FunctionsSourceTraversal<'_> {
         child: &Path,
         relative: &Path,
         stamp: &mut FunctionsSourceStamp,
+        file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
     ) -> Result<(), String> {
         let metadata = entry
             .metadata()
@@ -469,7 +486,7 @@ impl FunctionsSourceTraversal<'_> {
         hash_source_file(
             child,
             relative,
-            functions_source_file_version(&metadata),
+            file_version(&metadata),
             stamp,
             self.charge,
             self.cancelled,
@@ -535,6 +552,22 @@ fn functions_source_stamp_with_charge(
     charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &AtomicBool,
 ) -> Result<FunctionsSourceStamp, String> {
+    functions_source_stamp_with_charge_and_file_version(
+        root,
+        ignores,
+        charge,
+        cancelled,
+        &functions_source_file_version,
+    )
+}
+
+fn functions_source_stamp_with_charge_and_file_version(
+    root: &Path,
+    ignores: &[String],
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+    file_version: &dyn Fn(&std::fs::Metadata) -> FunctionsSourceFileVersion,
+) -> Result<FunctionsSourceStamp, String> {
     let mut stamp = FunctionsSourceStamp {
         change_guard: 0xcbf2_9ce4_8422_2325,
         content_signature: 0xcbf2_9ce4_8422_2325,
@@ -549,7 +582,7 @@ fn functions_source_stamp_with_charge(
         charge,
         cancelled,
     }
-    .scan_directory(root, &mut stamp, 0)?;
+    .scan_directory(root, &mut stamp, 0, file_version)?;
     Ok(stamp)
 }
 
@@ -2824,12 +2857,12 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_stamp, hash_source_file, hash_source_stamp_entry, node_engine_matches,
-        package_node_engine, parse_node_version, provision_function_pubsub_resources,
-        select_node_installation, snapshot_functions_source, source_scan_pacing_delay,
-        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
-        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
-        FunctionsSourceStamp, NodeInstallation, BLOCKING_AUTH_DEADLINE,
+        functions_source_stamp, functions_source_stamp_with_file_version, hash_source_file,
+        hash_source_stamp_entry, node_engine_matches, package_node_engine, parse_node_version,
+        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
+        source_scan_pacing_delay, stream_source_chunks, update_watch_hash,
+        validate_functions_codebase_budget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
+        FunctionsSourceScanBudget, FunctionsSourceStamp, NodeInstallation, BLOCKING_AUTH_DEADLINE,
         MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
@@ -3607,6 +3640,42 @@ mod tests {
         std::fs::write(&source, b"after!").unwrap();
         let second = scan();
 
+        assert_eq!(first.tracked_bytes, second.tracked_bytes);
+        assert_ne!(first.content_signature, second.content_signature);
+        assert_ne!(first.change_guard, second.change_guard);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_traversal_reads_real_rewrites_when_every_version_field_is_aliased() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-traversal-metadata-alias-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("index.js");
+        let version = FunctionsSourceFileVersion {
+            len: 6,
+            modified_nanos: 1_788_123_456_000_000_000,
+            changed_seconds: 1_788_123_456,
+            changed_nanos: 0,
+        };
+        let scan = || {
+            functions_source_stamp_with_file_version(&root, &[], &|metadata| {
+                assert_eq!(metadata.len(), version.len);
+                version
+            })
+            .unwrap()
+        };
+
+        std::fs::write(&source, b"before").unwrap();
+        let first = scan();
+        std::fs::write(&source, b"after!").unwrap();
+        let second = scan();
+
+        assert_eq!(first.tracked_files, 1);
+        assert_eq!(second.tracked_files, 1);
         assert_eq!(first.tracked_bytes, second.tracked_bytes);
         assert_ne!(first.content_signature, second.content_signature);
         assert_ne!(first.change_guard, second.change_guard);

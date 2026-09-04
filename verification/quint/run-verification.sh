@@ -45,20 +45,10 @@ if [ ! -f "$apalache_jar" ]; then
 fi
 printf '%s  %s\n' "$APALACHE_JAR_SHA256" "$apalache_jar" | shasum -a 256 -c -
 
-server_endpoint=${FIREEMU_QUINT_APALACHE_ENDPOINT:-}
-server_owner_pid=${FIREEMU_QUINT_APALACHE_OWNER_PID:-}
-if [ -z "$server_endpoint" ] && [ -z "$server_owner_pid" ]; then
-  authority_server="$script_dir/bin/authority-server"
-  if [ ! -x "$authority_server" ]; then
-    echo "error: authority server launcher is not executable" >&2
-    exit 2
-  fi
-  exec "$authority_server" "$0" "$@"
-fi
-if [ -z "$server_endpoint" ] || [ -z "$server_owner_pid" ]; then
-  echo "error: incomplete runner-owned Apalache metadata" >&2
-  exit 2
-fi
+unset FIREEMU_QUINT_APALACHE_ENDPOINT
+unset FIREEMU_QUINT_APALACHE_OWNER_PID
+unset FIREEMU_QUINT_APALACHE_SUPERVISOR_PID
+unset FIREEMU_QUINT_APALACHE_CAPABILITY_FD
 unset FIREEMU_QUINT_AUTHORITY_LOCK_FD
 
 passes=${VERIFICATION_PASSES:-1}
@@ -199,9 +189,9 @@ while [ "$pass" -le "$passes" ]; do
     model=${entry%%:*}
     test_target=${entry#*:}
     mutation_evidence="$staged_evidence/$model.json"
-    run_gate "$model-model" cargo run -p fireemu-verification-quint -- verify-model --model "$model" --server-endpoint "$server_endpoint" --server-owner-pid "$server_owner_pid"
+    run_gate "$model-model" cargo run -p fireemu-verification-quint -- verify-model --model "$model"
     run_gate "$model-connect" cargo test -p fireemu-verification-quint --test "$test_target" -- --ignored --test-threads=1
-    run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --server-endpoint "$server_endpoint" --server-owner-pid "$server_owner_pid" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
+    run_gate "$model-mutations" cargo run -p fireemu-verification-quint -- mutate-model --model "$model" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
     run_gate "$model-evidence" cargo run -p fireemu-verification-quint -- verify-evidence --model "$model" --evidence "$mutation_evidence" --cargo-authority "$staged_evidence/cargo-authority.json"
   done
   run_gate traceability cargo run -p traceability-check -- --quint-evidence-dir "$staged_evidence"

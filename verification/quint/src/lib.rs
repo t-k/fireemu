@@ -17,6 +17,7 @@ pub mod regex_authorization;
 pub mod regex_evaluation_cache;
 pub mod regex_linear_repeat;
 pub mod ruleset_activation;
+mod server;
 pub mod session_epoch;
 pub mod storage_generation;
 pub mod transaction_conditional_lock;

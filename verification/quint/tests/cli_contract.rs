@@ -740,12 +740,12 @@ fn cli_declares_verify_model_command() {
     assert!(output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("verify-model --model MODEL --server-endpoint ENDPOINT --server-owner-pid PID [--root PATH]"),
+            .contains("verify-model --model MODEL [--root PATH]"),
         "help must declare the verify-model contract"
     );
     assert!(
         String::from_utf8_lossy(&output.stdout).contains(
-            "mutate-model --model MODEL --server-endpoint ENDPOINT --server-owner-pid PID [--root PATH] [--evidence PATH] [--cargo-authority PATH]"
+            "mutate-model --model MODEL [--root PATH] [--evidence PATH] [--cargo-authority PATH]"
         ),
         "help must declare the mutation contract"
     );
@@ -775,7 +775,7 @@ fn cli_rejects_an_unknown_model_before_launching_a_checker() {
 
 #[cfg(unix)]
 #[test]
-fn cli_rejects_forged_matching_endpoint_and_owner_environment() {
+fn cli_rejects_external_server_selection() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener must bind");
     let endpoint = listener
         .local_addr()
@@ -805,7 +805,7 @@ fn cli_rejects_forged_matching_endpoint_and_owner_environment() {
         .expect("verification CLI must launch");
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("supervisor PID is not inherited"),
+        String::from_utf8_lossy(&output.stderr).contains("unknown flag \"--server-endpoint\""),
         "unexpected diagnostic: {}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -891,10 +891,10 @@ fn authority_script_owns_a_dynamic_backend_and_checks_its_digest() {
     let script = fs::read_to_string(authority_script_path()).expect("authority script must exist");
     assert!(script.contains("bin/authority-lock"));
     assert!(script.contains("--target \"$authority_target\""));
-    assert!(script.contains("bin/authority-server"));
     assert!(script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_FD"));
-    assert!(script.contains("FIREEMU_QUINT_APALACHE_ENDPOINT"));
-    assert!(script.contains("--server-owner-pid"));
+    assert!(!script.contains("bin/authority-server"));
+    assert!(!script.contains("--server-endpoint"));
+    assert!(!script.contains("--server-owner-pid"));
     assert!(!script.contains("127.0.0.1:8822"));
     assert!(!script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_HELD"));
     assert!(!script.contains("FIREEMU_QUINT_AUTHORITY_LOCK:-"));
@@ -903,20 +903,20 @@ fn authority_script_owns_a_dynamic_backend_and_checks_its_digest() {
 }
 
 #[test]
-fn authority_server_uses_a_loopback_provider_with_the_pinned_launcher() {
+fn rust_authority_embeds_the_loopback_provider() {
     let source = fs::read_to_string(loopback_agent_source_path())
         .expect("loopback server provider agent source must exist");
     assert!(source.contains("ServerRegistry.getDefaultRegistry().register"));
     assert!(source.contains("InetAddress.getByAddress(new byte[] {127, 0, 0, 1})"));
     assert!(source.contains("NettyServerBuilder.forAddress"));
 
-    let supervisor =
-        fs::read_to_string(authority_server_path()).expect("authority supervisor must exist");
-    assert!(supervisor.contains("-javaagent:"));
-    assert!(supervisor.contains("APALACHE_JAR"));
-    assert!(supervisor.contains("environment = {"));
-    assert!(supervisor.contains("FIXTURE_OBSERVABILITY_VARIABLES"));
-    assert!(!supervisor.contains("JAVA_INJECTION_VARIABLES"));
+    let server =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/server.rs"))
+            .expect("Rust authority server source must exist");
+    assert!(server.contains("include_bytes!"));
+    assert!(server.contains("-javaagent:"));
+    assert!(server.contains("env_clear"));
+    assert!(server.contains("server\", \"--port=0"));
 }
 
 #[cfg(unix)]
@@ -1056,70 +1056,17 @@ fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let server_record =
-        fs::read_to_string(&server_pid_file).expect("owned server must publish its PID and port");
-    let mut server_fields = server_record.split_whitespace();
-    let server_pid = server_fields
-        .next()
-        .expect("server PID must be present")
-        .parse::<u32>()
-        .expect("server PID must be numeric");
-    let server_port = server_fields
-        .next()
-        .expect("server port must be present")
-        .parse::<u16>()
-        .expect("server port must be numeric");
-    assert_ne!(server_port, 8822);
-    assert!(
-        !process_exists(server_pid),
-        "owned server {server_pid} leaked"
-    );
-
     let invocations =
         fs::read_to_string(&invocation_log).expect("authority invocations must be recorded");
-    let endpoints = invocations
-        .lines()
-        .filter_map(|line| line.split_once('\t').map(|(endpoint, _)| endpoint))
-        .filter(|endpoint| !endpoint.is_empty())
-        .collect::<Vec<_>>();
-    assert!(!endpoints.is_empty());
     assert!(
-        endpoints
-            .iter()
-            .all(|endpoint| *endpoint == format!("127.0.0.1:{server_port}")),
-        "authority used inconsistent endpoints: {endpoints:?}"
+        invocations.lines().all(|line| line.starts_with("\t\t")),
+        "legacy endpoint metadata reached a Rust command: {invocations}"
     );
-    assert!(invocations.contains("verify-model --model AtomicCommitOutbox --server-endpoint"));
-    assert!(invocations.contains("mutate-model --model AtomicCommitOutbox --server-endpoint"));
+    assert!(invocations.contains("verify-model --model AtomicCommitOutbox"));
+    assert!(invocations.contains("mutate-model --model AtomicCommitOutbox"));
+    assert!(!invocations.contains("--server-endpoint"));
+    assert!(!invocations.contains("--server-owner-pid"));
     assert!(!quint_dir.join("_apalache-out").exists());
-    let server_environment = fs::read_to_string(&server_environment_file)
-        .expect("sanitized server environment must be recorded");
-    assert!(server_environment.contains(&format!(
-        "APALACHE_JAR={}",
-        quint_home
-            .join("apalache-dist-0.56.1/apalache/lib/apalache.jar")
-            .display()
-    )));
-    assert!(server_environment.contains("JVM_ARGS=-javaagent:"));
-    for variable in [
-        "JAVA_TOOL_OPTIONS",
-        "_JAVA_OPTIONS",
-        "JDK_JAVA_OPTIONS",
-        "CLASSPATH",
-        "BASH_ENV",
-        "ENV",
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "LD_AUDIT",
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH",
-        "DYLD_FRAMEWORK_PATH",
-    ] {
-        assert!(
-            server_environment.contains(&format!("{variable}=\n")),
-            "unsafe Java environment survived sanitization:\n{server_environment}"
-        );
-    }
 }
 
 #[cfg(unix)]
@@ -1350,17 +1297,7 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
             .all(|pid| !process_exists(*pid))),
         "TERM must remove every recorded active-gate process: {pids:?}"
     );
-    let server_pid = fs::read_to_string(&server_pid_file)
-        .expect("server PID must be recorded")
-        .split_whitespace()
-        .next()
-        .expect("server PID must be present")
-        .parse::<u32>()
-        .expect("server PID must be numeric");
-    assert!(
-        wait_until(Duration::from_secs(2), || !process_exists(server_pid)),
-        "TERM must remove the owned Apalache server {server_pid}"
-    );
+    assert!(!server_pid_file.exists());
 }
 
 #[cfg(target_os = "linux")]
@@ -1457,14 +1394,10 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
 #[test]
 #[ignore = "requires Java and the pinned local Quint CLI"]
 fn verify_model_cli_checks_event_delivery_with_tlc() {
-    let output = Command::new(authority_server_path())
-        .args([
-            "/bin/sh",
-            "-c",
-            "exec \"$AUTHORITY_CLI\" verify-model --model EventDelivery --server-endpoint \"$FIREEMU_QUINT_APALACHE_ENDPOINT\" --server-owner-pid \"$FIREEMU_QUINT_APALACHE_OWNER_PID\" --root \"$AUTHORITY_ROOT\"",
-        ])
-        .env("AUTHORITY_CLI", env!("CARGO_BIN_EXE_fireemu-verification-quint"))
-        .env("AUTHORITY_ROOT", repository_root())
+    let legacy_listener = TcpListener::bind(("127.0.0.1", 8822)).ok();
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .args(["verify-model", "--model", "EventDelivery", "--root"])
+        .arg(repository_root())
         .env(
             "QUINT_HOME",
             std::env::var_os("QUINT_HOME").unwrap_or_else(|| {
@@ -1474,8 +1407,11 @@ fn verify_model_cli_checks_event_delivery_with_tlc() {
             }),
         )
         .env("PATH", path_with_pinned_quint())
+        .env("FIREEMU_QUINT_APALACHE_ENDPOINT", "192.0.2.1:1")
+        .env("FIREEMU_QUINT_APALACHE_OWNER_PID", "1")
         .output()
         .expect("authority CLI must launch");
+    drop(legacy_listener);
     assert!(
         output.status.success(),
         "verify-model failed:\nstdout:\n{}\nstderr:\n{}",

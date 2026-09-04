@@ -5,17 +5,6 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 cd "$repository_root"
 
-authority_lock="$script_dir/bin/authority-lock"
-authority_target="$script_dir/evidence"
-lock_fd=${FIREEMU_QUINT_AUTHORITY_LOCK_FD:-}
-if [ -z "$lock_fd" ]; then
-  if [ ! -x "$authority_lock" ]; then
-    echo "error: authority lock launcher is not executable" >&2
-    exit 2
-  fi
-  exec "$authority_lock" --target "$authority_target" "$0" "$@"
-fi
-"$authority_lock" --validate "$authority_target" "$lock_fd"
 refresh=0
 case "$#" in
   0) ;;
@@ -49,7 +38,6 @@ unset FIREEMU_QUINT_APALACHE_ENDPOINT
 unset FIREEMU_QUINT_APALACHE_OWNER_PID
 unset FIREEMU_QUINT_APALACHE_SUPERVISOR_PID
 unset FIREEMU_QUINT_APALACHE_CAPABILITY_FD
-unset FIREEMU_QUINT_AUTHORITY_LOCK_FD
 
 passes=${VERIFICATION_PASSES:-1}
 case "$passes" in
@@ -75,23 +63,6 @@ if [ ! -x "$group_launcher" ]; then
   exit 2
 fi
 
-checker_output="$script_dir/_apalache-out"
-if [ -e "$checker_output" ] || [ -L "$checker_output" ]; then
-  echo "error: refusing to replace pre-existing checker output: $checker_output" >&2
-  exit 2
-fi
-
-cleanup_checker_output() {
-  if [ ! -e "$checker_output" ] && [ ! -L "$checker_output" ]; then
-    return
-  fi
-  if [ -L "$checker_output" ] || [ ! -d "$checker_output" ]; then
-    echo "error: checker output is not an owned directory: $checker_output" >&2
-    return 1
-  fi
-  rm -rf -- "$checker_output"
-}
-
 owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-authority.XXXXXX")
 staged_evidence="$owned_temp/evidence"
 mkdir "$staged_evidence"
@@ -100,7 +71,6 @@ active_pid=
 launching=0
 pending_signal=
 cleanup() {
-  cleanup_checker_output || true
   rm -rf -- "$owned_temp"
 }
 
@@ -156,7 +126,6 @@ run_gate() {
   set -e
   active_pid=
   active_pgid=
-  cleanup_checker_output || return 1
   return "$status"
 }
 

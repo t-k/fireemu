@@ -32,7 +32,7 @@ pub const APALACHE_ARCHIVE_URL: &str =
 
 /// Loopback Apalache server identity validated from the private child process.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OwnedApalacheServer {
+pub(crate) struct OwnedApalacheServer {
     endpoint: String,
     _owner_pid: u32,
 }
@@ -257,7 +257,7 @@ fn bound_diagnostic(bytes: &[u8]) -> String {
 
 /// A bounded TLC verification request for one registered Quint model.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifyRequest<'a> {
+pub(crate) struct VerifyRequest<'a> {
     descriptor: &'static ModelDescriptor,
     server: &'a OwnedApalacheServer,
 }
@@ -265,7 +265,7 @@ pub struct VerifyRequest<'a> {
 impl<'a> VerifyRequest<'a> {
     /// Creates a request for a registered model descriptor.
     #[must_use]
-    pub const fn new(
+    pub(crate) const fn new(
         descriptor: &'static ModelDescriptor,
         server: &'a OwnedApalacheServer,
     ) -> Self {
@@ -274,7 +274,7 @@ impl<'a> VerifyRequest<'a> {
 
     /// Returns the stable Quint 0.32.0 command arguments.
     #[must_use]
-    pub fn arguments(&self) -> Vec<String> {
+    pub(crate) fn arguments(&self) -> Vec<String> {
         let mut arguments = vec![
             "verify".to_owned(),
             self.descriptor.spec.to_owned(),
@@ -716,27 +716,23 @@ pub fn verify_model(
     descriptor: &'static ModelDescriptor,
 ) -> Result<Execution, String> {
     let mut server = RunningApalacheServer::start()?;
-    let workdir = repository_root.join("verification/quint");
-    if !workdir.is_dir() {
+    let source_workdir = repository_root.join("verification/quint");
+    if !source_workdir.is_dir() {
         return Err(format!(
             "Quint verification directory does not exist: {}",
-            workdir.display()
+            source_workdir.display()
         ));
     }
-    let checker_output = workdir.join("_apalache-out");
-    if checker_output.exists() {
-        return Err(format!(
-            "refusing to replace pre-existing checker output: {}",
-            checker_output.display()
-        ));
-    }
+    let workdir = tempfile::Builder::new()
+        .prefix("fireemu-quint-baseline-")
+        .tempdir()
+        .map_err(|error| format!("cannot create private baseline directory: {error}"))?;
+    copy_checker_input(&source_workdir, workdir.path(), descriptor.spec)?;
+    copy_checker_input(&source_workdir, workdir.path(), descriptor.config)?;
     let arguments = VerifyRequest::new(descriptor, server.endpoint()).arguments();
     let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-    let execution_result = execute_quint(&workdir, &argument_refs);
-    let cleanup_result = cleanup_checker_output(&checker_output);
-    let execution = execution_result?;
+    let execution = execute_quint(workdir.path(), &argument_refs)?;
     server.ensure_running()?;
-    cleanup_result?;
     let result = match classify_execution(&execution) {
         CheckerOutcome::Passed => Ok(execution),
         CheckerOutcome::Counterexample => Err(format!(
@@ -754,6 +750,28 @@ pub fn verify_model(
     };
     server.close()?;
     result
+}
+
+fn copy_checker_input(
+    source_root: &Path,
+    target_root: &Path,
+    relative: &str,
+) -> Result<(), String> {
+    let source = source_root.join(relative);
+    let target = target_root.join(relative);
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("checker input has no parent: {relative}"))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create checker input directory: {error}"))?;
+    fs::copy(&source, &target).map_err(|error| {
+        format!(
+            "cannot copy checker input {} to {}: {error}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    Ok(())
 }
 
 /// Verifies the exact backend artifact before any model or mutation can execute it.
@@ -799,30 +817,6 @@ pub fn verify_event_delivery_model(repository_root: &Path) -> Result<Execution, 
         repository_root,
         model("EventDelivery").expect("EventDelivery must remain registered"),
     )
-}
-
-fn cleanup_checker_output(path: &Path) -> Result<(), String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(format!(
-                "cannot inspect owned checker output {}: {error}",
-                path.display()
-            ));
-        }
-    };
-    let result = if metadata.file_type().is_symlink() || metadata.is_file() {
-        fs::remove_file(path)
-    } else {
-        fs::remove_dir_all(path)
-    };
-    result.map_err(|error| {
-        format!(
-            "cannot remove owned checker output {}: {error}",
-            path.display()
-        )
-    })
 }
 
 #[cfg(test)]

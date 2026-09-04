@@ -50,14 +50,6 @@ fn apalache_installer_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/install-apalache")
 }
 
-fn authority_lock_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/authority-lock")
-}
-
-fn authority_server_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/authority-server")
-}
-
 fn loopback_agent_source_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("java/io/fireemu/verification/LoopbackServerProviderAgent.java")
@@ -204,10 +196,6 @@ fn prepare_authority_backend_fixture(
     fs::create_dir_all(quint_dir.join("evidence"))
         .expect("temporary evidence target must be created");
     fs::create_dir_all(fake_bin).expect("temporary fixture bin must be created");
-    let authority_lock = quint_dir.join("bin/authority-lock");
-    fs::copy(authority_lock_path(), &authority_lock).expect("authority lock must be copied");
-    let authority_server = quint_dir.join("bin/authority-server");
-    fs::copy(authority_server_path(), &authority_server).expect("authority server must be copied");
     let agent_source =
         quint_dir.join("java/io/fireemu/verification/LoopbackServerProviderAgent.java");
     fs::create_dir_all(
@@ -336,13 +324,7 @@ while True:
     .expect("Apalache fixture launcher must be written");
     let shasum = fake_bin.join("shasum");
     fs::write(&shasum, "#!/bin/sh\nexit 0\n").expect("shasum fixture must be written");
-    make_executable(&[
-        &authority_lock,
-        &authority_server,
-        &installer,
-        &apalache_launcher,
-        &shasum,
-    ]);
+    make_executable(&[&installer, &apalache_launcher, &shasum]);
     quint_home
 }
 
@@ -849,7 +831,7 @@ fn authority_script_declares_all_models_and_ordered_gates() {
     assert!(script.contains("VERIFICATION_PASSES:-1"));
     assert!(script.contains("mktemp -d"));
     assert!(script.contains("trap cleanup"));
-    assert!(script.contains("cleanup_checker_output"));
+    assert!(!script.contains("_apalache-out"));
     assert!(script.contains("--refresh"));
     assert!(script.contains("cargo-authority --write"));
     assert!(script.contains("--quint-evidence-dir"));
@@ -889,9 +871,8 @@ fn authority_script_rejects_unknown_refresh_arguments_before_tool_setup() {
 #[test]
 fn authority_script_owns_a_dynamic_backend_and_checks_its_digest() {
     let script = fs::read_to_string(authority_script_path()).expect("authority script must exist");
-    assert!(script.contains("bin/authority-lock"));
-    assert!(script.contains("--target \"$authority_target\""));
-    assert!(script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_FD"));
+    assert!(!script.contains("bin/authority-lock"));
+    assert!(!script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_FD"));
     assert!(!script.contains("bin/authority-server"));
     assert!(!script.contains("--server-endpoint"));
     assert!(!script.contains("--server-owner-pid"));
@@ -917,64 +898,6 @@ fn rust_authority_embeds_the_loopback_provider() {
     assert!(server.contains("-javaagent:"));
     assert!(server.contains("env_clear"));
     assert!(server.contains("server\", \"--port=0"));
-}
-
-#[cfg(unix)]
-#[test]
-fn authority_lock_serializes_two_processes() {
-    let temporary = OwnedTestDirectory::create("authority-lock-serialization");
-    let evidence_target = temporary.0.join("evidence");
-    fs::create_dir(&evidence_target).expect("evidence target must be created");
-    let first_ready = temporary.0.join("first.ready");
-    let second_ready = temporary.0.join("second.ready");
-    let mut first = Command::new(authority_lock_path())
-        .args([
-            "--target",
-            evidence_target.to_str().expect("target must be UTF-8"),
-            "/bin/sh",
-            "-c",
-            "printf ready > \"$FIRST_READY\"; exec sleep 30",
-        ])
-        .env(
-            "FIREEMU_QUINT_AUTHORITY_LOCK",
-            temporary.0.join("ignored-first.lock"),
-        )
-        .env("FIRST_READY", &first_ready)
-        .spawn()
-        .expect("first lock holder must launch");
-    assert!(wait_until(Duration::from_secs(3), || first_ready.exists()));
-
-    let mut second = Command::new(authority_lock_path())
-        .args([
-            "--target",
-            evidence_target.to_str().expect("target must be UTF-8"),
-            "/bin/sh",
-            "-c",
-            "printf ready > \"$SECOND_READY\"",
-        ])
-        .env(
-            "FIREEMU_QUINT_AUTHORITY_LOCK",
-            temporary.0.join("ignored-second.lock"),
-        )
-        .env("SECOND_READY", &second_ready)
-        .spawn()
-        .expect("second lock holder must launch");
-    std::thread::sleep(Duration::from_millis(250));
-    assert!(!second_ready.exists(), "second process bypassed the lock");
-    assert!(second
-        .try_wait()
-        .expect("second status must be readable")
-        .is_none());
-
-    let signal = Command::new("/bin/kill")
-        .args(["-TERM", &first.id().to_string()])
-        .status()
-        .expect("first lock holder must be signalled");
-    assert!(signal.success());
-    let _ = first.wait();
-    let status = second.wait().expect("second lock holder must finish");
-    assert!(status.success());
-    assert!(second_ready.exists());
 }
 
 #[cfg(unix)]
@@ -1067,138 +990,6 @@ fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied(
     assert!(!invocations.contains("--server-endpoint"));
     assert!(!invocations.contains("--server-owner-pid"));
     assert!(!quint_dir.join("_apalache-out").exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn authority_server_reports_premature_exit_and_reaps_the_active_command() {
-    let temporary = OwnedTestDirectory::create("authority-server-exit");
-    let quint_dir = temporary.0.join("verification/quint");
-    let fake_bin = temporary.0.join("bin");
-    let quint_home = prepare_authority_backend_fixture(&temporary.0, &quint_dir, &fake_bin);
-    let launcher = quint_home.join("apalache-dist-0.56.1/apalache/bin/apalache-mc");
-    fs::write(
-        &launcher,
-        r#"#!/usr/bin/env python3
-import socket
-import sys
-import time
-
-listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-listener.bind(("127.0.0.1", 0))
-listener.listen()
-connection, _address = listener.accept()
-connection.close()
-time.sleep(0.5)
-print("fixture server failure", file=sys.stderr)
-raise SystemExit(23)
-"#,
-    )
-    .expect("failing server fixture must be written");
-    make_executable(&[&launcher]);
-
-    let command_pid_file = temporary.0.join("command.pid");
-    let output = Command::new(authority_server_path())
-        .args([
-            "/bin/sh",
-            "-c",
-            "printf '%s\\n' \"$$\" > \"$COMMAND_PID_FILE\"; exec /bin/sleep 30",
-        ])
-        .env("COMMAND_PID_FILE", &command_pid_file)
-        .env("QUINT_HOME", &quint_home)
-        .env_remove("FIREEMU_QUINT_APALACHE_ENDPOINT")
-        .env_remove("FIREEMU_QUINT_APALACHE_OWNER_PID")
-        .output()
-        .expect("authority server supervisor must launch");
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("owned Apalache server exited during authority pass"));
-    assert!(stderr.contains("status=23"));
-    assert!(stderr.contains("fixture server failure"));
-    let command_pid = fs::read_to_string(&command_pid_file)
-        .expect("active command PID must be recorded")
-        .trim()
-        .parse::<u32>()
-        .expect("active command PID must be numeric");
-    assert!(
-        wait_until(Duration::from_secs(2), || !process_exists(command_pid)),
-        "active authority command {command_pid} leaked after server exit"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn authority_server_rejects_a_wildcard_backend_listener() {
-    let temporary = OwnedTestDirectory::create("authority-server-wildcard");
-    let quint_dir = temporary.0.join("verification/quint");
-    let fake_bin = temporary.0.join("bin");
-    let quint_home = prepare_authority_backend_fixture(&temporary.0, &quint_dir, &fake_bin);
-    let launcher = quint_home.join("apalache-dist-0.56.1/apalache/bin/apalache-mc");
-    fs::write(
-        &launcher,
-        r#"#!/usr/bin/env python3
-import socket
-
-listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-listener.bind(("0.0.0.0", 0))
-listener.listen()
-while True:
-    connection, _address = listener.accept()
-    connection.close()
-"#,
-    )
-    .expect("wildcard server fixture must be written");
-    make_executable(&[&launcher]);
-
-    let output = Command::new(authority_server_path())
-        .arg("/usr/bin/true")
-        .env("QUINT_HOME", &quint_home)
-        .env_remove("FIREEMU_QUINT_APALACHE_ENDPOINT")
-        .env_remove("FIREEMU_QUINT_APALACHE_OWNER_PID")
-        .output()
-        .expect("authority server supervisor must launch");
-    assert_eq!(output.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("is not loopback-bound"),
-        "unexpected diagnostic: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn authority_server_reaps_descendants_after_the_command_leader_exits() {
-    let temporary = OwnedTestDirectory::create("authority-command-descendant");
-    let quint_dir = temporary.0.join("verification/quint");
-    let fake_bin = temporary.0.join("bin");
-    let quint_home = prepare_authority_backend_fixture(&temporary.0, &quint_dir, &fake_bin);
-    let descendant_pid_file = temporary.0.join("descendant.pid");
-    let output = Command::new(authority_server_path())
-        .args([
-            "/bin/sh",
-            "-c",
-            "sleep 30 & child=$!; printf '%s\\n' \"$child\" > \"$DESCENDANT_PID_FILE\"; exit 0",
-        ])
-        .env("DESCENDANT_PID_FILE", &descendant_pid_file)
-        .env("QUINT_HOME", &quint_home)
-        .env_remove("FIREEMU_QUINT_APALACHE_ENDPOINT")
-        .env_remove("FIREEMU_QUINT_APALACHE_OWNER_PID")
-        .output()
-        .expect("authority server supervisor must launch");
-    assert!(
-        output.status.success(),
-        "authority server failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let descendant_pid = fs::read_to_string(&descendant_pid_file)
-        .expect("descendant PID must be recorded")
-        .trim()
-        .parse::<u32>()
-        .expect("descendant PID must be numeric");
-    assert!(
-        wait_until(Duration::from_secs(2), || !process_exists(descendant_pid)),
-        "authority command descendant {descendant_pid} leaked"
-    );
 }
 
 #[test]

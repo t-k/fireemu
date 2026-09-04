@@ -12,7 +12,7 @@ use fireemu_verification_quint::process::{
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 33] = [
+const BOUND_INPUTS: [&str; 32] = [
     ".github/workflows/quint.yml",
     "rust-toolchain.toml",
     "crates/fireemu-core-events/Cargo.toml",
@@ -27,8 +27,6 @@ const BOUND_INPUTS: [&str; 33] = [
     "verification/quint/bin/quint",
     "verification/quint/bin/process-group",
     "verification/quint/src/publication.rs",
-    "verification/quint/bin/authority-lock",
-    "verification/quint/bin/authority-server",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java",
     "verification/quint/run-verification.sh",
     "verification/quint/evidence/cargo-authority.json",
@@ -44,6 +42,7 @@ const BOUND_INPUTS: [&str; 33] = [
     "verification/quint/src/main.rs",
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
+    "verification/quint/src/server.rs",
     "verification/quint/tests/event_delivery_connect.rs",
     "verification/quint/tests/event_delivery_evidence.rs",
 ];

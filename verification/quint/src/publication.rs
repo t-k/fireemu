@@ -1,7 +1,10 @@
 //! Atomic publication of a complete Quint evidence snapshot.
 
 use std::fs;
+use std::os::unix::io::OwnedFd;
 use std::path::{Path, PathBuf};
+
+use rustix::fs::{flock, fstat, openat, FileType, FlockOperation, Mode, OFlags, CWD};
 
 use crate::model::all_models;
 
@@ -18,6 +21,7 @@ pub fn publish_evidence(source: &Path, target: &Path) -> Result<(), String> {
     let target_parent = target
         .parent()
         .ok_or_else(|| format!("evidence target has no parent: {}", target.display()))?;
+    let _publication_lock = PublicationLock::acquire(target_parent)?;
     let candidate = tempfile::Builder::new()
         .prefix(".evidence-candidate.")
         .tempdir_in(target_parent)
@@ -30,6 +34,36 @@ pub fn publish_evidence(source: &Path, target: &Path) -> Result<(), String> {
     atomic_exchange(candidate.path(), &target)?;
     drop(candidate);
     Ok(())
+}
+
+struct PublicationLock {
+    _descriptor: OwnedFd,
+}
+
+impl PublicationLock {
+    fn acquire(target_parent: &Path) -> Result<Self, String> {
+        let path = target_parent.join(".fireemu-quint-publication.lock");
+        let descriptor = openat(
+            CWD,
+            &path,
+            OFlags::CREATE | OFlags::RDWR | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|error| format!("cannot open evidence publication lock: {error}"))?;
+        let metadata = fstat(&descriptor)
+            .map_err(|error| format!("cannot inspect evidence publication lock: {error}"))?;
+        if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
+            || metadata.st_uid != rustix::process::getuid().as_raw()
+            || metadata.st_mode & 0o177 != 0
+        {
+            return Err("evidence publication lock is not a private regular file".to_owned());
+        }
+        flock(&descriptor, FlockOperation::LockExclusive)
+            .map_err(|error| format!("cannot acquire evidence publication lock: {error}"))?;
+        Ok(Self {
+            _descriptor: descriptor,
+        })
+    }
 }
 
 fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, String> {
@@ -81,4 +115,35 @@ fn atomic_exchange(candidate: &Path, target: &Path) -> Result<(), String> {
 #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
 fn atomic_exchange(_candidate: &Path, _target: &Path) -> Result<(), String> {
     Err("atomic evidence directory exchange is unsupported on this platform".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::PublicationLock;
+
+    #[test]
+    fn publication_lock_serializes_two_publishers() {
+        let temporary = tempfile::tempdir().expect("temporary directory must be created");
+        let first = PublicationLock::acquire(temporary.path())
+            .expect("first publisher must acquire the lock");
+        let target_parent = temporary.path().to_owned();
+        let (sender, receiver) = mpsc::channel();
+        let second = thread::spawn(move || {
+            let lock = PublicationLock::acquire(&target_parent)
+                .expect("second publisher must eventually acquire the lock");
+            sender.send(()).expect("lock acquisition must be reported");
+            drop(lock);
+        });
+
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(first);
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second publisher remained blocked after release");
+        second.join().expect("second publisher must not panic");
+    }
 }

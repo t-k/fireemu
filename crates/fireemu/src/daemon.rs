@@ -97,6 +97,7 @@ fn function_log_input(
     message: &str,
     function: Option<&str>,
     user: bool,
+    fields: serde_json::Map<String, serde_json::Value>,
     timestamp_ms: i64,
 ) -> fireemu_adapter_logging::LogInput {
     let mut input = fireemu_adapter_logging::LogInput::plain(level, message, timestamp_ms)
@@ -105,6 +106,7 @@ fn function_log_input(
         input = input.for_function(function);
     }
     input.user = user;
+    input.fields = fields;
     input
 }
 
@@ -678,6 +680,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
                             line.message(),
                             line.function(),
                             line.is_user(),
+                            line.fields().clone(),
                             clock_millis(&clock),
                         ));
                     }
@@ -1107,11 +1110,19 @@ mod tests {
 
     #[test]
     fn function_user_logs_keep_the_official_logging_metadata() {
+        let fields = serde_json::Map::from_iter([
+            (
+                "trace".to_owned(),
+                serde_json::json!("projects/demo/traces/abc"),
+            ),
+            ("metadata".to_owned(), serde_json::json!({"spoofed": true})),
+        ]);
         let bundle = build_bundle(&function_log_input(
             "warning",
             "payment delayed",
             Some("settlePayment"),
             true,
+            fields,
             123,
         ));
 
@@ -1123,5 +1134,7 @@ mod tests {
             "settlePayment"
         );
         assert_eq!(bundle["data"]["metadata"]["type"], "USER");
+        assert_eq!(bundle["data"]["trace"], "projects/demo/traces/abc");
+        assert_eq!(bundle["data"]["metadata"]["user"]["spoofed"], true);
     }
 }

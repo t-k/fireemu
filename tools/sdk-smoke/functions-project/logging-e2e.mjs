@@ -120,8 +120,11 @@ try {
     socket.destroy(error);
   }, 10_000);
 
-  const alphaFrame = await waitFor((frame) => frame.message.includes("alpha structured"));
-  assert.equal(alphaFrame.level, "warn");
+  const alphaFrame = await waitFor((frame) => frame.message === "alpha structured");
+  assert.equal(alphaFrame.level, "warning");
+  assert.equal(alphaFrame.data.trace, "projects/demo/traces/abc");
+  assert.deepEqual(alphaFrame.data.labels, { payment: "delayed", attempts: [1, 2] });
+  assert.deepEqual(alphaFrame.data.metadata.user, { spoofed: true });
   assert.equal(alphaFrame.data.metadata.emulator.name, "functions");
   assert.equal(alphaFrame.data.metadata.function.name, "alpha");
   assert.equal(alphaFrame.data.metadata.type, "USER");

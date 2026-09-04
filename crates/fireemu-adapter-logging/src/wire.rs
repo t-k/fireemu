@@ -3,7 +3,7 @@
 
 use base64::Engine as _;
 use fireemu_core_session::loopback::authority_is_loopback;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 
 /// The GUID RFC 6455 §1.3 appends to the client key before hashing.
@@ -37,6 +37,8 @@ pub struct LogInput {
     pub function: Option<String>,
     /// Function *user* output: type `USER`, while retaining the production severity.
     pub user: bool,
+    /// Arbitrary structured fields emitted by the Functions logger SDK.
+    pub fields: Map<String, Value>,
 }
 
 impl LogInput {
@@ -50,6 +52,7 @@ impl LogInput {
             emulator: None,
             function: None,
             user: false,
+            fields: Map::new(),
         }
     }
 
@@ -87,8 +90,11 @@ pub fn build_bundle(input: &LogInput) -> Value {
     if input.user {
         metadata.insert("type".to_owned(), Value::String("USER".to_owned()));
     }
-    let mut data = serde_json::Map::new();
+    let mut data = input.fields.clone();
     if !metadata.is_empty() {
+        if let Some(user_metadata) = data.remove("metadata") {
+            metadata.insert("user".to_owned(), user_metadata);
+        }
         data.insert("metadata".to_owned(), Value::Object(metadata));
     }
     json!({
@@ -346,6 +352,29 @@ mod tests {
         input.user = true;
         let b = build_bundle(&input);
         assert_eq!(b["level"], "error");
+        assert_eq!(b["data"]["metadata"]["type"], "USER");
+    }
+
+    #[test]
+    fn structured_fields_survive_without_overriding_trusted_metadata() {
+        let mut input = LogInput::plain("EMERGENCY", "", 1)
+            .for_function("settlePayment")
+            .for_emulator("functions");
+        input.user = true;
+        input.fields = serde_json::Map::from_iter([
+            ("trace".to_owned(), json!("projects/demo/traces/abc")),
+            ("labels".to_owned(), json!({"attempts": [1, 2]})),
+            ("metadata".to_owned(), json!({"spoofed": true})),
+        ]);
+
+        let b = build_bundle(&input);
+        assert_eq!(b["level"], "emergency");
+        assert_eq!(b["message"], "");
+        assert_eq!(b["data"]["trace"], "projects/demo/traces/abc");
+        assert_eq!(b["data"]["labels"]["attempts"], json!([1, 2]));
+        assert_eq!(b["data"]["metadata"]["user"]["spoofed"], true);
+        assert_eq!(b["data"]["metadata"]["emulator"]["name"], "functions");
+        assert_eq!(b["data"]["metadata"]["function"]["name"], "settlePayment");
         assert_eq!(b["data"]["metadata"]["type"], "USER");
     }
 

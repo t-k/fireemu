@@ -7,7 +7,7 @@
 //! Runtime → runner: `{"type":"invoke", ...}`, `{"type":"shutdown"}`.
 //! Runner → runtime: `{"type":"hello","runner":"node","httpPort":N,"manifest":{...}}`,
 //! `{"type":"result","invocationId":"...","ok":true|false,"error":"..."}`,
-//! `{"type":"log","level":"info","message":"...","invocationId":"...","functionName":"...","user":true}`,
+//! `{"type":"log","level":"info","message":"...","fields":{},"invocationId":"...","functionName":"...","user":true}`,
 //! `{"type":"heartbeat"}`.
 
 use serde_json::Value;

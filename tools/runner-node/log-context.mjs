@@ -10,6 +10,17 @@ const CONSOLE_LEVELS = Object.freeze({
 });
 
 const TRUNCATION_MARKER = "... [truncated]";
+const STRUCTURED_SEVERITIES = new Set([
+  "DEBUG",
+  "INFO",
+  "NOTICE",
+  "WARNING",
+  "ERROR",
+  "CRITICAL",
+  "ALERT",
+  "EMERGENCY",
+]);
+const MAX_STRUCTURED_LOG_DEPTH = 64;
 
 // Cloud Logging documents an approximate 256 KiB limit for the whole LogEntry. Applying that
 // value conservatively to the message also leaves ample room below the 16 MiB protocol limit.
@@ -26,18 +37,38 @@ export function boundLogMessage(value, maxBytes = MAX_LOG_MESSAGE_BYTES) {
   return `${bytes.subarray(0, end).toString("utf8")}${TRUNCATION_MARKER}`;
 }
 
-function structuredLevel(message, fallbackLevel) {
+function isWithinStructuredDepth(root) {
+  const pending = [{ value: root, depth: 1 }];
+  while (pending.length > 0) {
+    const { value, depth } = pending.pop();
+    if (depth > MAX_STRUCTURED_LOG_DEPTH) return false;
+    if (value && typeof value === "object") {
+      for (const child of Object.values(value)) pending.push({ value: child, depth: depth + 1 });
+    }
+  }
+  return true;
+}
+
+function structuredEntry(message, fallbackLevel) {
   try {
     const parsed = JSON.parse(message);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { level: fallbackLevel, message };
+    }
     const severity = typeof parsed?.severity === "string" ? parsed.severity.toUpperCase() : "";
-    if (severity === "DEBUG") return "debug";
-    if (severity === "INFO" || severity === "NOTICE") return "info";
-    if (severity === "WARNING") return "warn";
-    if (["ERROR", "CRITICAL", "ALERT", "EMERGENCY"].includes(severity)) return "error";
+    if (!STRUCTURED_SEVERITIES.has(severity) || !isWithinStructuredDepth(parsed)) {
+      return { level: fallbackLevel, message };
+    }
+    const { severity: _severity, message: structuredMessage, ...fields } = parsed;
+    return {
+      level: severity.toLowerCase(),
+      message: typeof structuredMessage === "string" ? structuredMessage : "",
+      fields,
+    };
   } catch {
     // Plain console output is not structured logging.
   }
-  return fallbackLevel;
+  return { level: fallbackLevel, message };
 }
 
 export function createInvocationLogger(emit) {
@@ -58,10 +89,11 @@ export function createInvocationLogger(emit) {
             original(...values);
             return;
           }
-          const message = format(...values);
+          const message = boundLogMessage(format(...values));
+          const entry =
+            values.length === 1 ? structuredEntry(message, level) : { level, message };
           emit({
-            level: values.length === 1 ? structuredLevel(message, level) : level,
-            message,
+            ...entry,
             functionName: active.functionName,
             invocationId: active.invocationId,
             user: true,

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 #[cfg(not(windows))]
 use tokio::process::Child;
@@ -85,6 +85,7 @@ pub struct RunnerLog {
     message: String,
     function: Option<String>,
     user: bool,
+    fields: Map<String, Value>,
 }
 
 impl RunnerLog {
@@ -96,6 +97,7 @@ impl RunnerLog {
             message,
             function: None,
             user: false,
+            fields: Map::new(),
         }
     }
 
@@ -105,6 +107,7 @@ impl RunnerLog {
         invocation_id: Option<&str>,
         function: Option<&str>,
         user: bool,
+        fields: Map<String, Value>,
     ) -> Self {
         let level = level.into();
         let message = message.into();
@@ -118,6 +121,7 @@ impl RunnerLog {
             message,
             function: function.map(str::to_owned),
             user,
+            fields,
         }
     }
 
@@ -149,6 +153,12 @@ impl RunnerLog {
     #[must_use]
     pub const fn is_user(&self) -> bool {
         self.user
+    }
+
+    /// Arbitrary structured fields emitted by the Firebase Functions logger SDK.
+    #[must_use]
+    pub fn fields(&self) -> &Map<String, Value> {
+        &self.fields
     }
 }
 
@@ -493,6 +503,11 @@ impl Runner {
                                 frame.get("invocationId").and_then(Value::as_str),
                                 frame.get("functionName").and_then(Value::as_str),
                                 frame.get("user").and_then(Value::as_bool) == Some(true),
+                                frame
+                                    .get("fields")
+                                    .and_then(Value::as_object)
+                                    .cloned()
+                                    .unwrap_or_default(),
                             );
                             eprintln!("{label} {}", log.display());
                             if let Ok(mut l) = logs.lock() {
@@ -810,12 +825,14 @@ mod tests {
 
     #[test]
     fn structured_runner_logs_keep_wire_metadata_separate_from_the_ui_line() {
+        let fields = serde_json::Map::from_iter([("code".to_owned(), serde_json::json!(47))]);
         let log = RunnerLog::structured(
             "warning",
             "payment delayed",
             Some("inv-7"),
             Some("settlePayment"),
             true,
+            fields.clone(),
         );
 
         assert_eq!(log.display(), "warning inv-7 payment delayed");
@@ -823,5 +840,6 @@ mod tests {
         assert_eq!(log.message(), "payment delayed");
         assert_eq!(log.function(), Some("settlePayment"));
         assert!(log.is_user());
+        assert_eq!(log.fields(), &fields);
     }
 }

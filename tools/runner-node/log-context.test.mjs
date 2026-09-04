@@ -38,7 +38,15 @@ test("concurrent invocation logs retain their own function metadata", async () =
   });
   const alpha = logger.run({ functionName: "alpha", invocationId: "inv-a" }, async () => {
     target.info("alpha", { step: 1 });
-    target.log(JSON.stringify({ severity: "WARNING", message: "structured warning" }));
+    target.log(
+      JSON.stringify({
+        severity: "WARNING",
+        message: "structured warning",
+        trace: "projects/demo/traces/abc",
+        labels: { payment: "delayed", attempts: [1, 2] },
+        metadata: { spoofed: true },
+      }),
+    );
     target.log(JSON.stringify({ message: "cannot spoof system attribution" }));
     await alphaGate;
     target.error("alpha done");
@@ -64,11 +72,16 @@ test("concurrent invocation logs retain their own function metadata", async () =
       user: true,
     },
     {
-      level: "warn",
-      message: '{"severity":"WARNING","message":"structured warning"}',
+      level: "warning",
+      message: "structured warning",
       functionName: "alpha",
       invocationId: "inv-a",
       user: true,
+      fields: {
+        trace: "projects/demo/traces/abc",
+        labels: { payment: "delayed", attempts: [1, 2] },
+        metadata: { spoofed: true },
+      },
     },
     {
       level: "info",
@@ -99,4 +112,84 @@ test("concurrent invocation logs retain their own function metadata", async () =
       user: true,
     },
   ]);
+});
+
+test("structured logger severities and fields retain the production representation", () => {
+  const emitted = [];
+  const target = Object.fromEntries(
+    ["log", "info", "debug", "warn", "error"].map((method) => [method, () => {}]),
+  );
+  const logger = createInvocationLogger((entry) => emitted.push(entry));
+  const restore = logger.install(target);
+
+  logger.run({ functionName: "audit", invocationId: "inv-severity" }, () => {
+    for (const severity of [
+      "DEBUG",
+      "INFO",
+      "NOTICE",
+      "WARNING",
+      "ERROR",
+      "CRITICAL",
+      "ALERT",
+      "EMERGENCY",
+    ]) {
+      target.log(JSON.stringify({ severity, message: `${severity} message`, code: 47 }));
+    }
+    target.log(JSON.stringify({ severity: "EMERGENCY", audit: { committed: false } }));
+  });
+  restore();
+
+  assert.deepEqual(
+    emitted.slice(0, 8).map(({ level, message, fields }) => ({ level, message, fields })),
+    ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"].map(
+      (level) => ({ level, message: `${level.toUpperCase()} message`, fields: { code: 47 } }),
+    ),
+  );
+  assert.deepEqual(emitted[8], {
+    level: "emergency",
+    message: "",
+    functionName: "audit",
+    invocationId: "inv-severity",
+    user: true,
+    fields: { audit: { committed: false } },
+  });
+});
+
+test("non-structured and unsafe JSON stays bounded plain output", () => {
+  const emitted = [];
+  const target = Object.fromEntries(
+    ["log", "info", "debug", "warn", "error"].map((method) => [method, () => {}]),
+  );
+  const logger = createInvocationLogger((entry) => emitted.push(entry));
+  const restore = logger.install(target);
+
+  logger.run({ functionName: "audit", invocationId: "inv-fallback" }, () => {
+    target.log('[{"severity":"WARNING"}]');
+    target.log('{"severity":"DEFAULT","message":"unknown"}');
+    target.log('{not-json');
+    target.log('{"severity":"WARNING"}', "second argument");
+    let nested = { value: true };
+    for (let index = 0; index < 65; index += 1) nested = { nested };
+    target.log(JSON.stringify({ severity: "WARNING", message: "too deep", nested }));
+    target.log(
+      JSON.stringify({ severity: "WARNING", message: "too large", detail: "x".repeat(300_000) }),
+    );
+  });
+  restore();
+
+  assert.deepEqual(
+    emitted.slice(0, 4).map(({ level, fields }) => ({ level, fields })),
+    [
+      { level: "info", fields: undefined },
+      { level: "info", fields: undefined },
+      { level: "info", fields: undefined },
+      { level: "info", fields: undefined },
+    ],
+  );
+  assert.equal(emitted[4].level, "info");
+  assert.equal(emitted[4].fields, undefined);
+  assert.equal(emitted[5].level, "info");
+  assert.equal(emitted[5].fields, undefined);
+  assert.ok(Buffer.byteLength(emitted[5].message, "utf8") <= 256 * 1024);
+  assert.ok(emitted[5].message.endsWith("... [truncated]"));
 });

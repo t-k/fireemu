@@ -65,6 +65,8 @@ async fn runner_log_frames_preserve_function_and_user_metadata() {
     assert_eq!(log.display(), "info log-metadata-1 invoked ok");
     assert_eq!(log.function(), Some("ok"));
     assert!(log.is_user());
+    assert_eq!(log.fields()["code"], 47);
+    assert_eq!(log.fields()["nested"]["attempts"], json!([1, 2]));
     runner.shutdown().await;
 }
 

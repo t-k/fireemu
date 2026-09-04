@@ -794,6 +794,49 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
 }
 
+fn load_project_config(
+    raw: &RawOptions,
+    only: &Selection,
+) -> Result<(RuntimeConfig, PathBuf), CliError> {
+    // `--config` carries either the canonical configuration or a firebase.json.
+    let (mut cfg, firebase_from_config) = match &raw.config_path {
+        Some(path) => {
+            let (json, canonical) = read_config_file(path)?;
+            if canonical {
+                let config = RuntimeConfig::from_json(&json)?;
+                let firebase = if raw.firebase_json.is_none() {
+                    config::firebase_json_reference(&json)?
+                        .map(|reference| project_dir(path).join(reference))
+                        .map(|firebase_path| read_firebase_json(&firebase_path))
+                        .transpose()?
+                } else {
+                    None
+                };
+                (config, firebase)
+            } else {
+                (RuntimeConfig::default(), Some((json, path.clone())))
+            }
+        }
+        None => (RuntimeConfig::default(), None),
+    };
+    // A firebase.json from `--firebase-json` wins over one that reached `--config`.
+    let firebase = match &raw.firebase_json {
+        Some(path) => Some(read_firebase_json(path)?),
+        None => firebase_from_config,
+    };
+    let mut project_root = PathBuf::from(".");
+    if let Some((json, path)) = &firebase {
+        project_root = project_dir(path);
+        let report = cfg.apply_firebase_json(json, &project_root, only)?;
+        if raw.verbosity > Verbosity::Quiet {
+            for notice in &report.notices {
+                eprintln!("note: {}: {notice}", diagnostic_path(path));
+            }
+        }
+    }
+    Ok((cfg, project_root))
+}
+
 fn parse_options(
     args: &[String],
     context: OptionContext,
@@ -801,42 +844,7 @@ fn parse_options(
     let raw = parse_raw_options(args, context)?;
     let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
-    // `--config` carries either the canonical configuration or a firebase.json.
-    let (mut cfg, firebase_from_config) = match &raw.config_path {
-        Some(p) => {
-            let (json, canonical) = read_config_file(p)?;
-            if canonical {
-                let config = RuntimeConfig::from_json(&json)?;
-                let firebase = if raw.firebase_json.is_none() {
-                    config::firebase_json_reference(&json)?
-                        .map(|reference| project_dir(p).join(reference))
-                        .map(|path| read_firebase_json(&path))
-                        .transpose()?
-                } else {
-                    None
-                };
-                (config, firebase)
-            } else {
-                (RuntimeConfig::default(), Some((json, p.clone())))
-            }
-        }
-        None => (RuntimeConfig::default(), None),
-    };
-    // A firebase.json from `--firebase-json` wins over one that reached `--config`.
-    let firebase = match &raw.firebase_json {
-        Some(p) => Some(read_firebase_json(p)?),
-        None => firebase_from_config,
-    };
-    let mut project_root = PathBuf::from(".");
-    if let Some((json, path)) = &firebase {
-        project_root = project_dir(path);
-        let report = cfg.apply_firebase_json(json, &project_root, &only)?;
-        if raw.verbosity > Verbosity::Quiet {
-            for notice in &report.notices {
-                eprintln!("note: {}: {notice}", diagnostic_path(path));
-            }
-        }
-    }
+    let (mut cfg, project_root) = load_project_config(&raw, &only)?;
     let rc = read_firebaserc(&project_root)?;
     if let Some(project) = resolve_project(rc.as_ref(), raw.project.as_deref())? {
         // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
@@ -1717,47 +1725,45 @@ struct Listeners {
     logging: Option<tokio::net::TcpListener>,
 }
 
-async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
-    let bind = |addr: &str| {
-        let addr = addr.to_owned();
-        async move {
-            tokio::net::TcpListener::bind(&addr)
-                .await
-                .map_err(|e| format!("bind {addr}: {e}"))
-        }
-    };
-    let bind_relocatable = |addr: &str, explicit: bool, service: &'static str| {
-        let addr = addr.to_owned();
-        async move {
-            if explicit || addr.ends_with(":0") {
-                return tokio::net::TcpListener::bind(&addr)
-                    .await
-                    .map_err(|e| format!("bind {addr}: {e}"));
-            }
-            let (host, port) = addr
-                .rsplit_once(':')
-                .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
-                .ok_or_else(|| format!("bind {addr}: invalid address"))?;
-            for candidate in port..=u16::MAX {
-                let candidate_addr = format!("{host}:{candidate}");
-                match tokio::net::TcpListener::bind(&candidate_addr).await {
-                    Ok(listener) => {
-                        if candidate != port {
-                            eprintln!(
-                                "warning: {service} unable to start on port {port}, starting on {candidate} instead"
-                            );
-                        }
-                        return Ok(listener);
-                    }
-                    Err(_) if candidate < u16::MAX => {}
-                    Err(error) => return Err(format!("bind {candidate_addr}: {error}")),
+async fn bind_listener(addr: &str) -> Result<tokio::net::TcpListener, String> {
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|error| format!("bind {addr}: {error}"))
+}
+
+async fn bind_relocatable_listener(
+    addr: &str,
+    explicit: bool,
+    service: &'static str,
+) -> Result<tokio::net::TcpListener, String> {
+    if explicit || addr.ends_with(":0") {
+        return bind_listener(addr).await;
+    }
+    let (host, port) = addr
+        .rsplit_once(':')
+        .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
+        .ok_or_else(|| format!("bind {addr}: invalid address"))?;
+    for candidate in port..=u16::MAX {
+        let candidate_addr = format!("{host}:{candidate}");
+        match tokio::net::TcpListener::bind(&candidate_addr).await {
+            Ok(listener) => {
+                if candidate != port {
+                    eprintln!(
+                        "warning: {service} unable to start on port {port}, starting on {candidate} instead"
+                    );
                 }
+                return Ok(listener);
             }
-            Err(format!(
-                "could not find an open {service} port in {port}-65535"
-            ))
+            Err(_) if candidate < u16::MAX => {}
+            Err(error) => return Err(format!("bind {candidate_addr}: {error}")),
         }
-    };
+    }
+    Err(format!(
+        "could not find an open {service} port in {port}-65535"
+    ))
+}
+
+async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
     // An explicit Hub address wins over every port-zero listener. The default remains late
     // and best effort: a selected product configured on 4400 must win and disable discovery.
     let prebound_hub = if cfg.hub_addr_explicit {
@@ -1766,23 +1772,23 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         None
     };
     let firestore = if only.firestore {
-        Some(bind(&cfg.firestore_addr).await?)
+        Some(bind_listener(&cfg.firestore_addr).await?)
     } else {
         None
     };
     let control = if only.auth {
-        bind(&cfg.http_addr).await?
+        bind_listener(&cfg.http_addr).await?
     } else {
         // Loopback, ephemeral: the configured Auth port belongs to whoever wants it.
-        bind("127.0.0.1:0").await?
+        bind_listener("127.0.0.1:0").await?
     };
     let storage = if only.storage {
-        Some(bind(&cfg.storage_addr).await?)
+        Some(bind_listener(&cfg.storage_addr).await?)
     } else {
         None
     };
     let functions = if only.functions && cfg.functions_source.is_some() {
-        Some(bind(&cfg.functions_addr).await?)
+        Some(bind_listener(&cfg.functions_addr).await?)
     } else {
         None
     };
@@ -1791,7 +1797,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     // accepted no-op and binds neither listener.
     let eventarc = if functions.is_some() {
         Some(
-            bind_relocatable(
+            bind_relocatable_listener(
                 &cfg.eventarc_addr,
                 cfg.eventarc_addr_explicit,
                 "Eventarc emulator",
@@ -1803,7 +1809,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     };
     let tasks = if functions.is_some() {
         Some(
-            bind_relocatable(
+            bind_relocatable_listener(
                 &cfg.tasks_addr,
                 cfg.tasks_addr_explicit,
                 "Cloud Tasks emulator",
@@ -1816,7 +1822,7 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     // Like the official suite, Pub/Sub starts only when it was configured or explicitly asked
     // for, rather than binding port 8085 on every run.
     let pubsub = if only.pubsub && (cfg.pubsub_enabled || only.explicit) {
-        Some(bind(&cfg.pubsub_addr).await?)
+        Some(bind_listener(&cfg.pubsub_addr).await?)
     } else {
         None
     };

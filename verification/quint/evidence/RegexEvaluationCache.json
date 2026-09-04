@@ -55,7 +55,7 @@
     "crates/fireemu-core-rules/src/ast.rs": "8de818d1b4e4d22a5ebfb015f3863f746d5b98bfc8d33c9501bd0e95d23c0c3e",
     "crates/fireemu-core-rules/src/eval.rs": "50f3ffd912a5d1a4cc25c39c7928a501b0e4813456dd90abe08866386aecaad6",
     "crates/fireemu-core-rules/src/parse.rs": "ebcf63731625d6b5237f4a4d1fddfb89ce776d0ce42aa71434b534f61ae2c45c",
-    "crates/fireemu-core-rules/tests/eval.rs": "b98915078098c897409fdb7f1201c860cae5e1be6b1744f76e1f234fa30f4324",
+    "crates/fireemu-core-rules/tests/eval.rs": "1a1ebd4f9472eb7c023061068556358a45419fe4722b6fccdbbbbfa445a5c9ff",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
     "verification/quint/bin/authority-lock": "51530b393fbff9bedadd2c97721fa72c889ab47420e25d5d79b1ee8d974f4ce6",

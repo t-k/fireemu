@@ -1,0 +1,5 @@
+{
+  "name": "fireemu-shutdown-signal-fixture",
+  "private": true,
+  "main": "index.js"
+}

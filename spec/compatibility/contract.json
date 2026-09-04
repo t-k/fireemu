@@ -1238,7 +1238,7 @@
         },
         {
           "id": "FN-CLAIM-DISCOVERY",
-          "statement": "Every export a codebase declares is accounted for: served, or named with the reason it is not, and every codebase a firebase.json declares is loaded on a runner of its own.",
+          "statement": "Every export a codebase declares is accounted for: served, or named with the reason it is not, every codebase a firebase.json declares is loaded on a runner of its own, and SIGINT or SIGTERM shuts those runners and their descendants down cleanly.",
           "capabilities": [
             {
               "id": "FN-DISCOVERY-1",
@@ -1246,7 +1246,9 @@
             }
           ],
           "evidence": {
-            "tests": [],
+            "tests": [
+              "sigterm_and_sigint_gracefully_shutdown_real_node_runners_and_their_children"
+            ],
             "integration": [
               "crates/fireemu/tests/functions_discovery.rs",
               "crates/fireemu/tests/functions_codebases.rs"

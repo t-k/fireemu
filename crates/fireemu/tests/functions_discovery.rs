@@ -85,7 +85,7 @@ async fn concurrent_real_sdk_logs_keep_their_function_identity() {
     let logs = runner.logs_since(None);
     for (message, function, level, user) in [
         ("alpha start", "alpha", "info", true),
-        ("alpha structured", "alpha", "warn", true),
+        ("alpha structured", "alpha", "warning", true),
         ("alpha done", "alpha", "error", true),
         ("beta start", "beta", "info", true),
         ("beta done", "beta", "info", true),
@@ -123,6 +123,7 @@ async fn a_dynamic_inspector_port_is_reported_active_and_released_on_shutdown() 
         command: vec![
             "node".to_owned(),
             "--inspect=127.0.0.1:0".to_owned(),
+            "--inspect-publish-uid=http".to_owned(),
             runner_script.display().to_string(),
             "--source".to_owned(),
             source.display().to_string(),
@@ -212,6 +213,7 @@ fn exec_command_with_inspector_port(
     source: &Path,
     command: &[&str],
     inspector_port: u16,
+    logging_port: u16,
 ) -> Output {
     let mut args: Vec<String> = vec!["exec".into()];
     for a in [
@@ -227,11 +229,11 @@ fn exec_command_with_inspector_port(
         "0",
         "--hub-port",
         "0",
-        "--logging-port",
-        "0",
     ] {
         args.push(a.into());
     }
+    args.push("--logging-port".into());
+    args.push(logging_port.to_string());
     args.push("--inspect-functions".into());
     args.push(inspector_port.to_string());
     args.push("--functions".into());
@@ -293,11 +295,15 @@ fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds()
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let inspector_port = listener.local_addr().unwrap().port();
         drop(listener);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let logging_port = listener.local_addr().unwrap().port();
+        drop(listener);
         let port = inspector_port.to_string();
         let out = exec_command_with_inspector_port(
             &fixture("inspect-sequential"),
             &["node", &probe, &port],
             inspector_port,
+            logging_port,
         );
         let error = stderr(&out);
         if !out.status.success()
@@ -318,6 +324,7 @@ fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds()
         }
         assert!(!error.contains("active=2"), "{error}");
         assert!(!error.contains("active=3"), "{error}");
+        assert!(!error.contains("Debugger listening on ws://"), "{error}");
         std::net::TcpListener::bind(("127.0.0.1", inspector_port))
             .unwrap_or_else(|cause| panic!("inspector port remained open: {cause}"));
         return;
@@ -330,8 +337,12 @@ fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds()
 fn inspect_functions_refuses_to_start_when_the_requested_port_is_occupied() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let inspector_port = listener.local_addr().unwrap().port();
-    let out =
-        exec_command_with_inspector_port(&fixture("inspect-sequential"), &["true"], inspector_port);
+    let out = exec_command_with_inspector_port(
+        &fixture("inspect-sequential"),
+        &["true"],
+        inspector_port,
+        0,
+    );
     let error = stderr(&out);
     assert_eq!(out.status.code(), Some(1), "{error}");
     assert!(
@@ -343,6 +354,26 @@ fn inspect_functions_refuses_to_start_when_the_requested_port_is_occupied() {
     drop(listener);
     std::net::TcpListener::bind(("127.0.0.1", inspector_port))
         .unwrap_or_else(|cause| panic!("runner retained the occupied inspector port: {cause}"));
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn inspect_functions_refuses_a_listener_closed_during_module_loading() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let inspector_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let out =
+        exec_command_with_inspector_port(&fixture("inspect-closed"), &["true"], inspector_port, 0);
+    let error = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{error}");
+    assert!(
+        error.contains(&format!(
+            "requested debugger port {inspector_port} is not active"
+        )),
+        "{error}"
+    );
+    std::net::TcpListener::bind(("127.0.0.1", inspector_port))
+        .unwrap_or_else(|cause| panic!("closed inspector port remained open: {cause}"));
 }
 
 fn invoke_blocking_runner(port: u16, function: &str, body: &str) -> (u16, serde_json::Value) {

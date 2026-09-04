@@ -37,14 +37,16 @@ function inspectorPort() {
   const activeUrl = inspectorUrl();
   if (!activeUrl) return undefined;
   try {
-    const port = Number(new URL(activeUrl).port);
+    const endpoint = new URL(activeUrl);
+    if (endpoint.hostname !== "127.0.0.1") return undefined;
+    const port = Number(endpoint.port);
     return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
   } catch {
     return undefined;
   }
 }
 
-const activeInspectorPort = inspectorPort();
+let activeInspectorPort;
 
 function esmExportTarget(value) {
   if (typeof value === "string") return value;
@@ -1046,6 +1048,7 @@ async function main() {
       log("error", `cannot start the HTTP server: ${e?.stack || e}`);
     }
   }
+  activeInspectorPort = inspectorPort();
   send({
     type: "hello",
     runner: "node",

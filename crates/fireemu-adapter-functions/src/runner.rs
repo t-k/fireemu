@@ -633,13 +633,13 @@ impl Runner {
         };
         // 1. The stdin lock (waiting here is harmless: nothing was written yet).
         let mut stdin = match deadline {
-            Some(deadline) => match tokio::time::timeout_at(deadline, self.stdin.lock()).await {
-                Ok(stdin) => stdin,
-                Err(_) => {
+            Some(deadline) => {
+                let Ok(stdin) = tokio::time::timeout_at(deadline, self.stdin.lock()).await else {
                     forget(&self.waiters);
                     return done(InvokeOutcome::TimedOut);
-                }
-            },
+                };
+                stdin
+            }
             None => self.stdin.lock().await,
         };
         let Some(pipe) = stdin.as_mut() else {

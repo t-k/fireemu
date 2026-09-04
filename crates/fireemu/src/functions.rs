@@ -276,6 +276,35 @@ struct FunctionsSourceStamp {
     tracked_bytes: u64,
 }
 
+#[derive(Clone, Copy)]
+struct FunctionsSourceFileVersion {
+    len: u64,
+    modified_nanos: u128,
+    changed_seconds: i64,
+    changed_nanos: i64,
+}
+
+fn functions_source_file_version(metadata: &std::fs::Metadata) -> FunctionsSourceFileVersion {
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos());
+    #[cfg(unix)]
+    let (changed_seconds, changed_nanos) = {
+        use std::os::unix::fs::MetadataExt as _;
+        (metadata.ctime(), metadata.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let (changed_seconds, changed_nanos) = (0, 0);
+    FunctionsSourceFileVersion {
+        len: metadata.len(),
+        modified_nanos,
+        changed_seconds,
+        changed_nanos,
+    }
+}
+
 #[cfg(test)]
 fn hash_source_stamp_entry(
     hash: u64,
@@ -321,6 +350,45 @@ fn hash_source_stamp_metadata(
         hash = update_watch_hash(hash, byte);
     }
     hash
+}
+
+fn hash_source_file(
+    child: &Path,
+    relative: &Path,
+    version: FunctionsSourceFileVersion,
+    stamp: &mut FunctionsSourceStamp,
+    charge: &mut dyn FnMut(u64, u64) -> Result<(), String>,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
+    stamp.change_guard = hash_source_stamp_metadata(
+        stamp.change_guard,
+        relative.to_string_lossy().as_bytes(),
+        version.len,
+        version.modified_nanos,
+        version.changed_seconds,
+        version.changed_nanos,
+    );
+    for byte in relative.to_string_lossy().bytes().chain([0]) {
+        stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
+    }
+    let mut file = std::fs::File::open(child)
+        .map_err(|error| format!("watch {}: {error}", child.display()))?;
+    stream_source_chunks(
+        &mut file,
+        |bytes| {
+            for byte in bytes {
+                stamp.change_guard = update_watch_hash(stamp.change_guard, *byte);
+                stamp.content_signature = update_watch_hash(stamp.content_signature, *byte);
+            }
+            Ok(())
+        },
+        |bytes| charge(0, bytes).map_err(std::io::Error::other),
+        cancelled,
+    )
+    .map_err(|error| format!("watch {}: {error}", child.display()))?;
+    stamp.tracked_files = stamp.tracked_files.saturating_add(1);
+    stamp.tracked_bytes = stamp.tracked_bytes.saturating_add(version.len);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -398,47 +466,14 @@ impl FunctionsSourceTraversal<'_> {
         let metadata = entry
             .metadata()
             .map_err(|error| format!("watch {}: {error}", child.display()))?;
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |duration| duration.as_nanos());
-        #[cfg(unix)]
-        let (changed_seconds, changed_nanos) = {
-            use std::os::unix::fs::MetadataExt as _;
-            (metadata.ctime(), metadata.ctime_nsec())
-        };
-        #[cfg(not(unix))]
-        let (changed_seconds, changed_nanos) = (0, 0);
-        stamp.change_guard = hash_source_stamp_metadata(
-            stamp.change_guard,
-            relative.to_string_lossy().as_bytes(),
-            metadata.len(),
-            modified,
-            changed_seconds,
-            changed_nanos,
-        );
-        for byte in relative.to_string_lossy().bytes().chain([0]) {
-            stamp.content_signature = update_watch_hash(stamp.content_signature, byte);
-        }
-        let mut file = std::fs::File::open(child)
-            .map_err(|error| format!("watch {}: {error}", child.display()))?;
-        stream_source_chunks(
-            &mut file,
-            |bytes| {
-                for byte in bytes {
-                    stamp.change_guard = update_watch_hash(stamp.change_guard, *byte);
-                    stamp.content_signature = update_watch_hash(stamp.content_signature, *byte);
-                }
-                Ok(())
-            },
-            |bytes| (self.charge)(0, bytes).map_err(std::io::Error::other),
+        hash_source_file(
+            child,
+            relative,
+            functions_source_file_version(&metadata),
+            stamp,
+            self.charge,
             self.cancelled,
         )
-        .map_err(|error| format!("watch {}: {error}", child.display()))?;
-        stamp.tracked_files = stamp.tracked_files.saturating_add(1);
-        stamp.tracked_bytes = stamp.tracked_bytes.saturating_add(metadata.len());
-        Ok(())
     }
 
     fn copy_directory(
@@ -2789,11 +2824,12 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_stamp, hash_source_stamp_entry, node_engine_matches, package_node_engine,
-        parse_node_version, provision_function_pubsub_resources, select_node_installation,
-        snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
-        update_watch_hash, validate_functions_codebase_budget, FunctionsSourceEntryBudget,
-        FunctionsSourceScanBudget, NodeInstallation, BLOCKING_AUTH_DEADLINE,
+        functions_source_stamp, hash_source_file, hash_source_stamp_entry, node_engine_matches,
+        package_node_engine, parse_node_version, provision_function_pubsub_resources,
+        select_node_installation, snapshot_functions_source, source_scan_pacing_delay,
+        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
+        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
+        FunctionsSourceStamp, NodeInstallation, BLOCKING_AUTH_DEADLINE,
         MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
@@ -3527,6 +3563,53 @@ mod tests {
         let second = functions_source_stamp(&root, &[]).unwrap();
         assert_ne!(second.content_signature, first.content_signature);
         assert_ne!(second, first);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_file_hash_reads_rewritten_bytes_when_every_version_field_is_aliased() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-forced-metadata-alias-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("index.js");
+        // POSIX does not expose an API for restoring ctime. Reuse one captured version tuple while
+        // the production file hasher reads two real on-disk generations instead.
+        let version = FunctionsSourceFileVersion {
+            len: 6,
+            modified_nanos: 1_788_123_456_000_000_000,
+            changed_seconds: 1_788_123_456,
+            changed_nanos: 0,
+        };
+        let scan = || {
+            let mut stamp = FunctionsSourceStamp {
+                change_guard: 0xcbf2_9ce4_8422_2325,
+                content_signature: 0xcbf2_9ce4_8422_2325,
+                tracked_files: 0,
+                tracked_bytes: 0,
+            };
+            hash_source_file(
+                &source,
+                std::path::Path::new("index.js"),
+                version,
+                &mut stamp,
+                &mut |_, _| Ok(()),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            stamp
+        };
+
+        std::fs::write(&source, b"before").unwrap();
+        let first = scan();
+        std::fs::write(&source, b"after!").unwrap();
+        let second = scan();
+
+        assert_eq!(first.tracked_bytes, second.tracked_bytes);
+        assert_ne!(first.content_signature, second.content_signature);
+        assert_ne!(first.change_guard, second.change_guard);
         std::fs::remove_dir_all(root).unwrap();
     }
 

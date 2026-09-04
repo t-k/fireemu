@@ -4,8 +4,10 @@ import { initializeApp } from "firebase/app";
 import { connectFunctionsEmulator, getFunctions, httpsCallable } from "firebase/functions";
 
 const functionsHost = process.env.FIREEMU_FUNCTIONS_HOST;
+const control = process.env.FIREEMU_CONTROL_URL;
 const project = process.env.GOOGLE_CLOUD_PROJECT;
 assert.ok(functionsHost, "FIREEMU_FUNCTIONS_HOST is required");
+assert.ok(control, "FIREEMU_CONTROL_URL is required");
 assert.ok(project, "GOOGLE_CLOUD_PROJECT is required");
 
 const [host, portText] = functionsHost.split(":");
@@ -95,7 +97,7 @@ const failedIterator = failed.stream[Symbol.asyncIterator]();
 assert.deepEqual(await failedIterator.next(), { done: false, value: { step: 1 } });
 await assert.rejects(failedIterator.next(), (error) => {
   assert.equal(error.code, "functions/failed-precondition");
-  assert.equal(error.message, "stream stopped");
+  assert.equal(error.message, "stream stopped [0]");
   assert.deepEqual(error.details, { phase: "after-first" });
   return true;
 });
@@ -110,8 +112,19 @@ const disconnectedIterator = disconnected.stream[Symbol.asyncIterator]();
 assert.deepEqual(await disconnectedIterator.next(), { done: false, value: { step: 1 } });
 abort.abort();
 await assert.rejects(disconnected.data, { code: "functions/cancelled" });
+let signalAborted = false;
 for (let attempt = 0; attempt < 80; attempt += 1) {
-  if ((await streamStatus({ nonce })).data.aborted) process.exit(0);
+  if ((await streamStatus({ nonce })).data.aborted) {
+    signalAborted = true;
+    break;
+  }
   await new Promise((resolve) => setTimeout(resolve, 25));
 }
-throw new Error("the callable response signal was not aborted after the client disconnected");
+assert.equal(signalAborted, true, "the callable response signal was not aborted after disconnect");
+
+const idle = await fetch(`${control}sessions/default:awaitIdle`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ timeoutSeconds: 5 }),
+});
+assert.equal(idle.status, 200, `stream admission was not released: ${await idle.text()}`);

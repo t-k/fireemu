@@ -32,7 +32,10 @@ use tokio::sync::Notify;
 use crate::events::{
     auth_event, change_kind, firestore_event, pubsub_event, schedule_event, storage_event,
 };
-use crate::http::{forward, ProxiedResponse};
+use crate::http::{
+    forward, forward_stream, ProxiedResponse, ProxiedStreamResponse, StreamCompletion,
+    StreamStartError,
+};
 use crate::runner::{Invocation, InvokeOutcome, Runner, SpawnSpec};
 
 /// Default maximum schedule runs enqueued per clock advance and job (spec 11.6); the rest
@@ -92,6 +95,14 @@ pub struct HttpTarget {
     pub function: String,
     /// Runner HTTP address.
     pub addr: String,
+}
+
+/// The two response shapes an SSE-capable HTTP invocation can produce.
+pub enum HttpStreamStart {
+    /// A fault or pre-header timeout that can still be returned as a complete response.
+    Buffered(ProxiedResponse),
+    /// Runner bytes that must be forwarded incrementally.
+    Streaming(ProxiedStreamResponse),
 }
 
 /// Internal loopback target for an Identity Platform blocking function.
@@ -2365,6 +2376,171 @@ impl FunctionsRuntime {
             .map_err(HttpInvokeError::into_message)
     }
 
+    fn admit_http_stream(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        function_capacity: usize,
+    ) -> Result<(EventId, Admission), String> {
+        let Ok(mut inner) = self.inner.lock() else {
+            return Err("runtime poisoned".into());
+        };
+        let running_here = inner
+            .running
+            .values()
+            .filter(|function| **function == target.function)
+            .count();
+        if inner.running.len() >= self.config.max_running || running_here >= function_capacity {
+            return Err(HttpInvokeError::Capacity {
+                function: target.function.clone(),
+            }
+            .into_message());
+        }
+        inner.next_event += 1;
+        let id = EventId::new(u128::from(inner.next_event));
+        let key = format!("http-{}", inner.next_event);
+        inner.running.insert(key.clone(), target.function.clone());
+        Ok((
+            id,
+            Admission {
+                runtime: self.clone(),
+                key,
+            },
+        ))
+    }
+
+    fn record_http_invocation(&self, id: EventId, function: String, outcome: String) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.record_invocation(InvocationRecord {
+                event_id: id.value(),
+                function,
+                attempt: 1,
+                outcome,
+            });
+        }
+    }
+
+    fn retain_stream_lifecycle(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        id: EventId,
+        status: u16,
+        timeout: u64,
+        completion: tokio::sync::oneshot::Receiver<StreamCompletion>,
+        admission: Admission,
+    ) {
+        let runtime = self.clone();
+        let function = target.function.clone();
+        tokio::spawn(async move {
+            let completion = completion
+                .await
+                .unwrap_or_else(|_| StreamCompletion::Upstream("stream pump stopped".to_owned()));
+            let outcome = match &completion {
+                StreamCompletion::Complete => format!("http {status}"),
+                StreamCompletion::ClientGone => "cancelled: client disconnected".to_owned(),
+                StreamCompletion::TimedOut => "timeout".to_owned(),
+                StreamCompletion::TooLarge => "failed: response too large".to_owned(),
+                StreamCompletion::Upstream(error) => format!("failed: {error}"),
+            };
+            if matches!(completion, StreamCompletion::TimedOut) {
+                log_http_timeout(timeout);
+            }
+            runtime.record_http_invocation(id, function, outcome);
+            drop(admission);
+        });
+    }
+
+    /// Starts an HTTP response whose body remains tied to runtime admission until it ends.
+    ///
+    /// The caller uses this only for an exact callable `Accept: text/event-stream` request.
+    /// Fault-plan responses and a timeout before the runner emits headers are still complete
+    /// responses because no public streaming bytes have been committed yet.
+    pub async fn invoke_http_stream(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        method: &str,
+        path_and_query: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<HttpStreamStart, String> {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the Functions runtime is shutting down".to_owned());
+        }
+        let (timeout, function_capacity) =
+            self.manifest
+                .get(&target.function)
+                .map_or((60, self.config.max_running), |function| {
+                    (
+                        u64::from(function.timeout_seconds),
+                        function.http_capacity(self.config.max_running),
+                    )
+                });
+        if let Some(faulted) = self.http_faults(&target.function) {
+            if let Ok(mut inner) = self.inner.lock() {
+                inner.next_event += 1;
+                let event_id = inner.next_event;
+                inner.record_invocation(InvocationRecord {
+                    event_id: u128::from(event_id),
+                    function: target.function.clone(),
+                    attempt: 1,
+                    outcome: match &faulted {
+                        Ok(response) => format!("fault plan: http {}", response.status),
+                        Err(error) => format!("failed: {error}"),
+                    },
+                });
+            }
+            return faulted
+                .map(HttpStreamStart::Buffered)
+                .map_err(HttpInvokeError::Message)
+                .map_err(HttpInvokeError::into_message);
+        }
+        let (id, admission) = self.admit_http_stream(target, function_capacity)?;
+        let forwarded = runner_headers(headers, &self.config.runner_secret);
+        let deadline = (!self.config.debug_mode)
+            .then(|| tokio::time::Instant::now() + Duration::from_secs(timeout));
+        match forward_stream(
+            &target.addr,
+            method,
+            path_and_query,
+            &forwarded,
+            body,
+            deadline,
+        )
+        .await
+        {
+            Ok(started) => {
+                let status = started.response.status;
+                self.retain_stream_lifecycle(
+                    target,
+                    id,
+                    status,
+                    timeout,
+                    started.completion,
+                    admission,
+                );
+                Ok(HttpStreamStart::Streaming(started.response))
+            }
+            Err(StreamStartError::TimedOut) => {
+                self.record_http_invocation(id, target.function.clone(), "timeout".to_owned());
+                log_http_timeout(timeout);
+                drop(admission);
+                Ok(HttpStreamStart::Buffered(ProxiedResponse {
+                    status: 500,
+                    headers: Vec::new(),
+                    body: br#"{"code":"ECONNRESET"}"#.to_vec(),
+                }))
+            }
+            Err(StreamStartError::Upstream(error)) => {
+                self.record_http_invocation(
+                    id,
+                    target.function.clone(),
+                    format!("failed: {error}"),
+                );
+                drop(admission);
+                Err(error)
+            }
+        }
+    }
+
     async fn invoke_http_classified(
         self: &Arc<Self>,
         target: &HttpTarget,
@@ -2428,7 +2604,10 @@ impl FunctionsRuntime {
             (id, key)
         };
         // The slot is released even if the client disconnects and this future is dropped.
-        let _admission = Admission { runtime: self, key };
+        let _admission = Admission {
+            runtime: self.clone(),
+            key,
+        };
         // The runner secret is ours to add; a caller-supplied copy never passes through. The
         // same goes for the emulator-internal fields `firebase-functions` honours under
         // `skipTokenVerification` to override v1 callable auth context: no client legitimately
@@ -2468,10 +2647,7 @@ impl FunctionsRuntime {
             // emulator runs one runtime process per trigger, so killing it costs that
             // function's warm start. One fireemu runner serves a whole codebase, and taking
             // it down would abort every other function's in-flight work.
-            eprintln!(
-                "[functions] Your function timed out after ~{timeout}s. To configure this \
-                 timeout, see\n      https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation."
-            );
+            log_http_timeout(timeout);
             // `{"code":"ECONNRESET"}` with no content-type is literally what the official
             // emulator answers: `proxy.destroy()` makes Node raise a socket hang-up on the
             // request, and the handler writes `JSON.stringify(err)` after a bare
@@ -2908,6 +3084,12 @@ enum HttpInvokeError {
     Message(String),
 }
 
+fn log_http_timeout(timeout: u64) {
+    eprintln!(
+        "[functions] Your function timed out after ~{timeout}s. To configure this timeout, see\n      https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation."
+    );
+}
+
 fn task_retry_deadline(
     first_delivery: std::time::Instant,
     retry: fireemu_core_functions::manifest::TaskRetryConfig,
@@ -2966,8 +3148,8 @@ fn http_status(code: &str) -> u16 {
 
 /// Holds an HTTP invocation's slot; dropping it (normal completion or a cancelled request
 /// future) frees the slot and wakes the dispatcher and idle waiters.
-struct Admission<'a> {
-    runtime: &'a FunctionsRuntime,
+struct Admission {
+    runtime: Arc<FunctionsRuntime>,
     key: String,
 }
 
@@ -2984,7 +3166,7 @@ impl Drop for BlockingAuthAdmission {
     }
 }
 
-impl Drop for Admission<'_> {
+impl Drop for Admission {
     fn drop(&mut self) {
         self.runtime.release(&self.key);
     }

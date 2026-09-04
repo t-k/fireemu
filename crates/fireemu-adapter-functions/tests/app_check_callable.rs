@@ -401,6 +401,41 @@ async fn an_enforced_callable_rejects_a_missing_app_check_token_before_invoking_
 }
 
 #[tokio::test]
+async fn an_enforced_streaming_callable_returns_the_sdk_sse_error_without_invoking_the_handler() {
+    let h = start(true).await;
+    let denial = h
+        .request(
+            "POST",
+            "guarded",
+            &[
+                ("accept", "text/event-stream"),
+                ("origin", "http://127.0.0.1:5173"),
+            ],
+        )
+        .await;
+
+    assert_eq!(denial.status, 200);
+    assert_eq!(
+        response_header(&denial, "access-control-allow-origin"),
+        Some("http://127.0.0.1:5173")
+    );
+    assert_eq!(response_header(&denial, "vary"), Some("Origin"));
+    let frame = denial
+        .body
+        .strip_prefix(b"data: ")
+        .and_then(|body| body.strip_suffix(b"\n\n"))
+        .expect("the streaming SDK receives one complete SSE frame");
+    let body: Value = serde_json::from_slice(frame).expect("the SSE payload is JSON");
+    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    assert_eq!(body["error"]["message"], "Unauthenticated");
+    assert!(
+        body.get("headers").is_none(),
+        "the runner was never reached: {body}"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn a_callable_denial_drains_a_body_that_arrives_after_its_headers() {
     let h = start(true).await;
     let status = h

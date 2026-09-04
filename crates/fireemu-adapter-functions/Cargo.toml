@@ -21,10 +21,11 @@ fireemu-core-session = { path = "../fireemu-core-session" }
 fireemu-adapter-grpc = { path = "../fireemu-adapter-grpc" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util", "process", "time"] }
-hyper = { version = "1", features = ["http1", "server"] }
+hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
+tokio-stream = "0.1"
 chrono-tz = "0.10"
 chrono = "0.4"
 

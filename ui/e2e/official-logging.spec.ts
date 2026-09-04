@@ -112,6 +112,10 @@ test("the pinned official Emulator UI renders a live fireemu Functions log", asy
 
     await page.goto(`${origin}/logs`);
     await expect(page.getByRole("textbox", { name: "Filter or search logs..." })).toBeVisible();
+    const attribution = page.getByText("function[mirrorTodo]", { exact: true });
+    const message = page.getByText("mirrorTodo", { exact: true });
+    const previousAttributionCount = await attribution.count();
+    const previousMessageCount = await message.count();
     const id = `official-ui-log-${Date.now()}`;
     const write = await request.patch(
       `http://${firestore}/v1/projects/demo-app/databases/(default)/documents/todos/${id}`,
@@ -119,8 +123,8 @@ test("the pinned official Emulator UI renders a live fireemu Functions log", asy
     );
     expect(write.ok(), await write.text()).toBeTruthy();
 
-    await expect(page.getByText("function[mirrorTodo]", { exact: true })).toBeVisible();
-    await expect(page.getByText("mirrorTodo", { exact: true })).toBeVisible();
+    await expect(attribution).toHaveCount(previousAttributionCount + 1);
+    await expect(message).toHaveCount(previousMessageCount + 1);
   } finally {
     await stopChild(child);
     rmSync(scratch, { recursive: true, force: true });

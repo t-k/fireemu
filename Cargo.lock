@@ -550,6 +550,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

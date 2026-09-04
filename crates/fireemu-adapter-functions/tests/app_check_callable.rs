@@ -234,6 +234,34 @@ impl Harness {
             .map_err(std::io::Error::other)
     }
 
+    async fn request_with_an_unrenderable_connection_value(
+        &self,
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut request = format!(
+            "POST /{PROJECT}/us-central1/guardedV2 HTTP/1.1\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: 7\r\nConnection: x-private,",
+            self.addr
+        )
+        .into_bytes();
+        request.extend_from_slice(b"\xff\r\nx-private: secret\r\n\r\n{\"x\":1}");
+        let mut stream = tokio::net::TcpStream::connect(self.addr)
+            .await
+            .expect("the functions port accepts");
+        stream
+            .write_all(&request)
+            .await
+            .expect("the raw request is written");
+        stream.flush().await.expect("flush");
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("the refusal is read");
+        fireemu_adapter_functions::http::parse_response(&raw, "POST")
+            .expect("a well-formed refusal")
+    }
+
     async fn post_raw(&self, path: &str, body: &[u8]) -> u16 {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -397,6 +425,68 @@ async fn an_enforced_callable_rejects_a_missing_app_check_token_before_invoking_
     let (status, body) = h.call("guarded", &[("x-firebase-appcheck", &token)]).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(echoed(&body, "x-firebase-appcheck"), vec![token]);
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn an_enforced_streaming_callable_returns_the_sdk_sse_error_without_invoking_the_handler() {
+    let h = start(true).await;
+    let denial = h
+        .request(
+            "POST",
+            "guardedV2",
+            &[
+                ("accept", "text/event-stream"),
+                ("origin", "http://127.0.0.1:5173"),
+            ],
+        )
+        .await;
+
+    assert_eq!(denial.status, 200);
+    assert_eq!(
+        response_header(&denial, "access-control-allow-origin"),
+        Some("http://127.0.0.1:5173")
+    );
+    assert_eq!(response_header(&denial, "vary"), Some("Origin"));
+    let frame = denial
+        .body
+        .strip_prefix(b"data: ")
+        .and_then(|body| body.strip_suffix(b"\n\n"))
+        .expect("the streaming SDK receives one complete SSE frame");
+    let body: Value = serde_json::from_slice(frame).expect("the SSE payload is JSON");
+    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    assert_eq!(body["error"]["message"], "Unauthenticated");
+    assert!(
+        body.get("headers").is_none(),
+        "the runner was never reached: {body}"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn a_first_generation_callable_with_a_stream_accept_header_keeps_the_json_denial() {
+    let h = start(true).await;
+    let denial = h
+        .request("POST", "guarded", &[("accept", "text/event-stream")])
+        .await;
+
+    assert_eq!(denial.status, 401);
+    assert_eq!(
+        response_header(&denial, "content-type"),
+        Some("application/json; charset=utf-8")
+    );
+    let body: Value = serde_json::from_slice(&denial.body).expect("the v1 denial remains JSON");
+    assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+    assert_eq!(body["error"]["message"], "Unauthenticated");
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn an_unrenderable_connection_value_is_refused_before_a_named_header_reaches_the_runner() {
+    let h = start(true).await;
+    let response = h.request_with_an_unrenderable_connection_value().await;
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body, b"invalid Connection header");
     h.stop().await;
 }
 

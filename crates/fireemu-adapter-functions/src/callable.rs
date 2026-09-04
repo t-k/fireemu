@@ -18,11 +18,11 @@
 //! 3. strips every caller-supplied copy of the fields it owns before inserting its own, so a
 //!    caller cannot smuggle a second value past the one the daemon verified
 //!    (`INV-APPCHECK-009`, `INV-APPCHECK-010`);
-//! 4. answers the callable `401 UNAUTHENTICATED` envelope itself for an `enforceAppCheck`
-//!    callable with a missing or invalid token, before the runner is reached at all. The SDK
-//!    wrapper would refuse it too — the daemon has already stripped the invalid token, so the
-//!    wrapper sees `MISSING` — but this way the guarantee does not depend on the wrapper, and a
-//!    denied request costs no concurrency slot, no invocation record and no handler run.
+//! 4. answers the callable `UNAUTHENTICATED` envelope itself for an `enforceAppCheck` callable
+//!    with a missing or invalid token, before the runner is reached at all. A normal request
+//!    gets the wrapper's `401` JSON response and a v2 streaming request gets its `200` SSE error
+//!    record. The guarantee does not depend on the wrapper, and a denied request costs no
+//!    concurrency slot, no invocation record and no handler run.
 
 use std::sync::Arc;
 

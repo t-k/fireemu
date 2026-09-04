@@ -1100,7 +1100,7 @@
       "claims": [
         {
           "id": "FN-CLAIM-HTTP",
-          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function} and reproduce the official callable envelope, the two 404s of an unknown route, the timeout answer and the CORS a loopback origin gets.",
+          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function} and reproduce the official callable envelope, the two 404s of an unknown route, the timeout answer and the CORS a loopback origin gets. A v2 callable stream forwards sendChunk and onCallGenkit values progressively, keeps its final result pending until completion, and propagates a client disconnect to the runner while retaining admission for the stream lifetime.",
           "capabilities": [
             {
               "id": "FN-HTTP-1",
@@ -1110,7 +1110,9 @@
           "evidence": {
             "tests": [],
             "integration": [
-              "crates/fireemu-adapter-functions/tests/runtime.rs"
+              "crates/fireemu-adapter-functions/tests/runtime.rs",
+              "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+              "crates/fireemu/tests/functions_discovery.rs"
             ],
             "conformance": [
               "functions/callable-error-envelope",

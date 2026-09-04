@@ -57,7 +57,7 @@
     "verification/quint/bin/process-group": "103ccb69680d0dbe9ad79affb0de8e42499d0362582d7e571c79b55c2042593c",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/StorageGeneration.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "03c05ca848812d75dbb3342a915186c84a778d799cd33326ddbb8c57d1d31ee5",
+    "verification/quint/evidence/cargo-authority.json": "849a40e26e79968cf3b754b39a6c631e821f0088c44788ff886b9cd2564e9044",
     "verification/quint/mutations/StorageGeneration.json": "f81d08b3aa0ca0054462cc7dfd76ccba9c1b934bd73bd29d644bf53ef740f0fe",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",

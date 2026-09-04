@@ -295,6 +295,58 @@ fn blocking_functions_metadata_matches_the_served_runtime() {
     }
 }
 
+/// Streaming callables are a distinct wire contract from buffered HTTPS responses. Public
+/// metadata must name progressive chunks, the final result, cancellation, and the real-SDK
+/// evidence that prevents a buffered proxy from being described as compatible.
+#[test]
+fn functions_http_metadata_publishes_the_streaming_callable_contract() {
+    let published = manifest();
+    let capability = text_of(&published["capabilities"]["FN-HTTP-1"]).to_ascii_lowercase();
+    for term in [
+        "sendchunk",
+        "progressively",
+        "final result",
+        "client disconnect",
+        "10 mib",
+        "oncallgenkit",
+    ] {
+        assert!(
+            capability.contains(term),
+            "FN-HTTP-1 does not publish the streaming callable term {term}"
+        );
+    }
+
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../spec/compatibility/contract.json"))
+            .expect("the compatibility contract is JSON");
+    let functions = contract["surfaces"]
+        .as_array()
+        .expect("the contract lists surfaces")
+        .iter()
+        .find(|surface| surface["id"] == "functions")
+        .expect("the contract lists Functions");
+    let claim = functions["claims"]
+        .as_array()
+        .expect("Functions lists claims")
+        .iter()
+        .find(|claim| claim["id"] == "FN-CLAIM-HTTP")
+        .expect("Functions lists its HTTP claim");
+    let statement = claim["statement"]
+        .as_str()
+        .expect("the claim has a statement")
+        .to_ascii_lowercase();
+    for term in ["progressive", "stream", "disconnect"] {
+        assert!(
+            statement.contains(term),
+            "FN-CLAIM-HTTP does not publish the streaming semantic term {term}"
+        );
+    }
+    assert!(
+        text_of(&claim["evidence"]).contains("crates/fireemu/tests/functions_discovery.rs"),
+        "FN-CLAIM-HTTP does not bind the real Web SDK streaming test"
+    );
+}
+
 /// The active Firestore transaction implementation validates optimistic read sets at commit.
 /// Public metadata must preserve the measured lock-timing divergence from the official Local
 /// Emulator Suite instead of claiming that unreachable pessimistic wait branches are parity.

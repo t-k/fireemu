@@ -60,6 +60,12 @@ assert(loom_step, "verify must run the Loom scenarios")
 assert(loom_step.fetch("run") == "cargo test -p fireemu-verification-loom --release --target-dir target/loom", "the Loom command must execute the tests in target/loom")
 assert(loom_step.dig("env", "RUSTFLAGS") == "--cfg loom -D warnings", "the Loom command must compile all scenarios and deny warnings")
 
+jobs.each do |job, definition|
+  definition.fetch("steps", []).select { |step| step["uses"] == "pnpm/action-setup@v4" }.each do |step|
+    assert(step.dig("with", "version"), "#{job} must pin the pnpm version")
+  end
+end
+
 runs = %w[lint test verify].flat_map do |job|
   jobs.fetch(job).fetch("steps").map { |step| step["run"] }.compact
 end.join("\n")

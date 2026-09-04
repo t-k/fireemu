@@ -1,4 +1,4 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
 import {
   connectAuthEmulator,
   createUserWithEmailAndPassword,
@@ -7,19 +7,19 @@ import {
   onAuthStateChanged,
   setPersistence,
   signOut,
-} from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+} from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
 import {
   collection,
   connectFirestoreEmulator,
   doc,
   getDoc,
-  getFirestore,
+  initializeFirestore,
   onSnapshot,
   query,
   setDoc,
   waitForPendingWrites,
   where,
-} from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+} from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
 
 const params = new URLSearchParams(location.search);
 const firestorePort = Number(params.get("fs"));
@@ -34,6 +34,7 @@ const callbackAfterUnsubscribe = [];
 const deniedOperations = [];
 const cleanupCallbacks = [];
 const cleanupErrors = [];
+const deniedWriteSessionDeltas = {};
 let subscriptionOrdinal = 0;
 
 const record = (event, fields = {}) => events.push({ event, ...fields });
@@ -90,10 +91,19 @@ const expectPathIsolation = async (scope, references) => {
   }
 };
 const expectPermissionDenied = async (label, operation) => {
+  const openingWriteSessions = diagnostics.writeSessionOpeningCount();
   try {
     await operation();
   } catch (error) {
     if (error?.code !== "permission-denied") throw error;
+    if (label.endsWith("-write")) {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const delta = diagnostics.writeSessionOpeningCount() - openingWriteSessions;
+      deniedWriteSessionDeltas[label] = delta;
+      if (delta !== 1) {
+        throw new Error(`${label} opened ${delta} Write sessions before rejecting`);
+      }
+    }
     deniedOperations.push(label);
     record("denied", { label, code: error.code });
     return;
@@ -147,7 +157,7 @@ const run = async () => {
     await setPersistence(auth, inMemoryPersistence);
     await signOut(auth);
     registerCleanup(() => signOut(auth));
-    const db = getFirestore(firebaseApp);
+    const db = initializeFirestore(firebaseApp, { experimentalForceLongPolling: true });
     connectFirestoreEmulator(db, "127.0.0.1", firestorePort);
 
     const isolationReferences = (uid) => [
@@ -306,13 +316,21 @@ const run = async () => {
     summary = {
       passed:
         diagnostics.maximumConnectedForms() === 1 &&
+        diagnostics.maximumConnectedRouteTrees() === 1 &&
         callbackAfterUnsubscribe.length === 0 &&
         deniedOperations.length === 16 &&
+        Object.values(deniedWriteSessionDeltas).length === 8 &&
+        Object.values(deniedWriteSessionDeltas).every((count) => count === 1) &&
+        diagnostics.writeSessionOpeningCount() === 9 &&
         JSON.stringify(firstProjectValues) === JSON.stringify([0]) &&
         JSON.stringify(replacementProjectValues) === JSON.stringify([0, 1]),
       maximumConnectedForms: diagnostics.maximumConnectedForms(),
+      maximumConnectedRouteTrees: diagnostics.maximumConnectedRouteTrees(),
+      initialHtml: diagnostics.initialHtml,
       callbackAfterUnsubscribe,
       deniedOperations,
+      deniedWriteSessionDeltas,
+      writeSessionOpeningCount: diagnostics.writeSessionOpeningCount(),
       values: {
         shellUser: shellUserValues,
         pageUser: pageUserValues,
@@ -328,7 +346,7 @@ const run = async () => {
   } finally {
     await cleanup();
     diagnostics.sample("settled");
-    diagnostics.observer.disconnect();
+    diagnostics.disconnect();
     if (summary) {
       summary.cleanupErrors = cleanupErrors;
       summary.passed &&= cleanupErrors.length === 0;

@@ -548,7 +548,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         functions_runtime,
         exporter,
         hub_state,
-        locator,
+        locator: _locator,
         addrs,
         control_token,
         storage_admin_capability,
@@ -779,7 +779,6 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     if let Some(runtime) = functions_runtime {
         runtime.shutdown().await;
     }
-    drop(locator);
     outcome.map(|_| code)
 }
 

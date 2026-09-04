@@ -365,11 +365,8 @@ const listenerReplacementHandoff = {
   async run(ctx) {
     const web = ctx.shared.webFirestore();
     const admin = ctx.shared.adminFirestore();
-    const item = admin.doc("conf_listener_handoff/item");
-    const watched = query(
-      collection(web, "conf_listener_handoff"),
-      where("group", "==", "watched"),
-    );
+    const item = admin.doc("conf_listen/handoff");
+    const watched = query(collection(web, "conf_listen"), where("group", "==", "watched"));
 
     const deferred = () => {
       let resolve;
@@ -439,9 +436,9 @@ const listenerReplacementHandoff = {
           watched,
           (snapshot) => {
             record(events, "replacement", snapshot);
-            const revisions = snapshot.docs.map((candidate) => candidate.get("revision"));
-            if (revisions.includes(0)) replacementInitial.resolve();
-            if (revisions.includes(1)) replacementUpdate.resolve();
+            const revisions = new Set(snapshot.docs.map((candidate) => candidate.get("revision")));
+            if (revisions.has(0)) replacementInitial.resolve();
+            if (revisions.has(1)) replacementUpdate.resolve();
           },
           (error) => {
             replacementInitial.reject(error);
@@ -480,9 +477,9 @@ const listenerReplacementHandoff = {
           watched,
           (snapshot) => {
             record(events, "client", snapshot);
-            const revisions = snapshot.docs.map((candidate) => candidate.get("revision"));
-            if (revisions.includes(2)) replacementInitial.resolve();
-            if (revisions.includes(3)) replacementUpdate.resolve();
+            const revisions = new Set(snapshot.docs.map((candidate) => candidate.get("revision")));
+            if (revisions.has(2)) replacementInitial.resolve();
+            if (revisions.has(3)) replacementUpdate.resolve();
           },
           (error) => {
             replacementInitial.reject(error);

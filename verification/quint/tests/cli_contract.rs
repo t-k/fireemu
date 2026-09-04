@@ -868,6 +868,35 @@ fn authority_script_rejects_unknown_refresh_arguments_before_tool_setup() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("unknown argument: --unknown"));
 }
 
+#[cfg(unix)]
+#[test]
+fn python_authority_helpers_ignore_startup_injection() {
+    let temporary = OwnedTestDirectory::create("python-isolation");
+    let sentinel = temporary.0.join("sitecustomize-ran");
+    fs::write(
+        temporary.0.join("sitecustomize.py"),
+        "import os\nopen(os.environ['SENTINEL'], 'w').write('injected')\n",
+    )
+    .expect("sitecustomize fixture must be written");
+
+    for helper in [apalache_installer_path(), process_group_launcher_path()] {
+        let source = fs::read_to_string(&helper).expect("Python helper must be readable");
+        assert!(source.starts_with("#!/usr/bin/python3 -I\n"));
+        let output = Command::new(&helper)
+            .env("PYTHONPATH", &temporary.0)
+            .env("PYTHONHOME", &temporary.0)
+            .env("SENTINEL", &sentinel)
+            .output()
+            .expect("isolated Python helper must launch");
+        assert!(!output.status.success());
+        assert!(
+            !sentinel.exists(),
+            "{} executed injected startup code",
+            helper.display()
+        );
+    }
+}
+
 #[test]
 fn authority_script_owns_a_dynamic_backend_and_checks_its_digest() {
     let script = fs::read_to_string(authority_script_path()).expect("authority script must exist");

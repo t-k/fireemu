@@ -5,13 +5,12 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustix::process::{kill_process_group, Signal};
+use rustix::process::{kill_process, Signal};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -26,6 +25,7 @@ const LOOPBACK_AGENT_SOURCE: &[u8] =
 pub(crate) struct RunningApalacheServer {
     endpoint: Option<OwnedApalacheServer>,
     child: Child,
+    _owner_pipe: ChildStdin,
     _temporary: TempDir,
     stderr: PathBuf,
     closed: bool,
@@ -33,84 +33,17 @@ pub(crate) struct RunningApalacheServer {
 
 impl RunningApalacheServer {
     pub(crate) fn start() -> Result<Self, String> {
-        let source_jar = validate_apalache_distribution()?;
         let temporary = tempfile::Builder::new()
             .prefix("fireemu-quint-apalache-")
             .tempdir()
             .map_err(|error| format!("cannot create Apalache private directory: {error}"))?;
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("cannot protect Apalache private directory: {error}"))?;
-
-        let jar_bytes = fs::read(&source_jar).map_err(|error| {
-            format!(
-                "cannot read pinned Apalache JAR {}: {error}",
-                source_jar.display()
-            )
-        })?;
-        let digest = format!("{:x}", Sha256::digest(&jar_bytes));
-        if digest != APALACHE_JAR_SHA256 {
-            return Err(format!(
-                "Apalache JAR changed before private copy: expected {APALACHE_JAR_SHA256}, found {digest}"
-            ));
-        }
-        let private_jar = temporary.path().join("apalache.jar");
-        fs::write(&private_jar, jar_bytes)
-            .map_err(|error| format!("cannot create private Apalache JAR: {error}"))?;
-        fs::set_permissions(&private_jar, fs::Permissions::from_mode(0o400))
-            .map_err(|error| format!("cannot protect private Apalache JAR: {error}"))?;
-
-        let java = trusted_executable("java")?;
-        let jdk_bin = java
-            .parent()
-            .ok_or_else(|| format!("Java executable has no parent: {}", java.display()))?;
-        let javac = trusted_sibling(jdk_bin, "javac")?;
-        let jar = trusted_sibling(jdk_bin, "jar")?;
-        let source = temporary.path().join("LoopbackServerProviderAgent.java");
-        fs::write(&source, LOOPBACK_AGENT_SOURCE)
-            .map_err(|error| format!("cannot create private loopback provider source: {error}"))?;
-        let classes = temporary.path().join("classes");
-        fs::create_dir(&classes)
-            .map_err(|error| format!("cannot create private Java classes directory: {error}"))?;
-
-        let compile = clean_command(&javac, temporary.path())
-            .args(["-cp"])
-            .arg(&private_jar)
-            .args(["-d"])
-            .arg(&classes)
-            .arg(&source)
-            .output()
-            .map_err(|error| format!("cannot launch trusted javac: {error}"))?;
-        if !compile.status.success() {
-            return Err(format!(
-                "cannot compile loopback provider: {}",
-                bounded(&compile.stderr)
-            ));
-        }
-
-        let manifest = temporary.path().join("MANIFEST.MF");
-        fs::write(
-            &manifest,
-            b"Manifest-Version: 1.0\r\nPremain-Class: io.fireemu.verification.LoopbackServerProviderAgent\r\n\r\n",
-        )
-        .map_err(|error| format!("cannot create Java agent manifest: {error}"))?;
-        let agent_jar = temporary.path().join("loopback-agent.jar");
-        let package = clean_command(&jar, temporary.path())
-            .args(["cfm"])
-            .arg(&agent_jar)
-            .arg(&manifest)
-            .args(["-C"])
-            .arg(&classes)
-            .arg(".")
-            .output()
-            .map_err(|error| format!("cannot launch trusted jar tool: {error}"))?;
-        if !package.status.success() {
-            return Err(format!(
-                "cannot package loopback provider: {}",
-                bounded(&package.stderr)
-            ));
-        }
-        fs::set_permissions(&agent_jar, fs::Permissions::from_mode(0o400))
-            .map_err(|error| format!("cannot protect loopback provider JAR: {error}"))?;
+        let RuntimeArtifacts {
+            java,
+            private_jar,
+            agent_jar,
+        } = prepare_runtime(&temporary)?;
 
         let stdout_path = temporary.path().join("stdout.log");
         let stderr_path = temporary.path().join("stderr.log");
@@ -133,13 +66,18 @@ impl RunningApalacheServer {
             .args(["server", "--port=0"])
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
-            .process_group(0);
-        let child = command
+            .stdin(Stdio::piped());
+        let mut child = command
             .spawn()
             .map_err(|error| format!("cannot launch owned Apalache server: {error}"))?;
+        let owner_pipe = child
+            .stdin
+            .take()
+            .ok_or_else(|| "owned Apalache server has no owner pipe".to_owned())?;
         let mut running = Self {
             endpoint: None,
             child,
+            _owner_pipe: owner_pipe,
             _temporary: temporary,
             stderr: stderr_path,
             closed: false,
@@ -180,17 +118,7 @@ impl RunningApalacheServer {
         while Instant::now() < deadline {
             self.ensure_running()?;
             let endpoints = listener_endpoints(self.child.id())?;
-            if endpoints.len() > 1 {
-                return Err(format!(
-                    "owned Apalache process has multiple listeners: {endpoints:?}"
-                ));
-            }
-            if let Some(address) = endpoints.iter().next().copied() {
-                if address.ip() != Ipv4Addr::LOCALHOST || address.port() == 0 {
-                    return Err(format!(
-                        "owned Apalache process is not IPv4 loopback-bound: {address}"
-                    ));
-                }
+            if let Some(address) = validated_listener(&endpoints)? {
                 if TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok() {
                     return Ok(address);
                 }
@@ -232,9 +160,11 @@ impl RunningApalacheServer {
         {
             return Ok(());
         }
-        let pid = rustix::process::Pid::from_raw(self.child.id() as i32)
+        let raw_pid = i32::try_from(self.child.id())
+            .map_err(|_| "owned Apalache server PID exceeds i32".to_owned())?;
+        let pid = rustix::process::Pid::from_raw(raw_pid)
             .ok_or_else(|| "owned Apalache server has invalid PID".to_owned())?;
-        let _ = kill_process_group(pid, Signal::TERM);
+        let _ = kill_process(pid, Signal::TERM);
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         while Instant::now() < deadline {
             if self
@@ -247,12 +177,113 @@ impl RunningApalacheServer {
             }
             thread::sleep(Duration::from_millis(50));
         }
-        let _ = kill_process_group(pid, Signal::KILL);
+        let _ = kill_process(pid, Signal::KILL);
         self.child
             .wait()
             .map_err(|error| format!("cannot reap owned Apalache server: {error}"))?;
         Ok(())
     }
+}
+
+struct RuntimeArtifacts {
+    java: PathBuf,
+    private_jar: PathBuf,
+    agent_jar: PathBuf,
+}
+
+fn prepare_runtime(temporary: &TempDir) -> Result<RuntimeArtifacts, String> {
+    let source_jar = validate_apalache_distribution()?;
+    let jar_bytes = fs::read(&source_jar).map_err(|error| {
+        format!(
+            "cannot read pinned Apalache JAR {}: {error}",
+            source_jar.display()
+        )
+    })?;
+    let digest = format!("{:x}", Sha256::digest(&jar_bytes));
+    if digest != APALACHE_JAR_SHA256 {
+        return Err(format!(
+            "Apalache JAR changed before private copy: expected {APALACHE_JAR_SHA256}, found {digest}"
+        ));
+    }
+    let private_jar = temporary.path().join("apalache.jar");
+    fs::write(&private_jar, jar_bytes)
+        .map_err(|error| format!("cannot create private Apalache JAR: {error}"))?;
+    fs::set_permissions(&private_jar, fs::Permissions::from_mode(0o400))
+        .map_err(|error| format!("cannot protect private Apalache JAR: {error}"))?;
+
+    let java = trusted_executable("java")?;
+    let jdk_bin = java
+        .parent()
+        .ok_or_else(|| format!("Java executable has no parent: {}", java.display()))?;
+    let javac = trusted_sibling(jdk_bin, "javac")?;
+    let jar = trusted_sibling(jdk_bin, "jar")?;
+    let source = temporary.path().join("LoopbackServerProviderAgent.java");
+    fs::write(&source, LOOPBACK_AGENT_SOURCE)
+        .map_err(|error| format!("cannot create private loopback provider source: {error}"))?;
+    let classes = temporary.path().join("classes");
+    fs::create_dir(&classes)
+        .map_err(|error| format!("cannot create private Java classes directory: {error}"))?;
+    let compile = clean_command(&javac, temporary.path())
+        .args(["-cp"])
+        .arg(&private_jar)
+        .args(["-d"])
+        .arg(&classes)
+        .arg(&source)
+        .output()
+        .map_err(|error| format!("cannot launch trusted javac: {error}"))?;
+    if !compile.status.success() {
+        return Err(format!(
+            "cannot compile loopback provider: {}",
+            bounded(&compile.stderr)
+        ));
+    }
+
+    let manifest = temporary.path().join("MANIFEST.MF");
+    fs::write(
+        &manifest,
+        b"Manifest-Version: 1.0\r\nPremain-Class: io.fireemu.verification.LoopbackServerProviderAgent\r\n\r\n",
+    )
+    .map_err(|error| format!("cannot create Java agent manifest: {error}"))?;
+    let agent_jar = temporary.path().join("loopback-agent.jar");
+    let package = clean_command(&jar, temporary.path())
+        .args(["cfm"])
+        .arg(&agent_jar)
+        .arg(&manifest)
+        .args(["-C"])
+        .arg(&classes)
+        .arg(".")
+        .output()
+        .map_err(|error| format!("cannot launch trusted jar tool: {error}"))?;
+    if !package.status.success() {
+        return Err(format!(
+            "cannot package loopback provider: {}",
+            bounded(&package.stderr)
+        ));
+    }
+    fs::set_permissions(&agent_jar, fs::Permissions::from_mode(0o400))
+        .map_err(|error| format!("cannot protect loopback provider JAR: {error}"))?;
+    Ok(RuntimeArtifacts {
+        java,
+        private_jar,
+        agent_jar,
+    })
+}
+
+fn validated_listener(endpoints: &BTreeSet<SocketAddr>) -> Result<Option<SocketAddr>, String> {
+    if endpoints.len() > 1 {
+        return Err(format!(
+            "owned Apalache process has multiple listeners: {endpoints:?}"
+        ));
+    }
+    let Some(address) = endpoints.iter().next().copied() else {
+        return Ok(None);
+    };
+    if address.ip() != Ipv4Addr::LOCALHOST || address.port() == 0 {
+        return Err(format!(
+            "owned Apalache process is not IPv4 loopback-bound: {address}"
+        ));
+    }
+    Ok(Some(address))
 }
 
 impl Drop for RunningApalacheServer {
@@ -298,7 +329,7 @@ fn trusted_path(path: &Path) -> Result<PathBuf, String> {
     let groups = rustix::process::getgroups()
         .map_err(|error| format!("cannot inspect caller groups: {error}"))?
         .into_iter()
-        .map(|group| group.as_raw())
+        .map(rustix::fs::Gid::as_raw)
         .chain(std::iter::once(rustix::process::getgid().as_raw()))
         .collect::<BTreeSet<_>>();
     for candidate in std::iter::once(path.as_path()).chain(path.ancestors().skip(1)) {
@@ -420,4 +451,39 @@ fn listener_endpoints(pid: u32) -> Result<BTreeSet<SocketAddr>, String> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn listener_endpoints(_pid: u32) -> Result<BTreeSet<SocketAddr>, String> {
     Err("owned Apalache servers are supported only on Linux and macOS".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::net::SocketAddr;
+
+    use super::validated_listener;
+
+    #[test]
+    fn listener_validation_requires_one_nonzero_ipv4_loopback_socket() {
+        assert_eq!(
+            validated_listener(&BTreeSet::new()).expect("no listener is not yet an error"),
+            None
+        );
+        let loopback = "127.0.0.1:43123".parse::<SocketAddr>().unwrap();
+        assert_eq!(
+            validated_listener(&BTreeSet::from([loopback])).unwrap(),
+            Some(loopback)
+        );
+
+        for rejected in ["0.0.0.0:43123", "[::1]:43123", "127.0.0.1:0"] {
+            let diagnostic =
+                validated_listener(&BTreeSet::from([rejected.parse::<SocketAddr>().unwrap()]))
+                    .expect_err("non-loopback or zero listeners must fail closed");
+            assert!(diagnostic.contains("not IPv4 loopback-bound"));
+        }
+
+        let diagnostic = validated_listener(&BTreeSet::from([
+            loopback,
+            "127.0.0.1:43124".parse().unwrap(),
+        ]))
+        .expect_err("multiple listeners must fail closed");
+        assert!(diagnostic.contains("multiple listeners"));
+    }
 }

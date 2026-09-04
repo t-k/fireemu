@@ -5,6 +5,7 @@ import io.grpc.ServerProvider;
 import io.grpc.ServerRegistry;
 import io.grpc.netty.NettyServerBuilder;
 import java.lang.instrument.Instrumentation;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
@@ -15,6 +16,18 @@ public final class LoopbackServerProviderAgent {
 
     public static void premain(String ignored, Instrumentation instrumentation) {
         ServerRegistry.getDefaultRegistry().register(new LoopbackServerProvider());
+        Thread watchdog = new Thread(() -> {
+            try {
+                while (System.in.read() != -1) {
+                    // The Rust owner never writes; only EOF is meaningful.
+                }
+                Runtime.getRuntime().halt(0);
+            } catch (IOException error) {
+                Runtime.getRuntime().halt(70);
+            }
+        }, "fireemu-owner-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
     }
 
     private static final class LoopbackServerProvider extends ServerProvider {

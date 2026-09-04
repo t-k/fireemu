@@ -355,6 +355,155 @@ const listenSequenceWithResume = {
   },
 };
 
+const listenerReplacementHandoff = {
+  id: "firestore/listener-replacement-handoff",
+  product: "firestore",
+  variant: VARIANTS.baseline,
+  sdks: ["firebase/firestore"],
+  title:
+    "Replacing and overlapping query listeners preserve one ordered callback stream per subscription",
+  async run(ctx) {
+    const web = ctx.shared.webFirestore();
+    const admin = ctx.shared.adminFirestore();
+    const item = admin.doc("conf_listen/handoff");
+    const watched = query(collection(web, "conf_listen"), where("group", "==", "watched"));
+
+    const deferred = () => {
+      let resolve;
+      let reject;
+      const promise = new Promise((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      return { promise, resolve, reject };
+    };
+    const bounded = async (promise, label) => {
+      let timer;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${label} timed out`)), 20_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const record = (events, subscription, snapshot) => {
+      const subscriptionEvents = events.filter((event) => event.subscription === subscription);
+      events.push({
+        subscription,
+        ordinal: subscriptionEvents.length + 1,
+        ids: snapshot.docs.map((candidate) => candidate.id),
+        revisions: snapshot.docs.map((candidate) => candidate.get("revision")),
+        changes: snapshot.docChanges().map((change) => ({
+          type: change.type,
+          id: change.doc.id,
+          oldIndex: change.oldIndex,
+          newIndex: change.newIndex,
+        })),
+        fromCache: snapshot.metadata.fromCache,
+        hasPendingWrites: snapshot.metadata.hasPendingWrites,
+      });
+    };
+    const grouped = (events, names) =>
+      Object.fromEntries(
+        names.map((name) => [name, events.filter((event) => event.subscription === name)]),
+      );
+
+    await item.set({ group: "watched", revision: 0 });
+    await ctx.step("unsubscribe-then-replace-the-same-query", async () => {
+      const events = [];
+      const firstInitial = deferred();
+      const replacementInitial = deferred();
+      const replacementUpdate = deferred();
+      let unsubscribeFirst = () => {};
+      let unsubscribeReplacement = () => {};
+      try {
+        unsubscribeFirst = onSnapshot(
+          watched,
+          (snapshot) => {
+            record(events, "first", snapshot);
+            unsubscribeFirst();
+            firstInitial.resolve();
+          },
+          firstInitial.reject,
+        );
+        await bounded(firstInitial.promise, "first listener initial callback");
+
+        unsubscribeReplacement = onSnapshot(
+          watched,
+          (snapshot) => {
+            record(events, "replacement", snapshot);
+            const revisions = new Set(snapshot.docs.map((candidate) => candidate.get("revision")));
+            if (revisions.has(0)) replacementInitial.resolve();
+            if (revisions.has(1)) replacementUpdate.resolve();
+          },
+          (error) => {
+            replacementInitial.reject(error);
+            replacementUpdate.reject(error);
+          },
+        );
+        await bounded(replacementInitial.promise, "replacement listener initial callback");
+        await item.update({ revision: 1 });
+        await bounded(replacementUpdate.promise, "replacement listener update callback");
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+        return grouped(events, ["first", "replacement"]);
+      } finally {
+        unsubscribeFirst();
+        unsubscribeReplacement();
+      }
+    });
+
+    await ctx.step("overlapping-listeners-handoff-after-both-initial-callbacks", async () => {
+      await item.update({ revision: 2 });
+      const events = [];
+      const hydratingCurrent = deferred();
+      const clientCurrent = deferred();
+      const replacementUpdate = deferred();
+      let unsubscribeFirst = () => {};
+      let unsubscribeReplacement = () => {};
+      try {
+        unsubscribeFirst = onSnapshot(
+          watched,
+          (snapshot) => {
+            record(events, "hydrating", snapshot);
+            const revisions = new Set(snapshot.docs.map((candidate) => candidate.get("revision")));
+            if (revisions.has(2)) hydratingCurrent.resolve();
+          },
+          hydratingCurrent.reject,
+        );
+        unsubscribeReplacement = onSnapshot(
+          watched,
+          (snapshot) => {
+            record(events, "client", snapshot);
+            const revisions = new Set(snapshot.docs.map((candidate) => candidate.get("revision")));
+            if (revisions.has(2)) clientCurrent.resolve();
+            if (revisions.has(3)) replacementUpdate.resolve();
+          },
+          (error) => {
+            clientCurrent.reject(error);
+            replacementUpdate.reject(error);
+          },
+        );
+        await bounded(
+          Promise.all([hydratingCurrent.promise, clientCurrent.promise]),
+          "overlapping listeners reaching the current revision",
+        );
+        unsubscribeFirst();
+        await item.update({ revision: 3 });
+        await bounded(replacementUpdate.promise, "client listener update callback");
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+        return grouped(events, ["hydrating", "client"]);
+      } finally {
+        unsubscribeFirst();
+        unsubscribeReplacement();
+      }
+    });
+  },
+};
+
 const rulesDecisions = {
   id: "firestore/rules-decisions",
   product: "firestore",
@@ -499,6 +648,7 @@ export const scenarios = [
   missingCompositeIndex,
   transactionReadSetAbort,
   listenSequenceWithResume,
+  listenerReplacementHandoff,
   rulesDecisions,
   restFailedPrecondition,
 ];

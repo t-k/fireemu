@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "id": "firestore/listener-replacement-handoff",
+  "product": "firestore",
+  "title": "Replacing and overlapping query listeners preserve one ordered callback stream per subscription",
+  "sdks": [
+    "firebase/firestore"
+  ],
+  "variant": "baseline",
+  "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
+  "summary": {
+    "parity": 2,
+    "documented-divergence": 0,
+    "debt": 0,
+    "pending": 0
+  },
+  "steps": [
+    {
+      "id": "unsubscribe-then-replace-the-same-query",
+      "status": "parity",
+      "value": {
+        "first": [
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": -1,
+                "type": "added"
+              }
+            ],
+            "fromCache": false,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 1,
+            "revisions": [
+              0
+            ],
+            "subscription": "first"
+          }
+        ],
+        "replacement": [
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": -1,
+                "type": "added"
+              }
+            ],
+            "fromCache": true,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 1,
+            "revisions": [
+              0
+            ],
+            "subscription": "replacement"
+          },
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": 0,
+                "type": "modified"
+              }
+            ],
+            "fromCache": false,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 2,
+            "revisions": [
+              1
+            ],
+            "subscription": "replacement"
+          }
+        ]
+      }
+    },
+    {
+      "id": "overlapping-listeners-handoff-after-both-initial-callbacks",
+      "status": "parity",
+      "value": {
+        "client": [
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": -1,
+                "type": "added"
+              }
+            ],
+            "fromCache": true,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 1,
+            "revisions": [
+              1
+            ],
+            "subscription": "client"
+          },
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": 0,
+                "type": "modified"
+              }
+            ],
+            "fromCache": false,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 2,
+            "revisions": [
+              2
+            ],
+            "subscription": "client"
+          },
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": 0,
+                "type": "modified"
+              }
+            ],
+            "fromCache": false,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 3,
+            "revisions": [
+              3
+            ],
+            "subscription": "client"
+          }
+        ],
+        "hydrating": [
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": -1,
+                "type": "added"
+              }
+            ],
+            "fromCache": true,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 1,
+            "revisions": [
+              1
+            ],
+            "subscription": "hydrating"
+          },
+          {
+            "changes": [
+              {
+                "id": "handoff",
+                "newIndex": 0,
+                "oldIndex": 0,
+                "type": "modified"
+              }
+            ],
+            "fromCache": false,
+            "hasPendingWrites": false,
+            "ids": [
+              "handoff"
+            ],
+            "ordinal": 2,
+            "revisions": [
+              2
+            ],
+            "subscription": "hydrating"
+          }
+        ]
+      }
+    }
+  ]
+}

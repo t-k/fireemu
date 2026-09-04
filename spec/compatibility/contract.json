@@ -1827,7 +1827,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "control-character stripping drops lone C0/DEL bytes from messages and structured field keys/string values as well as ANSI escape sequences, where Node's stripVTControlCharacters removes only the escape sequences",
+              "behaviour": "control-character stripping drops C0/C1/DEL and Unicode bidi-formatting controls from messages and structured field keys/string values as well as ANSI escape sequences, where Node's stripVTControlCharacters removes only the escape sequences; sanitized key collisions are retained under deterministic suffixes",
               "precision": "documented-divergence"
             },
             {

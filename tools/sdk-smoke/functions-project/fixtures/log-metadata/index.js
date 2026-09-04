@@ -22,6 +22,8 @@ exports.beta = onSchedule("every 5 minutes", async () => {
 
 exports.invalidUnicode = onSchedule("every 5 minutes", async () => {
   logger.info("invalid unicode", { invalid: "\ud800" });
+  console.log("plain\ud800surrogate");
+  console.log("multiple", "value\udfff");
   console.log("unicode survived");
 });
 

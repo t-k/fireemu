@@ -12,6 +12,9 @@ test("log messages are truncated on UTF-8 boundaries", () => {
   assert.ok(Buffer.byteLength(bounded, "utf8") <= maxBytes);
   assert.ok(bounded.endsWith("... [truncated]"));
   assert.ok(!bounded.includes("�"));
+  assert.equal(boundLogMessage("before\ud800after"), "before�after");
+  assert.equal(boundLogMessage("before\udfffafter"), "before�after");
+  assert.equal(boundLogMessage("before🚀after"), "before🚀after");
 });
 
 test("concurrent invocation logs retain their own function metadata", async () => {
@@ -164,6 +167,8 @@ test("non-structured and unsafe JSON stays bounded plain output", () => {
   const restore = logger.install(target);
 
   logger.run({ functionName: "audit", invocationId: "inv-fallback" }, () => {
+    target.log("plain\ud800value");
+    target.log("multiple", "value\udfff");
     target.log('[{"severity":"WARNING"}]');
     target.log('{"severity":"DEFAULT","message":"unknown"}');
     target.log('{not-json');
@@ -181,7 +186,7 @@ test("non-structured and unsafe JSON stays bounded plain output", () => {
   restore();
 
   assert.deepEqual(
-    emitted.slice(0, 4).map(({ level, fields }) => ({ level, fields })),
+    emitted.slice(2, 6).map(({ level, fields }) => ({ level, fields })),
     [
       { level: "info", fields: undefined },
       { level: "info", fields: undefined },
@@ -189,16 +194,18 @@ test("non-structured and unsafe JSON stays bounded plain output", () => {
       { level: "info", fields: undefined },
     ],
   );
-  assert.equal(emitted[4].level, "info");
-  assert.equal(emitted[4].fields, undefined);
-  assert.equal(emitted[5].level, "info");
-  assert.equal(emitted[5].fields, undefined);
-  assert.ok(Buffer.byteLength(emitted[5].message, "utf8") <= 256 * 1024);
-  assert.ok(emitted[5].message.endsWith("... [truncated]"));
+  assert.equal(emitted[0].message, "plain�value");
+  assert.equal(emitted[1].message, "multiple value�");
   assert.equal(emitted[6].level, "info");
   assert.equal(emitted[6].fields, undefined);
   assert.equal(emitted[7].level, "info");
   assert.equal(emitted[7].fields, undefined);
-  assert.equal(emitted[8].level, "notice");
-  assert.deepEqual(emitted[8].fields, { value: "🚀" });
+  assert.ok(Buffer.byteLength(emitted[7].message, "utf8") <= 256 * 1024);
+  assert.ok(emitted[7].message.endsWith("... [truncated]"));
+  assert.equal(emitted[8].level, "info");
+  assert.equal(emitted[8].fields, undefined);
+  assert.equal(emitted[9].level, "info");
+  assert.equal(emitted[9].fields, undefined);
+  assert.equal(emitted[10].level, "notice");
+  assert.deepEqual(emitted[10].fields, { value: "🚀" });
 });

@@ -106,10 +106,25 @@ pub fn build_bundle(input: &LogInput) -> Value {
 }
 
 fn sanitize_fields(fields: &Map<String, Value>) -> Map<String, Value> {
-    fields
-        .iter()
-        .map(|(key, value)| (strip_control(key), sanitize_field_value(value)))
-        .collect()
+    let mut sanitized = Map::new();
+    // Keep already-safe keys at their canonical spelling. Sanitized collisions remain visible
+    // under deterministic suffixes instead of silently replacing either value.
+    for changed in [false, true] {
+        for (key, value) in fields {
+            let clean = strip_control(key);
+            if (clean != *key) != changed {
+                continue;
+            }
+            let mut candidate = clean.clone();
+            let mut collision = 1usize;
+            while sanitized.contains_key(&candidate) {
+                candidate = format!("{clean} [sanitized {collision}]");
+                collision += 1;
+            }
+            sanitized.insert(candidate, sanitize_field_value(value));
+        }
+    }
+    sanitized
 }
 
 fn sanitize_field_value(value: &Value) -> Value {
@@ -127,12 +142,12 @@ pub fn bundle_text(input: &LogInput) -> String {
     build_bundle(input).to_string()
 }
 
-/// Removes ANSI/VT escape sequences and every remaining C0/DEL control byte.
+/// Removes ANSI/VT escape sequences, C0/C1/DEL, and Unicode bidi-formatting controls.
 ///
 /// Node's `util.stripVTControlCharacters` removes the terminal control sequences winston colour
-/// output emits; this also drops lone control bytes (NUL included), which the security rules
-/// forbid in stored/streamed content. Ordinary printable text (including non-ASCII) is
-/// untouched.
+/// output emits; this also drops lone control bytes (NUL included) and visual-order controls,
+/// which the security rules forbid in stored/streamed content. Ordinary printable text
+/// (including non-ASCII) is untouched.
 #[must_use]
 pub fn strip_control(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -158,8 +173,19 @@ pub fn strip_control(text: &str) -> String {
             }
             continue;
         }
-        // Drop C0 controls (0x00..=0x1F) and DEL (0x7F); keep everything printable.
-        if (c as u32) < 0x20 || c == '\u{7f}' {
+        // Drop C0/C1, DEL, and Unicode bidi-formatting controls. Those characters are not log
+        // content and can alter a terminal or visual ordering after a WebSocket client parses JSON.
+        if (c as u32) < 0x20
+            || ('\u{7f}'..='\u{9f}').contains(&c)
+            || matches!(
+                c,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
             continue;
         }
         out.push(c);
@@ -397,15 +423,21 @@ mod tests {
     #[test]
     fn structured_field_controls_are_stripped_recursively() {
         let mut input = LogInput::plain("INFO", "safe", 1);
-        input.fields = serde_json::Map::from_iter([(
-            "la\u{0}bels".to_owned(),
-            json!({"ne\u{1b}[31msted": ["a\u{7}b", {"de\u{7}ep": "c\u{7f}d"}]}),
-        )]);
+        input.fields = serde_json::Map::from_iter([
+            ("labels".to_owned(), json!({"source": "clean"})),
+            (
+                "la\u{0}bels".to_owned(),
+                json!({"ne\u{1b}[31msted": ["a\u{7}b", {"de\u{7}ep": "c\u{7f}\u{9b}\u{202e}d"}]}),
+            ),
+        ]);
 
         let b = build_bundle(&input);
-        assert_eq!(b["data"]["labels"]["nested"][0], "ab");
-        assert_eq!(b["data"]["labels"]["nested"][1]["deep"], "cd");
+        assert_eq!(b["data"]["labels"]["source"], "clean");
+        assert_eq!(b["data"]["labels [sanitized 1]"]["nested"][0], "ab");
+        assert_eq!(b["data"]["labels [sanitized 1]"]["nested"][1]["deep"], "cd");
         assert!(!bundle_text(&input).contains('\u{1b}'));
+        assert!(!bundle_text(&input).contains('\u{9b}'));
+        assert!(!bundle_text(&input).contains('\u{202e}'));
     }
 
     #[test]

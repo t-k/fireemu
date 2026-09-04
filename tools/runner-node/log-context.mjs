@@ -27,8 +27,10 @@ const MAX_STRUCTURED_LOG_DEPTH = 64;
 export const MAX_LOG_MESSAGE_BYTES = 256 * 1024;
 
 export function boundLogMessage(value, maxBytes = MAX_LOG_MESSAGE_BYTES) {
-  const message = String(value);
-  const bytes = Buffer.from(message, "utf8");
+  const bytes = Buffer.from(String(value), "utf8");
+  // A UTF-8 round trip replaces lone UTF-16 surrogates while preserving valid pairs. Without
+  // this, JSON.stringify emits an escape that serde_json correctly refuses on the protocol side.
+  const message = bytes.toString("utf8");
   if (bytes.length <= maxBytes) return message;
   const marker = Buffer.from(TRUNCATION_MARKER, "utf8");
   if (maxBytes <= marker.length) return marker.subarray(0, maxBytes).toString("utf8");

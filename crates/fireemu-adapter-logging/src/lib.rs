@@ -29,8 +29,9 @@
 //!   oldest, so an unbounded producer cannot exhaust memory.
 //! - **Control-character stripping is slightly more aggressive.** Node's
 //!   `stripVTControlCharacters` removes ANSI escape sequences but keeps `\n` / `\t`; this strips
-//!   ANSI sequences *and* every remaining C0/DEL control byte, so no control character reaches
-//!   the frame. `serde_json` would already escape them; stripping is defence in depth.
+//!   ANSI sequences, C0/C1/DEL bytes and Unicode bidi-formatting controls from messages and
+//!   structured fields. Sanitized key collisions receive deterministic suffixes, so neither
+//!   value disappears. `serde_json` would already escape controls; stripping is defence in depth.
 //!
 //! The pure protocol and bus logic ([`bus`], [`wire`]) is testable without a socket; only
 //! [`server::serve_logging`] touches the network.

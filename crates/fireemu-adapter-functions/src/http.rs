@@ -328,7 +328,7 @@ pub async fn forward(
     let connection_named = connection_tokens(headers.iter().filter_map(|(name, value)| {
         name.eq_ignore_ascii_case("connection")
             .then_some(value.as_str())
-    }));
+    }))?;
     for (k, v) in headers {
         // This writer frames the request by hand. Everything it is handed today comes from
         // hyper, which already refuses a control character in a field name or value, but the
@@ -389,13 +389,29 @@ async fn before_stream_deadline<T>(
     }
 }
 
-fn connection_tokens<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
-    values
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .filter(|name| is_framable_name(name))
-        .map(str::to_ascii_lowercase)
-        .collect()
+fn connection_tokens<'a>(values: impl Iterator<Item = &'a str>) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    for value in values {
+        for token in value.split(',').map(str::trim) {
+            if !is_framable_name(token) {
+                return Err("invalid Connection header".to_owned());
+            }
+            tokens.push(token.to_ascii_lowercase());
+        }
+    }
+    Ok(tokens)
+}
+
+fn header_map_connection_tokens(headers: &hyper::HeaderMap) -> Result<Vec<String>, String> {
+    let mut values = Vec::new();
+    for value in headers.get_all(hyper::header::CONNECTION) {
+        values.push(
+            value
+                .to_str()
+                .map_err(|_| "invalid Connection header".to_owned())?,
+        );
+    }
+    connection_tokens(values.into_iter())
 }
 
 fn is_hop_by_hop(name: &str, connection_named: &[String]) -> bool {
@@ -426,7 +442,7 @@ fn streaming_request(
     let connection_named = connection_tokens(headers.iter().filter_map(|(name, value)| {
         name.eq_ignore_ascii_case("connection")
             .then_some(value.as_str())
-    }));
+    }))?;
     for (name, value) in headers {
         if !is_framable_name(name) || !is_framable_value(value) {
             return Err(format!(
@@ -649,13 +665,14 @@ async fn forward_stream_with_limit(
         ));
     }
     let status = response.status().as_u16();
-    let connection_named = connection_tokens(
-        response
-            .headers()
-            .get_all(hyper::header::CONNECTION)
-            .iter()
-            .filter_map(|value| value.to_str().ok()),
-    );
+    let connection_named = match header_map_connection_tokens(response.headers()) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            connection.abort();
+            let _ = connection.await;
+            return Err(StreamStartError::Upstream(error));
+        }
+    };
     let response_headers = response
         .headers()
         .iter()
@@ -716,7 +733,8 @@ pub fn parse_response(raw: &[u8], method: &str) -> Result<ProxiedResponse, Strin
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .ok_or_else(|| "malformed response from the functions runner".to_owned())?;
-    let head = String::from_utf8_lossy(&raw[..header_end]);
+    let head = std::str::from_utf8(&raw[..header_end])
+        .map_err(|_| "malformed response header text".to_owned())?;
     let mut lines = head.split("\r\n");
     let status_line = lines.next().unwrap_or("");
     let status: u16 = status_line
@@ -742,7 +760,7 @@ pub fn parse_response(raw: &[u8], method: &str) -> Result<ProxiedResponse, Strin
     let connection_named = connection_tokens(raw_headers.iter().filter_map(|(name, value)| {
         name.eq_ignore_ascii_case("connection")
             .then_some(value.as_str())
-    }));
+    }))?;
     let headers = raw_headers
         .into_iter()
         .filter(|(name, _)| {
@@ -1124,6 +1142,10 @@ async fn respond(
         Ok(resolved) => resolved,
         Err(answer) => return Ok(*answer),
     };
+    if let Err(error) = header_map_connection_tokens(req.headers()) {
+        drain_refused_body(req.into_body()).await;
+        return Ok(simple(StatusCode::BAD_REQUEST, &error));
+    }
     let method = req.method().as_str().to_owned();
     // The CORS the official emulator's `enableCors` gives an `onRequest` function, for the
     // loopback origins this port serves. A callable answers its own preflight (v2 `onCall`
@@ -1473,7 +1495,7 @@ mod streaming_tests {
     }
 
     async fn upstream_exchange(
-        response_headers: &'static str,
+        response_headers: &'static [u8],
         chunks: Vec<&'static [u8]>,
         finish: bool,
     ) -> (String, tokio::task::JoinHandle<String>) {
@@ -1491,7 +1513,7 @@ mod streaming_tests {
                     break;
                 }
             }
-            stream.write_all(response_headers.as_bytes()).await.unwrap();
+            stream.write_all(response_headers).await.unwrap();
             for chunk in chunks {
                 if stream
                     .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
@@ -1591,7 +1613,7 @@ mod streaming_tests {
     #[tokio::test]
     async fn a_slow_reader_cannot_hold_admission_past_the_absolute_deadline() {
         let (address, upstream) = upstream_exchange(
-            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
             vec![b"first", b"second", b"third"],
             false,
         )
@@ -1631,7 +1653,7 @@ mod streaming_tests {
     #[tokio::test]
     async fn streaming_strips_standard_and_connection_named_hop_by_hop_headers() {
         let (address, upstream) = upstream_exchange(
-            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: x-response-hop, keep-alive\r\nx-response-hop: private\r\nUpgrade: websocket\r\nTE: trailers\r\nTrailer: x-checksum\r\nProxy-Authenticate: Basic\r\nProxy-Authorization: Basic private\r\nx-response-keep: public\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: x-response-hop, keep-alive\r\nx-response-hop: private\r\nUpgrade: websocket\r\nTE: trailers\r\nTrailer: x-checksum\r\nProxy-Authenticate: Basic\r\nProxy-Authorization: Basic private\r\nx-response-keep: public\r\n\r\n",
             vec![b"done"],
             true,
         )
@@ -1692,7 +1714,7 @@ mod streaming_tests {
     #[tokio::test]
     async fn an_encoded_stream_is_refused_before_compressed_bytes_can_bypass_the_limit() {
         let (address, upstream) = upstream_exchange(
-            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Encoding: gzip\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Encoding: gzip\r\n\r\n",
             vec![b"compressed"],
             true,
         )
@@ -1706,6 +1728,26 @@ mod streaming_tests {
         tokio::time::timeout(Duration::from_secs(1), upstream)
             .await
             .expect("the refused encoded stream closes upstream")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_unrenderable_connection_value_fails_closed_before_a_named_header_can_escape() {
+        let (address, upstream) = upstream_exchange(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: x-private,\xff\r\nx-private: secret\r\n\r\n",
+            vec![],
+            false,
+        )
+        .await;
+        let result =
+            forward_stream_with_limit(&address, "POST", "/callable", &[], &[], None, 64).await;
+        assert!(matches!(
+            result,
+            Err(StreamStartError::Upstream(error)) if error.contains("Connection header")
+        ));
+        tokio::time::timeout(Duration::from_secs(1), upstream)
+            .await
+            .expect("the invalid response closes upstream")
             .unwrap();
     }
 }

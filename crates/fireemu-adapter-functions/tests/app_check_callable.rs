@@ -234,6 +234,34 @@ impl Harness {
             .map_err(std::io::Error::other)
     }
 
+    async fn request_with_an_unrenderable_connection_value(
+        &self,
+    ) -> fireemu_adapter_functions::http::ProxiedResponse {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut request = format!(
+            "POST /{PROJECT}/us-central1/guardedV2 HTTP/1.1\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: 7\r\nConnection: x-private,",
+            self.addr
+        )
+        .into_bytes();
+        request.extend_from_slice(b"\xff\r\nx-private: secret\r\n\r\n{\"x\":1}");
+        let mut stream = tokio::net::TcpStream::connect(self.addr)
+            .await
+            .expect("the functions port accepts");
+        stream
+            .write_all(&request)
+            .await
+            .expect("the raw request is written");
+        stream.flush().await.expect("flush");
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("the refusal is read");
+        fireemu_adapter_functions::http::parse_response(&raw, "POST")
+            .expect("a well-formed refusal")
+    }
+
     async fn post_raw(&self, path: &str, body: &[u8]) -> u16 {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -450,6 +478,15 @@ async fn a_first_generation_callable_with_a_stream_accept_header_keeps_the_json_
     let body: Value = serde_json::from_slice(&denial.body).expect("the v1 denial remains JSON");
     assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
     assert_eq!(body["error"]["message"], "Unauthenticated");
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn an_unrenderable_connection_value_is_refused_before_a_named_header_reaches_the_runner() {
+    let h = start(true).await;
+    let response = h.request_with_an_unrenderable_connection_value().await;
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body, b"invalid Connection header");
     h.stop().await;
 }
 

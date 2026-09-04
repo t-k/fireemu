@@ -499,6 +499,7 @@ struct RawOptions {
     logging_port: Option<u16>,
     functions_source: Option<String>,
     inspect_functions: Option<u16>,
+    inspect_functions_dynamic: bool,
     verbosity: Verbosity,
     /// `--import <dir>`.
     import: Option<PathBuf>,
@@ -516,8 +517,20 @@ enum ExportOnExit {
     ImportDirectory,
 }
 
-/// The Node inspector port `--inspect-functions` defaults to, as in the official CLI.
-const DEFAULT_INSPECT_PORT: u16 = 9229;
+const MIN_INSPECT_PORT: u16 = 1024;
+
+fn inspect_port_arg(raw: &str) -> Result<u16, CliError> {
+    let invalid = || {
+        CliError::usage(format!(
+            "{raw:?} is not a valid port for debugging, please pass an integer between 1024 and 65535 or true for a dynamic port."
+        ))
+    };
+    let port = raw.parse::<u16>().map_err(|_| invalid())?;
+    if port < MIN_INSPECT_PORT {
+        return Err(invalid());
+    }
+    Ok(port)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OptionContext {
@@ -610,15 +623,20 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                 i += 2;
             }
             "--inspect-functions" => {
-                let (port, step) = match optional_value(args, i + 1) {
-                    Some(v) => (
-                        v.parse()
-                            .map_err(|e| CliError::usage(format!("--inspect-functions: {e}")))?,
-                        2,
-                    ),
-                    None => (DEFAULT_INSPECT_PORT, 1),
+                let step = match optional_value(args, i + 1) {
+                    Some(v) if v == "true" => {
+                        raw.inspect_functions_dynamic = true;
+                        2
+                    }
+                    Some(v) => {
+                        raw.inspect_functions = Some(inspect_port_arg(v)?);
+                        2
+                    }
+                    None => {
+                        raw.inspect_functions_dynamic = true;
+                        1
+                    }
                 };
-                raw.inspect_functions = Some(port);
                 i += step;
             }
             "--log-verbosity" => {
@@ -836,8 +854,8 @@ fn parse_options(
         cfg.functions_source = Some(dir);
         cfg.functions_loaded.clear();
     }
-    if let Some(port) = raw.inspect_functions {
-        apply_inspect_functions(&mut cfg, port)?;
+    if raw.inspect_functions.is_some() || raw.inspect_functions_dynamic {
+        apply_inspect_functions(&mut cfg, raw.inspect_functions)?;
     }
     // The UI listener is configured through its own module when a port was asked for or when
     // exec must apply its official opt-in default. Start otherwise keeps the best-effort
@@ -915,7 +933,7 @@ fn resolve_export_on_exit(
 /// `--inspect-functions [port]`: the bundled runner is a Node script, so the inspector is
 /// Node's own `--inspect=<port>` flag placed before it. A configured `functions.runner`
 /// that is not Node cannot be given one, and saying so is better than starting without it.
-fn apply_inspect_functions(cfg: &mut RuntimeConfig, port: u16) -> Result<(), CliError> {
+fn apply_inspect_functions(cfg: &mut RuntimeConfig, port: Option<u16>) -> Result<(), CliError> {
     if let Some(command) = &cfg.functions_runner {
         let program = std::path::Path::new(&command[0])
             .file_stem()
@@ -928,7 +946,8 @@ fn apply_inspect_functions(cfg: &mut RuntimeConfig, port: u16) -> Result<(), Cli
             )));
         }
     }
-    cfg.functions_inspect_port = Some(port);
+    cfg.functions_inspect_port = port;
+    cfg.functions_inspect_dynamic = port.is_none();
     Ok(())
 }
 

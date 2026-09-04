@@ -587,8 +587,26 @@ fn inspect_functions_passes_the_node_inspector_through_to_the_runner() {
     // With no codebase there is no runner to start, so the flag only has to be accepted.
     let out = exec_with(&["--inspect-functions"], &["true"]);
     assert!(out.status.success(), "{}", stderr(&out));
+    let out = exec_with(&["--inspect-functions", "true"], &["true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
     let out = exec_with(&["--inspect-functions", "9330"], &["true"]);
     assert!(out.status.success(), "{}", stderr(&out));
+    for port in ["1024", "65535"] {
+        let out = exec_with(&["--inspect-functions", port], &["true"]);
+        assert!(out.status.success(), "{port}: {}", stderr(&out));
+    }
+
+    for port in ["0", "1023", "65536"] {
+        let out = exec_with(&["--inspect-functions", port], &["true"]);
+        assert_eq!(out.status.code(), Some(2), "{port}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!(
+                "{port:?} is not a valid port for debugging, please pass an integer between 1024 and 65535 or true for a dynamic port."
+            )),
+            "{port}: {}",
+            stderr(&out)
+        );
+    }
 
     // A configured runner that is not Node cannot take `--inspect`, and says so instead of
     // starting without the inspector the caller asked for.
@@ -886,6 +904,28 @@ fn a_multi_codebase_functions_section_names_the_codebase_to_load() {
 "#,
     );
     let firebase = firebase.to_str().unwrap();
+
+    let out = exec_with(
+        &["--firebase-json", firebase, "--inspect-functions", "9330"],
+        &["true"],
+    );
+    let text = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("Cannot debug on a single port with multiple codebases"),
+        "{text}"
+    );
+
+    let out = exec_with(
+        &["--firebase-json", firebase, "--inspect-functions"],
+        &["true"],
+    );
+    let text = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        !text.contains("Cannot debug on a single port with multiple codebases"),
+        "dynamic inspector ports must permit multiple codebases: {text}"
+    );
 
     // Every declared codebase is loaded, one runner process each, and the run says so. The
     // two directories here are empty, so the runners fail on the codebases themselves --

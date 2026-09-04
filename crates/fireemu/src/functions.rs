@@ -17,6 +17,7 @@ use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_http::control::FunctionsHook;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use crate::config::{CompatibilityProfile, FunctionsCodebase, RuntimeConfig};
 
@@ -141,6 +142,46 @@ pub fn provision_function_pubsub_resources(
             })?;
     }
     Ok(())
+}
+
+async fn inspector_endpoint_is_active(port: u16) -> bool {
+    const RESPONSE_LIMIT: usize = 64 * 1024;
+    let probe = async {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .ok()?;
+        stream
+            .write_all(
+                format!(
+                    "GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .ok()?;
+        let expected = format!("ws://127.0.0.1:{port}/");
+        let mut response = Vec::with_capacity(4 * 1024);
+        let mut chunk = [0_u8; 4 * 1024];
+        while response.len() < RESPONSE_LIMIT {
+            let read = stream.read(&mut chunk).await.ok()?;
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&chunk[..read]);
+            let text = String::from_utf8_lossy(&response);
+            if (text.starts_with("HTTP/1.1 200 ") || text.starts_with("HTTP/1.0 200 "))
+                && text.contains("webSocketDebuggerUrl")
+                && text.contains(&expected)
+            {
+                return Some(true);
+            }
+        }
+        Some(false)
+    };
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), probe).await,
+        Ok(Some(true))
+    )
 }
 
 fn ignored_reload_path(relative: &Path, configured: &[String]) -> bool {
@@ -1856,6 +1897,12 @@ pub async fn start(
         return Err("functions.source is not configured".to_owned());
     }
     validate_functions_codebase_budget(&codebases)?;
+    if codebases.len() > 1 && cfg.functions_inspect_port.is_some() {
+        return Err(
+            "Cannot debug on a single port with multiple codebases. Use --inspect-functions=true to assign dynamic ports to each codebase"
+                .to_owned(),
+        );
+    }
     if codebases.len() > 1 && cfg.functions_manifest.is_some() {
         return Err(format!(
             "functions.manifest replaces discovery for one codebase, and this run loads {} \
@@ -1905,6 +1952,7 @@ pub async fn start(
         location: "nam5".to_owned(),
         session: SessionId::new(u128::from(cfg.seed)),
         max_running: cfg.functions_max_running,
+        debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
         retry_attempts: cfg.events_max_attempts,
         max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
         runner_secret: runner_secret.to_owned(),
@@ -1976,8 +2024,12 @@ async fn start_codebase(
         None => default_runner_for_codebase(codebase)
             .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
     };
-    if let Some(port) = cfg.functions_inspect_port {
-        command.insert(1, format!("--inspect={port}"));
+    if cfg.functions_inspect_dynamic {
+        command.insert(1, "--inspect-publish-uid=http".to_owned());
+        command.insert(1, "--inspect=127.0.0.1:0".to_owned());
+    } else if let Some(port) = cfg.functions_inspect_port {
+        command.insert(1, "--inspect-publish-uid=http".to_owned());
+        command.insert(1, format!("--inspect=127.0.0.1:{port}"));
     }
     command.push("--source".to_owned());
     command.push(source.clone());
@@ -2094,6 +2146,31 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
+    if cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some() {
+        let actual = runner.hello().inspector_port;
+        let port_matches = cfg
+            .functions_inspect_port
+            .is_none_or(|expected| actual == Some(expected));
+        let endpoint_active = match actual {
+            Some(port) => inspector_endpoint_is_active(port).await,
+            None => false,
+        };
+        if !endpoint_active || !port_matches {
+            runner.kill_now();
+            return Err(match cfg.functions_inspect_port {
+                Some(expected) => format!(
+                    "the Functions codebase {label:?}: requested debugger port {expected} is not active"
+                ),
+                None => format!(
+                    "the Functions codebase {label:?}: the dynamically assigned debugger port is not active"
+                ),
+            });
+        }
+        eprintln!(
+            "functions[{label}]: using debug port {}",
+            actual.expect("the active inspector port was checked above")
+        );
+    }
     let configured = (|| {
         let manifest_json = match &cfg.functions_manifest {
             Some(path) => {
@@ -3321,6 +3398,7 @@ mod tests {
                 location: "nam5".to_owned(),
                 session: SessionId::new(7),
                 max_running: 1,
+                debug_mode: false,
                 retry_attempts: 1,
                 max_catch_up_runs: 1,
                 runner_secret: "test-secret".to_owned(),

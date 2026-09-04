@@ -23,6 +23,8 @@ use crate::protocol::{read_frame, write_frame};
 pub struct Hello {
     /// Runner name (`node`).
     pub runner: String,
+    /// Active Node inspector port, if the runner was started in debug mode.
+    pub inspector_port: Option<u16>,
     /// Port of the runner's HTTP server (HTTP / callable functions), if any.
     pub http_port: Option<u16>,
     /// Discovered manifest (canonical JSON), if the runner performed discovery.
@@ -459,6 +461,10 @@ impl Runner {
                                     .and_then(Value::as_str)
                                     .unwrap_or("unknown")
                                     .to_owned(),
+                                inspector_port: frame
+                                    .get("inspectorPort")
+                                    .and_then(Value::as_u64)
+                                    .and_then(|p| u16::try_from(p).ok()),
                                 http_port: frame
                                     .get("httpPort")
                                     .and_then(Value::as_u64)
@@ -592,6 +598,17 @@ impl Runner {
     /// runner retired rather than left with a half frame. A timed-out invocation keeps its
     /// waiter: the late result (or the runner's death) arrives on [`Invocation::late`].
     pub async fn invoke(&self, request: Value, timeout: Duration) -> Invocation {
+        self.invoke_inner(request, Some(timeout)).await
+    }
+
+    /// Sends an `invoke` without a handler deadline. The debugger uses this path so time
+    /// stopped at a breakpoint does not expire the invocation. Shutdown still closes the
+    /// runner and resolves the waiter as `RunnerGone`.
+    pub async fn invoke_unbounded(&self, request: Value) -> Invocation {
+        self.invoke_inner(request, None).await
+    }
+
+    async fn invoke_inner(&self, request: Value, timeout: Option<Duration>) -> Invocation {
         let done = |outcome| Invocation {
             outcome,
             late: None,
@@ -608,16 +625,22 @@ impl Runner {
         if let Ok(mut w) = self.waiters.lock() {
             w.insert(id.clone(), tx);
         }
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = timeout.map(|timeout| tokio::time::Instant::now() + timeout);
         let forget = |waiters: &Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>| {
             if let Ok(mut w) = waiters.lock() {
                 w.remove(&id);
             }
         };
         // 1. The stdin lock (waiting here is harmless: nothing was written yet).
-        let Ok(mut stdin) = tokio::time::timeout_at(deadline, self.stdin.lock()).await else {
-            forget(&self.waiters);
-            return done(InvokeOutcome::TimedOut);
+        let mut stdin = match deadline {
+            Some(deadline) => {
+                let Ok(stdin) = tokio::time::timeout_at(deadline, self.stdin.lock()).await else {
+                    forget(&self.waiters);
+                    return done(InvokeOutcome::TimedOut);
+                };
+                stdin
+            }
+            None => self.stdin.lock().await,
         };
         let Some(pipe) = stdin.as_mut() else {
             forget(&self.waiters);
@@ -627,8 +650,14 @@ impl Runner {
         //    failed write retires the runner.
         let mut frame = request;
         frame["type"] = Value::String("invoke".into());
-        let written = tokio::time::timeout_at(deadline, write_frame(pipe, &frame)).await;
-        if !matches!(written, Ok(Ok(()))) {
+        let written = match deadline {
+            Some(deadline) => matches!(
+                tokio::time::timeout_at(deadline, write_frame(pipe, &frame)).await,
+                Ok(Ok(()))
+            ),
+            None => write_frame(pipe, &frame).await.is_ok(),
+        };
+        if !written {
             *stdin = None;
             self.alive.store(false, Ordering::SeqCst);
             eprintln!(
@@ -642,24 +671,36 @@ impl Runner {
         }
         drop(stdin);
         // 3. The result.
-        match tokio::time::timeout_at(deadline, &mut rx).await {
-            Ok(Ok(outcome)) => {
-                forget(&self.waiters);
-                done(outcome)
+        if let Some(deadline) = deadline {
+            match tokio::time::timeout_at(deadline, &mut rx).await {
+                Ok(Ok(outcome)) => {
+                    forget(&self.waiters);
+                    done(outcome)
+                }
+                Ok(Err(_)) => {
+                    forget(&self.waiters);
+                    done(InvokeOutcome::RunnerGone("runner exited".into()))
+                }
+                Err(_) => Invocation {
+                    outcome: InvokeOutcome::TimedOut,
+                    late: Some(rx),
+                },
             }
-            Ok(Err(_)) => {
-                forget(&self.waiters);
-                done(InvokeOutcome::RunnerGone("runner exited".into()))
-            }
-            Err(_) => Invocation {
-                outcome: InvokeOutcome::TimedOut,
-                late: Some(rx),
-            },
+        } else {
+            let outcome = rx
+                .await
+                .unwrap_or_else(|_| InvokeOutcome::RunnerGone("runner exited".into()));
+            forget(&self.waiters);
+            done(outcome)
         }
     }
 
     /// Asks the runner to exit, then kills it.
     pub async fn shutdown(&self) {
+        // Retire the runner synchronously with the shutdown request. The stdout reader also
+        // clears this flag on EOF, but waiting for that independent task would make the
+        // postcondition scheduler-dependent and briefly admit work into a retiring process.
+        self.alive.store(false, Ordering::SeqCst);
         // The polite part is bounded: a stalled runner or a full pipe must not keep the
         // daemon alive.
         let polite = async {

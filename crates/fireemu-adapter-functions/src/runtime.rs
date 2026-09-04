@@ -51,6 +51,40 @@ pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
 /// Cap of the retry backoff (virtual time).
 pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
 
+async fn forward_with_debug_deadline(
+    debug_mode: bool,
+    timeout: Duration,
+    addr: &str,
+    method: &str,
+    path_and_query: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> Result<Result<ProxiedResponse, String>, tokio::time::error::Elapsed> {
+    if debug_mode {
+        Ok(forward(addr, method, path_and_query, headers, body).await)
+    } else {
+        tokio::time::timeout(
+            timeout,
+            forward(addr, method, path_and_query, headers, body),
+        )
+        .await
+    }
+}
+
+fn runner_headers(headers: &[(String, String)], secret: &str) -> Vec<(String, String)> {
+    let mut forwarded: Vec<_> = headers
+        .iter()
+        .filter(|(key, _)| {
+            !crate::callable::ALWAYS_STRIPPED
+                .iter()
+                .any(|owned| key.eq_ignore_ascii_case(owned))
+        })
+        .cloned()
+        .collect();
+    forwarded.push(("x-fireemu-runner-secret".to_owned(), secret.to_owned()));
+    forwarded
+}
+
 /// One HTTP function the proxy can reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpTarget {
@@ -89,6 +123,8 @@ pub struct FunctionsConfig {
     pub session: SessionId,
     /// Maximum invocations running at once across every function.
     pub max_running: usize,
+    /// Whether debugger mode disables handler deadlines.
+    pub debug_mode: bool,
     /// Attempts (first delivery included) for functions declared with `retry`.
     pub retry_attempts: u32,
     /// Schedule runs enqueued per clock change and job before the rest waits its turn.
@@ -2397,22 +2433,15 @@ impl FunctionsRuntime {
         // same goes for the emulator-internal fields `firebase-functions` honours under
         // `skipTokenVerification` to override v1 callable auth context: no client legitimately
         // sends them, and one that does is trying to forge `context.auth`.
-        let mut forwarded: Vec<(String, String)> = headers
-            .iter()
-            .filter(|(k, _)| {
-                !crate::callable::ALWAYS_STRIPPED
-                    .iter()
-                    .any(|owned| k.eq_ignore_ascii_case(owned))
-            })
-            .cloned()
-            .collect();
-        forwarded.push((
-            "x-fireemu-runner-secret".to_owned(),
-            self.config.runner_secret.clone(),
-        ));
-        let result = tokio::time::timeout(
+        let forwarded = runner_headers(headers, &self.config.runner_secret);
+        let result = forward_with_debug_deadline(
+            self.config.debug_mode,
             Duration::from_secs(timeout),
-            forward(&target.addr, method, path_and_query, &forwarded, body),
+            &target.addr,
+            method,
+            path_and_query,
+            &forwarded,
+            body,
         )
         .await;
         let outcome = match &result {
@@ -2690,6 +2719,7 @@ impl FunctionsRuntime {
                         runtime.release(&key);
                         return;
                     }
+                    None if runtime.config.debug_mode => runner.invoke_unbounded(request).await,
                     None => runner.invoke(request, timeout).await,
                 };
                 runtime.complete(id, &key, &function_name, attempt, epoch, retry, &outcome);
@@ -3004,6 +3034,7 @@ mod task_completion_tests {
                 location: "nam5".to_owned(),
                 session: SessionId::new(7),
                 max_running: 4,
+                debug_mode: false,
                 retry_attempts: 1,
                 max_catch_up_runs: 1,
                 runner_secret: "test-secret".to_owned(),

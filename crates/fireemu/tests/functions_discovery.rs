@@ -85,7 +85,7 @@ async fn concurrent_real_sdk_logs_keep_their_function_identity() {
     let logs = runner.logs_since(None);
     for (message, function, level, user) in [
         ("alpha start", "alpha", "info", true),
-        ("alpha structured", "alpha", "warn", true),
+        ("alpha structured", "alpha", "warning", true),
         ("alpha done", "alpha", "error", true),
         ("beta start", "beta", "info", true),
         ("beta done", "beta", "info", true),
@@ -111,6 +111,39 @@ async fn concurrent_real_sdk_logs_keep_their_function_identity() {
         .iter()
         .any(|line| line.display() == "info beta-2 beta start"));
     runner.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+async fn a_dynamic_inspector_port_is_reported_active_and_released_on_shutdown() {
+    let runner_script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/runner-node/index.mjs");
+    let source = fixture("inspect-sequential");
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command: vec![
+            "node".to_owned(),
+            "--inspect=127.0.0.1:0".to_owned(),
+            "--inspect-publish-uid=http".to_owned(),
+            runner_script.display().to_string(),
+            "--source".to_owned(),
+            source.display().to_string(),
+            "--codebase".to_owned(),
+            "default".to_owned(),
+        ],
+        cwd: None,
+        env: vec![("GCLOUD_PROJECT".to_owned(), "demo-inspect".to_owned())],
+        hello_timeout: Duration::from_secs(20),
+    })
+    .await
+    .unwrap();
+    let port = runner
+        .hello()
+        .inspector_port
+        .expect("the runner reports Node's active dynamic inspector port");
+    TcpStream::connect(("127.0.0.1", port)).expect("the reported inspector port accepts traffic");
+    runner.shutdown().await;
+    std::net::TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|cause| panic!("dynamic inspector port remained open: {cause}"));
 }
 
 /// The fixture codebases live beside the smoke's functions project so that Node resolves
@@ -176,6 +209,44 @@ fn exec_command_with_logging_port(
         .unwrap()
 }
 
+fn exec_command_with_inspector_port(
+    source: &Path,
+    command: &[&str],
+    inspector_port: u16,
+    logging_port: u16,
+) -> Output {
+    let mut args: Vec<String> = vec!["exec".into()];
+    for a in [
+        "--firestore-port",
+        "0",
+        "--http-port",
+        "0",
+        "--storage-port",
+        "0",
+        "--functions-port",
+        "0",
+        "--ui-port",
+        "0",
+        "--hub-port",
+        "0",
+    ] {
+        args.push(a.into());
+    }
+    args.push("--logging-port".into());
+    args.push(logging_port.to_string());
+    args.push("--inspect-functions".into());
+    args.push(inspector_port.to_string());
+    args.push("--functions".into());
+    args.push(source.display().to_string());
+    args.push("--".into());
+    args.extend(command.iter().map(|argument| (*argument).to_owned()));
+    Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(&args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
@@ -212,6 +283,97 @@ fn a_real_node_invocation_reaches_the_logging_websocket_with_function_metadata()
         );
     }
     unreachable!("the final failed attempt panics");
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds() {
+    let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/sdk-smoke/functions-project/inspector-e2e.mjs");
+    let probe = probe.display().to_string();
+    for attempt in 0..3 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let inspector_port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let logging_port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let port = inspector_port.to_string();
+        let out = exec_command_with_inspector_port(
+            &fixture("inspect-sequential"),
+            &["node", &probe, &port],
+            inspector_port,
+            logging_port,
+        );
+        let error = stderr(&out);
+        if !out.status.success()
+            && error.contains(&format!(
+                "Address already in use: 127.0.0.1:{inspector_port}"
+            ))
+            && attempt < 2
+        {
+            continue;
+        }
+        assert!(
+            out.status.success(),
+            "stdout:\n{}\nstderr:\n{error}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        for name in ["alpha", "beta", "http", "slowHttp"] {
+            assert!(error.contains(&format!("{name} active=1")), "{error}");
+        }
+        assert!(!error.contains("active=2"), "{error}");
+        assert!(!error.contains("active=3"), "{error}");
+        assert!(!error.contains("Debugger listening on ws://"), "{error}");
+        std::net::TcpListener::bind(("127.0.0.1", inspector_port))
+            .unwrap_or_else(|cause| panic!("inspector port remained open: {cause}"));
+        return;
+    }
+    unreachable!("the final failed attempt asserts");
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn inspect_functions_refuses_to_start_when_the_requested_port_is_occupied() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let inspector_port = listener.local_addr().unwrap().port();
+    let out = exec_command_with_inspector_port(
+        &fixture("inspect-sequential"),
+        &["true"],
+        inspector_port,
+        0,
+    );
+    let error = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{error}");
+    assert!(
+        error.contains(&format!(
+            "requested debugger port {inspector_port} is not active"
+        )),
+        "{error}"
+    );
+    drop(listener);
+    std::net::TcpListener::bind(("127.0.0.1", inspector_port))
+        .unwrap_or_else(|cause| panic!("runner retained the occupied inspector port: {cause}"));
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn inspect_functions_refuses_a_listener_closed_during_module_loading() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let inspector_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let out =
+        exec_command_with_inspector_port(&fixture("inspect-closed"), &["true"], inspector_port, 0);
+    let error = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{error}");
+    assert!(
+        error.contains(&format!(
+            "requested debugger port {inspector_port} is not active"
+        )),
+        "{error}"
+    );
+    std::net::TcpListener::bind(("127.0.0.1", inspector_port))
+        .unwrap_or_else(|cause| panic!("closed inspector port remained open: {cause}"));
 }
 
 fn invoke_blocking_runner(port: u16, function: &str, body: &str) -> (u16, serde_json::Value) {

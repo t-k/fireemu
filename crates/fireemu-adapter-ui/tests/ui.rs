@@ -707,6 +707,7 @@ async fn state_with_functions() -> (
             location: "nam5".into(),
             session: fireemu_core_types::ids::SessionId::new(7),
             max_running: 4,
+            debug_mode: false,
             retry_attempts: 4,
             max_catch_up_runs: 1000,
             runner_secret: "s".into(),

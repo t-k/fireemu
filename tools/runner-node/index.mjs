@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
 import { blockingResult } from "./blocking-response.mjs";
@@ -31,6 +32,21 @@ const localSecrets = (() => {
 })();
 let functionEnvironmentQueue = Promise.resolve();
 let discoveredGlobalOptions = {};
+
+function inspectorPort() {
+  const activeUrl = inspectorUrl();
+  if (!activeUrl) return undefined;
+  try {
+    const endpoint = new URL(activeUrl);
+    if (endpoint.hostname !== "127.0.0.1") return undefined;
+    const port = Number(endpoint.port);
+    return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+let activeInspectorPort;
 
 function esmExportTarget(value) {
   if (typeof value === "string") return value;
@@ -172,7 +188,7 @@ function withFunctionEnvironment(spec, task, invocationId) {
       }
     }
   };
-  if (localSecrets.size === 0) return run();
+  if (localSecrets.size === 0 && activeInspectorPort === undefined) return run();
   const result = functionEnvironmentQueue.then(run);
   functionEnvironmentQueue = result.catch(() => {});
   return result;
@@ -1032,11 +1048,13 @@ async function main() {
       log("error", `cannot start the HTTP server: ${e?.stack || e}`);
     }
   }
+  activeInspectorPort = inspectorPort();
   send({
     type: "hello",
     runner: "node",
     codebase: args.codebase,
     version: process.version,
+    inspectorPort: activeInspectorPort,
     httpPort,
     manifest,
     appCheck: {

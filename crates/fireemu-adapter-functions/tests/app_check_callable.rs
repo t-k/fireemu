@@ -316,6 +316,7 @@ async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
             location: "nam5".into(),
             session: SessionId::new(7),
             max_running: 4,
+            debug_mode: false,
             retry_attempts: 4,
             max_catch_up_runs: 1000,
             runner_secret: "runner-secret".into(),

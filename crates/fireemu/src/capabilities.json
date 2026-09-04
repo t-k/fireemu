@@ -701,7 +701,7 @@
     "implemented": [
       "emulators:start and emulators:exec as exact aliases of up and exec, and emulators:export <dir> [--project <id>] [--force] against a running suite",
       "the official flag names --only, --project / -P, --config, --import, --export-on-exit, --ui (on emulators:exec), --inspect-functions and --log-verbosity, next to the fireemu port flags",
-      "--inspect-functions [port] inserts Node's --inspect=<port> before the runner script (default 9229), and refuses with a precise message when a configured functions.runner is not Node rather than starting without the inspector",
+      "--inspect-functions [port|true] binds Node's inspector to loopback, keeps its capability UUID out of stderr and Logging history, verifies /json/list after codebase loading, assigns independent dynamic ports to multiple codebases, serialises HTTP and background handlers while debugging, disables handler deadlines, and releases inspector ports at shutdown; a configured non-Node functions.runner and a fixed port with multiple codebases are refused before serving",
       "--log-verbosity quiet | silent | info | debug (case-insensitive): quiet and silent suppress the banner and the notices, debug adds the resolved configuration",
       "emulators:exec starts without the Emulator UI unless --ui is present, while emulators:start keeps the official automatic UI selection for supported services; an explicit fireemu --ui-port remains the stronger local override",
       "exit codes: the command's own status from exec, 128 + signal when a signal ended it, 1 for a startup failure or a refused configuration, 2 for a usage error; a refusal never starts a listener and never runs the command",

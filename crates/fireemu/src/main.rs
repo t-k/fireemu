@@ -3,6 +3,7 @@
 //! ```text
 //! fireemu init [options]
 //! fireemu up | emulators:start   [options]
+//! fireemu exec | emulators:exec  [options] "shell script"
 //! fireemu exec | emulators:exec  [options] -- <command...>
 //! fireemu emulators:export <dir> [options]
 //! fireemu doctor
@@ -64,7 +65,7 @@ use crate::config::{RuntimeConfig, Selection};
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
+    eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
     ExitCode::from(2)
 }
 
@@ -186,8 +187,24 @@ impl std::fmt::Debug for RedactedRuntimeConfig<'_> {
 
 /// What `exec` runs once the services are up.
 struct ExecPlan {
-    /// Program and arguments.
-    command: Vec<String>,
+    /// Direct argv or the official CLI's positional shell script.
+    command: ExecCommand,
+}
+
+enum ExecCommand {
+    /// The fireemu extension that preserves an exact program and argv.
+    Argv(Vec<String>),
+    /// The official `emulators:exec <script>` form.
+    Shell(String),
+}
+
+impl std::fmt::Display for ExecCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Argv(command) => f.write_str(&command.join(" ")),
+            Self::Shell(script) => f.write_str(script),
+        }
+    }
 }
 
 /// Everything the option parser produced.
@@ -244,7 +261,8 @@ fn main() -> ExitCode {
             Err(e) => fail(&e),
         },
         Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
-            Ok(options) => daemon::run(options, None),
+            Ok((options, None)) => daemon::run(options, None),
+            Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
             Err(e) => fail(&e),
         },
         Some("exec" | "emulators:exec") => match parse_exec(&args[1..]) {
@@ -259,7 +277,7 @@ fn main() -> ExitCode {
         // The manifest describes the behaviour of one profile, so the command takes the same
         // options the daemon does and reports the profile they resolve to.
         Some("capabilities") => match parse_options(&args[1..], OptionContext::Start) {
-            Ok(options) => {
+            Ok((options, None)) => {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&control::capabilities_manifest(
@@ -269,6 +287,7 @@ fn main() -> ExitCode {
                 );
                 ExitCode::SUCCESS
             }
+            Ok((_, Some(_))) => unreachable!("capabilities does not accept a positional argument"),
             Err(e) => fail(&e),
         },
         _ => usage(),
@@ -408,18 +427,37 @@ fn post_json(
     Ok((status, body.to_owned()))
 }
 
-/// `exec [options] -- <command...>`.
+/// `exec [options] <script>` or `exec [options] -- <command...>`.
 fn parse_exec(args: &[String]) -> Result<(Options, ExecPlan), CliError> {
-    let split = args
-        .iter()
-        .position(|a| a == "--")
-        .ok_or_else(|| CliError::usage("exec needs `-- <command...>` after its options"))?;
-    let command = args[split + 1..].to_vec();
-    if command.is_empty() {
-        return Err(CliError::usage("exec needs a command after --"));
+    if let Some(split) = args.iter().position(|arg| arg == "--") {
+        let command = args[split + 1..].to_vec();
+        if command.is_empty() {
+            return Err(CliError::usage("exec needs a command after --"));
+        }
+        let (options, positional) = parse_options(&args[..split], OptionContext::Exec)?;
+        if positional.is_some() {
+            return Err(CliError::usage(
+                "exec cannot combine a positional shell script with `-- <command...>`",
+            ));
+        }
+        return Ok((
+            options,
+            ExecPlan {
+                command: ExecCommand::Argv(command),
+            },
+        ));
     }
-    let options = parse_options(&args[..split], OptionContext::Exec)?;
-    Ok((options, ExecPlan { command }))
+
+    let (options, script) = parse_options(args, OptionContext::Exec)?;
+    let script = script.ok_or_else(|| {
+        CliError::usage("exec needs a positional shell script or `-- <command...>`")
+    })?;
+    Ok((
+        options,
+        ExecPlan {
+            command: ExecCommand::Shell(script),
+        },
+    ))
 }
 
 /// Replaces the port of a `host:port` address, keeping the configured host.
@@ -448,6 +486,8 @@ fn optional_value(args: &[String], i: usize) -> Option<&String> {
 /// The parsed command line, before it is applied to a configuration.
 #[derive(Default)]
 struct RawOptions {
+    /// The official `emulators:exec <script>` positional argument.
+    positional_script: Option<String>,
     config_path: Option<PathBuf>,
     firebase_json: Option<PathBuf>,
     project: Option<String>,
@@ -612,6 +652,14 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                 raw.export_on_exit = Some(dir);
                 i += step;
             }
+            other if context == OptionContext::Exec && !other.starts_with('-') => {
+                if raw.positional_script.replace(other.to_owned()).is_some() {
+                    return Err(CliError::usage(
+                        "emulators:exec takes exactly one positional shell script",
+                    ));
+                }
+                i += 1;
+            }
             other => return Err(CliError::usage(format!("unknown argument {other}"))),
         }
     }
@@ -702,8 +750,12 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
 }
 
-fn parse_options(args: &[String], context: OptionContext) -> Result<Options, CliError> {
+fn parse_options(
+    args: &[String],
+    context: OptionContext,
+) -> Result<(Options, Option<String>), CliError> {
     let raw = parse_raw_options(args, context)?;
+    let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
     // `--config` carries either the canonical configuration or a firebase.json.
     let (mut cfg, firebase_from_config) = match &raw.config_path {
@@ -796,13 +848,16 @@ fn parse_options(args: &[String], context: OptionContext) -> Result<Options, Cli
             )));
         }
     }
-    Ok(Options {
-        cfg,
-        only,
-        verbosity: raw.verbosity,
-        import: raw.import,
-        export_on_exit,
-    })
+    Ok((
+        Options {
+            cfg,
+            only,
+            verbosity: raw.verbosity,
+            import: raw.import,
+            export_on_exit,
+        },
+        positional_script,
+    ))
 }
 
 /// Resolves `--export-on-exit` against `--import` and refuses a target that would replace
@@ -1021,13 +1076,33 @@ fn own_process_group() -> bool {
     !std::io::stdin().is_terminal()
 }
 
+#[cfg(unix)]
+fn shell_child_command(script: &str) -> (tokio::process::Command, &'static str) {
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command.args(["-c", script]);
+    (command, "/bin/sh")
+}
+
+#[cfg(windows)]
+fn shell_child_command(script: &str) -> (tokio::process::Command, &'static str) {
+    let mut command = tokio::process::Command::new("cmd.exe");
+    command.args(["/D", "/S", "/C", script]);
+    (command, "cmd.exe")
+}
+
 fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<tokio::process::Child, String> {
-    let (program, args) = plan
-        .command
-        .split_first()
-        .ok_or("exec needs a command after --")?;
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(args).kill_on_drop(true);
+    let (mut cmd, program) = match &plan.command {
+        ExecCommand::Argv(command) => {
+            let (program, args) = command
+                .split_first()
+                .ok_or("exec needs a command after --")?;
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.args(args);
+            (cmd, program.as_str())
+        }
+        ExecCommand::Shell(script) => shell_child_command(script),
+    };
+    cmd.kill_on_drop(true);
     for name in OWNED_VARIABLES {
         cmd.env_remove(name);
     }

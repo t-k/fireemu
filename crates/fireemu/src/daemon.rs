@@ -714,7 +714,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
                 &storage_admin_capability,
             );
             if !quiet {
-                println!("  running: {}", plan.command.join(" "));
+                println!("  running: {}", plan.command);
             }
             Some(spawn_child(plan, &env)?)
         }

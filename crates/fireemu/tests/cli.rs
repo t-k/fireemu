@@ -113,6 +113,18 @@ fn the_official_command_names_are_aliases_of_the_short_ones() {
     assert!(stderr(&out).contains("usage: fireemu"));
 }
 
+#[cfg(unix)]
+#[test]
+fn emulators_exec_accepts_the_official_positional_shell_script() {
+    let mut args: Vec<&str> = vec!["emulators:exec"];
+    args.extend_from_slice(&PORTS);
+    args.push("exit 7");
+
+    let out = run(&args);
+
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+}
+
 #[test]
 fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
     let dir = scratch("init-default");

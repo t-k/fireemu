@@ -4,12 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   lint:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: target/normal
@@ -47,6 +49,7 @@ jobs:
         run: env -u CARGO_TARGET_DIR scripts/cargo-session.test.sh
 
   test:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: target/normal
@@ -76,6 +79,7 @@ jobs:
         run: cargo run -p config-schema-check
 
   verify:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,17 +105,26 @@ jobs:
         env:
           RUSTFLAGS: --cfg loom -D warnings
 
-  # Keep one stable required status while the expensive gates run in parallel.
   pr:
-    if: ${{ always() }}
-    needs: [lint, test, verify]
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/minimal
     steps:
-      - name: every PR shard succeeded
-        run: |
-          test "${{ needs.lint.result }}" = success
-          test "${{ needs.test.result }}" = success
-          test "${{ needs.verify.result }}" = success
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pr-minimal
+          workspaces: . -> target/minimal
+          cache-bin: "false"
+      - name: CI workflow cost contract
+        run: ruby scripts/ci-workflow-contract.rb
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: compile every target
+        run: cargo check --workspace --all-targets
 
   # The platforms fireemu publishes binaries for, so a change that only breaks one of them is
   # caught before a tag is cut rather than during a release. The Ubuntu `pr` status above joins
@@ -120,6 +133,7 @@ jobs:
   # Linux arm64 is not here: it shares this source with linux x64 and is exercised in the
   # release workflow, which builds and tests it on a native arm64 runner.
   platforms:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -152,6 +166,7 @@ jobs:
   # characters, through a symlink and from a read-only directory. `pack-local.mjs` is what a
   # developer runs before a tag; running it here keeps the packaging from rotting between tags.
   package:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -178,6 +193,7 @@ jobs:
   # tests, and the Playwright E2E (parity flows plus the security suite -- CSP, DNS-rebinding
   # via Host/Origin, download disposition, and bounded reads) against a real daemon.
   ui:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

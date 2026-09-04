@@ -292,6 +292,10 @@ fn exec_command_with_logging_port(
         "0",
         "--functions-port",
         "0",
+        "--eventarc-port",
+        "0",
+        "--tasks-port",
+        "0",
         "--ui-port",
         "0",
         "--hub-port",
@@ -332,6 +336,10 @@ fn exec_command_with_inspector_port(
         "0",
         "--functions-port",
         "0",
+        "--eventarc-port",
+        "0",
+        "--tasks-port",
+        "0",
         "--ui-port",
         "0",
         "--hub-port",
@@ -356,6 +364,43 @@ fn exec_command_with_inspector_port(
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn functions_starts_eventarc_and_tasks_on_dedicated_ports() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke/functions-project");
+    let dir = scratch("support-services");
+    let env_path = dir.join("env.txt");
+    let script = format!("env > {}", env_path.display());
+    let output = exec_command(&source, None, &["sh", "-c", &script]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let env: std::collections::BTreeMap<String, String> = std::fs::read_to_string(&env_path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    let functions = &env["FIREEMU_FUNCTIONS_HOST"];
+    let eventarc = env["CLOUD_EVENTARC_EMULATOR_HOST"]
+        .strip_prefix("http://")
+        .expect("Eventarc uses the official URL spelling");
+    let tasks = &env["CLOUD_TASKS_EMULATOR_HOST"];
+    assert_ne!(eventarc, functions);
+    assert_ne!(tasks, functions);
+    assert_ne!(eventarc, tasks);
+    for (service, address) in [
+        ("functions", functions.as_str()),
+        ("eventarc", eventarc),
+        ("tasks", tasks.as_str()),
+    ] {
+        assert!(
+            TcpStream::connect(address).is_err(),
+            "{service} listener {address} survived exec"
+        );
+    }
 }
 
 #[test]
@@ -545,6 +590,10 @@ fn assert_signal_shutdown(signal: &str, label: &str) {
                 "0",
                 "--functions-port",
                 &functions_port_text,
+                "--eventarc-port",
+                "0",
+                "--tasks-port",
+                "0",
                 "--pubsub-port",
                 "0",
                 "--ui-port",

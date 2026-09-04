@@ -3,8 +3,8 @@
 //!
 //! The official Local Emulator Suite runs a Tasks emulator on port 9499 and points
 //! `CLOUD_TASKS_EMULATOR_HOST` at it, without a scheme (unlike `CLOUD_EVENTARC_EMULATOR_HOST`,
-//! which has one). fireemu serves the same routes on the functions port -- a task has nowhere
-//! to go without functions -- and exports the variable accordingly, so
+//! which has one). fireemu serves the same routes on a dedicated Tasks port that starts with
+//! the Functions runtime and exports the variable accordingly, so
 //! `getFunctions().taskQueue(name).enqueue(payload)` reaches it unchanged.
 //!
 //! What the Admin SDK sends (`firebase-admin/lib/functions/functions-api-client-internal.js`):

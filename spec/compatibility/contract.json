@@ -1937,8 +1937,8 @@
         "service",
         "supportedByFunctions"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: no Eventarc channel surface is served.",
+      "state": "claimed",
+      "decision": "Active supported surface. A configured Functions runtime starts a dedicated Eventarc listener on port 9299 and exports its URL to Functions codebases.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_eventarc"
       ],
@@ -1946,11 +1946,36 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [],
-      "gaps": [
-        "custom event channels and the CloudEvent publish route"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "EVENTARC-CLAIM-LOCAL-PUBLISH",
+          "statement": "When a Functions codebase is loaded, the Eventarc support emulator has an independently bound listener advertised by the Hub and CLOUD_EVENTARC_EMULATOR_HOST; custom channel and google-channel publications are accepted only on that listener and dispatched to matching Functions triggers.",
+          "capabilities": [
+            {
+              "id": "FN-EVT-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "support_service_routes_are_isolated_from_the_functions_listener",
+              "functions_starts_eventarc_and_tasks_on_dedicated_ports"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+              "crates/fireemu/tests/functions_discovery.rs",
+              "tools/sdk-smoke/functions.mjs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "tasks",
@@ -1963,8 +1988,8 @@
         "service",
         "supportedByFunctions"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open orchestration gap: queue create and enqueue routes are served on the Functions listener rather than a dedicated Tasks emulator listener.",
+      "state": "claimed",
+      "decision": "Active supported surface. A configured Functions runtime starts a dedicated Cloud Tasks listener on port 9499 and exports its host to Functions codebases.",
       "docs": [
         "https://firebase.google.com/docs/functions/task-functions"
       ],
@@ -1972,11 +1997,36 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [],
-      "gaps": [
-        "dedicated port 9499 listener, Hub registration and independent Tasks emulator lifecycle"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "TASKS-CLAIM-LOCAL-QUEUE",
+          "statement": "When a Functions codebase is loaded, the Cloud Tasks support emulator has an independently bound listener advertised by the Hub and CLOUD_TASKS_EMULATOR_HOST; queue creation and task enqueue routes are accepted only on that listener and feed matching task queue Functions.",
+          "capabilities": [
+            {
+              "id": "FN-EVT-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "support_service_routes_are_isolated_from_the_functions_listener",
+              "functions_starts_eventarc_and_tasks_on_dedicated_ports"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+              "crates/fireemu/tests/functions_discovery.rs",
+              "tools/sdk-smoke/functions.mjs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "dataconnect",

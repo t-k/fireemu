@@ -809,8 +809,6 @@ fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
         ("database", "deferred"),
         ("hosting", "deferred"),
         ("apphosting", "deferred"),
-        ("eventarc", "planned"),
-        ("tasks", "planned"),
         ("dataconnect", "deferred"),
         ("extensions", "not planned"),
     ] {
@@ -856,6 +854,43 @@ fn an_official_service_fireemu_does_not_serve_is_refused_with_its_status() {
             String::from_utf8_lossy(&output.stderr).contains("not a service emulator"),
             "{name}"
         );
+    }
+}
+
+#[test]
+fn support_services_without_a_functions_codebase_are_accepted_no_ops() {
+    for service in ["eventarc", "tasks"] {
+        let dir = scratch(&format!("support-noop-{service}"));
+        let out = dir.join("env.txt");
+        let output = daemon()
+            .args([
+                "--project",
+                "demo-support-noop",
+                "--only",
+                service,
+                "--http-port",
+                "0",
+                "--hub-port",
+                "0",
+                "--",
+                "sh",
+                "-c",
+            ])
+            .arg(format!("env > {}", out.display()))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{service}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let env = env_file(&out);
+        assert!(!env.contains_key("FIREEMU_FUNCTIONS_HOST"), "{service}");
+        assert!(
+            !env.contains_key("CLOUD_EVENTARC_EMULATOR_HOST"),
+            "{service}"
+        );
+        assert!(!env.contains_key("CLOUD_TASKS_EMULATOR_HOST"), "{service}");
     }
 }
 

@@ -1200,12 +1200,12 @@ pub struct EmulatorHosts {
     pub auth: Option<String>,
     /// Storage.
     pub storage: Option<String>,
-    /// The functions port itself, which also serves the Eventarc `publishEvents` route. The
-    /// official suite gives Eventarc a port of its own; a custom event has nowhere to go
-    /// without functions, so fireemu serves it here and points the variable the Admin SDK
-    /// reads (`CLOUD_EVENTARC_EMULATOR_HOST`, which carries an `http://` prefix) at this
-    /// listener.
+    /// The Functions HTTP listener.
     pub functions: Option<String>,
+    /// The Eventarc HTTP listener. It carries an `http://` prefix in the runner environment.
+    pub eventarc: Option<String>,
+    /// The Cloud Tasks HTTP listener, exported as a bare host and port.
+    pub tasks: Option<String>,
     /// The Logging emulator WebSocket (`FIREBASE_LOGGING_EMULATOR_HOST`), a bare host:port. The
     /// runner's functions inherit it so any Firebase tooling they load can find the log stream.
     pub logging: Option<String>,
@@ -2113,13 +2113,16 @@ async fn start_codebase(
         env.push(("FIREBASE_STORAGE_EMULATOR_HOST".to_owned(), host.clone()));
         env.push(("STORAGE_EMULATOR_HOST".to_owned(), format!("http://{host}")));
     }
-    if let Some(host) = &hosts.functions {
+    if let Some(host) = &hosts.eventarc {
         env.push((
             "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
             format!("http://{host}"),
         ));
-        // Cloud Tasks' variable carries no scheme, unlike Eventarc's (`env.js:34-39`).
+    }
+    if let Some(host) = &hosts.tasks {
         env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), host.clone()));
+    }
+    if let Some(host) = &hosts.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), host.clone()));
     }
     if let Some(host) = &hosts.logging {

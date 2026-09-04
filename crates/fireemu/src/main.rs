@@ -980,6 +980,10 @@ struct BoundAddrs {
     storage: Option<std::net::SocketAddr>,
     /// Functions HTTP.
     functions: Option<std::net::SocketAddr>,
+    /// Eventarc HTTP, present only as a dependency of a loaded Functions runtime.
+    eventarc: Option<std::net::SocketAddr>,
+    /// Cloud Tasks HTTP, present only as a dependency of a loaded Functions runtime.
+    tasks: Option<std::net::SocketAddr>,
     /// Pub/Sub gRPC.
     pubsub: Option<std::net::SocketAddr>,
     /// The Emulator Hub, when its port could be bound.
@@ -1052,14 +1056,14 @@ fn child_environment(
     }
     if let Some(addr) = addrs.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), addr.to_string()));
-        // Eventarc's publishEvents route is served on the functions port. The variable
-        // carries the scheme, as `setEnvVarsForEmulators` gives it one; without it the Admin
-        // SDK publishes to production, which is a network call a local run must never make.
+    }
+    if let Some(addr) = addrs.eventarc {
         env.push((
             "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
             format!("http://{addr}"),
         ));
-        // Cloud Tasks' variable carries no scheme, unlike Eventarc's.
+    }
+    if let Some(addr) = addrs.tasks {
         env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), addr.to_string()));
     }
     if let Some(addr) = addrs.pubsub {
@@ -1686,6 +1690,8 @@ struct Listeners {
     auth_selected: bool,
     storage: Option<tokio::net::TcpListener>,
     functions: Option<tokio::net::TcpListener>,
+    eventarc: Option<tokio::net::TcpListener>,
+    tasks: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
     hub: Option<tokio::net::TcpListener>,
     /// The Logging emulator WebSocket, when its port could be bound. Best effort like the Hub
@@ -1730,6 +1736,19 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
     } else {
         None
     };
+    // The pinned Firebase CLI starts both support emulators whenever a Functions backend is
+    // loaded, even if `--only` did not name them. Naming either one without Functions is an
+    // accepted no-op and binds neither listener.
+    let eventarc = if functions.is_some() {
+        Some(bind(&cfg.eventarc_addr).await?)
+    } else {
+        None
+    };
+    let tasks = if functions.is_some() {
+        Some(bind(&cfg.tasks_addr).await?)
+    } else {
+        None
+    };
     // Like the official suite, Pub/Sub starts only when it was configured or explicitly asked
     // for, rather than binding port 8085 on every run.
     let pubsub = if only.pubsub && (cfg.pubsub_enabled || only.explicit) {
@@ -1756,6 +1775,8 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         auth_selected: only.auth,
         storage,
         functions,
+        eventarc,
+        tasks,
         pubsub,
         hub,
         logging,
@@ -1791,6 +1812,8 @@ fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("eventarc", addrs.eventarc),
+        ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
         ("hub", addrs.hub),
         ("ui", addrs.ui),
@@ -1856,6 +1879,14 @@ fn print_banner(
         None => {
             println!("  functions:        not configured (functions.source or --functions <dir>)");
         }
+    }
+    match addrs.eventarc {
+        Some(a) => println!("  eventarc (HTTP):  {a}   CLOUD_EVENTARC_EMULATOR_HOST=http://{a}"),
+        None => println!("  eventarc:         not started (requires a Functions codebase)"),
+    }
+    match addrs.tasks {
+        Some(a) => println!("  tasks (HTTP):     {a}   CLOUD_TASKS_EMULATOR_HOST={a}"),
+        None => println!("  tasks:            not started (requires a Functions codebase)"),
     }
     match addrs.pubsub {
         Some(a) => println!("  pubsub (gRPC):    {a}   PUBSUB_EMULATOR_HOST={a}"),

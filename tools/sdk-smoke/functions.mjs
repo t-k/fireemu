@@ -13,6 +13,7 @@ import { getFunctions } from "firebase-admin/functions";
 const project = process.env.GOOGLE_CLOUD_PROJECT || "demo-app";
 const control = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`;
 const functionsHost = process.env.FIREEMU_FUNCTIONS_HOST || "127.0.0.1:5001";
+const eventarcHost = process.env.CLOUD_EVENTARC_EMULATOR_HOST || "http://127.0.0.1:9299";
 const app = initializeApp({ projectId: project, storageBucket: `${project}.appspot.com` });
 const db = getFirestore(app);
 const results = [];
@@ -218,7 +219,7 @@ try {
 
   // A Firebase alert, through the one door the official emulator has for them: the Eventarc
   // `google` channel, which forwards the CloudEvent verbatim.
-  const alert = await fetch(`http://${functionsHost}/google/publishEvents`, {
+  const alert = await fetch(`${eventarcHost}/google/publishEvents`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

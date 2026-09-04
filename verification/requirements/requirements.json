@@ -1580,6 +1580,20 @@
       }
     },
     {
+      "id": "FN-SUPPORT-LISTENERS-001",
+      "statement": "A configured Functions runtime starts separate Eventarc and Cloud Tasks listeners, advertises both through the Hub, exports their canonical environment variables, isolates their route families from the Functions listener, and releases all three listeners together.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+          "crates/fireemu/tests/functions_discovery.rs",
+          "crates/fireemu/tests/hub.rs"
+        ]
+      }
+    },
+    {
       "id": "FN-TASKS-001",
       "statement": "A task enqueued against a queue takes that queue's default URI, waits for the official initially-empty rate bucket, obeys that queue's dispatch-rate and concurrency limits, carries the official X-CloudTasks-* headers with a first delivery of retry count 0, and retries on the official backoff until it succeeds or its attempts run out without unbounded retained work.",
       "criticality": "important",

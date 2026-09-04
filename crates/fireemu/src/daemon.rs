@@ -148,6 +148,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         auth_selected,
         storage: storage_listener,
         functions: functions_listener,
+        eventarc: eventarc_listener,
+        tasks: tasks_listener,
         pubsub: pubsub_listener,
         hub: hub_listener,
         logging: logging_listener,
@@ -333,6 +335,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+            eventarc: eventarc_listener,
+            tasks: tasks_listener,
             pubsub: pubsub_listener,
             hub: hub_listener,
             logging: logging_listener,
@@ -581,6 +585,8 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         auth_selected: _,
         storage: storage_listener,
         functions: functions_listener,
+        eventarc: eventarc_listener,
+        tasks: tasks_listener,
         pubsub: pubsub_listener,
         hub: hub_listener,
         logging: logging_listener,
@@ -617,6 +623,18 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         ),
         _ => tokio::spawn(std::future::pending()),
     };
+    let eventarc_server = match (eventarc_listener, functions_runtime.clone()) {
+        (Some(listener), Some(runtime)) => tokio::spawn(
+            fireemu_adapter_functions::http::serve_eventarc(listener, runtime),
+        ),
+        _ => tokio::spawn(std::future::pending()),
+    };
+    let tasks_server = match (tasks_listener, functions_runtime.clone()) {
+        (Some(listener), Some(runtime)) => tokio::spawn(
+            fireemu_adapter_functions::http::serve_tasks(listener, runtime),
+        ),
+        _ => tokio::spawn(std::future::pending()),
+    };
     let pubsub_server = match pubsub_listener {
         Some(listener) => tokio::spawn(fireemu_adapter_pubsub::serve_pubsub(listener, pubsub)),
         None => tokio::spawn(std::future::pending()),
@@ -627,6 +645,8 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("eventarc", addrs.eventarc),
+        ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
     ] {
         if let Some(addr) = addr {
@@ -744,6 +764,8 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         r = http => Err(format!("HTTP server stopped: {r:?}")),
         r = storage_server => Err(format!("Storage server stopped: {r:?}")),
         r = functions_server => Err(format!("Functions server stopped: {r:?}")),
+        r = eventarc_server => Err(format!("Eventarc server stopped: {r:?}")),
+        r = tasks_server => Err(format!("Cloud Tasks server stopped: {r:?}")),
         r = pubsub_server => Err(format!("Pub/Sub server stopped: {r:?}")),
         r = ui_server => Err(format!("UI server stopped: {r:?}")),
         r = hub_server => Err(format!("Emulator Hub stopped: {r:?}")),
@@ -951,6 +973,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+            eventarc: eventarc_listener,
+            tasks: tasks_listener,
             pubsub: pubsub_listener,
             hub: hub_listener,
             logging: logging_listener,
@@ -967,6 +991,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let functions_addr = functions_listener
             .as_ref()
             .and_then(|l| l.local_addr().ok());
+        let eventarc_addr = eventarc_listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok());
+        let tasks_addr = tasks_listener.as_ref().and_then(|l| l.local_addr().ok());
         let pubsub_addr = pubsub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let hub_addr = hub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let logging_addr = logging_listener.as_ref().and_then(|l| l.local_addr().ok());
@@ -981,6 +1009,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
             functions: functions_addr,
+            eventarc: eventarc_addr,
+            tasks: tasks_addr,
             pubsub: pubsub_addr,
             hub: hub_addr,
             ui: ui_addr,
@@ -1025,6 +1055,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         auth: addrs.auth.map(|a| a.to_string()),
                         storage: storage_addr.map(|a| a.to_string()),
                         functions: functions_addr.map(|a| a.to_string()),
+                        eventarc: eventarc_addr.map(|a| a.to_string()),
+                        tasks: tasks_addr.map(|a| a.to_string()),
                         logging: logging_addr.map(|a| a.to_string()),
                     },
                     &runner_secret,
@@ -1077,6 +1109,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     auth_selected,
                     storage: storage_listener,
                     functions: functions_listener,
+                    eventarc: eventarc_listener,
+                    tasks: tasks_listener,
                     pubsub: pubsub_listener,
                     hub: hub_listener,
                     logging: logging_listener,

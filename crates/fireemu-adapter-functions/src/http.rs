@@ -94,8 +94,8 @@ impl RequestAdmission {
     }
 }
 
-fn request_body_limit(path: &str) -> usize {
-    if crate::tasks::route(path).is_some() {
+fn request_body_limit(surface: HttpSurface, path: &str) -> usize {
+    if surface == HttpSurface::Tasks && crate::tasks::route(path).is_some() {
         MAX_TASK_BODY_BYTES
     } else {
         MAX_FUNCTION_BODY_BYTES
@@ -1104,6 +1104,7 @@ async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
     body_limit: usize,
+    surface: HttpSurface,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
@@ -1117,30 +1118,40 @@ async fn respond(
         Ok(origin) => origin,
         Err(refusal) => return Ok(*refusal),
     };
-    // Eventarc's `publishEvents` shares this port. The official suite gives Eventarc a port
-    // of its own; a custom event has nowhere to go without functions, so fireemu serves the
-    // route here and points `CLOUD_EVENTARC_EMULATOR_HOST` at this listener. The path forms
-    // cannot collide with a function route: both are rooted at a literal segment no project
-    // ID reaches, and both end in a literal the function route does not have.
-    if req.method() == hyper::Method::POST {
-        if let Some(channel) = crate::eventarc::publish_channel(&path) {
+    match surface {
+        HttpSurface::Eventarc => {
+            if req.method() != hyper::Method::POST {
+                drain_refused_body(req.into_body()).await;
+                return Ok(simple(StatusCode::NOT_FOUND, "Not Found"));
+            }
+            let Some(channel) = crate::eventarc::publish_channel(&path) else {
+                drain_refused_body(req.into_body()).await;
+                return Ok(simple(StatusCode::NOT_FOUND, "Not Found"));
+            };
             return Ok(match collect_body(req.into_body(), body_limit).await {
                 Ok(body) => publish_events(&runtime, &channel, &body),
                 Err(answer) => *answer,
             });
         }
-    }
-    // Cloud Tasks shares this port for the same reason Eventarc does.
-    if let Some(route) = crate::tasks::route(&path) {
-        let method = req.method().clone();
-        return Ok(match collect_body(req.into_body(), body_limit).await {
-            Ok(body) => task_route(&runtime, &route, &method, &body),
-            Err(answer) => *answer,
-        });
+        HttpSurface::Tasks => {
+            let Some(route) = crate::tasks::route(&path) else {
+                drain_refused_body(req.into_body()).await;
+                return Ok(simple(StatusCode::NOT_FOUND, "Not Found"));
+            };
+            let method = req.method().clone();
+            return Ok(match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => task_route(&runtime, &route, &method, &body),
+                Err(answer) => *answer,
+            });
+        }
+        HttpSurface::Functions => {}
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,
-        Err(answer) => return Ok(*answer),
+        Err(answer) => {
+            drain_refused_body(req.into_body()).await;
+            return Ok(*answer);
+        }
     };
     if let Err(error) = header_map_connection_tokens(req.headers()) {
         drain_refused_body(req.into_body()).await;
@@ -1338,10 +1349,17 @@ fn callable_preflight(headers: &hyper::HeaderMap) -> Option<Response<OutBody>> {
     builder.body(full(Bytes::new())).ok()
 }
 
-/// Serves the functions port.
-pub async fn serve_functions(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HttpSurface {
+    Functions,
+    Eventarc,
+    Tasks,
+}
+
+async fn serve_surface(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
+    surface: HttpSurface,
 ) -> std::io::Result<()> {
     let request_admission = RequestAdmission::new();
     let connection_slots = Arc::new(Semaphore::new(MAX_FUNCTION_CONNECTIONS));
@@ -1361,10 +1379,10 @@ pub async fn serve_functions(
                 let runtime = runtime.clone();
                 let request_admission = request_admission.clone();
                 async move {
-                    let body_limit = request_body_limit(req.uri().path());
+                    let body_limit = request_body_limit(surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
-                    respond(runtime, req, body_limit).await
+                    respond(runtime, req, body_limit, surface).await
                 }
             });
             let mut builder = http1::Builder::new();
@@ -1377,21 +1395,55 @@ pub async fn serve_functions(
     }
 }
 
+/// Serves HTTPS and callable functions on the Functions listener.
+pub async fn serve_functions(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+) -> std::io::Result<()> {
+    serve_surface(listener, runtime, HttpSurface::Functions).await
+}
+
+/// Serves only the Eventarc channel publication routes on the official Eventarc listener.
+pub async fn serve_eventarc(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+) -> std::io::Result<()> {
+    serve_surface(listener, runtime, HttpSurface::Eventarc).await
+}
+
+/// Serves only the Cloud Tasks queue routes on the official Tasks listener.
+pub async fn serve_tasks(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+) -> std::io::Result<()> {
+    serve_surface(listener, runtime, HttpSurface::Tasks).await
+}
+
 #[cfg(test)]
 mod admission_tests {
     use super::{
-        request_body_limit, RequestAdmission, MAX_FUNCTION_BODY_BYTES, MAX_TASK_BODY_BYTES,
+        request_body_limit, HttpSurface, RequestAdmission, MAX_FUNCTION_BODY_BYTES,
+        MAX_TASK_BODY_BYTES,
     };
     use std::time::Duration;
 
     #[test]
-    fn task_routes_use_the_official_json_body_limit() {
+    fn task_routes_use_the_official_json_body_limit_only_on_the_tasks_surface() {
+        let route = "/projects/demo-app/locations/us-central1/queues/work/tasks";
         assert_eq!(
-            request_body_limit("/projects/demo-app/locations/us-central1/queues/work/tasks"),
+            request_body_limit(HttpSurface::Tasks, route),
             MAX_TASK_BODY_BYTES
         );
         assert_eq!(
-            request_body_limit("/demo-app/us-central1/ordinary"),
+            request_body_limit(HttpSurface::Functions, route),
+            MAX_FUNCTION_BODY_BYTES
+        );
+        assert_eq!(
+            request_body_limit(HttpSurface::Eventarc, route),
+            MAX_FUNCTION_BODY_BYTES
+        );
+        assert_eq!(
+            request_body_limit(HttpSurface::Functions, "/demo-app/us-central1/ordinary"),
             MAX_FUNCTION_BODY_BYTES
         );
     }

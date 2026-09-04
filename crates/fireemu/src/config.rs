@@ -1429,6 +1429,8 @@ impl RuntimeConfig {
                 "storagePort",
                 "httpPort",
                 "functionsPort",
+                "eventarcPort",
+                "tasksPort",
                 "pubsubPort",
                 "hubPort",
                 "uiPort",
@@ -1467,6 +1469,12 @@ impl RuntimeConfig {
         }
         if let Some(port) = d.get("functionsPort").and_then(Value::as_u64) {
             cfg.functions_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("eventarcPort").and_then(Value::as_u64) {
+            cfg.eventarc_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("tasksPort").and_then(Value::as_u64) {
+            cfg.tasks_addr = format!("127.0.0.1:{port}");
         }
         if let Some(port) = d.get("pubsubPort").and_then(Value::as_u64) {
             cfg.pubsub_addr = format!("127.0.0.1:{port}");

@@ -394,6 +394,21 @@ fn a_real_node_invocation_reaches_the_logging_websocket_with_function_metadata()
 
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn real_node_streaming_callables_deliver_progressively_and_observe_disconnects() {
+    let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/sdk-smoke/functions-project/streaming-e2e.mjs");
+    let probe = probe.display().to_string();
+    let out = exec_command(&fixture("streaming-callable"), None, &["node", &probe]);
+    assert!(
+        out.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        stderr(&out)
+    );
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds() {
     let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tools/sdk-smoke/functions-project/inspector-e2e.mjs");

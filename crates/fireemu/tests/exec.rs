@@ -7,7 +7,7 @@ mod census;
 use std::collections::BTreeMap;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn daemon() -> Command {
@@ -68,6 +68,105 @@ fn alive(pid: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn sleeping() -> Self {
+        Self::new(
+            Command::new("sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("the unrelated scenario child starts"),
+        )
+    }
+
+    fn id(&self) -> u32 {
+        self.0.as_ref().expect("the child remains owned").id()
+    }
+
+    fn wait_with_output(mut self) -> std::io::Result<std::process::Output> {
+        self.0
+            .take()
+            .expect("the child remains owned")
+            .wait_with_output()
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = Command::new("kill")
+                .args(["-TERM", &child.id().to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                if child.try_wait().is_ok_and(|status| status.is_some()) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+struct ProcessGroupGuard(Option<i32>);
+
+impl ProcessGroupGuard {
+    fn new(pgid: i32) -> Self {
+        assert!(pgid > 0, "the command process group must be positive");
+        assert_ne!(
+            Some(pgid),
+            census::own_process_group(),
+            "the command must not share the test harness process group"
+        );
+        Self(Some(pgid))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0 {
+            census::kill_process_group(pgid);
+        }
+    }
+}
+
+struct PidGuard(Option<i32>);
+
+impl PidGuard {
+    fn new(pid: i32) -> Self {
+        assert!(pid > 0, "the fixture PID must be positive");
+        Self(Some(pid))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for PidGuard {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            census::kill_pid(pid);
+        }
+    }
 }
 
 #[test]
@@ -281,21 +380,28 @@ fn sigterm_stops_the_command_and_the_services_without_leaving_processes() {
     let dir = scratch("term");
     let pidfile = dir.join("pid");
     let out = dir.join("env.txt");
-    let supervisor = daemon()
-        .args(["--", "sh", "-c"])
-        .arg(format!(
-            "env > {}; echo $$ > {}; exec sleep 30",
-            out.display(),
-            pidfile.display()
-        ))
-        .spawn()
-        .unwrap();
+    let supervisor = ChildGuard::new(
+        daemon()
+            .args(["--", "sh", "-c"])
+            .arg(format!(
+                "env > {}; echo $$ > {}; exec sleep 30",
+                out.display(),
+                pidfile.display()
+            ))
+            .spawn()
+            .unwrap(),
+    );
     let started = Instant::now();
     while !pidfile.exists() && started.elapsed() < Duration::from_secs(20) {
         std::thread::sleep(Duration::from_millis(50));
     }
     let child_pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
     assert!(alive(&child_pid));
+    let command_pgid = census::find(child_pid.parse().expect("the command PID is numeric"))
+        .expect("the command is visible to the process census")
+        .pgid;
+    assert_eq!(command_pgid.to_string(), child_pid);
+    let mut command_group = ProcessGroupGuard::new(command_pgid);
     let env = env_file(&out);
     let firestore = env["FIRESTORE_EMULATOR_HOST"].clone();
     assert!(
@@ -325,12 +431,14 @@ fn sigterm_stops_the_command_and_the_services_without_leaving_processes() {
     }
     assert!(!alive(&child_pid), "the command outlived the supervisor");
     assert!(refused(&firestore), "the daemon kept listening");
-    // Nextest only sees processes still holding this test's captured output; the census also
-    // covers descendants that closed or redirected it.
-    census::assert_no_owned_descendants(
+    // The command's dedicated process group is scenario-specific even when Cargo runs another
+    // test in this integration binary concurrently.
+    census::assert_process_group_empty(
+        command_pgid,
         "sigterm_stops_the_command_and_the_services_without_leaving_processes",
         Duration::from_secs(5),
     );
+    command_group.disarm();
 }
 
 #[test]
@@ -345,20 +453,31 @@ fn exec_needs_a_command() {
 
 #[test]
 fn a_background_job_the_command_leaves_behind_is_swept() {
+    let unrelated = ChildGuard::sleeping();
+    assert!(alive(&unrelated.id().to_string()));
     // Off a terminal the command leads its own process group; the group is killed once
     // the command has exited, so `sleep` does not outlive the supervisor.
     let dir = scratch("orphan");
     let pidfile = dir.join("pid");
+    let groupfile = dir.join("pgid");
     let output = daemon()
         .args(["--", "sh", "-c"])
         .arg(format!(
-            "sleep 300 & echo $! > {}; exit 0",
-            pidfile.display()
+            "ps -o pgid= -p $$ | tr -d ' ' > {}; sleep 300 </dev/null >/dev/null 2>&1 & echo $! > {}; exit 0",
+            groupfile.display(),
+            pidfile.display(),
         ))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
+    let command_pgid = std::fs::read_to_string(&groupfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .expect("the command process group is numeric");
     let sleeper = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    let mut sleeper_guard = PidGuard::new(sleeper.parse().expect("the sleeper PID is numeric"));
+    let mut command_group = ProcessGroupGuard::new(command_pgid);
     let gone = Instant::now();
     while alive(&sleeper) && gone.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(50));
@@ -367,10 +486,17 @@ fn a_background_job_the_command_leaves_behind_is_swept() {
         !alive(&sleeper),
         "the background job survived the supervisor"
     );
-    census::assert_no_owned_descendants(
+    sleeper_guard.disarm();
+    assert!(
+        alive(&unrelated.id().to_string()),
+        "the unrelated scenario child ended early"
+    );
+    census::assert_process_group_empty(
+        command_pgid,
         "a_background_job_the_command_leaves_behind_is_swept",
         Duration::from_secs(5),
     );
+    command_group.disarm();
 }
 
 #[test]
@@ -402,17 +528,24 @@ fn inherited_emulator_variables_do_not_reach_the_command_unless_selected() {
 fn sigint_keeps_its_identity_when_forwarded() {
     let dir = scratch("int");
     let pidfile = dir.join("pid");
-    let supervisor = daemon()
-        .args(["--", "sh", "-c"])
-        .arg(format!("echo $$ > {}; exec sleep 30", pidfile.display()))
-        .spawn()
-        .unwrap();
+    let supervisor = ChildGuard::new(
+        daemon()
+            .args(["--", "sh", "-c"])
+            .arg(format!("echo $$ > {}; exec sleep 30", pidfile.display()))
+            .spawn()
+            .unwrap(),
+    );
     let started = Instant::now();
     while !pidfile.exists() && started.elapsed() < Duration::from_secs(20) {
         std::thread::sleep(Duration::from_millis(50));
     }
     let child_pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
     assert!(alive(&child_pid));
+    let command_pgid = census::find(child_pid.parse().expect("the command PID is numeric"))
+        .expect("the command is visible to the process census")
+        .pgid;
+    assert_eq!(command_pgid.to_string(), child_pid);
+    let mut command_group = ProcessGroupGuard::new(command_pgid);
     assert!(Command::new("kill")
         .args(["-INT", &supervisor.id().to_string()])
         .status()
@@ -427,6 +560,12 @@ fn sigint_keeps_its_identity_when_forwarded() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(!alive(&child_pid));
+    census::assert_process_group_empty(
+        command_pgid,
+        "sigint_keeps_its_identity_when_forwarded",
+        Duration::from_secs(5),
+    );
+    command_group.disarm();
 }
 
 // --------------------------------------------------------------------------------------

@@ -337,10 +337,12 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
     let absolute = std::path::absolute(&path)
         .map_err(|e| CliError::refused(format!("{}: {e}", path.display())))?;
 
-    let project = match project {
-        Some(project) => project,
-        None => resolve_project(Path::new("."), None)?
-            .unwrap_or_else(|| config::RuntimeConfig::default().auth_project),
+    let project = if let Some(project) = project {
+        project
+    } else {
+        let rc = read_firebaserc(Path::new("."))?;
+        resolve_project(rc.as_ref(), None)?
+            .unwrap_or_else(|| config::RuntimeConfig::default().auth_project)
     };
     let locator = hub::Locator::path_for(&project);
     let text = std::fs::read_to_string(&locator).map_err(|_| {
@@ -696,16 +698,27 @@ fn project_dir(path: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
-/// Resolves `--project` against the `.firebaserc` of a project directory, when there is one.
-fn resolve_project(dir: &Path, requested: Option<&str>) -> Result<Option<String>, CliError> {
+/// Reads the `.firebaserc` of a project directory once for alias and deploy-target resolution.
+fn read_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
     let rc_path = dir.join(".firebaserc");
     let Ok(text) = std::fs::read_to_string(&rc_path) else {
-        return Ok(requested.map(str::to_owned));
+        return Ok(None);
     };
     let rc: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
         CliError::refused(format!("{} does not parse: {e}", diagnostic_path(&rc_path)))
     })?;
-    Ok(config::resolve_project_alias(&rc, requested)?)
+    Ok(Some(rc))
+}
+
+/// Resolves `--project` against the already-read `.firebaserc`, when there is one.
+fn resolve_project(
+    rc: Option<&serde_json::Value>,
+    requested: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    match rc {
+        Some(rc) => Ok(config::resolve_project_alias(rc, requested)?),
+        None => Ok(requested.map(str::to_owned)),
+    }
 }
 
 /// A port given on the command line overrides `firebase.json`, which overrides the canonical
@@ -786,7 +799,8 @@ fn parse_options(
             }
         }
     }
-    if let Some(project) = resolve_project(&project_root, raw.project.as_deref())? {
+    let rc = read_firebaserc(&project_root)?;
+    if let Some(project) = resolve_project(rc.as_ref(), raw.project.as_deref())? {
         // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
         // keyed by (`findEnvfiles`). A `--project` value that is already a project ID is not
         // an alias, and neither is one that resolves to itself.
@@ -796,6 +810,16 @@ fn parse_options(
             .filter(|requested| *requested != project)
             .map(str::to_owned);
         cfg.auth_project = project;
+    }
+    if !cfg.storage_rules_by_target.is_empty() {
+        let rc = rc.as_ref().ok_or_else(|| {
+            CliError::refused(
+                "firebase.json declares Storage targets but the project has no .firebaserc"
+                    .to_owned(),
+            )
+        })?;
+        let project = cfg.auth_project.clone();
+        cfg.resolve_storage_rules_targets(rc, &project)?;
     }
     if !only.functions {
         cfg.functions_source = None;
@@ -1292,16 +1316,58 @@ fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
     }
 }
 
-fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
-    match &cfg.storage_rules_file {
-        Some(path) => {
-            let source = std::fs::read_to_string(path)
-                .map_err(|e| format!("storage rules source {path}: {e}"))?;
-            LoadedRules::from_source(&source)
-                .map_err(|e| format!("storage rules source {path} does not parse: {e}"))
-        }
-        None => Ok(LoadedRules::default()),
+struct LoadedStorageRules {
+    registry: Arc<fireemu_adapter_http::storage::StorageRulesRegistry>,
+    watched: Vec<(String, Arc<RulesetSlot>)>,
+}
+
+fn read_storage_rules(path: &str) -> Result<LoadedRules, String> {
+    let source =
+        std::fs::read_to_string(path).map_err(|e| format!("storage rules source {path}: {e}"))?;
+    LoadedRules::from_source(&source)
+        .map_err(|e| format!("storage rules source {path} does not parse: {e}"))
+}
+
+fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String> {
+    if cfg.storage_rules_by_target.is_empty() {
+        let loaded = match &cfg.storage_rules_file {
+            Some(path) => read_storage_rules(path)?,
+            None => LoadedRules::default(),
+        };
+        let slot = Arc::new(RulesetSlot::new(loaded));
+        let watched = cfg
+            .storage_rules_file
+            .iter()
+            .map(|path| (path.clone(), slot.clone()))
+            .collect();
+        return Ok(LoadedStorageRules {
+            registry: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+                slot,
+            )),
+            watched,
+        });
     }
+    if cfg.storage_buckets_by_target.len() != cfg.storage_rules_by_target.len() {
+        return Err("Storage rules targets were not resolved through .firebaserc".to_owned());
+    }
+    let mut by_bucket = std::collections::BTreeMap::new();
+    let mut watched = Vec::new();
+    for (target, path) in &cfg.storage_rules_by_target {
+        let slot = Arc::new(RulesetSlot::new(read_storage_rules(path)?));
+        let buckets = cfg.storage_buckets_by_target.get(target).ok_or_else(|| {
+            format!("Storage rules target {target:?} has no resolved bucket mapping")
+        })?;
+        for bucket in buckets {
+            by_bucket.insert(bucket.clone(), slot.clone());
+        }
+        watched.push((path.clone(), slot));
+    }
+    Ok(LoadedStorageRules {
+        registry: Arc::new(
+            fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(by_bucket),
+        ),
+        watched,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1482,7 +1548,7 @@ fn start_firestore_config_reload_supervisors(
     backend: &Arc<LocalBackend>,
     rules: &Arc<RulesetSlot>,
     database_rules: &std::collections::BTreeMap<String, Arc<RulesetSlot>>,
-    storage_rules: &Arc<RulesetSlot>,
+    storage_rules: &LoadedStorageRules,
     barrier: &Arc<fireemu_core_session::barrier::AdmissionBarrier>,
 ) {
     for (database, files) in &cfg.firestore_databases {
@@ -1502,8 +1568,8 @@ fn start_firestore_config_reload_supervisors(
             start_rules_reload_supervisor(path.clone(), "Firestore rules", rules, barrier);
         }
     }
-    if let Some(path) = &cfg.storage_rules_file {
-        start_rules_reload_supervisor(path.clone(), "Storage rules", storage_rules, barrier);
+    for (path, slot) in &storage_rules.watched {
+        start_rules_reload_supervisor(path.clone(), "Storage rules", slot, barrier);
     }
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.indexes {
@@ -1527,7 +1593,7 @@ fn storage_state(
     clock: &Arc<Mutex<VirtualClock>>,
     registry: &Arc<fireemu_core_auth::store::AuthRegistry>,
     tenancy: &fireemu_core_session::tenancy::SharedTenancy,
-    storage_rules: &Arc<RulesetSlot>,
+    storage_rules: &Arc<fireemu_adapter_http::storage::StorageRulesRegistry>,
     events: Option<fireemu_adapter_http::storage::StorageEventSink>,
     backend: &Arc<LocalBackend>,
     faults: &fireemu_core_session::fault::SharedFaultRegistry,
@@ -1961,7 +2027,7 @@ fn control_state(
     clock: &Arc<Mutex<VirtualClock>>,
     rules: &Arc<RulesetSlot>,
     database_rules: &std::collections::BTreeMap<String, Arc<RulesetSlot>>,
-    storage_rules: &Arc<RulesetSlot>,
+    storage_rules: &Arc<fireemu_adapter_http::storage::StorageRulesRegistry>,
     backend: &Arc<LocalBackend>,
     auth_store: &Arc<Mutex<AuthStore>>,
     storage: &Arc<fireemu_adapter_http::storage::StorageState>,
@@ -1994,10 +2060,7 @@ fn control_state(
             slot.clone(),
         )));
     }
-    snapshot_hooks.push(Arc::new(snapshots::Rules(
-        "storage rules",
-        storage_rules.clone(),
-    )));
+    snapshot_hooks.push(Arc::new(snapshots::StorageRules(storage_rules.clone())));
     if let Some(runtime) = functions {
         snapshot_hooks.push(Arc::new(snapshots::Functions(runtime.clone())));
     }
@@ -2077,6 +2140,9 @@ mod config_reload_tests {
 
     const RULES_ONE: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
     const RULES_TWO: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow write: if false; } } }";
+    const STORAGE_ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
+    const STORAGE_DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if false; } } }";
+    const STORAGE_WRITE: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir =
@@ -2215,6 +2281,130 @@ mod config_reload_tests {
         assert_eq!(rules.snapshot().unwrap().source.as_deref(), Some(RULES_TWO));
         drop(rules);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn storage_target_reload_changes_only_its_own_bucket_group() {
+        let dir = scratch("storage-target-isolation");
+        let public_path = dir.join("public.rules");
+        let private_path = dir.join("private.rules");
+        std::fs::write(&public_path, STORAGE_DENY).unwrap();
+        std::fs::write(&private_path, STORAGE_DENY).unwrap();
+        let public = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(STORAGE_DENY).unwrap(),
+        ));
+        let private = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(STORAGE_DENY).unwrap(),
+        ));
+        let loaded = LoadedStorageRules {
+            registry: Arc::new(
+                fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(
+                    std::collections::BTreeMap::from([
+                        ("public.example.test".to_owned(), public.clone()),
+                        ("private.example.test".to_owned(), private.clone()),
+                    ]),
+                ),
+            ),
+            watched: vec![
+                (public_path.to_string_lossy().into_owned(), public.clone()),
+                (private_path.to_string_lossy().into_owned(), private.clone()),
+            ],
+        };
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_firestore_config_reload_supervisors(
+            &RuntimeConfig::default(),
+            &Arc::new(LocalBackend::new(
+                Gateway {
+                    enforce_limits: true,
+                    ctx: PlanningContext {
+                        edition: FirestoreEdition::Standard,
+                        api_mode: FirestoreApiMode::Native,
+                        policy: IndexValidationPolicy::Conservative,
+                    },
+                    indexes: IndexSet::default(),
+                },
+                Arc::new(Mutex::new(VirtualClock::new(
+                    LogicalInstant::from_unix_seconds(1_788_004_860),
+                ))),
+                7,
+            )),
+            &Arc::new(RulesetSlot::default()),
+            &std::collections::BTreeMap::new(),
+            &loaded,
+            &barrier,
+        );
+
+        std::fs::write(&public_path, STORAGE_ALLOW).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if public.snapshot().unwrap().source.as_deref() == Some(STORAGE_ALLOW) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the public target should reload");
+        assert_eq!(
+            private.snapshot().unwrap().source.as_deref(),
+            Some(STORAGE_DENY)
+        );
+    }
+
+    #[tokio::test]
+    async fn global_storage_file_keeps_reloading_after_a_control_update() {
+        let dir = scratch("storage-global-control-reload");
+        let path = dir.join("storage.rules");
+        std::fs::write(&path, STORAGE_DENY).unwrap();
+        let slot = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(STORAGE_DENY).unwrap(),
+        ));
+        let loaded = LoadedStorageRules {
+            registry: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+                slot.clone(),
+            )),
+            watched: vec![(path.to_string_lossy().into_owned(), slot.clone())],
+        };
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_rules_reload_supervisor(
+            path.to_string_lossy().into_owned(),
+            "Storage rules",
+            &slot,
+            &barrier,
+        );
+
+        loaded.registry.replace_source(STORAGE_ALLOW).unwrap();
+        assert_eq!(
+            loaded
+                .registry
+                .global_snapshot()
+                .unwrap()
+                .unwrap()
+                .source
+                .as_deref(),
+            Some(STORAGE_ALLOW)
+        );
+        std::fs::write(&path, STORAGE_WRITE).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if slot.snapshot().unwrap().source.as_deref() == Some(STORAGE_WRITE) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the configured Storage file should keep reloading");
+        assert_eq!(
+            loaded
+                .registry
+                .global_snapshot()
+                .unwrap()
+                .unwrap()
+                .source
+                .as_deref(),
+            Some(STORAGE_WRITE)
+        );
     }
 
     #[tokio::test]

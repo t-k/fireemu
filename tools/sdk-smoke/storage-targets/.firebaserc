@@ -1,0 +1,11 @@
+{
+  "projects": { "default": "demo-storage-targets" },
+  "targets": {
+    "demo-storage-targets": {
+      "storage": {
+        "public": ["public.example.test"],
+        "private": ["private.example.test"]
+      }
+    }
+  }
+}

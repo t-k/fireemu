@@ -69,6 +69,45 @@ impl Storage {
     }
 }
 
+/// The complete global or target-based Storage Rules registry.
+pub struct StorageRules(pub Arc<fireemu_adapter_http::storage::StorageRulesRegistry>);
+
+impl SnapshotHook for StorageRules {
+    fn name(&self) -> &'static str {
+        "storage rules"
+    }
+
+    fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        self.0
+            .capture()
+            .map(|snapshot| Arc::new(snapshot) as SnapshotPart)
+            .map_err(|reason| TransitionFailure::new(self.name(), reason))
+    }
+
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<fireemu_adapter_http::storage::StorageRulesRegistrySnapshot>()
+            .map(|_| ())
+            .ok_or_else(|| wrong_shape(self.name()))
+    }
+
+    fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let snapshot = part
+            .downcast_ref::<fireemu_adapter_http::storage::StorageRulesRegistrySnapshot>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .restore(snapshot)
+            .map_err(|reason| TransitionFailure::new(self.name(), reason))
+    }
+
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<fireemu_adapter_http::storage::StorageRulesRegistrySnapshot>()
+            .map_or(
+                0,
+                fireemu_adapter_http::storage::StorageRulesRegistrySnapshot::retained_bytes,
+            )
+    }
+}
+
 impl SnapshotHook for Storage {
     fn name(&self) -> &'static str {
         "storage"

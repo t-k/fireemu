@@ -212,7 +212,7 @@ pub struct ControlState {
     /// Loaded Firestore Security Rules (shared with the gRPC adapter).
     pub rules: Arc<RulesetSlot>,
     /// Loaded Storage Security Rules (shared with the Storage adapter).
-    pub storage_rules: Arc<RulesetSlot>,
+    pub storage_rules: Arc<crate::storage::StorageRulesRegistry>,
     /// Hooks run by a reset of the default session after its scope is wiped (the shared
     /// parts: the functions runtime).
     pub reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>>,
@@ -443,7 +443,7 @@ pub fn handle_with(
         }
         ("GET" | "PUT" | "DELETE", "/v1/storage/rules") => {
             let _admitted = state.barrier.as_ref().map(|b| b.admit());
-            rules_route(&state.storage_rules, method, body)
+            storage_rules_route(&state.storage_rules, method, body)
         }
         ("GET", "/v1/rules") => match state.rules.snapshot() {
             Ok(r) => ok(json!({"loaded": r.is_loaded(), "source": r.source})),
@@ -553,11 +553,18 @@ fn rules_requests_route(state: &ControlState, method: &str) -> JsonResponse {
     }))
 }
 
-/// GET / PUT / DELETE on a rules slot.
-fn rules_route(slot: &RulesetSlot, method: &str, body: &Value) -> JsonResponse {
+/// GET / PUT / DELETE on the Storage rules registry.
+fn storage_rules_route(
+    registry: &crate::storage::StorageRulesRegistry,
+    method: &str,
+    body: &Value,
+) -> JsonResponse {
     match method {
-        "GET" => match slot.snapshot() {
-            Ok(r) => ok(json!({"loaded": r.is_loaded(), "source": r.source})),
+        "GET" => match registry.global_snapshot() {
+            Ok(Some(rules)) => {
+                ok(json!({"loaded": rules.is_loaded(), "source": rules.source, "targeted": false}))
+            }
+            Ok(None) => ok(json!({"loaded": true, "source": Value::Null, "targeted": true})),
             Err(_) => error(500, "INTERNAL"),
         },
         "PUT" => {
@@ -567,16 +574,17 @@ fn rules_route(slot: &RulesetSlot, method: &str, body: &Value) -> JsonResponse {
                     "INVALID_ARGUMENT : body.source (rules text) is required",
                 );
             };
-            match LoadedRules::from_source(source) {
-                Ok(loaded) => match slot.replace_loaded(loaded) {
-                    Ok(_) => ok(json!({"loaded": true})),
-                    Err(_) => error(500, "INTERNAL"),
-                },
-                Err(e) => error(400, &format!("INVALID_ARGUMENT : rules do not parse: {e}")),
+            match registry.replace_source(source) {
+                Ok(()) => ok(json!({"loaded": true})),
+                Err(reason) if reason.contains("line ") || reason.contains("column ") => error(
+                    400,
+                    &format!("INVALID_ARGUMENT : rules do not parse: {reason}"),
+                ),
+                Err(_) => error(500, "INTERNAL"),
             }
         }
-        _ => match slot.clear() {
-            Ok(_) => ok(json!({"loaded": false})),
+        _ => match registry.clear() {
+            Ok(()) => ok(json!({"loaded": false})),
             Err(_) => error(500, "INTERNAL"),
         },
     }

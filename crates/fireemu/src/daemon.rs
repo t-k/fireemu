@@ -48,7 +48,7 @@ struct BoundStartup {
     registry: Arc<fireemu_core_auth::store::AuthRegistry>,
     rules: Arc<RulesetSlot>,
     database_rules: std::collections::BTreeMap<String, Arc<RulesetSlot>>,
-    storage_rules: Arc<RulesetSlot>,
+    storage_rules: super::LoadedStorageRules,
     barrier: Arc<fireemu_core_session::barrier::AdmissionBarrier>,
     listeners: Listeners,
     ui_listener: Option<tokio::net::TcpListener>,
@@ -232,7 +232,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         &clock,
         &registry,
         &tenancy,
-        &storage_rules,
+        &storage_rules.registry,
         functions_runtime
             .as_ref()
             .map(|r| functions::storage_sink(r, &tenancy)),
@@ -281,7 +281,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         &clock,
         &rules,
         &database_rules,
-        &storage_rules,
+        &storage_rules.registry,
         &backend,
         &auth_store,
         &storage,
@@ -918,7 +918,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             };
             database_rules.insert(database.clone(), Arc::new(RulesetSlot::new(loaded)));
         }
-        let storage_rules = Arc::new(RulesetSlot::new(load_storage_rules(&cfg)?));
+        let storage_rules = load_storage_rules(&cfg)?;
         start_firestore_config_reload_supervisors(
             &cfg,
             &backend,

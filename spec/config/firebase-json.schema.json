@@ -13,10 +13,10 @@
       ]
     },
     "storage": {
-      "description": "One bucket, or an array of targets. fireemu evaluates one ruleset for every bucket, so the entry without a target wins and the rest are reported.",
+      "description": "One rules file for every bucket, or an array of deploy targets resolved through .firebaserc to bucket-specific rules.",
       "oneOf": [
-        { "$ref": "#/$defs/storageEntry" },
-        { "type": "array", "items": { "$ref": "#/$defs/storageEntry" }, "minItems": 1 }
+        { "$ref": "#/$defs/storageGlobalEntry" },
+        { "type": "array", "items": { "$ref": "#/$defs/storageTargetEntry" }, "minItems": 1 }
       ]
     },
     "functions": {
@@ -59,11 +59,20 @@
         "index": { "type": "string", "minLength": 1 }
       }
     },
-    "storageEntry": {
+    "storageGlobalEntry": {
       "type": "object",
+      "additionalProperties": false,
+      "required": ["rules"],
+      "properties": {
+        "rules": { "type": "string", "minLength": 1 }
+      }
+    },
+    "storageTargetEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "rules"],
       "properties": {
         "target": { "type": "string", "minLength": 1 },
-        "bucket": { "type": "string", "minLength": 1 },
         "rules": { "type": "string", "minLength": 1 }
       }
     },

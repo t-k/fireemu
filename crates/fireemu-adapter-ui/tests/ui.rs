@@ -51,7 +51,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         TotpPolicy::default(),
     )));
     let rules = Arc::new(RulesetSlot::default());
-    let storage_rules = Arc::new(RulesetSlot::default());
+    let storage_rules = Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default());
     let storage = Arc::new(StorageState {
         store: Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
         clock: clock.clone(),

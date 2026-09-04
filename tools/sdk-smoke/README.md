@@ -20,6 +20,10 @@ suite) needs, and what leaves the other smokes working without attaching a token
   SDK makes).
 - `storage.mjs`: `firebase-admin` storage (JSON API) and `firebase/storage` (Firebase
   protocol, resumable uploads) with Storage Rules; needs `FIREBASE_STORAGE_EMULATOR_HOST`.
+- `storage-targets.mjs`: the real Web Storage SDK uses three explicit bucket instances to
+  prove that `.firebaserc` deploy targets select independent allow/deny rules and that an
+  unmapped bucket fails closed. Run it with
+  `fireemu exec --firebase-json tools/sdk-smoke/storage-targets/firebase.json --only storage:public -- npm --prefix tools/sdk-smoke run smoke:storage-targets`.
 - `functions.mjs`: the functions in `functions-project/` (firebase-functions v2: Firestore
   and Storage triggers, `onSchedule`, `onRequest`, `onCall`, retries) driven through
   `awaitIdle` and the virtual clock; start the daemon with

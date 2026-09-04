@@ -131,8 +131,7 @@
       "features": [],
       "dependencies": [
         "path+crates/fireemu-core-limits/Cargo.toml#fireemu-core-limits@0.1.0",
-        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.1.0",
-        "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9"
+        "path+crates/fireemu-core-types/Cargo.toml#fireemu-core-types@0.1.0"
       ]
     },
     {
@@ -247,7 +246,8 @@
         "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.4",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
-        "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9"
+        "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9",
+        "registry+https://github.com/rust-lang/crates.io-index#tempfile@3.27.0"
       ]
     },
     {
@@ -279,6 +279,15 @@
       "id": "registry+https://github.com/rust-lang/crates.io-index#atomic-waker@1.1.2",
       "name": "atomic-waker",
       "version": "1.1.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": null,
+      "features": [],
+      "dependencies": []
+    },
+    {
+      "id": "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
+      "name": "autocfg",
+      "version": "1.5.1",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "manifest": null,
       "features": [],
@@ -840,7 +849,8 @@
         "more_lengths"
       ],
       "dependencies": [
-        "registry+https://github.com/rust-lang/crates.io-index#typenum@1.20.1"
+        "registry+https://github.com/rust-lang/crates.io-index#typenum@1.20.1",
+        "registry+https://github.com/rust-lang/crates.io-index#version_check@0.9.5"
       ]
     },
     {
@@ -1095,6 +1105,7 @@
         "std"
       ],
       "dependencies": [
+        "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
         "registry+https://github.com/rust-lang/crates.io-index#hashbrown@0.12.3",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229"
       ]
@@ -1334,6 +1345,7 @@
         "std"
       ],
       "dependencies": [
+        "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
         "registry+https://github.com/rust-lang/crates.io-index#libm@0.2.16"
       ]
     },
@@ -1531,7 +1543,8 @@
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
         "registry+https://github.com/rust-lang/crates.io-index#similar@2.7.0",
-        "registry+https://github.com/rust-lang/crates.io-index#tempfile@3.27.0"
+        "registry+https://github.com/rust-lang/crates.io-index#tempfile@3.27.0",
+        "registry+https://github.com/rust-lang/crates.io-index#version_check@0.9.5"
       ]
     },
     {
@@ -2350,6 +2363,15 @@
       "id": "registry+https://github.com/rust-lang/crates.io-index#unicode-ident@1.0.24",
       "name": "unicode-ident",
       "version": "1.0.24",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": null,
+      "features": [],
+      "dependencies": []
+    },
+    {
+      "id": "registry+https://github.com/rust-lang/crates.io-index#version_check@0.9.5",
+      "name": "version_check",
+      "version": "0.9.5",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "manifest": null,
       "features": [],

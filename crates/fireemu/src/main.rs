@@ -64,7 +64,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
@@ -491,6 +491,8 @@ struct RawOptions {
     http_port: Option<u16>,
     storage_port: Option<u16>,
     functions_port: Option<u16>,
+    eventarc_port: Option<u16>,
+    tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
     hub_port: Option<u16>,
     ui_port: Option<u16>,
@@ -596,6 +598,14 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--functions-port" => {
                 raw.functions_port = Some(port_arg(args, i, "--functions-port")?);
+                i += 2;
+            }
+            "--eventarc-port" => {
+                raw.eventarc_port = Some(port_arg(args, i, "--eventarc-port")?);
+                i += 2;
+            }
+            "--tasks-port" => {
+                raw.tasks_port = Some(port_arg(args, i, "--tasks-port")?);
                 i += 2;
             }
             "--ui-port" => {
@@ -753,6 +763,12 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
+    }
+    if let Some(p) = raw.eventarc_port {
+        cfg.eventarc_addr = with_port(&cfg.eventarc_addr, p);
+    }
+    if let Some(p) = raw.tasks_port {
+        cfg.tasks_addr = with_port(&cfg.tasks_addr, p);
     }
     if let Some(p) = raw.pubsub_port {
         cfg.pubsub_addr = with_port(&cfg.pubsub_addr, p);

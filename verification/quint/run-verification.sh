@@ -5,48 +5,6 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 cd "$repository_root"
 
-authority_lock="$script_dir/bin/authority-lock"
-lock_fd=${FIREEMU_QUINT_AUTHORITY_LOCK_FD:-}
-if [ -z "$lock_fd" ]; then
-  if [ ! -x "$authority_lock" ]; then
-    echo "error: authority lock launcher is not executable" >&2
-    exit 2
-  fi
-  exec "$authority_lock" "$0" "$@"
-fi
-lock_path=${FIREEMU_QUINT_AUTHORITY_LOCK:-${TMPDIR:-/tmp}/fireemu-quint-apalache-8822.lock}
-python3 - "$lock_fd" "$lock_path" <<'PY'
-import fcntl
-import os
-import stat
-import sys
-
-try:
-    descriptor = int(sys.argv[1])
-    inherited = os.fstat(descriptor)
-except (ValueError, OSError) as error:
-    raise SystemExit(f"error: invalid inherited authority lock descriptor: {error}") from error
-flags = os.O_RDONLY
-if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
-expected_descriptor = os.open(sys.argv[2], flags)
-try:
-    expected = os.fstat(expected_descriptor)
-finally:
-    os.close(expected_descriptor)
-if (
-    not stat.S_ISREG(inherited.st_mode)
-    or inherited.st_uid != os.getuid()
-    or (inherited.st_dev, inherited.st_ino) != (expected.st_dev, expected.st_ino)
-):
-    raise SystemExit("error: inherited authority lock descriptor does not own the expected file")
-try:
-    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError as error:
-    raise SystemExit("error: inherited authority lock descriptor does not hold the lock") from error
-PY
-unset FIREEMU_QUINT_AUTHORITY_LOCK_FD
-
 refresh=0
 case "$#" in
   0) ;;
@@ -75,14 +33,11 @@ if [ ! -f "$apalache_jar" ]; then
   exit 2
 fi
 printf '%s  %s\n' "$APALACHE_JAR_SHA256" "$apalache_jar" | shasum -a 256 -c -
-python3 - <<'PY'
-import socket
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-    probe.settimeout(0.2)
-    if probe.connect_ex(("127.0.0.1", 8822)) == 0:
-        raise SystemExit("error: refusing an already occupied Apalache endpoint 127.0.0.1:8822")
-PY
+unset FIREEMU_QUINT_APALACHE_ENDPOINT
+unset FIREEMU_QUINT_APALACHE_OWNER_PID
+unset FIREEMU_QUINT_APALACHE_SUPERVISOR_PID
+unset FIREEMU_QUINT_APALACHE_CAPABILITY_FD
 
 passes=${VERIFICATION_PASSES:-1}
 case "$passes" in
@@ -108,23 +63,6 @@ if [ ! -x "$group_launcher" ]; then
   exit 2
 fi
 
-checker_output="$script_dir/_apalache-out"
-if [ -e "$checker_output" ] || [ -L "$checker_output" ]; then
-  echo "error: refusing to replace pre-existing checker output: $checker_output" >&2
-  exit 2
-fi
-
-cleanup_checker_output() {
-  if [ ! -e "$checker_output" ] && [ ! -L "$checker_output" ]; then
-    return
-  fi
-  if [ -L "$checker_output" ] || [ ! -d "$checker_output" ]; then
-    echo "error: checker output is not an owned directory: $checker_output" >&2
-    return 1
-  fi
-  rm -rf -- "$checker_output"
-}
-
 owned_temp=$(mktemp -d "${TMPDIR:-/tmp}/fireemu-quint-authority.XXXXXX")
 staged_evidence="$owned_temp/evidence"
 mkdir "$staged_evidence"
@@ -133,7 +71,6 @@ active_pid=
 launching=0
 pending_signal=
 cleanup() {
-  cleanup_checker_output || true
   rm -rf -- "$owned_temp"
 }
 
@@ -189,7 +126,6 @@ run_gate() {
   set -e
   active_pid=
   active_pgid=
-  cleanup_checker_output || return 1
   return "$status"
 }
 

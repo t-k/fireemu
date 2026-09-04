@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Supervises one command in an owned process group."""
 
 from __future__ import annotations
@@ -9,11 +9,8 @@ import subprocess
 import sys
 import time
 
-
 GRACE_SECONDS = 2.0
 POLL_SECONDS = 0.01
-
-
 def parse_arguments() -> tuple[dict[int, int], list[str]]:
     arguments = sys.argv[1:]
     exit_mapping: dict[int, int] = {}
@@ -91,8 +88,11 @@ def main() -> int:
         signal.signal(supervised_signal, remember_signal)
 
     try:
-        child = subprocess.Popen(command, start_new_session=True)
-    except OSError as error:
+        child = subprocess.Popen(
+            command,
+            start_new_session=True,
+        )
+    except (OSError, ValueError) as error:
         print(f"error: cannot launch supervised command: {error}", file=sys.stderr)
         return 126
 

@@ -2,6 +2,8 @@
 
 use std::fs;
 #[cfg(unix)]
+use std::net::TcpListener;
+#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(unix)]
@@ -48,8 +50,9 @@ fn apalache_installer_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/install-apalache")
 }
 
-fn authority_lock_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/authority-lock")
+fn loopback_agent_source_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("java/io/fireemu/verification/LoopbackServerProviderAgent.java")
 }
 
 fn readme_path() -> PathBuf {
@@ -91,6 +94,22 @@ fn process_exists(pid: u32) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+fn matching_processes(pattern: &str) -> Vec<u32> {
+    let output = Command::new("pgrep")
+        .args(["-f", pattern])
+        .output()
+        .expect("process lookup must launch");
+    if output.status.code() == Some(1) {
+        return Vec::new();
+    }
+    assert!(output.status.success(), "process lookup must succeed");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
 }
 
 #[cfg(unix)]
@@ -183,25 +202,145 @@ fn make_executable(paths: &[&Path]) {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_lines)]
 fn prepare_authority_backend_fixture(
     temporary: &Path,
     quint_dir: &Path,
     fake_bin: &Path,
 ) -> PathBuf {
     fs::create_dir_all(quint_dir.join("bin")).expect("temporary Quint bin must be created");
+    fs::create_dir_all(quint_dir.join("evidence"))
+        .expect("temporary evidence target must be created");
     fs::create_dir_all(fake_bin).expect("temporary fixture bin must be created");
-    let authority_lock = quint_dir.join("bin/authority-lock");
-    fs::copy(authority_lock_path(), &authority_lock).expect("authority lock must be copied");
+    let agent_source =
+        quint_dir.join("java/io/fireemu/verification/LoopbackServerProviderAgent.java");
+    fs::create_dir_all(
+        agent_source
+            .parent()
+            .expect("loopback agent source must have a parent"),
+    )
+    .expect("loopback agent source directory must be created");
+    fs::copy(loopback_agent_source_path(), &agent_source)
+        .expect("loopback agent source must be copied");
     let installer = quint_dir.join("bin/install-apalache");
     fs::write(&installer, "#!/bin/sh\nexit 0\n").expect("installer fixture must be written");
     let quint_home = temporary.join("quint-home");
     let apalache_lib = quint_home.join("apalache-dist-0.56.1/apalache/lib");
     fs::create_dir_all(&apalache_lib).expect("Apalache fixture directory must be created");
-    fs::write(apalache_lib.join("apalache.jar"), b"fixture")
-        .expect("Apalache fixture JAR must be written");
+    let stub_sources = temporary.join("grpc-stubs");
+    let stub_classes = temporary.join("grpc-stub-classes");
+    for (relative, source) in [
+        (
+            "io/grpc/ServerBuilder.java",
+            "package io.grpc; public abstract class ServerBuilder<T extends ServerBuilder<T>> {}\n",
+        ),
+        (
+            "io/grpc/ServerProvider.java",
+            "package io.grpc; public abstract class ServerProvider { protected abstract boolean isAvailable(); protected abstract int priority(); protected abstract ServerBuilder<?> builderForPort(int port); }\n",
+        ),
+        (
+            "io/grpc/ServerRegistry.java",
+            "package io.grpc; public final class ServerRegistry { private static final ServerRegistry INSTANCE = new ServerRegistry(); public static ServerRegistry getDefaultRegistry() { return INSTANCE; } public void register(ServerProvider provider) {} }\n",
+        ),
+        (
+            "io/grpc/netty/NettyServerBuilder.java",
+            "package io.grpc.netty; import io.grpc.ServerBuilder; import java.net.SocketAddress; public final class NettyServerBuilder extends ServerBuilder<NettyServerBuilder> { public static NettyServerBuilder forAddress(SocketAddress address) { return new NettyServerBuilder(); } }\n",
+        ),
+    ] {
+        let path = stub_sources.join(relative);
+        fs::create_dir_all(path.parent().expect("stub source must have a parent"))
+            .expect("stub source directory must be created");
+        fs::write(path, source).expect("stub source must be written");
+    }
+    fs::create_dir(&stub_classes).expect("stub classes directory must be created");
+    let mut javac = Command::new("javac");
+    javac.arg("-d").arg(&stub_classes);
+    for relative in [
+        "io/grpc/ServerBuilder.java",
+        "io/grpc/ServerProvider.java",
+        "io/grpc/ServerRegistry.java",
+        "io/grpc/netty/NettyServerBuilder.java",
+    ] {
+        javac.arg(stub_sources.join(relative));
+    }
+    let status = javac
+        .status()
+        .expect("javac must build authority fixture stubs");
+    assert!(status.success(), "authority fixture stubs must compile");
+    let fixture_jar = apalache_lib.join("apalache.jar");
+    let status = Command::new("jar")
+        .args(["cf"])
+        .arg(&fixture_jar)
+        .arg("-C")
+        .arg(&stub_classes)
+        .arg(".")
+        .status()
+        .expect("jar must package authority fixture stubs");
+    assert!(status.success(), "authority fixture JAR must be packaged");
+    let apalache_launcher = quint_home.join("apalache-dist-0.56.1/apalache/bin/apalache-mc");
+    fs::create_dir_all(
+        apalache_launcher
+            .parent()
+            .expect("Apalache launcher must have a parent"),
+    )
+    .expect("Apalache fixture bin must be created");
+    fs::write(
+        &apalache_launcher,
+        r#"#!/usr/bin/env python3
+import os
+import signal
+import socket
+
+if __import__("sys").argv[1:] != ["server", "--port=0"]:
+    raise SystemExit("unexpected fake Apalache arguments")
+
+environment_file = os.environ.get("APALACHE_SERVER_ENV_FILE")
+if environment_file:
+    with open(environment_file, "w", encoding="utf-8") as handle:
+        for name in (
+            "APALACHE_JAR",
+            "JVM_ARGS",
+            "JVM_GC_ARGS",
+            "JAVA_TOOL_OPTIONS",
+            "_JAVA_OPTIONS",
+            "JDK_JAVA_OPTIONS",
+            "CLASSPATH",
+            "BASH_ENV",
+            "ENV",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+        ):
+            handle.write(f"{name}={os.environ.get(name, '')}\n")
+
+listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", 0))
+listener.listen()
+pid_file = os.environ.get("APALACHE_SERVER_PID_FILE")
+if pid_file:
+    temporary = f"{pid_file}.tmp.{os.getpid()}"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(f"{os.getpid()} {listener.getsockname()[1]}\n")
+    os.replace(temporary, pid_file)
+
+def stop(_signal, _frame):
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+while True:
+    connection, _address = listener.accept()
+    connection.close()
+"#,
+    )
+    .expect("Apalache fixture launcher must be written");
     let shasum = fake_bin.join("shasum");
     fs::write(&shasum, "#!/bin/sh\nexit 0\n").expect("shasum fixture must be written");
-    make_executable(&[&authority_lock, &installer, &shasum]);
+    make_executable(&[&installer, &apalache_launcher, &shasum]);
     quint_home
 }
 
@@ -632,6 +771,44 @@ fn cli_rejects_an_unknown_model_before_launching_a_checker() {
     assert!(!String::from_utf8_lossy(&output.stderr).contains("failed to launch"));
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_rejects_external_server_selection() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener must bind");
+    let endpoint = listener
+        .local_addr()
+        .expect("fixture listener must have an address")
+        .to_string();
+    let owner = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("non-owner process must launch");
+    let owner_pid = owner.id().to_string();
+    let _owner = AuthorityChild::new(owner);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .args([
+            "verify-model",
+            "--model",
+            "EventDelivery",
+            "--server-endpoint",
+            &endpoint,
+            "--server-owner-pid",
+            &owner_pid,
+        ])
+        .env("FIREEMU_QUINT_APALACHE_ENDPOINT", &endpoint)
+        .env("FIREEMU_QUINT_APALACHE_OWNER_PID", &owner_pid)
+        .env("PATH", "")
+        .output()
+        .expect("verification CLI must launch");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown flag \"--server-endpoint\""),
+        "unexpected diagnostic: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn authority_script_declares_all_models_and_ordered_gates() {
     let script = fs::read_to_string(authority_script_path()).expect("authority script must exist");
@@ -670,7 +847,7 @@ fn authority_script_declares_all_models_and_ordered_gates() {
     assert!(script.contains("VERIFICATION_PASSES:-1"));
     assert!(script.contains("mktemp -d"));
     assert!(script.contains("trap cleanup"));
-    assert!(script.contains("cleanup_checker_output"));
+    assert!(!script.contains("_apalache-out"));
     assert!(script.contains("--refresh"));
     assert!(script.contains("cargo-authority --write"));
     assert!(script.contains("--quint-evidence-dir"));
@@ -707,57 +884,157 @@ fn authority_script_rejects_unknown_refresh_arguments_before_tool_setup() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("unknown argument: --unknown"));
 }
 
+#[cfg(unix)]
 #[test]
-fn authority_script_serializes_the_fixed_backend_endpoint_and_checks_its_digest() {
+fn python_authority_helpers_ignore_startup_injection() {
+    let temporary = OwnedTestDirectory::create("python-isolation");
+    let sentinel = temporary.0.join("sitecustomize-ran");
+    fs::write(
+        temporary.0.join("sitecustomize.py"),
+        "import os\nopen(os.environ['SENTINEL'], 'w').write('injected')\n",
+    )
+    .expect("sitecustomize fixture must be written");
+
+    for helper in [apalache_installer_path(), process_group_launcher_path()] {
+        let source = fs::read_to_string(&helper).expect("Python helper must be readable");
+        assert!(source.starts_with("#!/usr/bin/python3 -I\n"));
+        let output = Command::new(&helper)
+            .env("PYTHONPATH", &temporary.0)
+            .env("PYTHONHOME", &temporary.0)
+            .env("SENTINEL", &sentinel)
+            .output()
+            .expect("isolated Python helper must launch");
+        assert!(!output.status.success());
+        assert!(
+            !sentinel.exists(),
+            "{} executed injected startup code",
+            helper.display()
+        );
+    }
+}
+
+#[test]
+fn authority_script_owns_a_dynamic_backend_and_checks_its_digest() {
     let script = fs::read_to_string(authority_script_path()).expect("authority script must exist");
-    assert!(script.contains("bin/authority-lock"));
-    assert!(script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_FD"));
+    assert!(!script.contains("bin/authority-lock"));
+    assert!(!script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_FD"));
+    assert!(!script.contains("bin/authority-server"));
+    assert!(!script.contains("--server-endpoint"));
+    assert!(!script.contains("--server-owner-pid"));
+    assert!(!script.contains("127.0.0.1:8822"));
     assert!(!script.contains("FIREEMU_QUINT_AUTHORITY_LOCK_HELD"));
+    assert!(!script.contains("FIREEMU_QUINT_AUTHORITY_LOCK:-"));
     assert!(script.contains("APALACHE_JAR_SHA256"));
     assert!(script.contains("shasum -a 256"));
 }
 
+#[test]
+fn rust_authority_embeds_the_loopback_provider() {
+    let source = fs::read_to_string(loopback_agent_source_path())
+        .expect("loopback server provider agent source must exist");
+    assert!(source.contains("ServerRegistry.getDefaultRegistry().register"));
+    assert!(source.contains("InetAddress.getByAddress(new byte[] {127, 0, 0, 1})"));
+    assert!(source.contains("NettyServerBuilder.forAddress"));
+
+    let server =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/server.rs"))
+            .expect("Rust authority server source must exist");
+    assert!(server.contains("include_bytes!"));
+    assert!(server.contains("-javaagent:"));
+    assert!(server.contains("env_clear"));
+    assert!(server.contains("server\", \"--port=0"));
+}
+
 #[cfg(unix)]
 #[test]
-fn authority_lock_serializes_two_processes() {
-    let temporary = OwnedTestDirectory::create("authority-lock-serialization");
-    let lock_path = temporary.0.join("authority.lock");
-    let first_ready = temporary.0.join("first.ready");
-    let second_ready = temporary.0.join("second.ready");
-    let mut first = Command::new(authority_lock_path())
-        .args([
-            "/bin/sh",
-            "-c",
-            "printf ready > \"$FIRST_READY\"; exec sleep 30",
-        ])
-        .env("FIREEMU_QUINT_AUTHORITY_LOCK", &lock_path)
-        .env("FIRST_READY", &first_ready)
-        .spawn()
-        .expect("first lock holder must launch");
-    assert!(wait_until(Duration::from_secs(3), || first_ready.exists()));
+#[allow(clippy::too_many_lines)]
+fn authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied() {
+    let legacy_listener = match TcpListener::bind(("127.0.0.1", 8822)) {
+        Ok(listener) => Some(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => None,
+        Err(error) => panic!("legacy endpoint fixture must bind: {error}"),
+    };
+    let temporary = OwnedTestDirectory::create("authority-owned-endpoint");
+    let quint_dir = temporary.0.join("verification/quint");
+    let fake_bin = temporary.0.join("bin");
+    let quint_home = prepare_authority_backend_fixture(&temporary.0, &quint_dir, &fake_bin);
 
-    let mut second = Command::new(authority_lock_path())
-        .args(["/bin/sh", "-c", "printf ready > \"$SECOND_READY\""])
-        .env("FIREEMU_QUINT_AUTHORITY_LOCK", &lock_path)
-        .env("SECOND_READY", &second_ready)
-        .spawn()
-        .expect("second lock holder must launch");
-    std::thread::sleep(Duration::from_millis(250));
-    assert!(!second_ready.exists(), "second process bypassed the lock");
-    assert!(second
-        .try_wait()
-        .expect("second status must be readable")
-        .is_none());
+    let authority = quint_dir.join("run-verification.sh");
+    fs::copy(authority_script_path(), &authority).expect("authority script must be copied");
+    let group_launcher = quint_dir.join("bin/process-group");
+    fs::copy(process_group_launcher_path(), &group_launcher)
+        .expect("group launcher must be copied");
+    let evidence_dir = quint_dir.join("evidence");
+    fs::create_dir_all(&evidence_dir).expect("authority evidence directory must be created");
+    fs::write(evidence_dir.join("cargo-authority.json"), "{}\n")
+        .expect("authority fixture must be written");
 
-    let signal = Command::new("/bin/kill")
-        .args(["-TERM", &first.id().to_string()])
-        .status()
-        .expect("first lock holder must be signalled");
-    assert!(signal.success());
-    let _ = first.wait();
-    let status = second.wait().expect("second lock holder must finish");
-    assert!(status.success());
-    assert!(second_ready.exists());
+    let invocation_log = temporary.0.join("invocations.log");
+    let server_pid_file = temporary.0.join("server.pid");
+    let server_environment_file = temporary.0.join("server.env");
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        "#!/bin/sh\nprintf '%s\\t%s\\t%s\\n' \"${FIREEMU_QUINT_APALACHE_ENDPOINT:-}\" \"${FIREEMU_QUINT_APALACHE_OWNER_PID:-}\" \"$*\" >> \"$AUTHORITY_INVOCATION_LOG\"\n",
+    )
+    .expect("cargo fixture must be written");
+    make_executable(&[&authority, &group_launcher, &cargo]);
+
+    let output = Command::new(&authority)
+        .current_dir(&temporary.0)
+        .env("APALACHE_SERVER_PID_FILE", &server_pid_file)
+        .env("APALACHE_SERVER_ENV_FILE", &server_environment_file)
+        .env("AUTHORITY_INVOCATION_LOG", &invocation_log)
+        .env(
+            "FIREEMU_QUINT_AUTHORITY_LOCK",
+            temporary.0.join("authority.lock"),
+        )
+        .env("QUINT_HOME", &quint_home)
+        .env("QUINT_REAL_BIN", "/bin/sh")
+        .env("FIREEMU_QUINT_APALACHE_ENDPOINT", "192.0.2.1:1")
+        .env("FIREEMU_QUINT_APALACHE_OWNER_PID", "1")
+        .env("APALACHE_JAR", "/tmp/unreviewed-apalache.jar")
+        .env("JVM_ARGS", "-javaagent:/tmp/unreviewed-agent.jar")
+        .env("JAVA_TOOL_OPTIONS", "-javaagent:/tmp/unreviewed-agent.jar")
+        .env("_JAVA_OPTIONS", "-javaagent:/tmp/unreviewed-agent.jar")
+        .env("JDK_JAVA_OPTIONS", "-javaagent:/tmp/unreviewed-agent.jar")
+        .env("CLASSPATH", "/tmp/unreviewed-classes")
+        .env("BASH_ENV", "/tmp/unreviewed-bash-env")
+        .env("ENV", "/tmp/unreviewed-shell-env")
+        .env("LD_PRELOAD", "/tmp/unreviewed-native.so")
+        .env("LD_LIBRARY_PATH", "/tmp/unreviewed-native-libraries")
+        .env("LD_AUDIT", "/tmp/unreviewed-audit.so")
+        .env("DYLD_INSERT_LIBRARIES", "/tmp/unreviewed-native.dylib")
+        .env("DYLD_LIBRARY_PATH", "/tmp/unreviewed-native-libraries")
+        .env("DYLD_FRAMEWORK_PATH", "/tmp/unreviewed-frameworks")
+        .env(
+            "PATH",
+            std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )))
+            .expect("fixture PATH must be joinable"),
+        )
+        .output()
+        .expect("authority must launch");
+    drop(legacy_listener);
+    assert!(
+        output.status.success(),
+        "authority failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let invocations =
+        fs::read_to_string(&invocation_log).expect("authority invocations must be recorded");
+    assert!(
+        invocations.lines().all(|line| line.starts_with("\t\t")),
+        "legacy endpoint metadata reached a Rust command: {invocations}"
+    );
+    assert!(invocations.contains("verify-model --model AtomicCommitOutbox"));
+    assert!(invocations.contains("mutate-model --model AtomicCommitOutbox"));
+    assert!(!invocations.contains("--server-endpoint"));
+    assert!(!invocations.contains("--server-owner-pid"));
+    assert!(!quint_dir.join("_apalache-out").exists());
 }
 
 #[test]
@@ -797,6 +1074,7 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
     make_executable(&[&authority, &launcher, &gate]);
 
     let pid_file = temporary.0.join("children.pid");
+    let server_pid_file = temporary.0.join("server.pid");
     let authority_log = temporary.0.join("authority.log");
     let stdout = fs::File::create(&authority_log).expect("authority log must be created");
     let stderr = stdout
@@ -806,6 +1084,7 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
         .arg(&authority)
         .current_dir(&temporary.0)
         .env("AUTHORITY_CHILD_PID_FILE", &pid_file)
+        .env("APALACHE_SERVER_PID_FILE", &server_pid_file)
         .env(
             "FIREEMU_QUINT_AUTHORITY_LOCK",
             temporary.0.join("authority.lock"),
@@ -854,6 +1133,7 @@ fn authority_term_signal_stops_and_waits_for_the_active_gate_group() {
             .all(|pid| !process_exists(*pid))),
         "TERM must remove every recorded active-gate process: {pids:?}"
     );
+    assert!(!server_pid_file.exists());
 }
 
 #[cfg(target_os = "linux")]
@@ -950,19 +1230,24 @@ fn authority_term_signal_reaches_the_nested_guarded_quint_group() {
 #[test]
 #[ignore = "requires Java and the pinned local Quint CLI"]
 fn verify_model_cli_checks_event_delivery_with_tlc() {
+    let legacy_listener = TcpListener::bind(("127.0.0.1", 8822)).ok();
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
-        .args([
-            "verify-model",
-            "--model",
-            "EventDelivery",
-            "--root",
-            repository_root()
-                .to_str()
-                .expect("repository path must be UTF-8"),
-        ])
+        .args(["verify-model", "--model", "EventDelivery", "--root"])
+        .arg(repository_root())
+        .env(
+            "QUINT_HOME",
+            std::env::var_os("QUINT_HOME").unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").expect("HOME must exist"))
+                    .join(".quint")
+                    .into_os_string()
+            }),
+        )
         .env("PATH", path_with_pinned_quint())
+        .env("FIREEMU_QUINT_APALACHE_ENDPOINT", "192.0.2.1:1")
+        .env("FIREEMU_QUINT_APALACHE_OWNER_PID", "1")
         .output()
         .expect("authority CLI must launch");
+    drop(legacy_listener);
     assert!(
         output.status.success(),
         "verify-model failed:\nstdout:\n{}\nstderr:\n{}",
@@ -978,6 +1263,49 @@ fn verify_model_cli_checks_event_delivery_with_tlc() {
             .join("verification/quint/_apalache-out")
             .exists(),
         "verify-model must remove the checker output it owns"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires Java and the pinned local Quint CLI"]
+fn interrupted_real_mutation_reaps_the_owned_backend() {
+    let backend_pattern = r"apalache\.jar server --port=0";
+    let before = matching_processes(backend_pattern);
+    let child = Command::new(process_group_launcher_path())
+        .arg(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .args(["mutate-model", "--model", "EventDelivery", "--root"])
+        .arg(repository_root())
+        .env(
+            "QUINT_HOME",
+            std::env::var_os("QUINT_HOME").unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").expect("HOME must exist"))
+                    .join(".quint")
+                    .into_os_string()
+            }),
+        )
+        .env("PATH", path_with_pinned_quint())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("real mutation authority must launch");
+    let child = AuthorityChild::new(child);
+    let mut owned = Vec::new();
+    assert!(wait_until(Duration::from_secs(30), || {
+        owned = matching_processes(backend_pattern)
+            .into_iter()
+            .filter(|pid| !before.contains(pid))
+            .collect();
+        !owned.is_empty()
+    }));
+
+    let status = child.terminate_and_wait(Duration::from_secs(8));
+    assert_eq!(status.code(), Some(143));
+    assert!(
+        wait_until(Duration::from_secs(5), || owned
+            .iter()
+            .all(|pid| !process_exists(*pid))),
+        "interrupted mutation leaked owned backend processes: {owned:?}"
     );
 }
 

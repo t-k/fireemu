@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Install or verify the exact Apalache distribution used by Quint."""
 
 import argparse

@@ -29,7 +29,7 @@ const COMMON_DIGEST_PATHS: &[&str] = &[
     "verification/quint/bin/install-apalache",
     "verification/quint/bin/process-group",
     "verification/quint/bin/quint",
-    "verification/quint/bin/authority-lock",
+    "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java",
     "verification/quint/package.json",
     "verification/quint/pnpm-lock.yaml",
     "verification/quint/run-verification.sh",
@@ -41,6 +41,7 @@ const COMMON_DIGEST_PATHS: &[&str] = &[
     "verification/quint/src/model.rs",
     "verification/quint/src/process.rs",
     "verification/quint/src/publication.rs",
+    "verification/quint/src/server.rs",
 ];
 
 /// Strict, versioned evidence document shared by every model.

@@ -4,7 +4,9 @@ This directory is the repository's formal verification authority. Fourteen bound
 
 ## Pinned tools
 
-`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. `apalache.lock.json` pins the release URL and reviewed archive, launcher, and JAR digests for Apalache 0.56.1. The verification runner also requires Java for Quint's TLC backend and Python 3 to install the backend safely, serialize the fixed translation endpoint, and create owned process groups.
+`package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. `apalache.lock.json` pins the release URL and reviewed archive, launcher, and JAR digests for Apalache 0.56.1. Each Rust baseline or mutation command copies the verified Apalache JAR into a private directory, compiles the evidence-bound gRPC provider agent with a root-owned JDK, starts one OS-assigned IPv4 loopback endpoint, verifies that the child process owns exactly that listener, and retains an owner pipe until shutdown. The Java process clears inherited loader and Java injection variables and exits if its Rust owner disappears. The Python utilities use the fixed system interpreter in isolated mode only for installation and checker process-group cleanup; they do not select or attest the backend endpoint.
+
+The authority trust boundary includes the native program loader, the fixed system shell and Python interpreter, the selected Rust toolchain, and the same-UID repository owner. Variables such as `LD_PRELOAD` and `LD_AUDIT` can execute native code before any script or Rust process can sanitize its environment; callers that do not trust their inherited native-loader environment must start the authority from an externally established clean environment. Backend isolation begins when the Rust verifier constructs its Java child with a cleared environment. The publication lock coordinates trusted same-UID repository processes and is not intended to defend evidence from the repository owner, who can already modify the bound sources.
 
 Install the JavaScript dependency with:
 
@@ -48,7 +50,7 @@ Generated conformance campaigns use the checked-in seeds `0x1`, `0x2`, `0x3`, an
 
 Mutation manifests under `mutations/` use tool-neutral `M-FORMAL-*` identifiers. Each exact source replacement must match once, and every mutant must produce the expected safety or temporal counterexample. Parser, typechecker, translator, launch, timeout, and other tool failures never count as mutation kills.
 
-Evidence under `evidence/` binds the model, checker configuration, mutation manifest, pinned toolchain, dedicated CI workflow, tool versions, properties, scenarios, action coverage, projection negative checks, seeds, bounds, and production sources. `cargo-authority.json` records only the locked normal dependency graph reachable from `fireemu-verification-quint`, with repository-relative workspace paths. Unrelated workspace dependencies, Cargo profiles, and CI jobs are intentionally outside this authority.
+Evidence under `evidence/` binds the model, checker configuration, mutation manifest, pinned toolchain, loopback provider source, Rust-owned server and publication policy, dedicated CI workflow, tool versions, properties, scenarios, action coverage, projection negative checks, seeds, bounds, and production sources. `cargo-authority.json` records only the locked normal dependency graph reachable from `fireemu-verification-quint`, with repository-relative workspace paths. Unrelated workspace dependencies, Cargo profiles, and CI jobs are intentionally outside this authority.
 
 Refresh the complete evidence set only after every baseline, deterministic scenario, generated campaign, projection negative check, and real mutation campaign passes:
 

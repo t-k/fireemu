@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::model::{model, ModelDescriptor, PropertyDescriptor, PropertyKind};
+use crate::server::RunningApalacheServer;
 
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 /// Apalache release required by Quint 0.32.0 for translation and TLC execution.
@@ -26,7 +28,27 @@ pub const APALACHE_LAUNCHER_SHA256: &str =
 /// Exact release archive used by the fail-closed installer.
 pub const APALACHE_ARCHIVE_URL: &str =
     "https://github.com/apalache-mc/apalache/releases/download/v0.56.1/apalache.tgz";
-const APALACHE_SERVER_ENDPOINT: &str = "127.0.0.1:8822";
+
+/// Loopback Apalache server identity validated from the private child process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedApalacheServer {
+    endpoint: String,
+    _owner_pid: u32,
+}
+
+impl OwnedApalacheServer {
+    pub(crate) fn from_validated_child(address: SocketAddr, owner_pid: u32) -> Self {
+        Self {
+            endpoint: address.to_string(),
+            _owner_pid: owner_pid,
+        }
+    }
+
+    #[must_use]
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
 
 /// Strict source-mutation manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -119,21 +141,25 @@ fn bound_diagnostic(bytes: &[u8]) -> String {
 }
 
 /// A bounded TLC verification request for one registered Quint model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VerifyRequest {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifyRequest<'a> {
     descriptor: &'static ModelDescriptor,
+    server: &'a OwnedApalacheServer,
 }
 
-impl VerifyRequest {
+impl<'a> VerifyRequest<'a> {
     /// Creates a request for a registered model descriptor.
     #[must_use]
-    pub const fn new(descriptor: &'static ModelDescriptor) -> Self {
-        Self { descriptor }
+    pub(crate) const fn new(
+        descriptor: &'static ModelDescriptor,
+        server: &'a OwnedApalacheServer,
+    ) -> Self {
+        Self { descriptor, server }
     }
 
     /// Returns the stable Quint 0.32.0 command arguments.
     #[must_use]
-    pub fn arguments(self) -> Vec<String> {
+    pub(crate) fn arguments(&self) -> Vec<String> {
         let mut arguments = vec![
             "verify".to_owned(),
             self.descriptor.spec.to_owned(),
@@ -144,7 +170,7 @@ impl VerifyRequest {
             "--apalache-version".to_owned(),
             APALACHE_VERSION.to_owned(),
             "--server-endpoint".to_owned(),
-            APALACHE_SERVER_ENDPOINT.to_owned(),
+            self.server.endpoint().to_owned(),
             "--tlc-config".to_owned(),
             self.descriptor.config.to_owned(),
         ];
@@ -391,7 +417,7 @@ pub fn mutate_model(
     evidence_path: Option<&Path>,
     cargo_authority: Option<&Path>,
 ) -> Result<Vec<MutationResult>, String> {
-    validate_apalache_distribution()?;
+    let mut server = RunningApalacheServer::start()?;
     let workdir = repository_root.join("verification/quint");
     let source_path = workdir.join(descriptor.spec);
     let config_path = workdir.join(descriptor.config);
@@ -426,10 +452,12 @@ pub fn mutate_model(
             .map_err(|error| format!("cannot write copied TLC config: {error}"))?;
 
         let property = descriptor.property(&mutation.property)?;
-        let arguments = mutation_arguments(descriptor, mutation, property.kind);
+        server.ensure_running()?;
+        let arguments = mutation_arguments(descriptor, mutation, property.kind, server.endpoint());
         let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         let execution_result = execute_quint(&temporary.path, &argument_refs);
         let execution = execution_result?;
+        server.ensure_running()?;
         let outcome = classify_model_mutation_execution(&execution, property);
         let diagnostic =
             bound_diagnostic(format!("{}\n{}", execution.stdout, execution.stderr).as_bytes());
@@ -458,6 +486,7 @@ pub fn mutate_model(
             cargo_authority,
         )?;
     }
+    server.close()?;
     Ok(results)
 }
 
@@ -478,6 +507,7 @@ fn mutation_arguments(
     descriptor: &ModelDescriptor,
     mutation: &Mutation,
     property_kind: PropertyKind,
+    server: &OwnedApalacheServer,
 ) -> Vec<String> {
     let mut arguments = vec![
         "verify".to_owned(),
@@ -489,7 +519,7 @@ fn mutation_arguments(
         "--apalache-version".to_owned(),
         APALACHE_VERSION.to_owned(),
         "--server-endpoint".to_owned(),
-        APALACHE_SERVER_ENDPOINT.to_owned(),
+        server.endpoint().to_owned(),
         "--tlc-config".to_owned(),
         descriptor.config.to_owned(),
     ];
@@ -570,28 +600,25 @@ pub fn verify_model(
     repository_root: &Path,
     descriptor: &'static ModelDescriptor,
 ) -> Result<Execution, String> {
-    validate_apalache_distribution()?;
-    let workdir = repository_root.join("verification/quint");
-    if !workdir.is_dir() {
+    let mut server = RunningApalacheServer::start()?;
+    let source_workdir = repository_root.join("verification/quint");
+    if !source_workdir.is_dir() {
         return Err(format!(
             "Quint verification directory does not exist: {}",
-            workdir.display()
+            source_workdir.display()
         ));
     }
-    let checker_output = workdir.join("_apalache-out");
-    if checker_output.exists() {
-        return Err(format!(
-            "refusing to replace pre-existing checker output: {}",
-            checker_output.display()
-        ));
-    }
-    let arguments = VerifyRequest::new(descriptor).arguments();
+    let workdir = tempfile::Builder::new()
+        .prefix("fireemu-quint-baseline-")
+        .tempdir()
+        .map_err(|error| format!("cannot create private baseline directory: {error}"))?;
+    copy_checker_input(&source_workdir, workdir.path(), descriptor.spec)?;
+    copy_checker_input(&source_workdir, workdir.path(), descriptor.config)?;
+    let arguments = VerifyRequest::new(descriptor, server.endpoint()).arguments();
     let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-    let execution_result = execute_quint(&workdir, &argument_refs);
-    let cleanup_result = cleanup_checker_output(&checker_output);
-    let execution = execution_result?;
-    cleanup_result?;
-    match classify_execution(&execution) {
+    let execution = execute_quint(workdir.path(), &argument_refs)?;
+    server.ensure_running()?;
+    let result = match classify_execution(&execution) {
         CheckerOutcome::Passed => Ok(execution),
         CheckerOutcome::Counterexample => Err(format!(
             "{} baseline produced a counterexample after {:?}:\n{}\n{}",
@@ -605,7 +632,31 @@ pub fn verify_model(
             "{} baseline checker failed after {:?}:\n{}\n{}",
             descriptor.name, execution.elapsed, execution.stdout, execution.stderr
         )),
-    }
+    };
+    server.close()?;
+    result
+}
+
+fn copy_checker_input(
+    source_root: &Path,
+    target_root: &Path,
+    relative: &str,
+) -> Result<(), String> {
+    let source = source_root.join(relative);
+    let target = target_root.join(relative);
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("checker input has no parent: {relative}"))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create checker input directory: {error}"))?;
+    fs::copy(&source, &target).map_err(|error| {
+        format!(
+            "cannot copy checker input {} to {}: {error}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    Ok(())
 }
 
 /// Verifies the exact backend artifact before any model or mutation can execute it.
@@ -653,37 +704,15 @@ pub fn verify_event_delivery_model(repository_root: &Path) -> Result<Execution, 
     )
 }
 
-fn cleanup_checker_output(path: &Path) -> Result<(), String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(format!(
-                "cannot inspect owned checker output {}: {error}",
-                path.display()
-            ));
-        }
-    };
-    let result = if metadata.file_type().is_symlink() || metadata.is_file() {
-        fs::remove_file(path)
-    } else {
-        fs::remove_dir_all(path)
-    };
-    result.map_err(|error| {
-        format!(
-            "cannot remove owned checker output {}: {error}",
-            path.display()
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
     use std::process::Command;
 
     use super::{
         classify_execution, classify_model_mutation_execution, classify_mutation_execution,
-        CheckerOutcome, Execution, MutationOutcome, VerifyRequest,
+        mutation_arguments, CheckerOutcome, Execution, Mutation, MutationOutcome,
+        OwnedApalacheServer, VerifyRequest,
     };
 
     fn execution(code: i32, stdout: &str, stderr: &str) -> Execution {
@@ -699,11 +728,22 @@ mod tests {
         }
     }
 
+    fn owned_test_server() -> (TcpListener, OwnedApalacheServer) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener must bind");
+        let endpoint = listener
+            .local_addr()
+            .expect("test listener must have an address");
+        let server = OwnedApalacheServer::from_validated_child(endpoint, std::process::id());
+        (listener, server)
+    }
+
     #[test]
     fn baseline_request_checks_every_registered_property_with_tlc() {
         let descriptor = crate::model::model("EventDelivery").expect("registered model");
+        let (_listener, server) = owned_test_server();
+        let endpoint = server.endpoint().to_owned();
         assert_eq!(
-            VerifyRequest::new(descriptor).arguments(),
+            VerifyRequest::new(descriptor, &server).arguments(),
             [
                 "verify",
                 "specs/EventDelivery.qnt",
@@ -714,7 +754,7 @@ mod tests {
                 "--apalache-version",
                 "0.56.1",
                 "--server-endpoint",
-                "127.0.0.1:8822",
+                endpoint.as_str(),
                 "--tlc-config",
                 "configs/EventDelivery.json",
                 "--invariants",
@@ -732,6 +772,28 @@ mod tests {
                 "0",
             ]
         );
+    }
+
+    #[test]
+    fn mutation_request_uses_the_same_runner_owned_endpoint() {
+        let descriptor = crate::model::model("EventDelivery").expect("registered model");
+        let property = descriptor
+            .property("LegalStateTransitions")
+            .expect("registered property");
+        let mutation = Mutation {
+            id: "fixture".to_owned(),
+            property: property.name.to_owned(),
+            operator: "fixture".to_owned(),
+            from: "before".to_owned(),
+            to: "after".to_owned(),
+        };
+        let (_listener, server) = owned_test_server();
+        let arguments = mutation_arguments(descriptor, &mutation, property.kind, &server);
+        let endpoint_index = arguments
+            .iter()
+            .position(|argument| argument == "--server-endpoint")
+            .expect("mutation must declare a server endpoint");
+        assert_eq!(arguments[endpoint_index + 1], server.endpoint());
     }
 
     #[test]

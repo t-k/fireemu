@@ -1790,9 +1790,7 @@
         "docs.local/issues/open/match-emulator-suite-ui-workflows.md"
       ],
       "notes": [],
-      "gaps": [
-        "end-to-end differential verification of the official Emulator UI's Logs page consuming the stream (a browser matrix); the primary evidence is a Rust client asserting the handshake and a functions log frame"
-      ],
+      "gaps": [],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -1812,7 +1810,8 @@
             ],
             "integration": [
               "crates/fireemu-adapter-logging/tests/websocket_client.rs",
-              "crates/fireemu/tests/functions_discovery.rs"
+              "crates/fireemu/tests/functions_discovery.rs",
+              "ui/e2e/official-logging.spec.ts"
             ],
             "conformance": []
           },

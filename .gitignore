@@ -9,6 +9,7 @@ CLAUDE.local.md
 junit.xml
 verification/tla/states/
 verification/tla/**/states/
+verification/quint/.fireemu-quint-publication.lock
 *.tlaps
 .tools/
 # cargo-mutants default output (use --output docs.local/mutants/... for kept runs)

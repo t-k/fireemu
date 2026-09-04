@@ -808,6 +808,9 @@ impl Session {
 
     fn replace_backchannel(&self, cancel: oneshot::Sender<()>) -> Result<u64, ()> {
         let mut owner = self.backchannel_owner.lock().map_err(|_| ())?;
+        if self.terminated.load(Ordering::SeqCst) {
+            return Err(());
+        }
         owner.generation = owner.generation.checked_add(1).ok_or(())?;
         if let Some(previous) = owner.cancel.replace(cancel) {
             let _ = previous.send(());
@@ -900,8 +903,7 @@ impl Session {
             queued_count,
         });
         if terminal_acknowledged {
-            self.terminated.store(true, Ordering::SeqCst);
-            self.notify.notify_waiters();
+            self.terminate();
         }
         Ok(())
     }
@@ -1494,6 +1496,10 @@ impl Hub {
         if let Err(e) = session.acknowledge(acked) {
             return error_chunk(&e);
         }
+        if session.is_terminated() {
+            let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
+            return text_response(200, chunk(&noop));
+        }
         let long_poll = req.params.get("CI").map(String::as_str) == Some("1");
         let wait = req
             .params
@@ -1503,6 +1509,10 @@ impl Hub {
             .clamp(Duration::from_secs(1), LONG_POLL_MAX);
         let (cancel_tx, mut cancelled) = oneshot::channel();
         let Ok(generation) = session.replace_backchannel(cancel_tx) else {
+            if session.is_terminated() {
+                let noop = json!([[session.last_aid(), ["noop"]]]).to_string();
+                return text_response(200, chunk(&noop));
+            }
             return text_response(500, "session lock poisoned".to_owned());
         };
         session.trace_event(&TraceEvent::BackchannelStarted {
@@ -2216,6 +2226,36 @@ mod tests {
             tonic::Code::InvalidArgument
         );
         assert_eq!(session.delivery.lock().unwrap().outbound.len(), 1);
+    }
+
+    #[test]
+    fn a_terminated_session_cannot_acquire_a_new_backchannel_owner() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "terminated-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState::default()),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((0, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: std::sync::Weak::new(),
+            terminated: AtomicBool::new(false),
+        };
+        session.terminate();
+        let (cancel, _cancelled) = oneshot::channel();
+
+        assert!(session.replace_backchannel(cancel).is_err());
+        assert!(!session.backchannel_attached());
     }
 
     #[test]

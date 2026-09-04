@@ -377,6 +377,7 @@ fn a_startup_failure_never_runs_the_command() {
 
 #[test]
 fn sigterm_stops_the_command_and_the_services_without_leaving_processes() {
+    let unrelated = ChildGuard::sleeping();
     let dir = scratch("term");
     let pidfile = dir.join("pid");
     let out = dir.join("env.txt");
@@ -437,6 +438,10 @@ fn sigterm_stops_the_command_and_the_services_without_leaving_processes() {
         command_pgid,
         "sigterm_stops_the_command_and_the_services_without_leaving_processes",
         Duration::from_secs(5),
+    );
+    assert!(
+        alive(&unrelated.id().to_string()),
+        "SIGTERM cleanup stopped an unrelated scenario child"
     );
     command_group.disarm();
 }
@@ -526,6 +531,7 @@ fn inherited_emulator_variables_do_not_reach_the_command_unless_selected() {
 
 #[test]
 fn sigint_keeps_its_identity_when_forwarded() {
+    let unrelated = ChildGuard::sleeping();
     let dir = scratch("int");
     let pidfile = dir.join("pid");
     let supervisor = ChildGuard::new(
@@ -564,6 +570,10 @@ fn sigint_keeps_its_identity_when_forwarded() {
         command_pgid,
         "sigint_keeps_its_identity_when_forwarded",
         Duration::from_secs(5),
+    );
+    assert!(
+        alive(&unrelated.id().to_string()),
+        "SIGINT cleanup stopped an unrelated scenario child"
     );
     command_group.disarm();
 }

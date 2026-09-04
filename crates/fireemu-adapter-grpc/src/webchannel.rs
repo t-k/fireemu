@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::hash::{BuildHasher, Hasher};
 use std::io::Write as _;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -706,6 +706,8 @@ struct DeliveryState {
     committed_aid: u64,
     acknowledged_aid: u64,
     stream_end: Option<StreamEnd>,
+    terminal_expiry_cancel: Option<oneshot::Sender<()>>,
+    terminal_expiry_tasks: Arc<AtomicUsize>,
 }
 
 struct BackchannelOwner {
@@ -872,7 +874,14 @@ impl Session {
     }
 
     fn acknowledge(&self, aid: u64) -> Result<(), Status> {
-        let (queued_first, queued_last, queued_count, terminal_acknowledged, cancelled) = {
+        let (
+            queued_first,
+            queued_last,
+            queued_count,
+            terminal_acknowledged,
+            backchannel_cancelled,
+            expiry_cancelled,
+        ) = {
             let mut owner = self
                 .backchannel_owner
                 .lock()
@@ -893,20 +902,21 @@ impl Session {
             let terminal_acknowledged = delivery
                 .stream_end
                 .is_some_and(|ended| delivery.acknowledged_aid >= ended.terminal_aid);
-            let cancelled = if terminal_acknowledged {
+            let (backchannel_cancelled, expiry_cancelled) = if terminal_acknowledged {
                 owner.generation = owner.generation.saturating_add(1);
                 self.terminated.store(true, Ordering::SeqCst);
                 delivery.outbound.clear();
-                owner.cancel.take()
+                (owner.cancel.take(), delivery.terminal_expiry_cancel.take())
             } else {
-                None
+                (None, None)
             };
             (
                 delivery.outbound.front().map(|(id, _)| *id),
                 delivery.outbound.back().map(|(id, _)| *id),
                 delivery.outbound.len(),
                 terminal_acknowledged,
-                cancelled,
+                backchannel_cancelled,
+                expiry_cancelled,
             )
         };
         self.trace_event(&TraceEvent::ArrayAcknowledged {
@@ -917,7 +927,10 @@ impl Session {
             queued_count,
         });
         if terminal_acknowledged {
-            if let Some(cancel) = cancelled {
+            if let Some(cancel) = backchannel_cancelled {
+                let _ = cancel.send(());
+            }
+            if let Some(cancel) = expiry_cancelled {
                 let _ = cancel.send(());
             }
             if let Ok(mut inbound) = self.inbound.lock() {
@@ -988,6 +1001,13 @@ impl Session {
         })
     }
 
+    #[cfg(test)]
+    fn terminal_expiry_task_count(&self) -> usize {
+        self.delivery.lock().map_or(0, |delivery| {
+            delivery.terminal_expiry_tasks.load(Ordering::SeqCst)
+        })
+    }
+
     /// Ends the application stream while preserving its final numbered array for delivery.
     fn end_stream(self: &Arc<Self>) {
         let _terminal_acknowledged = self.backchannel_owner.lock().ok().and_then(|mut owner| {
@@ -1036,6 +1056,9 @@ impl Session {
         }
         if let Ok(mut delivery) = self.delivery.lock() {
             delivery.outbound.clear();
+            if let Some(cancel) = delivery.terminal_expiry_cancel.take() {
+                let _ = cancel.send(());
+            }
         }
         if let Ok(mut maps) = self.maps.lock() {
             maps.1.clear();
@@ -1045,10 +1068,41 @@ impl Session {
     }
 }
 
+struct TerminalExpiryTask {
+    active: Arc<AtomicUsize>,
+}
+
+impl Drop for TerminalExpiryTask {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn schedule_terminal_expiry(session: &Arc<Session>, delay: Duration) {
+    let (cancel, mut cancelled) = oneshot::channel();
+    let active = {
+        let Ok(mut delivery) = session.delivery.lock() else {
+            return;
+        };
+        if delivery.terminal_expiry_cancel.is_some() || session.is_terminated() {
+            return;
+        }
+        delivery.terminal_expiry_cancel = Some(cancel);
+        delivery
+            .terminal_expiry_tasks
+            .fetch_add(1, Ordering::SeqCst);
+        delivery.terminal_expiry_tasks.clone()
+    };
     let session = Arc::downgrade(session);
     tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
+        let _task = TerminalExpiryTask { active };
+        let expired = tokio::select! {
+            () = tokio::time::sleep(delay) => true,
+            _ = &mut cancelled => false,
+        };
+        if !expired {
+            return;
+        }
         if let Some(session) = session.upgrade() {
             if session.terminal_delivery_expired() {
                 session.terminate();
@@ -1071,6 +1125,22 @@ fn schedule_terminal_expiry(session: &Arc<Session>, delay: Duration) {
 pub struct Hub {
     state: Arc<RestState>,
     sessions: Arc<SessionRegistry>,
+}
+
+fn terminate_registered_sessions(sessions: &SessionRegistry) {
+    let sessions = sessions
+        .lock()
+        .map(|mut sessions| sessions.drain().map(|(_, session)| session).collect())
+        .unwrap_or_else(|_| Vec::new());
+    for session in sessions {
+        session.terminate();
+    }
+}
+
+impl Drop for Hub {
+    fn drop(&mut self) {
+        terminate_registered_sessions(&self.sessions);
+    }
 }
 
 /// One parsed `WebChannel` HTTP request.
@@ -1955,6 +2025,59 @@ where
 mod tests {
     use super::*;
 
+    fn terminal_session(
+        sid: &str,
+        registry: &Arc<SessionRegistry>,
+        ended_at: Instant,
+    ) -> Arc<Session> {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        Arc::new(Session {
+            sid: sid.to_owned(),
+            trace_id: next_trace_session_id(),
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            delivery: Mutex::new(DeliveryState {
+                outbound: VecDeque::from([(1, "[1,[{\"error\":{}}]]".to_owned())]),
+                next_aid: 1,
+                committed_aid: 1,
+                stream_end: Some(StreamEnd {
+                    ended_at,
+                    terminal_aid: 1,
+                }),
+                ..DeliveryState::default()
+            }),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((1, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            registry: Arc::downgrade(registry),
+            terminated: AtomicBool::new(false),
+        })
+    }
+
+    async fn wait_for_no_expiry_tasks(sessions: &[Arc<Session>]) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if sessions
+                    .iter()
+                    .all(|session| session.terminal_expiry_task_count() == 0)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled terminal expiry tasks must finish promptly");
+    }
+
     #[test]
     fn trace_events_cannot_render_channel_capabilities_or_payloads() {
         let rendered = format_trace_event(&TraceEvent::ArrayGenerated {
@@ -2182,6 +2305,7 @@ mod tests {
                         .expect("test instant must support the terminal TTL"),
                     terminal_aid: 2,
                 }),
+                ..DeliveryState::default()
             }),
             backchannel_owner: Mutex::new(BackchannelOwner {
                 generation: 0,
@@ -2213,6 +2337,82 @@ mod tests {
         .expect("the deadline task must terminate an abandoned session");
         assert!(session.delivery.lock().unwrap().outbound.is_empty());
         assert!(!registry.lock().unwrap().contains_key(&session.sid));
+    }
+
+    #[tokio::test]
+    async fn terminal_acknowledgement_and_termination_cancel_all_expiry_work() {
+        let registry = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = (0..64)
+            .map(|index| {
+                let session =
+                    terminal_session(&format!("terminal-{index}"), &registry, Instant::now());
+                registry
+                    .lock()
+                    .unwrap()
+                    .insert(session.sid.clone(), session.clone());
+                schedule_terminal_expiry(&session, Duration::from_secs(60));
+                session
+            })
+            .collect::<Vec<_>>();
+        assert!(sessions
+            .iter()
+            .all(|session| session.terminal_expiry_task_count() == 1));
+
+        for (index, session) in sessions.iter().enumerate() {
+            if index % 2 == 0 {
+                session.acknowledge(1).unwrap();
+            } else {
+                session.terminate();
+            }
+        }
+
+        wait_for_no_expiry_tasks(&sessions).await;
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_old_expiry_cannot_remove_a_replacement_sid() {
+        let registry = Arc::new(Mutex::new(HashMap::new()));
+        let old = terminal_session("reused", &registry, Instant::now());
+        registry
+            .lock()
+            .unwrap()
+            .insert(old.sid.clone(), old.clone());
+        schedule_terminal_expiry(&old, Duration::from_secs(60));
+
+        let replacement = terminal_session("reused", &registry, Instant::now());
+        registry
+            .lock()
+            .unwrap()
+            .insert(replacement.sid.clone(), replacement.clone());
+        old.terminate();
+        wait_for_no_expiry_tasks(std::slice::from_ref(&old)).await;
+
+        let registered = registry.lock().unwrap().get("reused").cloned().unwrap();
+        assert!(Arc::ptr_eq(&registered, &replacement));
+        assert!(!replacement.is_terminated());
+    }
+
+    #[tokio::test]
+    async fn hub_shutdown_cancels_every_registered_expiry() {
+        let registry = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = (0..16)
+            .map(|index| {
+                let session =
+                    terminal_session(&format!("hub-terminal-{index}"), &registry, Instant::now());
+                registry
+                    .lock()
+                    .unwrap()
+                    .insert(session.sid.clone(), session.clone());
+                schedule_terminal_expiry(&session, Duration::from_secs(60));
+                session
+            })
+            .collect::<Vec<_>>();
+
+        terminate_registered_sessions(&registry);
+
+        assert!(registry.lock().unwrap().is_empty());
+        wait_for_no_expiry_tasks(&sessions).await;
+        assert!(sessions.iter().all(|session| session.is_terminated()));
     }
 
     #[test]

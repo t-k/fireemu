@@ -1904,6 +1904,281 @@ fn control_state(
     }
 }
 
+struct ReadySuite {
+    cfg: RuntimeConfig,
+    only: Selection,
+    quiet: bool,
+    export_on_exit: Option<PathBuf>,
+    clock: Arc<Mutex<VirtualClock>>,
+    backend: Arc<LocalBackend>,
+    auth: Arc<AuthState>,
+    storage: Arc<fireemu_adapter_http::storage::StorageState>,
+    control: Arc<fireemu_adapter_http::control::ControlState>,
+    app_check: Option<Arc<fireemu_adapter_http::app_check::AppCheckState>>,
+    functions_runtime: Option<Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>>,
+    exporter: Arc<Exporter>,
+    hub_state: Arc<hub::HubState>,
+    locator: Option<hub::Locator>,
+    addrs: BoundAddrs,
+    control_token: String,
+    storage_admin_capability: String,
+    listeners: Listeners,
+    ui_listener: Option<tokio::net::TcpListener>,
+    firestore_service: GatewayService,
+    rest: Arc<RestState>,
+    pubsub: fireemu_adapter_pubsub::PubSubHandle,
+}
+
+async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, String> {
+    let ReadySuite {
+        cfg,
+        only,
+        quiet,
+        export_on_exit,
+        clock,
+        backend,
+        auth,
+        storage,
+        control,
+        app_check,
+        functions_runtime,
+        exporter,
+        hub_state,
+        locator,
+        addrs,
+        control_token,
+        storage_admin_capability,
+        listeners,
+        ui_listener,
+        firestore_service,
+        rest,
+        pubsub,
+    } = ready;
+    let Listeners {
+        firestore: grpc_listener,
+        control: http_listener,
+        auth_selected: _,
+        storage: storage_listener,
+        functions: functions_listener,
+        pubsub: pubsub_listener,
+        hub: hub_listener,
+        logging: logging_listener,
+    } = listeners;
+    let grpc = match grpc_listener {
+        Some(listener) => tokio::spawn(serve_multiplexed(
+            listener,
+            FirestoreServer::new(firestore_service)
+                .max_decoding_message_size(10 * 1024 * 1024)
+                .max_encoding_message_size(10 * 1024 * 1024),
+            rest.clone(),
+        )),
+        None => tokio::spawn(std::future::pending()),
+    };
+    let http = tokio::spawn(fireemu_adapter_http::server::serve_with_control(
+        http_listener,
+        auth.clone(),
+        control.clone(),
+    ));
+    let storage_server = match storage_listener {
+        Some(listener) => tokio::spawn(fireemu_adapter_http::storage_server::serve_storage(
+            listener,
+            storage.clone(),
+        )),
+        None => tokio::spawn(std::future::pending()),
+    };
+    let hub_server = match hub_listener {
+        Some(listener) => tokio::spawn(hub::serve(listener, hub_state.clone())),
+        None => tokio::spawn(std::future::pending()),
+    };
+    let functions_server = match (functions_listener, functions_runtime.clone()) {
+        (Some(listener), Some(runtime)) => tokio::spawn(
+            fireemu_adapter_functions::http::serve_functions(listener, runtime),
+        ),
+        _ => tokio::spawn(std::future::pending()),
+    };
+    let pubsub_server = match pubsub_listener {
+        Some(listener) => tokio::spawn(fireemu_adapter_pubsub::serve_pubsub(listener, pubsub)),
+        None => tokio::spawn(std::future::pending()),
+    };
+    let log_bus = fireemu_adapter_logging::LogBus::new();
+    for (name, addr) in [
+        ("firestore", addrs.firestore),
+        ("auth", addrs.auth),
+        ("storage", addrs.storage),
+        ("functions", addrs.functions),
+        ("pubsub", addrs.pubsub),
+    ] {
+        if let Some(addr) = addr {
+            log_bus.publish(
+                &fireemu_adapter_logging::LogInput::plain(
+                    "info",
+                    format!("{name} emulator started on {addr}"),
+                    clock_millis(&clock),
+                )
+                .for_emulator(name),
+            );
+        }
+    }
+    let functions_log_pump = functions_runtime.clone().map(|runtime| {
+        let bus = log_bus.clone();
+        let clock = clock.clone();
+        tokio::spawn(async move {
+            let mut cursors: std::collections::BTreeMap<
+                String,
+                (Arc<fireemu_adapter_functions::runner::Runner>, Option<u64>),
+            > = std::collections::BTreeMap::new();
+            let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                poll.tick().await;
+                let runners = runtime.current_runners();
+                cursors.retain(|name, _| runners.iter().any(|(current, _)| current == name));
+                for (codebase, runner) in runners {
+                    let state = cursors
+                        .entry(codebase.clone())
+                        .or_insert_with(|| (runner.clone(), None));
+                    if !Arc::ptr_eq(&state.0, &runner) {
+                        *state = (runner.clone(), None);
+                    }
+                    let slice = runner.logs_since(state.1);
+                    state.1 = Some(slice.next_seq);
+                    if slice.truncated {
+                        bus.publish(
+                            &fireemu_adapter_logging::LogInput::plain(
+                                "warning",
+                                format!(
+                                    "earlier function logs were truncated for codebase {codebase}"
+                                ),
+                                clock_millis(&clock),
+                            )
+                            .for_emulator("functions"),
+                        );
+                    }
+                    for line in slice.lines {
+                        bus.publish(
+                            &fireemu_adapter_logging::LogInput::plain(
+                                "info",
+                                line,
+                                clock_millis(&clock),
+                            )
+                            .for_emulator("functions"),
+                        );
+                    }
+                }
+            }
+        })
+    });
+    let logging_server = match logging_listener {
+        Some(listener) => tokio::spawn(fireemu_adapter_logging::serve_logging(
+            listener,
+            log_bus.clone(),
+        )),
+        None => tokio::spawn(std::future::pending()),
+    };
+    let ui_server = match (ui_listener, addrs.ui) {
+        (Some(listener), Some(addr)) => {
+            let state = ui::state(ui::Parts {
+                cfg: &cfg,
+                only: &only,
+                control_token: control_token.clone(),
+                rest: rest.clone(),
+                backend: backend.clone(),
+                auth: auth.clone(),
+                storage: storage.clone(),
+                control: control.clone(),
+                functions: functions_runtime.clone(),
+                app_check,
+                addrs: (
+                    addrs.firestore.unwrap_or(addrs.control),
+                    addrs.control,
+                    addrs.storage.unwrap_or(addrs.control),
+                    addrs.functions,
+                    addr,
+                ),
+            });
+            tokio::spawn(fireemu_adapter_ui::server::serve_ui(listener, state))
+        }
+        _ => tokio::spawn(std::future::pending()),
+    };
+    // Every listener is now served, so an exec child can safely use all advertised endpoints.
+    let mut child = match &exec {
+        Some(plan) => {
+            let env = child_environment(
+                &cfg,
+                &only,
+                &addrs,
+                &control_token,
+                &storage_admin_capability,
+            );
+            if !quiet {
+                println!("  running: {}", plan.command.join(" "));
+            }
+            Some(spawn_child(plan, &env)?)
+        }
+        None => None,
+    };
+    let child_pid = child.as_ref().and_then(tokio::process::Child::id);
+    let mut terminated = false;
+    let outcome = tokio::select! {
+        r = grpc => Err(format!("gRPC server stopped: {r:?}")),
+        r = http => Err(format!("HTTP server stopped: {r:?}")),
+        r = storage_server => Err(format!("Storage server stopped: {r:?}")),
+        r = functions_server => Err(format!("Functions server stopped: {r:?}")),
+        r = pubsub_server => Err(format!("Pub/Sub server stopped: {r:?}")),
+        r = ui_server => Err(format!("UI server stopped: {r:?}")),
+        r = hub_server => Err(format!("Emulator Hub stopped: {r:?}")),
+        r = logging_server => Err(format!("Logging emulator stopped: {r:?}")),
+        status = wait_child(child.as_mut()) => match status {
+            Ok(status) => Ok(Some(exit_code(status))),
+            Err(e) => Err(format!("waiting for the command: {e}")),
+        },
+        _ = tokio::signal::ctrl_c() => {
+            if !quiet {
+                println!("shutting down");
+            }
+            Ok::<Option<i32>, String>(None)
+        }
+        () = terminate_signal() => {
+            if !quiet {
+                println!("shutting down (SIGTERM)");
+            }
+            terminated = true;
+            Ok::<Option<i32>, String>(None)
+        }
+    };
+    // Keep services and the Hub locator alive through child cleanup, export, and Functions
+    // shutdown. The runtime tears down the detached server tasks only after this returns.
+    if let Some(pump) = &functions_log_pump {
+        pump.abort();
+    }
+    let code = match (&outcome, child.as_mut(), child_pid) {
+        (Ok(Some(code)), _, Some(pid)) => {
+            signal_child(pid, "-KILL");
+            *code
+        }
+        (Ok(Some(code)), _, None) => *code,
+        (_, Some(child), Some(pid)) => {
+            stop_child(child, pid, if terminated { "-TERM" } else { "-INT" }).await
+        }
+        _ => 0,
+    };
+    if let Some(dir) = &export_on_exit {
+        use hub::ExportRunner as _;
+        match exporter.export(dir, "exit") {
+            Ok(()) => {
+                if !quiet {
+                    println!("exported to {}", dir.display());
+                }
+            }
+            Err(e) => eprintln!("error: --export-on-exit {}: {e}", dir.display()),
+        }
+    }
+    if let Some(runtime) = functions_runtime {
+        runtime.shutdown().await;
+    }
+    drop(locator);
+    outcome.map(|_| code)
+}
+
 #[allow(clippy::too_many_lines)]
 fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     let Options {
@@ -2433,232 +2708,43 @@ fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             rules: enforcer,
             app_check: firestore_policy,
         });
-        let grpc = match grpc_listener {
-            Some(listener) => tokio::spawn(serve_multiplexed(
-                listener,
-                // Firestore's request size limit applies to the message (framing is separate).
-                FirestoreServer::new(service)
-                    .max_decoding_message_size(10 * 1024 * 1024)
-                    .max_encoding_message_size(10 * 1024 * 1024),
-                rest.clone(),
-            )),
-            None => tokio::spawn(std::future::pending()),
-        };
-        let http = tokio::spawn(fireemu_adapter_http::server::serve_with_control(
-            http_listener,
-            auth.clone(),
-            control.clone(),
-        ));
-        let storage_server = match storage_listener {
-            Some(listener) => tokio::spawn(
-                fireemu_adapter_http::storage_server::serve_storage(listener, storage.clone()),
-            ),
-            None => tokio::spawn(std::future::pending()),
-        };
-        let hub_server = match hub_listener {
-            Some(listener) => tokio::spawn(hub::serve(listener, hub_state.clone())),
-            None => tokio::spawn(std::future::pending()),
-        };
-        let functions_server = match (functions_listener, functions_runtime.clone()) {
-            (Some(listener), Some(runtime)) => tokio::spawn(
-                fireemu_adapter_functions::http::serve_functions(listener, runtime),
-            ),
-            _ => tokio::spawn(std::future::pending()),
-        };
-        let pubsub_server = match pubsub_listener {
-            Some(listener) => {
-                tokio::spawn(fireemu_adapter_pubsub::serve_pubsub(listener, pubsub_handle))
-            }
-            None => tokio::spawn(std::future::pending()),
-        };
-        // The Logging emulator: an `EmulatorLog` WebSocket the official UI's Logs page reads.
-        // One bounded bus carries the lines; the daemon feeds it the functions runner's output
-        // and the emulators' lifecycle notes. What is and is not fed is recorded as a precision
-        // on the `logging` surface in the compatibility contract.
-        let log_bus = fireemu_adapter_logging::LogBus::new();
-        for (name, addr) in [
-            ("firestore", addrs.firestore),
-            ("auth", addrs.auth),
-            ("storage", addrs.storage),
-            ("functions", addrs.functions),
-            ("pubsub", addrs.pubsub),
-        ] {
-            if let Some(addr) = addr {
-                log_bus.publish(
-                    &fireemu_adapter_logging::LogInput::plain(
-                        "info",
-                        format!("{name} emulator started on {addr}"),
-                        clock_millis(&clock),
-                    )
-                    .for_emulator(name),
-                );
-            }
-        }
-        // Feed every Functions codebase runner's lines into the bus, tagged
-        // emulator=functions, by polling its log accessor. A hot reload replaces a runner, so
-        // the cursor is reset when the Arc identity changes rather than carrying the retired
-        // generation's sequence into the new log buffer.
-        let functions_log_pump = functions_runtime.clone().map(|runtime| {
-            let bus = log_bus.clone();
-            let clock = clock.clone();
-            tokio::spawn(async move {
-                let mut cursors: std::collections::BTreeMap<
-                    String,
-                    (Arc<fireemu_adapter_functions::runner::Runner>, Option<u64>),
-                > = std::collections::BTreeMap::new();
-                let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
-                loop {
-                    poll.tick().await;
-                    let runners = runtime.current_runners();
-                    cursors.retain(|name, _| runners.iter().any(|(current, _)| current == name));
-                    for (codebase, runner) in runners {
-                        let state = cursors
-                            .entry(codebase.clone())
-                            .or_insert_with(|| (runner.clone(), None));
-                        if !Arc::ptr_eq(&state.0, &runner) {
-                            *state = (runner.clone(), None);
-                        }
-                        let slice = runner.logs_since(state.1);
-                        state.1 = Some(slice.next_seq);
-                        if slice.truncated {
-                            bus.publish(
-                                &fireemu_adapter_logging::LogInput::plain(
-                                    "warning",
-                                    format!("earlier function logs were truncated for codebase {codebase}"),
-                                    clock_millis(&clock),
-                                )
-                                .for_emulator("functions"),
-                            );
-                        }
-                        for line in slice.lines {
-                            bus.publish(
-                                &fireemu_adapter_logging::LogInput::plain(
-                                    "info",
-                                    line,
-                                    clock_millis(&clock),
-                                )
-                                .for_emulator("functions"),
-                            );
-                        }
-                    }
-                }
-            })
-        });
-        let logging_server = match logging_listener {
-            Some(listener) => tokio::spawn(fireemu_adapter_logging::serve_logging(
-                listener,
-                log_bus.clone(),
-            )),
-            None => tokio::spawn(std::future::pending()),
-        };
-        let ui_server = match (ui_listener, ui_addr) {
-            (Some(listener), Some(addr)) => {
-                let state = ui::state(ui::Parts {
-                    cfg: &cfg,
-                    only: &only,
-                    control_token: control_token.clone(),
-                    rest: rest.clone(),
-                    backend: backend.clone(),
-                    auth: auth.clone(),
-                    storage: storage.clone(),
-                    control: control.clone(),
-                    functions: functions_runtime.clone(),
-                    app_check: app_check.clone(),
-                    addrs: (
-                        grpc_addr.unwrap_or(http_addr),
-                        http_addr,
-                        storage_addr.unwrap_or(http_addr),
-                        functions_addr,
-                        addr,
-                    ),
-                });
-                tokio::spawn(fireemu_adapter_ui::server::serve_ui(listener, state))
-            }
-            _ => tokio::spawn(std::future::pending()),
-        };
-        // Every listener is bound and served: the command may start.
-        let mut child = match &exec {
-            Some(plan) => {
-                let env = child_environment(
-                    &cfg,
-                    &only,
-                    &addrs,
-                    &control_token,
-                    &storage_admin_capability,
-                );
-                if !quiet {
-                    println!("  running: {}", plan.command.join(" "));
-                }
-                Some(spawn_child(plan, &env)?)
-            }
-            None => None,
-        };
-        let child_pid = child.as_ref().and_then(tokio::process::Child::id);
-        let mut terminated = false;
-        let outcome = tokio::select! {
-            r = grpc => Err(format!("gRPC server stopped: {r:?}")),
-            r = http => Err(format!("HTTP server stopped: {r:?}")),
-            r = storage_server => Err(format!("Storage server stopped: {r:?}")),
-            r = functions_server => Err(format!("Functions server stopped: {r:?}")),
-            r = pubsub_server => Err(format!("Pub/Sub server stopped: {r:?}")),
-            r = ui_server => Err(format!("UI server stopped: {r:?}")),
-            r = hub_server => Err(format!("Emulator Hub stopped: {r:?}")),
-            r = logging_server => Err(format!("Logging emulator stopped: {r:?}")),
-            status = wait_child(child.as_mut()) => match status {
-                Ok(status) => Ok(Some(exit_code(status))),
-                Err(e) => Err(format!("waiting for the command: {e}")),
+        serve_suite(
+            ReadySuite {
+                cfg,
+                only,
+                quiet,
+                export_on_exit,
+                clock,
+                backend,
+                auth,
+                storage,
+                control,
+                app_check,
+                functions_runtime,
+                exporter,
+                hub_state,
+                locator: _locator,
+                addrs,
+                control_token,
+                storage_admin_capability,
+                listeners: Listeners {
+                    firestore: grpc_listener,
+                    control: http_listener,
+                    auth_selected,
+                    storage: storage_listener,
+                    functions: functions_listener,
+                    pubsub: pubsub_listener,
+                    hub: hub_listener,
+                    logging: logging_listener,
+                },
+                ui_listener,
+                firestore_service: service,
+                rest,
+                pubsub: pubsub_handle,
             },
-            _ = tokio::signal::ctrl_c() => {
-                if !quiet {
-                    println!("shutting down");
-                }
-                Ok::<Option<i32>, String>(None)
-            }
-            () = terminate_signal() => {
-                if !quiet {
-                    println!("shutting down (SIGTERM)");
-                }
-                terminated = true;
-                Ok::<Option<i32>, String>(None)
-            }
-        };
-        // The functions log pump is a background poller with no shutdown signal of its own;
-        // stop it explicitly so it does not outlive the run.
-        if let Some(pump) = &functions_log_pump {
-            pump.abort();
-        }
-        // The command stops before the services it uses. When it exited by itself its
-        // group is still swept (a background job it left behind must not keep running).
-        let code = match (&outcome, child.as_mut(), child_pid) {
-            (Ok(Some(code)), _, Some(pid)) => {
-                signal_child(pid, "-KILL");
-                *code
-            }
-            (Ok(Some(code)), _, None) => *code,
-            (_, Some(child), Some(pid)) => {
-                stop_child(child, pid, if terminated { "-TERM" } else { "-INT" }).await
-            }
-            _ => 0,
-        };
-        // `--export-on-exit` runs on every path that reached a served suite: a clean exit, a
-        // command that failed, and SIGINT or SIGTERM. It runs before the runner is shut down
-        // and while every store is still in memory, and a failure to write it is reported
-        // without changing the exit code the run already earned (`DATA-04`).
-        if let Some(dir) = &export_on_exit {
-            use hub::ExportRunner as _;
-            match exporter.export(dir, "exit") {
-                Ok(()) => {
-                    if !quiet {
-                        println!("exported to {}", dir.display());
-                    }
-                }
-                Err(e) => eprintln!("error: --export-on-exit {}: {e}", dir.display()),
-            }
-        }
-        if let Some(runtime) = functions_runtime {
-            runtime.shutdown().await;
-        }
-        outcome.map(|_| code)
+            exec,
+        )
+        .await
     });
     match result {
         Ok(code) => ExitCode::from(u8::try_from(code.clamp(0, 255)).unwrap_or(1)),

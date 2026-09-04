@@ -6,6 +6,8 @@ This directory is the repository's formal verification authority. Fourteen bound
 
 `package.json` pins Quint 0.32.0 and pnpm 10.32.1. `Cargo.toml` pins Quint Connect 0.1.2. `apalache.lock.json` pins the release URL and reviewed archive, launcher, and JAR digests for Apalache 0.56.1. Each Rust baseline or mutation command copies the verified Apalache JAR into a private directory, compiles the evidence-bound gRPC provider agent with a root-owned JDK, starts one OS-assigned IPv4 loopback endpoint, verifies that the child process owns exactly that listener, and retains an owner pipe until shutdown. The Java process clears inherited loader and Java injection variables and exits if its Rust owner disappears. The Python utilities use the fixed system interpreter in isolated mode only for installation and checker process-group cleanup; they do not select or attest the backend endpoint.
 
+The authority trust boundary includes the native program loader, the fixed system shell and Python interpreter, the selected Rust toolchain, and the same-UID repository owner. Variables such as `LD_PRELOAD` and `LD_AUDIT` can execute native code before any script or Rust process can sanitize its environment; callers that do not trust their inherited native-loader environment must start the authority from an externally established clean environment. Backend isolation begins when the Rust verifier constructs its Java child with a cleared environment. The publication lock coordinates trusted same-UID repository processes and is not intended to defend evidence from the repository owner, who can already modify the bound sources.
+
 Install the JavaScript dependency with:
 
 ```sh

@@ -97,6 +97,22 @@ fn process_exists(pid: u32) -> bool {
 }
 
 #[cfg(unix)]
+fn matching_processes(pattern: &str) -> Vec<u32> {
+    let output = Command::new("pgrep")
+        .args(["-f", pattern])
+        .output()
+        .expect("process lookup must launch");
+    if output.status.code() == Some(1) {
+        return Vec::new();
+    }
+    assert!(output.status.success(), "process lookup must succeed");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+#[cfg(unix)]
 fn read_complete_pid_record(path: &Path, expected: usize) -> Option<Vec<u32>> {
     let text = fs::read_to_string(path).ok()?;
     let pids = text
@@ -1247,6 +1263,48 @@ fn verify_model_cli_checks_event_delivery_with_tlc() {
             .join("verification/quint/_apalache-out")
             .exists(),
         "verify-model must remove the checker output it owns"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires Java and the pinned local Quint CLI"]
+fn interrupted_real_mutation_reaps_the_owned_backend() {
+    let before = matching_processes("fireemu-quint-apalache-");
+    let child = Command::new(process_group_launcher_path())
+        .arg(env!("CARGO_BIN_EXE_fireemu-verification-quint"))
+        .args(["mutate-model", "--model", "EventDelivery", "--root"])
+        .arg(repository_root())
+        .env(
+            "QUINT_HOME",
+            std::env::var_os("QUINT_HOME").unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").expect("HOME must exist"))
+                    .join(".quint")
+                    .into_os_string()
+            }),
+        )
+        .env("PATH", path_with_pinned_quint())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("real mutation authority must launch");
+    let child = AuthorityChild::new(child);
+    let mut owned = Vec::new();
+    assert!(wait_until(Duration::from_secs(30), || {
+        owned = matching_processes("fireemu-quint-apalache-")
+            .into_iter()
+            .filter(|pid| !before.contains(pid))
+            .collect();
+        !owned.is_empty()
+    }));
+
+    let status = child.terminate_and_wait(Duration::from_secs(8));
+    assert_eq!(status.code(), Some(143));
+    assert!(
+        wait_until(Duration::from_secs(5), || owned
+            .iter()
+            .all(|pid| !process_exists(*pid))),
+        "interrupted mutation leaked owned backend processes: {owned:?}"
     );
 }
 

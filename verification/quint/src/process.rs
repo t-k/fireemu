@@ -2,10 +2,9 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
-use std::str::FromStr;
+use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -38,131 +37,17 @@ pub(crate) struct OwnedApalacheServer {
 }
 
 impl OwnedApalacheServer {
-    pub(crate) fn parse(endpoint: &str, owner_pid: &str) -> Result<Self, String> {
-        let address = SocketAddr::from_str(endpoint)
-            .map_err(|error| format!("invalid Apalache server endpoint {endpoint:?}: {error}"))?;
-        if address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || address.port() == 0 {
-            return Err(format!(
-                "Apalache server endpoint must be a non-zero loopback socket: {endpoint:?}"
-            ));
-        }
-        let owner_pid = owner_pid
-            .parse::<u32>()
-            .map_err(|error| format!("invalid Apalache owner PID {owner_pid:?}: {error}"))?;
-        if owner_pid == 0 {
-            return Err("Apalache owner PID must be non-zero".to_owned());
-        }
-        let status = Command::new("/bin/kill")
-            .args(["-0", &owner_pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|error| format!("cannot inspect Apalache owner PID {owner_pid}: {error}"))?;
-        if !status.success() {
-            return Err(format!("Apalache owner PID {owner_pid} is not alive"));
-        }
-        if !process_owns_listener(owner_pid, address)? {
-            return Err(format!(
-                "Apalache owner PID {owner_pid} does not own listener port {}",
-                address.port()
-            ));
-        }
-        Ok(Self {
+    pub(crate) fn from_validated_child(address: SocketAddr, owner_pid: u32) -> Self {
+        Self {
             endpoint: address.to_string(),
             _owner_pid: owner_pid,
-        })
+        }
     }
 
     #[must_use]
     fn endpoint(&self) -> &str {
         &self.endpoint
     }
-}
-
-#[cfg(target_os = "linux")]
-fn process_owns_listener(owner_pid: u32, address: SocketAddr) -> Result<bool, String> {
-    let descriptors = fs::read_dir(format!("/proc/{owner_pid}/fd"))
-        .map_err(|error| format!("cannot inspect Apalache owner descriptors: {error}"))?;
-    let mut socket_inodes = BTreeSet::new();
-    for descriptor in descriptors {
-        let descriptor = match descriptor {
-            Ok(descriptor) => descriptor,
-            Err(_) => continue,
-        };
-        let target = match fs::read_link(descriptor.path()) {
-            Ok(target) => target,
-            Err(_) => continue,
-        };
-        let target = target.to_string_lossy();
-        if let Some(inode) = target
-            .strip_prefix("socket:[")
-            .and_then(|value| value.strip_suffix(']'))
-        {
-            socket_inodes.insert(inode.to_owned());
-        }
-    }
-    for table_name in ["tcp", "tcp6"] {
-        let table_path = format!("/proc/{owner_pid}/net/{table_name}");
-        let table = match fs::read_to_string(&table_path) {
-            Ok(table) => table,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!("cannot inspect {table_path}: {error}"));
-            }
-        };
-        for line in table.lines().skip(1) {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            if fields.len() < 10 || fields[3] != "0A" || !socket_inodes.contains(fields[9]) {
-                continue;
-            }
-            let Some((hexadecimal_address, hexadecimal_port)) = fields[1].rsplit_once(':') else {
-                continue;
-            };
-            if table_name == "tcp"
-                && hexadecimal_address == "0100007F"
-                && u16::from_str_radix(hexadecimal_port, 16).ok() == Some(address.port())
-            {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-#[cfg(target_os = "macos")]
-fn process_owns_listener(owner_pid: u32, address: SocketAddr) -> Result<bool, String> {
-    let output = Command::new("/usr/sbin/lsof")
-        .args([
-            "-nP",
-            "-a",
-            "-p",
-            &owner_pid.to_string(),
-            "-iTCP",
-            "-sTCP:LISTEN",
-            "-Fn",
-        ])
-        .output()
-        .map_err(|error| format!("cannot inspect Apalache listener ownership: {error}"))?;
-    if output.status.code() == Some(1) && output.stderr.is_empty() {
-        return Ok(false);
-    }
-    if !output.status.success() {
-        return Err(format!(
-            "listener ownership inspection failed with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let expected = format!("n{}:{}", address.ip(), address.port());
-    Ok(output
-        .stdout
-        .split(|byte| *byte == b'\n')
-        .any(|line| line == expected.as_bytes()))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn process_owns_listener(_owner_pid: u32, _address: SocketAddr) -> Result<bool, String> {
-    Err("Apalache listener ownership checks are unsupported on this platform".to_owned())
 }
 
 /// Strict source-mutation manifest.
@@ -847,10 +732,8 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener must bind");
         let endpoint = listener
             .local_addr()
-            .expect("test listener must have an address")
-            .to_string();
-        let server = OwnedApalacheServer::parse(&endpoint, &std::process::id().to_string())
-            .expect("loopback server metadata must be valid");
+            .expect("test listener must have an address");
+        let server = OwnedApalacheServer::from_validated_child(endpoint, std::process::id());
         (listener, server)
     }
 
@@ -911,40 +794,6 @@ mod tests {
             .position(|argument| argument == "--server-endpoint")
             .expect("mutation must declare a server endpoint");
         assert_eq!(arguments[endpoint_index + 1], server.endpoint());
-    }
-
-    #[test]
-    fn server_metadata_rejects_malformed_non_loopback_and_dead_owners() {
-        let current_pid = std::process::id().to_string();
-        for endpoint in [
-            "localhost:49152",
-            "0.0.0.0:49152",
-            "192.0.2.1:49152",
-            "127.0.0.1:0",
-            "not-an-endpoint",
-        ] {
-            assert!(
-                OwnedApalacheServer::parse(endpoint, &current_pid).is_err(),
-                "endpoint must be rejected: {endpoint}"
-            );
-        }
-        assert!(OwnedApalacheServer::parse("127.0.0.1:49152", "0").is_err());
-        assert!(OwnedApalacheServer::parse("127.0.0.1:49152", "4294967295").is_err());
-
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener must bind");
-        let endpoint = listener
-            .local_addr()
-            .expect("fixture listener must have an address")
-            .to_string();
-        let mut non_owner = Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("non-owner fixture must launch");
-        let diagnostic = OwnedApalacheServer::parse(&endpoint, &non_owner.id().to_string())
-            .expect_err("an unrelated live process must not own the listener");
-        assert!(diagnostic.contains("does not own listener port"));
-        non_owner.kill().expect("non-owner fixture must stop");
-        non_owner.wait().expect("non-owner fixture must be reaped");
     }
 
     #[test]

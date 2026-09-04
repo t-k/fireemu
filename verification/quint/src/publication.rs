@@ -119,6 +119,8 @@ fn atomic_exchange(_candidate: &Path, _target: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -145,5 +147,31 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("second publisher remained blocked after release");
         second.join().expect("second publisher must not panic");
+    }
+
+    #[test]
+    fn publication_lock_rejects_symlinks_directories_and_public_files() {
+        for fixture in ["symlink", "directory", "public-file"] {
+            let temporary = tempfile::tempdir().expect("temporary directory must be created");
+            let lock = temporary.path().join(".fireemu-quint-publication.lock");
+            match fixture {
+                "symlink" => {
+                    let target = temporary.path().join("target");
+                    fs::write(&target, b"").expect("symlink target must be created");
+                    symlink(target, &lock).expect("lock symlink must be created");
+                }
+                "directory" => fs::create_dir(&lock).expect("lock directory must be created"),
+                "public-file" => {
+                    fs::write(&lock, b"").expect("lock file must be created");
+                    fs::set_permissions(&lock, fs::Permissions::from_mode(0o644))
+                        .expect("lock mode must be changed");
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                PublicationLock::acquire(temporary.path()).is_err(),
+                "{fixture} publication lock must fail closed"
+            );
+        }
     }
 }

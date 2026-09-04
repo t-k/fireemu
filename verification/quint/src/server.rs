@@ -83,10 +83,10 @@ impl RunningApalacheServer {
             closed: false,
         };
         let address = running.wait_until_ready()?;
-        running.endpoint = Some(OwnedApalacheServer::parse(
-            &address.to_string(),
-            &running.child.id().to_string(),
-        )?);
+        running.endpoint = Some(OwnedApalacheServer::from_validated_child(
+            address,
+            running.child.id(),
+        ));
         Ok(running)
     }
 
@@ -395,17 +395,21 @@ fn listener_endpoints(pid: u32) -> Result<BTreeSet<SocketAddr>, String> {
             bounded(&output.stderr)
         ));
     }
+    parse_lsof_listener_output(&output.stdout)
+}
+
+fn parse_lsof_listener_output(output: &[u8]) -> Result<BTreeSet<SocketAddr>, String> {
     let mut endpoints = BTreeSet::new();
-    for line in output.stdout.split(|byte| *byte == b'\n') {
+    for line in output.split(|byte| *byte == b'\n') {
         let Some(value) = line.strip_prefix(b"n") else {
             continue;
         };
-        let Ok(value) = std::str::from_utf8(value) else {
-            continue;
-        };
-        if let Ok(address) = value.trim_matches(['[', ']']).parse() {
-            endpoints.insert(address);
-        }
+        let value = std::str::from_utf8(value)
+            .map_err(|error| format!("listener address is not UTF-8: {error}"))?;
+        let address = value
+            .parse::<SocketAddr>()
+            .map_err(|error| format!("unrecognized listener address {value:?}: {error}"))?;
+        endpoints.insert(address);
     }
     Ok(endpoints)
 }
@@ -458,7 +462,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::net::SocketAddr;
 
-    use super::validated_listener;
+    use super::{parse_lsof_listener_output, validated_listener};
 
     #[test]
     fn listener_validation_requires_one_nonzero_ipv4_loopback_socket() {
@@ -485,5 +489,20 @@ mod tests {
         ]))
         .expect_err("multiple listeners must fail closed");
         assert!(diagnostic.contains("multiple listeners"));
+    }
+
+    #[test]
+    fn lsof_listener_parser_preserves_ipv6_and_rejects_unknown_addresses() {
+        let endpoints = parse_lsof_listener_output(b"p42\nn127.0.0.1:43123\nn[::1]:43124\n")
+            .expect("recognized IPv4 and IPv6 listeners must parse");
+        assert_eq!(endpoints.len(), 2);
+        assert!(validated_listener(&endpoints).is_err());
+
+        for malformed in [b"p42\nn*:43123\n".as_slice(), b"p42\nn\xff\n".as_slice()] {
+            assert!(
+                parse_lsof_listener_output(malformed).is_err(),
+                "unrecognized lsof listener output must fail closed"
+            );
+        }
     }
 }

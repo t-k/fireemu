@@ -313,7 +313,7 @@ fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds()
             "stdout:\n{}\nstderr:\n{error}",
             String::from_utf8_lossy(&out.stdout)
         );
-        for name in ["alpha", "beta", "http"] {
+        for name in ["alpha", "beta", "http", "slowHttp"] {
             assert!(error.contains(&format!("{name} active=1")), "{error}");
         }
         assert!(!error.contains("active=2"), "{error}");

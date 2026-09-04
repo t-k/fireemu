@@ -16,3 +16,10 @@ exports.http = onRequest(async (_request, response) => {
   await hold("http");
   response.status(200).send("ok");
 });
+exports.slowHttp = onRequest({ timeoutSeconds: 1 }, async (_request, response) => {
+  active += 1;
+  console.log(`slowHttp active=${active}`);
+  await new Promise((resolve) => setTimeout(resolve, 1_250));
+  active -= 1;
+  response.status(200).send("ok");
+});

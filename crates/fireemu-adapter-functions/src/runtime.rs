@@ -89,6 +89,8 @@ pub struct FunctionsConfig {
     pub session: SessionId,
     /// Maximum invocations running at once across every function.
     pub max_running: usize,
+    /// Whether debugger mode disables handler deadlines.
+    pub debug_mode: bool,
     /// Attempts (first delivery included) for functions declared with `retry`.
     pub retry_attempts: u32,
     /// Schedule runs enqueued per clock change and job before the rest waits its turn.
@@ -2410,11 +2412,15 @@ impl FunctionsRuntime {
             "x-fireemu-runner-secret".to_owned(),
             self.config.runner_secret.clone(),
         ));
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout),
-            forward(&target.addr, method, path_and_query, &forwarded, body),
-        )
-        .await;
+        let result = if self.config.debug_mode {
+            Ok(forward(&target.addr, method, path_and_query, &forwarded, body).await)
+        } else {
+            tokio::time::timeout(
+                Duration::from_secs(timeout),
+                forward(&target.addr, method, path_and_query, &forwarded, body),
+            )
+            .await
+        };
         let outcome = match &result {
             Ok(Ok(r)) => format!("http {}", r.status),
             Ok(Err(e)) => format!("failed: {e}"),
@@ -2690,6 +2696,7 @@ impl FunctionsRuntime {
                         runtime.release(&key);
                         return;
                     }
+                    None if runtime.config.debug_mode => runner.invoke_unbounded(request).await,
                     None => runner.invoke(request, timeout).await,
                 };
                 runtime.complete(id, &key, &function_name, attempt, epoch, retry, &outcome);
@@ -3004,6 +3011,7 @@ mod task_completion_tests {
                 location: "nam5".to_owned(),
                 session: SessionId::new(7),
                 max_running: 4,
+                debug_mode: false,
                 retry_attempts: 1,
                 max_catch_up_runs: 1,
                 runner_secret: "test-secret".to_owned(),

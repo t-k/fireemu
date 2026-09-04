@@ -37,6 +37,13 @@ runs.push(
     signal,
   }),
 );
+// Debug mode disables the deployed function timeout so breakpoints do not kill the runtime.
+runs.push(
+  fetch(`http://${functionsHost}/${project}/us-central1/slowHttp`, {
+    method: "POST",
+    signal,
+  }),
+);
 const responses = await Promise.all(runs);
 for (const response of responses) assert.equal(response.status, 200);
 

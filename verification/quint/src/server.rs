@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::Read;
+#[cfg(any(target_os = "linux", test))]
+use std::net::Ipv6Addr;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -430,26 +432,61 @@ fn listener_endpoints(pid: u32) -> Result<BTreeSet<SocketAddr>, String> {
         })
         .collect::<BTreeSet<_>>();
     let mut endpoints = BTreeSet::new();
-    let table = fs::read_to_string(format!("/proc/{pid}/net/tcp"))
-        .map_err(|error| format!("cannot inspect Apalache TCP listeners: {error}"))?;
+    for table_name in ["tcp", "tcp6"] {
+        let path = format!("/proc/{pid}/net/{table_name}");
+        let table = fs::read_to_string(&path)
+            .map_err(|error| format!("cannot inspect Apalache {table_name} listeners: {error}"))?;
+        parse_linux_listener_table(table_name, &table, &socket_inodes, &mut endpoints)?;
+    }
+    Ok(endpoints)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_linux_listener_table(
+    table_name: &str,
+    table: &str,
+    socket_inodes: &BTreeSet<String>,
+    endpoints: &mut BTreeSet<SocketAddr>,
+) -> Result<(), String> {
     for line in table.lines().skip(1) {
         let fields = line.split_whitespace().collect::<Vec<_>>();
-        if fields.len() < 10 || fields[3] != "0A" || !socket_inodes.contains(fields[9]) {
+        if fields.len() < 10 {
+            return Err(format!("malformed /proc listener row: {line:?}"));
+        }
+        if fields[3] != "0A" || !socket_inodes.contains(fields[9]) {
             continue;
         }
         let Some((address, port)) = fields[1].rsplit_once(':') else {
-            continue;
+            return Err(format!("malformed /proc listener address: {:?}", fields[1]));
         };
-        if address.len() != 8 {
-            continue;
-        }
-        let raw = u32::from_str_radix(address, 16)
-            .map_err(|error| format!("invalid listener address: {error}"))?;
         let port = u16::from_str_radix(port, 16)
             .map_err(|error| format!("invalid listener port: {error}"))?;
-        endpoints.insert(SocketAddr::from((Ipv4Addr::from(raw.to_le_bytes()), port)));
+        let endpoint = match table_name {
+            "tcp" if address.len() == 8 => {
+                let raw = u32::from_str_radix(address, 16)
+                    .map_err(|error| format!("invalid IPv4 listener address: {error}"))?;
+                SocketAddr::from((Ipv4Addr::from(raw.to_le_bytes()), port))
+            }
+            "tcp6" if address.len() == 32 => {
+                let mut bytes = [0_u8; 16];
+                for (index, chunk) in address.as_bytes().chunks_exact(8).enumerate() {
+                    let chunk = std::str::from_utf8(chunk)
+                        .map_err(|error| format!("invalid IPv6 listener address: {error}"))?;
+                    let raw = u32::from_str_radix(chunk, 16)
+                        .map_err(|error| format!("invalid IPv6 listener address: {error}"))?;
+                    bytes[index * 4..index * 4 + 4].copy_from_slice(&raw.to_le_bytes());
+                }
+                SocketAddr::from((Ipv6Addr::from(bytes), port))
+            }
+            _ => {
+                return Err(format!(
+                    "unexpected {table_name} listener address {address:?}"
+                ));
+            }
+        };
+        endpoints.insert(endpoint);
     }
-    Ok(endpoints)
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -462,7 +499,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::net::SocketAddr;
 
-    use super::{parse_lsof_listener_output, validated_listener};
+    use super::{parse_linux_listener_table, parse_lsof_listener_output, validated_listener};
 
     #[test]
     fn listener_validation_requires_one_nonzero_ipv4_loopback_socket() {
@@ -504,5 +541,36 @@ mod tests {
                 "unrecognized lsof listener output must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn proc_listener_parser_preserves_ipv6_and_fails_closed() {
+        let inodes = BTreeSet::from(["12345".to_owned(), "12346".to_owned()]);
+        let mut endpoints = BTreeSet::new();
+        parse_linux_listener_table(
+            "tcp",
+            "header\n0: 0100007F:A86B 00000000:0000 0A 0:0 00:0 0 1000 0 12345\n",
+            &inodes,
+            &mut endpoints,
+        )
+        .unwrap();
+        parse_linux_listener_table(
+            "tcp6",
+            "header\n0: 00000000000000000000000001000000:A86C 00000000000000000000000000000000:0000 0A 0:0 00:0 0 1000 0 12346\n",
+            &inodes,
+            &mut endpoints,
+        )
+        .unwrap();
+        assert_eq!(endpoints.len(), 2);
+        assert!(validated_listener(&endpoints).is_err());
+
+        let error = parse_linux_listener_table(
+            "tcp6",
+            "header\n0: malformed:A86C 0000:0000 0A 0:0 00:0 0 1000 0 12346\n",
+            &inodes,
+            &mut BTreeSet::new(),
+        )
+        .expect_err("malformed owned listeners must fail closed");
+        assert!(error.contains("unexpected tcp6 listener address"));
     }
 }

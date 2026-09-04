@@ -4,7 +4,8 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, handle_with, AuthBlockingHook, AuthState, BlockingFunctionFailure, RequestHeaders,
+    handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionFailure,
+    RequestHeaders,
 };
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -28,6 +29,51 @@ impl AuthBlockingHook for PassThroughBlockingHook {
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
         Ok(json!({}))
+    }
+}
+
+struct FilteringIdpBlockingHook {
+    contexts: Arc<Mutex<Vec<(BlockingAuthEvent, AuthBlockingContext)>>>,
+}
+
+impl AuthBlockingHook for FilteringIdpBlockingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+        context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        self.contexts.lock().unwrap().push((event, context.clone()));
+        let response = if event == BlockingAuthEvent::BeforeSignIn {
+            let role = context
+                .credential
+                .as_ref()
+                .and_then(|credential| credential.claims.as_ref())
+                .and_then(|claims| claims.get("roles"))
+                .and_then(Value::as_array)
+                .and_then(|roles| roles.first())
+                .cloned()
+                .unwrap_or(Value::Null);
+            json!({
+                "userRecord": {
+                    "updateMask": "sessionClaims",
+                    "sessionClaims": {"selectedRole": role}
+                }
+            })
+        } else {
+            json!({})
+        };
+        Ok(Some(response))
     }
 }
 
@@ -1871,7 +1917,89 @@ fn an_oidc_assertion_keeps_the_claims_as_raw_user_info() {
     // federatedId is the raw id for a non-google provider.
     assert_eq!(signed["federatedId"], "oidc-9");
     let token = claims(signed["idToken"].as_str().unwrap());
-    assert!(token["firebase"].get("sign_in_attributes").is_none());
+    assert_eq!(token["firebase"]["sign_in_attributes"], oidc);
+}
+
+#[test]
+fn blocking_auth_receives_idp_context_and_can_select_session_claims() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let oidc = json!({
+        "sub": "oidc-blocking",
+        "email": "blocking-oidc@example.com",
+        "email_verified": true,
+        "roles": ["billing", "discarded"],
+        "privateGroup": "must-not-become-a-session-claim"
+    });
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": format!("providerId=oidc.corp&id_token={}", percent(&oidc.to_string())), "requestUri": DUMMY_URI}),
+    );
+
+    assert_eq!(status, 200, "{signed}");
+    let token = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(token["firebase"]["sign_in_attributes"], oidc);
+    assert_eq!(token["selectedRole"], "billing");
+    assert!(token.get("privateGroup").is_none());
+
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeCreate);
+    assert_eq!(recorded[1].0, BlockingAuthEvent::BeforeSignIn);
+    for (index, (_, context)) in recorded.iter().enumerate() {
+        let credential = context.credential.as_ref().unwrap();
+        assert_eq!(credential.provider_id, "oidc.corp");
+        assert_eq!(credential.sign_in_method, "oidc.corp");
+        assert_eq!(credential.claims.as_ref(), Some(&oidc));
+        let info = context.additional_user_info.as_ref().unwrap();
+        assert_eq!(info.provider_id, "oidc.corp");
+        assert_eq!(info.profile.as_ref(), Some(&oidc));
+        assert_eq!(info.is_new_user, index == 0);
+    }
+}
+
+#[test]
+fn blocking_auth_receives_saml_attribute_context() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    s.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+        contexts: Arc::clone(&contexts),
+    }));
+    let attributes = json!({"roles": ["auditor"], "costCenter": 42});
+    let saml = json!({
+        "assertion": {
+            "subject": {"nameId": "blocking-context@saml.example.com"},
+            "attributeStatements": attributes
+        }
+    });
+    let post_body = format!(
+        "providerId=saml.corp&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub": "saml-blocking-context"}).to_string()),
+        percent(&saml.to_string())
+    );
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": post_body, "requestUri": DUMMY_URI}),
+    );
+
+    assert_eq!(status, 200, "{signed}");
+    let token = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(token["firebase"]["sign_in_attributes"], attributes);
+    assert_eq!(token["selectedRole"], "auditor");
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 2);
+    for (_, context) in recorded.iter() {
+        let credential = context.credential.as_ref().unwrap();
+        assert_eq!(credential.provider_id, "saml.corp");
+        assert_eq!(credential.claims.as_ref(), Some(&attributes));
+    }
 }
 
 #[test]

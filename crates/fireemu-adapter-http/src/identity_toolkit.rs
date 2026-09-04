@@ -266,6 +266,39 @@ impl BlockingFunctionFailure {
     }
 }
 
+/// Identity-provider credentials exposed to a Blocking Auth handler for the current request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthBlockingCredential {
+    /// SAML attributes or OIDC claims. Other providers leave this absent.
+    pub claims: Option<Value>,
+    /// Provider ID, such as `saml.corp` or `oidc.corp`.
+    pub provider_id: String,
+    /// Sign-in method. Identity Platform currently uses the provider ID here.
+    pub sign_in_method: String,
+}
+
+/// Provider profile exposed to a Blocking Auth handler for the current request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthBlockingAdditionalUserInfo {
+    /// Provider ID for the sign-in.
+    pub provider_id: String,
+    /// Parsed `rawUserInfo`, when the provider supplied it.
+    pub profile: Option<Value>,
+    /// Whether this is the before-create invocation for a new user.
+    pub is_new_user: bool,
+}
+
+/// Per-request context supplied to a Blocking Auth handler.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AuthBlockingContext {
+    /// Provider credential for an identity-provider sign-in.
+    pub credential: Option<AuthBlockingCredential>,
+    /// Additional provider profile information for the sign-in.
+    pub additional_user_info: Option<AuthBlockingAdditionalUserInfo>,
+    /// Provider-backed sign-in method used to suffix the event type.
+    pub sign_in_method: Option<String>,
+}
+
 /// Synchronous bridge invoked before an Auth create or sign-in commit.
 pub trait AuthBlockingHook: Send + Sync {
     /// Maximum number of Auth requests that may occupy the synchronous bridge, including
@@ -302,6 +335,19 @@ pub trait AuthBlockingHook: Send + Sync {
         user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke(event, user).map(Some)
+    }
+
+    /// Runs a hook with the request-scoped provider context. The default preserves existing
+    /// embedders whose hooks only consume the user record and namespace.
+    fn invoke_for_with_context(
+        &self,
+        project: &str,
+        tenant: Option<&str>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+        _context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        self.invoke_for(project, tenant, event, user)
     }
 }
 
@@ -1086,6 +1132,38 @@ fn apply_blocking_response(
     Ok(session_claims)
 }
 
+fn blocking_context(
+    response: &JsonResponse,
+    event: fireemu_core_functions::manifest::BlockingAuthEvent,
+) -> AuthBlockingContext {
+    let Some(provider_id) = response.body.get("providerId").and_then(Value::as_str) else {
+        return AuthBlockingContext::default();
+    };
+    let profile = response
+        .body
+        .get("rawUserInfo")
+        .and_then(Value::as_str)
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .filter(|profile: &Value| !profile.is_null());
+    let claims = (provider_id.starts_with("saml.") || provider_id.starts_with("oidc."))
+        .then(|| profile.clone())
+        .flatten();
+    let credential = claims.map(|claims| AuthBlockingCredential {
+        claims: Some(claims),
+        provider_id: provider_id.to_owned(),
+        sign_in_method: provider_id.to_owned(),
+    });
+    AuthBlockingContext {
+        credential,
+        additional_user_info: Some(AuthBlockingAdditionalUserInfo {
+            provider_id: provider_id.to_owned(),
+            profile,
+            is_new_user: event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+        }),
+        sign_in_method: Some(provider_id.to_owned()),
+    }
+}
+
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
 // route behavior; grouping them in a second request type would duplicate that boundary.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1151,11 +1229,16 @@ fn dispatch_with_blocking_hook(
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    match blocking.invoke_for(
+                    let context = blocking_context(
+                        &response,
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                    );
+                    match blocking.invoke_for_with_context(
                         &project,
                         tenant.as_deref(),
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
                         user,
+                        &context,
                     ) {
                         Ok(value) => value,
                         Err(failure) => {
@@ -1186,11 +1269,16 @@ fn dispatch_with_blocking_hook(
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    match blocking.invoke_for(
+                    let context = blocking_context(
+                        &response,
+                        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                    );
+                    match blocking.invoke_for_with_context(
                         &project,
                         tenant.as_deref(),
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         user,
+                        &context,
                     ) {
                         Ok(value) => value,
                         Err(failure) => {
@@ -4548,6 +4636,12 @@ fn parse_idp_token(token: &str) -> Option<Value> {
     serde_json::from_str(&payload).ok()
 }
 
+fn idp_claim_value(value: &Value) -> Option<ClaimValue> {
+    fireemu_core_types::json::parse(&value.to_string())
+        .ok()
+        .and_then(|value| claims_from_json(&value))
+}
+
 /// A federated identity as the fake identity provider would report it, per the official emulator's
 /// `fakeFetchUserInfoFromIdp`: the raw id, the profile fields, the `federatedId` shape the
 /// provider uses, and the JSON `rawUserInfo` blob the SDKs read back.
@@ -4609,7 +4703,10 @@ fn fake_fetch_user_info(provider_id: &str, claims: &Value, saml: Option<&Value>)
         first_name: None,
         last_name: None,
         raw_user_info: claims.to_string(),
-        sign_in_attributes: None,
+        sign_in_attributes: provider_id
+            .starts_with("oidc.")
+            .then(|| idp_claim_value(claims))
+            .flatten(),
     };
     if provider_id == "google.com" {
         info.federated_id = format!("https://accounts.google.com/{}", info.raw_id);
@@ -4649,11 +4746,7 @@ fn fake_fetch_user_info(provider_id: &str, claims: &Value, saml: Option<&Value>)
             .and_then(|a| a.get("attributeStatements"))
             .cloned();
         info.raw_user_info = attributes.clone().unwrap_or(Value::Null).to_string();
-        info.sign_in_attributes = attributes.and_then(|attributes| {
-            fireemu_core_types::json::parse(&attributes.to_string())
-                .ok()
-                .and_then(|attributes| claims_from_json(&attributes))
-        });
+        info.sign_in_attributes = attributes.and_then(|attributes| idp_claim_value(&attributes));
     }
     // oidc.* and every other provider keep the JSON claims as rawUserInfo (the default).
     info

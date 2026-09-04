@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Firestore listener lifecycle smoke</title>
+  </head>
+  <body>
+    <main id="app" data-route-tree="ssr">
+      <form data-setting-form="ssr">
+        <h1>Listener lifecycle settings</h1>
+        <output>SSR scalar state</output>
+      </form>
+    </main>
+    <pre id="result">running</pre>
+    <script>
+      (() => {
+        const ledger = [];
+        let maximumConnectedForms = 0;
+        const sample = (event) => {
+          const forms = document.querySelectorAll("[data-setting-form]");
+          maximumConnectedForms = Math.max(maximumConnectedForms, forms.length);
+          ledger.push({
+            event,
+            connectedForms: forms.length,
+            routeTrees: Array.from(document.querySelectorAll("[data-route-tree]"), (node) =>
+              node.getAttribute("data-route-tree"),
+            ),
+          });
+        };
+        sample("initial-html");
+        const observer = new MutationObserver(() => sample("dom-mutation"));
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        window.__listenerLifecycle = {
+          ledger,
+          observer,
+          sample,
+          maximumConnectedForms: () => maximumConnectedForms,
+        };
+      })();
+    </script>
+    <script type="module" src="./listener-lifecycle.js"></script>
+  </body>
+</html>

@@ -23,6 +23,7 @@ use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
 use fireemu_core_types::time::LogicalInstant;
+use fireemu_proto_firestore::google::firestore::v1 as pb;
 use serde_json::{json, Value};
 use tokio_stream::StreamExt;
 
@@ -34,6 +35,10 @@ fn hub(rules: Option<&str>) -> Hub {
 }
 
 fn hub_with_acceptance(rules: Option<&str>, acceptance: TokenAcceptance) -> Hub {
+    hub_and_local(rules, acceptance).0
+}
+
+fn hub_and_local(rules: Option<&str>, acceptance: TokenAcceptance) -> (Hub, Arc<LocalBackend>) {
     let gateway = Gateway {
         enforce_limits: true,
         ctx: PlanningContext {
@@ -62,12 +67,13 @@ fn hub_with_acceptance(rules: Option<&str>, acceptance: TokenAcceptance) -> Hub 
             .with_token_acceptance(acceptance),
         )
     });
-    Hub::new(Arc::new(RestState {
-        local,
+    let hub = Hub::new(Arc::new(RestState {
+        local: local.clone(),
         gateway: Arc::new(gateway),
         rules,
         app_check: None,
-    }))
+    }));
+    (hub, local)
 }
 
 fn mock_user_token(sub: &str, project: &str) -> String {
@@ -184,6 +190,200 @@ fn listen_target(id: i32, collection: &str) -> String {
         }
     })
     .to_string()
+}
+
+fn remove_target(id: i32) -> String {
+    json!({"database": DB, "removeTarget": id}).to_string()
+}
+
+fn set_write(name: &str, revision: i64) -> pb::Write {
+    pb::Write {
+        operation: Some(pb::write::Operation::Update(pb::Document {
+            name: format!("{DB}/documents/{name}"),
+            fields: [(
+                "revision".to_owned(),
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::IntegerValue(revision)),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn commit(local: &LocalBackend, writes: Vec<pb::Write>) {
+    local
+        .commit(&pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .unwrap();
+}
+
+fn open_listen_session(hub: &Hub, target: &str) -> String {
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", target)]),
+    }));
+    assert_eq!(status, 200);
+    headers
+        .into_iter()
+        .find(|(key, _)| *key == "x-http-session-id")
+        .map(|(_, value)| value)
+        .unwrap()
+}
+
+fn send_map(hub: &Hub, sid: &str, rid: &str, aid: u64, offset: u64, data: &str) {
+    let (status, _, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("SID", sid), ("RID", rid), ("AID", &aid.to_string())]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[
+            ("count", "1"),
+            ("ofs", &offset.to_string()),
+            ("req0___data__", data),
+        ]),
+    }));
+    assert_eq!(status, 200);
+}
+
+async fn read_long_poll(hub: &Hub, sid: &str, aid: u64) -> Value {
+    let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", sid),
+            ("RID", "rpc"),
+            ("AID", &aid.to_string()),
+            ("CI", "1"),
+            ("TO", "1000"),
+            ("TYPE", "xmlhttp"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    }) else {
+        panic!("expected a streamed back channel");
+    };
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(body.next().await.is_none());
+    let parsed = chunks(std::str::from_utf8(&chunk).unwrap());
+    assert_eq!(parsed.len(), 1);
+    parsed.into_iter().next().unwrap()
+}
+
+fn last_array_id(batch: &Value) -> u64 {
+    batch.as_array().unwrap().last().unwrap()[0]
+        .as_u64()
+        .unwrap()
+}
+
+fn response_payloads(batch: &Value) -> Vec<&Value> {
+    batch
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|array| &array[1][0])
+        .collect()
+}
+
+#[tokio::test]
+async fn an_unacknowledged_committed_batch_is_replayed_with_the_same_array_ids() {
+    let hub = hub(None);
+    let sid = open_listen_session(&hub, &listen_target(2, "replay"));
+
+    let first = read_long_poll(&hub, &sid, 0).await;
+    let replay = read_long_poll(&hub, &sid, 0).await;
+
+    assert_eq!(
+        replay, first,
+        "response commitment is not client acknowledgement"
+    );
+    let ids = first
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|array| array[0].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, (1..=ids.len() as u64).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn remove_readd_retry_and_commits_preserve_the_target_lifetime_boundary() {
+    let (hub, local) = hub_and_local(None, TokenAcceptance::Verified);
+    commit(
+        &local,
+        vec![set_write("first/a", 0), set_write("second/b", 0)],
+    );
+    let sid = open_listen_session(&hub, &listen_target(7, "first"));
+    let initial = read_long_poll(&hub, &sid, 0).await;
+    let initial_aid = last_array_id(&initial);
+    assert!(response_payloads(&initial).iter().any(|payload| {
+        payload["documentChange"]["document"]["name"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("/first/a"))
+    }));
+
+    let remove = remove_target(7);
+    send_map(&hub, &sid, "2", initial_aid, 1, &remove);
+    send_map(&hub, &sid, "3", initial_aid, 1, &remove);
+    let removed = read_long_poll(&hub, &sid, initial_aid).await;
+    let removed_aid = last_array_id(&removed);
+    assert_eq!(
+        response_payloads(&removed)
+            .iter()
+            .filter(|payload| payload["targetChange"]["targetChangeType"] == "REMOVE")
+            .count(),
+        1,
+        "a retried forward map removes one target lifetime once"
+    );
+
+    commit(&local, vec![set_write("first/late", 1)]);
+    send_map(&hub, &sid, "4", removed_aid, 2, &listen_target(7, "second"));
+    let readded = read_long_poll(&hub, &sid, removed_aid).await;
+    let readded_aid = last_array_id(&readded);
+    let readded_payloads = response_payloads(&readded);
+    assert!(readded_payloads.iter().any(|payload| {
+        payload["documentChange"]["document"]["name"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("/second/b"))
+    }));
+    assert!(readded_payloads.iter().all(|payload| {
+        !payload["documentChange"]["document"]["name"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("/first/late"))
+    }));
+
+    commit(
+        &local,
+        vec![set_write("first/stale", 2), set_write("second/c", 1)],
+    );
+    let updated = read_long_poll(&hub, &sid, readded_aid).await;
+    let changed_names = response_payloads(&updated)
+        .into_iter()
+        .filter_map(|payload| payload["documentChange"]["document"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(changed_names.iter().any(|name| name.ends_with("/second/c")));
+    assert!(changed_names
+        .iter()
+        .all(|name| !name.ends_with("/first/stale")));
 }
 
 #[tokio::test]

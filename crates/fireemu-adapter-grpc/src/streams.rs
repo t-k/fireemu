@@ -338,6 +338,12 @@ struct DatabaseHashCache {
 /// never a silent drop); the web SDK multiplexes every listener of a client over one stream.
 pub const MAX_LISTEN_TARGETS: usize = 1000;
 
+/// Optional observer used by transports that need lifecycle diagnostics at the exact point
+/// where one request has been applied and its response batch has been constructed.
+pub(crate) trait ListenObserver: Send + Sync {
+    fn exchange(&self, request: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]);
+}
+
 /// Runs the `Listen` stream.
 ///
 /// Back-pressure: responses go out through a bounded channel and the loop awaits it, so a
@@ -347,8 +353,21 @@ pub const MAX_LISTEN_TARGETS: usize = 1000;
 /// is the same one refresh.
 pub async fn listen_stream(
     ctx: StreamContext,
+    inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
+    tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
+) {
+    listen_stream_observed(ctx, inbound, tx, None).await;
+}
+
+/// Runs `Listen` with an optional transport observer. The observer sees a completed response
+/// batch before the next inbound request can be processed, preventing pipelined target-ID reuse
+/// from relabeling an earlier response.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn listen_stream_observed(
+    ctx: StreamContext,
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
+    observer: Option<Arc<dyn ListenObserver>>,
 ) {
     let mut parent: Option<Parent> = None;
     let mut targets: BTreeMap<i32, TargetState> = BTreeMap::new();
@@ -357,20 +376,25 @@ pub async fn listen_stream(
     let mut events = ctx.local.subscribe();
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
+        let mut request = None;
         let outcome: Result<bool, Status> = tokio::select! {
             () = tx.closed() => Ok(false),
             msg = inbound.next() => match msg {
                 None => Ok(false),
                 Some(Err(e)) => Err(e),
-                Some(Ok(req)) => handle_listen_request(
-                    &ctx,
-                    &mut parent,
-                    &mut targets,
-                    &req,
-                    &mut database_hash_cache,
-                    &mut last_snapshot_version,
-                    &mut out,
-                ).map(|()| true),
+                Some(Ok(req)) => {
+                    let result = handle_listen_request(
+                        &ctx,
+                        &mut parent,
+                        &mut targets,
+                        &req,
+                        &mut database_hash_cache,
+                        &mut last_snapshot_version,
+                        &mut out,
+                    ).map(|()| true);
+                    request = Some(req);
+                    result
+                },
             },
             ev = events.recv() => match ev {
                 Ok(first) => {
@@ -430,6 +454,9 @@ pub async fn listen_stream(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(false),
             },
         };
+        if let Some(observer) = observer.as_ref() {
+            observer.exchange(request.as_ref(), &out);
+        }
         for r in out {
             if tx.send(Ok(r)).await.is_err() {
                 return;

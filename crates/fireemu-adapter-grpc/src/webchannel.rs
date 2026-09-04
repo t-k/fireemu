@@ -27,8 +27,10 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::hash::{BuildHasher, Hasher};
+use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -43,7 +45,7 @@ use crate::rest::json::{
     write_response_to_json, JsonError,
 };
 use crate::rest::{error_response, RestState};
-use crate::streams::{listen_stream, write_stream, StreamContext};
+use crate::streams::{listen_stream_observed, write_stream, ListenObserver, StreamContext};
 
 /// Sessions without an attached back channel and without requests longer than this are
 /// closed.
@@ -62,16 +64,518 @@ pub const MAX_SESSIONS: usize = 256;
 pub const MAX_QUEUED_ARRAYS: usize = 4096;
 /// Maximum maps per forward request and maximum gap of buffered map ids.
 const MAX_MAPS_PER_REQUEST: u64 = 1000;
+/// Maximum completed target lifetimes retained solely for diagnostics.
+const MAX_TRACE_COMPLETED_TARGETS: usize = 256;
+/// Maximum diagnostic events emitted by one admitted channel session.
+const MAX_TRACE_EVENTS_PER_SESSION: u64 = 4096;
+/// Diagnostic messages wait in a bounded queue and are dropped rather than blocking protocol work.
+const TRACE_QUEUE_CAPACITY: usize = 1024;
+/// Process-wide trace budget for each fixed one-second interval. Crossing an interval boundary
+/// can burst at most twice this count; the bounded sink still drops excess queued events.
+const MAX_TRACE_EVENTS_PER_SECOND: u64 = 2048;
 
 fn trace_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("FIREEMU_TRACE_WEBCHANNEL").is_some())
 }
 
-/// Redacted tracing: identifiers, counts and sizes only (never headers or message bodies).
-fn trace(what: &str, detail: &str) {
-    if trace_enabled() {
-        eprintln!("[webchannel] {what}: {detail}");
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TraceEvent {
+    RequestReceived {
+        session: u64,
+        kind: StreamKind,
+        method: &'static str,
+        rid: TraceRid,
+        aid: Option<u64>,
+        ci: Option<u64>,
+        body_bytes: usize,
+    },
+    SessionOpened {
+        session: u64,
+        kind: StreamKind,
+    },
+    SessionPurged {
+        session: u64,
+    },
+    ArrayGenerated {
+        session: u64,
+        aid: u64,
+        bytes: usize,
+        queued_first: Option<u64>,
+        queued_last: Option<u64>,
+        queued_count: usize,
+    },
+    ArrayAcknowledged {
+        session: u64,
+        aid: u64,
+        queued_first: Option<u64>,
+        queued_last: Option<u64>,
+        queued_count: usize,
+    },
+    BackchannelStarted {
+        session: u64,
+        generation: u64,
+        rid: TraceRid,
+        client_aid: u64,
+        long_poll: bool,
+    },
+    BackchannelQueued {
+        session: u64,
+        generation: u64,
+        first_aid: u64,
+        last_aid: u64,
+        count: usize,
+    },
+    BackchannelCommitted {
+        session: u64,
+        generation: u64,
+        last_aid: u64,
+    },
+    BackchannelEnded {
+        session: u64,
+        generation: u64,
+        outcome: &'static str,
+    },
+    ForwardMaps {
+        session: u64,
+        offset: u64,
+        declared: u64,
+        accepted: usize,
+        duplicates: usize,
+        buffered: usize,
+        next_expected: u64,
+    },
+    Overflow {
+        session: u64,
+    },
+    SessionTraceLimitReached {
+        session: u64,
+    },
+    ListenRequest {
+        session: u64,
+        action: &'static str,
+        target: i32,
+        lifetime: Option<u64>,
+    },
+    ListenResponse {
+        session: u64,
+        kind: &'static str,
+        targets: Vec<(i32, Option<u64>)>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraceRid {
+    Missing,
+    Rpc,
+    Numeric(u64),
+    Other,
+}
+
+fn format_optional_range(first: Option<u64>, last: Option<u64>) -> String {
+    match (first, last) {
+        (Some(first), Some(last)) => format!("{first}..{last}"),
+        _ => "none".to_owned(),
+    }
+}
+
+fn format_rid(rid: TraceRid) -> String {
+    match rid {
+        TraceRid::Missing => "missing".to_owned(),
+        TraceRid::Rpc => "rpc".to_owned(),
+        TraceRid::Numeric(value) => value.to_string(),
+        TraceRid::Other => "other".to_owned(),
+    }
+}
+
+fn format_targets(targets: &[(i32, Option<u64>)]) -> String {
+    if targets.is_empty() {
+        return "all".to_owned();
+    }
+    targets
+        .iter()
+        .map(|(target, lifetime)| match lifetime {
+            Some(lifetime) => format!("{target}@{lifetime}"),
+            None => format!("{target}@unknown"),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[allow(clippy::too_many_lines)]
+fn format_trace_event(event: &TraceEvent) -> String {
+    match event {
+        TraceEvent::RequestReceived {
+            session,
+            kind,
+            method,
+            rid,
+            aid,
+            ci,
+            body_bytes,
+        } => format!(
+            "session={session} request kind={kind:?} method={method} rid={} aid={} ci={} body_bytes={body_bytes}",
+            format_rid(*rid),
+            aid.map_or_else(|| "missing".to_owned(), |value| value.to_string()),
+            ci.map_or_else(|| "missing".to_owned(), |value| value.to_string())
+        ),
+        TraceEvent::SessionOpened { session, kind } => {
+            format!("session={session} opened kind={kind:?}")
+        }
+        TraceEvent::SessionPurged { session } => format!("session={session} purged"),
+        TraceEvent::ArrayGenerated {
+            session,
+            aid,
+            bytes,
+            queued_first,
+            queued_last,
+            queued_count,
+        } => format!(
+            "session={session} array=generated aid={aid} bytes={bytes} queued={} queued_count={queued_count}",
+            format_optional_range(*queued_first, *queued_last)
+        ),
+        TraceEvent::ArrayAcknowledged {
+            session,
+            aid,
+            queued_first,
+            queued_last,
+            queued_count,
+        } => format!(
+            "session={session} array=acknowledged aid={aid} queued={} queued_count={queued_count}",
+            format_optional_range(*queued_first, *queued_last)
+        ),
+        TraceEvent::BackchannelStarted {
+            session,
+            generation,
+            rid,
+            client_aid,
+            long_poll,
+        } => format!(
+            "session={session} backchannel=started generation={generation} rid={} client_aid={client_aid} long_poll={long_poll}",
+            format_rid(*rid)
+        ),
+        TraceEvent::BackchannelQueued {
+            session,
+            generation,
+            first_aid,
+            last_aid,
+            count,
+        } => format!(
+            "session={session} backchannel=queued generation={generation} arrays={first_aid}..{last_aid} count={count}"
+        ),
+        TraceEvent::BackchannelCommitted {
+            session,
+            generation,
+            last_aid,
+        } => format!(
+            "session={session} backchannel=committed generation={generation} last_aid={last_aid}"
+        ),
+        TraceEvent::BackchannelEnded {
+            session,
+            generation,
+            outcome,
+        } => format!(
+            "session={session} backchannel=ended generation={generation} outcome={outcome}"
+        ),
+        TraceEvent::ForwardMaps {
+            session,
+            offset,
+            declared,
+            accepted,
+            duplicates,
+            buffered,
+            next_expected,
+        } => format!(
+            "session={session} maps offset={offset} declared={declared} accepted={accepted} duplicates={duplicates} buffered={buffered} next_expected={next_expected}"
+        ),
+        TraceEvent::Overflow { session } => format!("session={session} overflow"),
+        TraceEvent::SessionTraceLimitReached { session } => {
+            format!("session={session} trace=limit-reached")
+        }
+        TraceEvent::ListenRequest {
+            session,
+            action,
+            target,
+            lifetime,
+        } => format!(
+            "session={session} listen=request action={action} target={target}@{}",
+            lifetime.map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+        ),
+        TraceEvent::ListenResponse {
+            session,
+            kind,
+            targets,
+        } => format!(
+            "session={session} listen=response kind={kind} targets={}",
+            format_targets(targets)
+        ),
+    }
+}
+
+fn trace_sender() -> Option<&'static SyncSender<String>> {
+    static SENDER: OnceLock<SyncSender<String>> = OnceLock::new();
+    if !trace_enabled() {
+        return None;
+    }
+    Some(SENDER.get_or_init(|| {
+        let (sender, receiver) = sync_channel::<String>(TRACE_QUEUE_CAPACITY);
+        let _ = std::thread::Builder::new()
+            .name("webchannel-trace".to_owned())
+            .spawn(move || {
+                while let Ok(line) = receiver.recv() {
+                    let stderr = std::io::stderr();
+                    let mut stderr = stderr.lock();
+                    let _ = writeln!(stderr, "[webchannel] {line}");
+                }
+            });
+        sender
+    }))
+}
+
+struct TraceRateLimiter {
+    window_started: Instant,
+    emitted: u64,
+}
+
+impl TraceRateLimiter {
+    fn allow(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.window_started) >= Duration::from_secs(1) {
+            self.window_started = now;
+            self.emitted = 0;
+        }
+        if self.emitted >= MAX_TRACE_EVENTS_PER_SECOND {
+            return false;
+        }
+        self.emitted += 1;
+        true
+    }
+}
+
+fn claim_global_trace_slot() -> bool {
+    static LIMITER: OnceLock<Mutex<TraceRateLimiter>> = OnceLock::new();
+    let limiter = LIMITER.get_or_init(|| {
+        Mutex::new(TraceRateLimiter {
+            window_started: Instant::now(),
+            emitted: 0,
+        })
+    });
+    limiter
+        .try_lock()
+        .is_ok_and(|mut limiter| limiter.allow(Instant::now()))
+}
+
+/// Redacted tracing: generated numeric identifiers, counts and sizes only. Formatting happens
+/// after protocol locks are released, and a full or disconnected sink drops the event.
+fn trace(event: &TraceEvent) {
+    let Some(sender) = trace_sender() else { return };
+    if !claim_global_trace_slot() {
+        return;
+    }
+    match sender.try_send(format_trace_event(event)) {
+        Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {}
+    }
+}
+
+fn trace_rid(params: &BTreeMap<String, String>) -> TraceRid {
+    match params.get("RID").map(String::as_str) {
+        None => TraceRid::Missing,
+        Some("rpc") => TraceRid::Rpc,
+        Some(value) => value
+            .parse::<u64>()
+            .map_or(TraceRid::Other, TraceRid::Numeric),
+    }
+}
+
+fn trace_request(session: &Session, request: &ChannelRequest) {
+    let method = match request.method.as_str() {
+        "GET" => "GET",
+        "POST" => "POST",
+        _ => "OTHER",
+    };
+    session.trace_event(&TraceEvent::RequestReceived {
+        session: session.trace_id,
+        kind: request.kind,
+        method,
+        rid: trace_rid(&request.params),
+        aid: request
+            .params
+            .get("AID")
+            .and_then(|value| value.parse().ok()),
+        ci: request
+            .params
+            .get("CI")
+            .and_then(|value| value.parse().ok()),
+        body_bytes: request.body.len(),
+    });
+}
+
+#[derive(Default)]
+struct ListenTraceState {
+    next_lifetime: u64,
+    active: BTreeMap<i32, u64>,
+    completed: BTreeMap<i32, u64>,
+    completed_order: VecDeque<i32>,
+}
+
+impl ListenTraceState {
+    fn request_add(&mut self, target: i32) -> u64 {
+        self.next_lifetime = self.next_lifetime.saturating_add(1);
+        let lifetime = self.next_lifetime;
+        self.completed.remove(&target);
+        self.completed_order
+            .retain(|completed| *completed != target);
+        self.active.insert(target, lifetime);
+        lifetime
+    }
+
+    fn request_remove(&mut self, target: i32) -> Option<u64> {
+        let lifetime = self.active.remove(&target)?;
+        self.remember_completed(target, lifetime);
+        Some(lifetime)
+    }
+
+    fn remember_completed(&mut self, target: i32, lifetime: u64) {
+        self.completed.remove(&target);
+        self.completed_order
+            .retain(|completed| *completed != target);
+        self.completed.insert(target, lifetime);
+        self.completed_order.push_back(target);
+        while self.completed_order.len() > MAX_TRACE_COMPLETED_TARGETS {
+            if let Some(evicted) = self.completed_order.pop_front() {
+                self.completed.remove(&evicted);
+            }
+        }
+    }
+
+    fn active_lifetime(&self, target: i32) -> Option<u64> {
+        self.active.get(&target).copied()
+    }
+
+    fn latest_lifetime(&self, target: i32) -> Option<u64> {
+        self.active_lifetime(target)
+            .or_else(|| self.completed.get(&target).copied())
+    }
+
+    fn response_event(&mut self, session: u64, response: &pb::ListenResponse) -> TraceEvent {
+        use pb::listen_response::ResponseType as Response;
+        let (kind, mut target_ids) = match response.response_type.as_ref() {
+            Some(Response::TargetChange(change)) => {
+                let kind = pb::target_change::TargetChangeType::try_from(change.target_change_type)
+                    .map_or("target_change_unknown", |kind| match kind {
+                        pb::target_change::TargetChangeType::NoChange => "no_change",
+                        pb::target_change::TargetChangeType::Add => "target_add",
+                        pb::target_change::TargetChangeType::Remove => "target_remove",
+                        pb::target_change::TargetChangeType::Current => "current",
+                        pb::target_change::TargetChangeType::Reset => "reset",
+                    });
+                (kind, change.target_ids.clone())
+            }
+            Some(Response::DocumentChange(change)) => {
+                let mut ids = change.target_ids.clone();
+                ids.extend(change.removed_target_ids.iter().copied());
+                ("document_change", ids)
+            }
+            Some(Response::DocumentDelete(change)) => {
+                ("document_delete", change.removed_target_ids.clone())
+            }
+            Some(Response::DocumentRemove(change)) => {
+                ("document_remove", change.removed_target_ids.clone())
+            }
+            Some(Response::Filter(filter)) => ("filter", vec![filter.target_id]),
+            None => ("empty", Vec::new()),
+        };
+        target_ids.sort_unstable();
+        target_ids.dedup();
+        let targets = target_ids
+            .iter()
+            .map(|target| (*target, self.latest_lifetime(*target)))
+            .collect();
+        if kind == "target_remove" {
+            for target in target_ids {
+                let _ = self.request_remove(target);
+            }
+        }
+        TraceEvent::ListenResponse {
+            session,
+            kind,
+            targets,
+        }
+    }
+
+    fn exchange_events(
+        &mut self,
+        session: u64,
+        request: Option<&pb::ListenRequest>,
+        responses: &[pb::ListenResponse],
+        event_limit: usize,
+    ) -> Vec<TraceEvent> {
+        let mut events = Vec::with_capacity(responses.len().saturating_add(1).min(event_limit));
+        if let Some(request) = request {
+            match request.target_change.as_ref() {
+                Some(pb::listen_request::TargetChange::AddTarget(target)) => {
+                    let accepted = responses.iter().any(|response| {
+                        matches!(
+                            response.response_type.as_ref(),
+                            Some(pb::listen_response::ResponseType::TargetChange(change))
+                                if change.target_change_type
+                                    == pb::target_change::TargetChangeType::Add as i32
+                                    && change.target_ids.contains(&target.target_id)
+                        )
+                    });
+                    let lifetime = accepted.then(|| self.request_add(target.target_id));
+                    if events.len() < event_limit {
+                        events.push(TraceEvent::ListenRequest {
+                            session,
+                            action: "add",
+                            target: target.target_id,
+                            lifetime,
+                        });
+                    }
+                }
+                Some(pb::listen_request::TargetChange::RemoveTarget(target)) => {
+                    let lifetime = self.request_remove(*target);
+                    if events.len() < event_limit {
+                        events.push(TraceEvent::ListenRequest {
+                            session,
+                            action: "remove",
+                            target: *target,
+                            lifetime,
+                        });
+                    }
+                }
+                None => {}
+            }
+        }
+        for response in responses {
+            let event = self.response_event(session, response);
+            if events.len() < event_limit {
+                events.push(event);
+            }
+        }
+        events
+    }
+}
+
+struct WebchannelListenObserver {
+    session: Arc<Session>,
+    state: Mutex<ListenTraceState>,
+}
+
+impl ListenObserver for WebchannelListenObserver {
+    fn exchange(&self, request: Option<&pb::ListenRequest>, responses: &[pb::ListenResponse]) {
+        let event_limit = self.session.trace_event_capacity();
+        if event_limit == 0 {
+            return;
+        }
+        let events = match self.state.lock() {
+            Ok(mut state) => {
+                state.exchange_events(self.session.trace_id, request, responses, event_limit)
+            }
+            Err(_) => return,
+        };
+        for event in events {
+            self.session.trace_event(&event);
+        }
     }
 }
 
@@ -116,6 +620,11 @@ fn keyed_sid() -> String {
     format!("{:016x}{:016x}", a.finish(), b.finish())
 }
 
+fn next_trace_session_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Which gRPC stream a session carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamKind {
@@ -147,6 +656,10 @@ pub enum ChannelResponse {
 
 struct Session {
     sid: String,
+    /// Process-local diagnostic identifier. Unlike `sid`, this is not a channel capability.
+    trace_id: u64,
+    /// Per-session diagnostic budget. Protocol work continues after this counter is exhausted.
+    trace_events: AtomicU64,
     kind: StreamKind,
     /// Origin the session was opened from (`None` for non-browser clients).
     origin: Option<String>,
@@ -247,6 +760,32 @@ struct ChannelApp {
 }
 
 impl Session {
+    fn trace_event_capacity(&self) -> usize {
+        let emitted = self.trace_events.load(Ordering::Relaxed);
+        let capacity = MAX_TRACE_EVENTS_PER_SESSION
+            .saturating_sub(emitted)
+            .saturating_add(u64::from(emitted <= MAX_TRACE_EVENTS_PER_SESSION));
+        usize::try_from(capacity).unwrap_or(usize::MAX)
+    }
+
+    fn trace_event(&self, event: &TraceEvent) {
+        if !trace_enabled() {
+            return;
+        }
+        let slot =
+            self.trace_events
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
+                    (emitted <= MAX_TRACE_EVENTS_PER_SESSION).then_some(emitted + 1)
+                });
+        match slot {
+            Ok(emitted) if emitted < MAX_TRACE_EVENTS_PER_SESSION => trace(event),
+            Ok(_) => trace(&TraceEvent::SessionTraceLimitReached {
+                session: self.trace_id,
+            }),
+            Err(_) => {}
+        }
+    }
+
     fn replace_backchannel(&self, cancel: oneshot::Sender<()>) -> Result<u64, ()> {
         let mut owner = self.backchannel_owner.lock().map_err(|_| ())?;
         owner.generation = owner.generation.checked_add(1).ok_or(())?;
@@ -276,17 +815,27 @@ impl Session {
     fn push(&self, payload: &Value) -> Result<u64, ()> {
         let aid = self.next_aid.fetch_add(1, Ordering::SeqCst) + 1;
         let text = json!([aid, payload]).to_string();
-        trace(
-            "array",
-            &format!("{} aid={aid} bytes={}", self.sid, text.len()),
-        );
-        let overflow = match self.outbound.lock() {
+        let bytes = text.len();
+        let (overflow, queued_first, queued_last, queued_count) = match self.outbound.lock() {
             Ok(mut q) => {
                 q.push_back((aid, text));
-                q.len() > MAX_QUEUED_ARRAYS
+                (
+                    q.len() > MAX_QUEUED_ARRAYS,
+                    q.front().map(|(id, _)| *id),
+                    q.back().map(|(id, _)| *id),
+                    q.len(),
+                )
             }
-            Err(_) => true,
+            Err(_) => (true, None, None, 0),
         };
+        self.trace_event(&TraceEvent::ArrayGenerated {
+            session: self.trace_id,
+            aid,
+            bytes,
+            queued_first,
+            queued_last,
+            queued_count,
+        });
         self.touch();
         // `notify_one` keeps a permit when no back channel is waiting yet (no lost wakeups).
         self.notify.notify_one();
@@ -302,11 +851,25 @@ impl Session {
                 "AID acknowledges an array that was never sent",
             ));
         }
-        if let Ok(mut q) = self.outbound.lock() {
+        let (queued_first, queued_last, queued_count) = if let Ok(mut q) = self.outbound.lock() {
             while q.front().is_some_and(|(id, _)| *id <= aid) {
                 q.pop_front();
             }
-        }
+            (
+                q.front().map(|(id, _)| *id),
+                q.back().map(|(id, _)| *id),
+                q.len(),
+            )
+        } else {
+            (None, None, 0)
+        };
+        self.trace_event(&TraceEvent::ArrayAcknowledged {
+            session: self.trace_id,
+            aid,
+            queued_first,
+            queued_last,
+            queued_count,
+        });
         Ok(())
     }
 
@@ -502,24 +1065,29 @@ impl Hub {
 
     /// Closes and forgets sessions that are idle without a live back channel.
     fn purge_idle(&self) {
-        let Ok(mut sessions) = self.sessions.lock() else {
-            return;
+        let gone = {
+            let Ok(mut sessions) = self.sessions.lock() else {
+                return;
+            };
+            let mut gone = Vec::new();
+            sessions.retain(|sid, s| {
+                let idle = s
+                    .last_seen
+                    .lock()
+                    .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
+                let live = s.backchannel_attached();
+                let keep = (!idle || live) && !s.is_closed();
+                if !keep {
+                    gone.push((sid.clone(), s.clone()));
+                }
+                keep
+            });
+            gone
         };
-        let mut gone = Vec::new();
-        sessions.retain(|sid, s| {
-            let idle = s
-                .last_seen
-                .lock()
-                .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
-            let live = s.backchannel_attached();
-            let keep = (!idle || live) && !s.is_closed();
-            if !keep {
-                gone.push((sid.clone(), s.clone()));
-            }
-            keep
-        });
-        for (sid, s) in gone {
-            trace("purge", &sid);
+        for (_sid, s) in gone {
+            s.trace_event(&TraceEvent::SessionPurged {
+                session: s.trace_id,
+            });
             s.close();
         }
     }
@@ -550,16 +1118,6 @@ impl Hub {
     /// Handles one HTTP request of the channel endpoint.
     pub fn handle(&self, req: &ChannelRequest) -> ChannelResponse {
         self.purge_idle();
-        trace(
-            "request",
-            &format!(
-                "{:?} {} params={:?} body_bytes={}",
-                req.kind,
-                req.method,
-                req.params.keys().collect::<Vec<_>>(),
-                req.body.len()
-            ),
-        );
         if let Some(origin) = &req.origin {
             if !origin_is_local(origin) {
                 return text_response(403, "Forbidden origin".to_owned());
@@ -713,6 +1271,8 @@ impl Hub {
         let (inbound_tx, inbound_rx) = mpsc::channel::<Result<Value, Status>>(64);
         let session = Arc::new(Session {
             sid: sid.clone(),
+            trace_id: next_trace_session_id(),
+            trace_events: AtomicU64::new(0),
             kind: req.kind,
             origin: req.origin.clone(),
             inbound: Mutex::new(Some(inbound_tx)),
@@ -738,6 +1298,11 @@ impl Hub {
             }
             sessions.insert(sid.clone(), session.clone());
         }
+        session.trace_event(&TraceEvent::SessionOpened {
+            session: session.trace_id,
+            kind: session.kind,
+        });
+        trace_request(&session, req);
         let ctx = StreamContext {
             local: self.state.local.clone(),
             gateway: self.state.gateway.clone(),
@@ -780,6 +1345,7 @@ impl Hub {
         if let Err(response) = self.check_replacement(req, &session, &form) {
             return response;
         }
+        trace_request(&session, req);
         if let Some(aid) = req.params.get("AID").and_then(|a| a.parse::<u64>().ok()) {
             if let Err(e) = session.acknowledge(aid) {
                 return error_chunk(&e);
@@ -803,6 +1369,7 @@ impl Hub {
         if let Err(response) = self.check_replacement(req, &session, &BTreeMap::new()) {
             return response;
         }
+        trace_request(&session, req);
         let acked = req
             .params
             .get("AID")
@@ -822,6 +1389,13 @@ impl Hub {
         let Ok(generation) = session.replace_backchannel(cancel_tx) else {
             return text_response(500, "session lock poisoned".to_owned());
         };
+        session.trace_event(&TraceEvent::BackchannelStarted {
+            session: session.trace_id,
+            generation,
+            rid: trace_rid(&req.params),
+            client_aid: acked,
+            long_poll,
+        });
         // Wake a previous back channel so it notices it was replaced.
         session.notify.notify_waiters();
         let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, Status>>(64);
@@ -838,10 +1412,11 @@ impl Hub {
                 &mut cancelled,
             )
             .await;
-            trace(
-                "backchannel end",
-                &format!("{} gen={generation} {outcome}", session.sid),
-            );
+            session.trace_event(&TraceEvent::BackchannelEnded {
+                session: session.trace_id,
+                generation,
+                outcome,
+            });
         });
         ChannelResponse::Stream {
             headers: vec![("content-type", "text/plain; charset=utf-8".to_owned())],
@@ -858,22 +1433,31 @@ impl Hub {
 fn commit_backchannel_chunk(
     session: &Session,
     generation: u64,
+    last_aid: u64,
     permit: mpsc::Permit<'_, Result<bytes::Bytes, Status>>,
     body: bytes::Bytes,
 ) -> bool {
-    let Ok(owner) = session.backchannel_owner.lock() else {
-        return false;
-    };
-    if owner.generation != generation {
-        return false;
+    {
+        let Ok(owner) = session.backchannel_owner.lock() else {
+            return false;
+        };
+        if owner.generation != generation {
+            return false;
+        }
+        permit.send(Ok(body));
     }
-    permit.send(Ok(body));
+    session.trace_event(&TraceEvent::BackchannelCommitted {
+        session: session.trace_id,
+        generation,
+        last_aid,
+    });
     true
 }
 
 async fn send_backchannel_chunk(
     session: &Session,
     generation: u64,
+    last_aid: u64,
     tx: &mpsc::Sender<Result<bytes::Bytes, Status>>,
     cancelled: &mut oneshot::Receiver<()>,
     body: bytes::Bytes,
@@ -883,7 +1467,7 @@ async fn send_backchannel_chunk(
         _ = &mut *cancelled => return Err("superseded"),
         permit = tx.reserve() => permit.map_err(|_| "receiver gone")?,
     };
-    if commit_backchannel_chunk(session, generation, permit, body) {
+    if commit_backchannel_chunk(session, generation, last_aid, permit, body) {
         Ok(())
     } else {
         Err("superseded")
@@ -911,13 +1495,18 @@ async fn backchannel_loop(
         }
         let pending = session.pending_chunk_after(*cursor);
         if let Some((last, count, text)) = &pending {
-            trace(
-                "backchannel send",
-                &format!("{} gen={generation} arrays={count}", session.sid),
-            );
+            let first = last.saturating_sub(*count as u64).saturating_add(1);
+            session.trace_event(&TraceEvent::BackchannelQueued {
+                session: session.trace_id,
+                generation,
+                first_aid: first,
+                last_aid: *last,
+                count: *count,
+            });
             if let Err(outcome) = send_backchannel_chunk(
                 session,
                 generation,
+                *last,
                 tx,
                 cancelled,
                 bytes::Bytes::from(chunk(text)),
@@ -958,6 +1547,7 @@ async fn backchannel_loop(
             if let Err(outcome) = send_backchannel_chunk(
                 session,
                 generation,
+                session.last_aid(),
                 tx,
                 cancelled,
                 bytes::Bytes::from(chunk(&noop)),
@@ -986,12 +1576,15 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
         .maps
         .lock()
         .map_err(|_| Status::internal("session lock poisoned"))?;
+    let mut accepted = 0;
+    let mut duplicates = 0;
     for n in 0..count {
         let map_id = ofs.saturating_add(n);
         let Some(raw) = form.get(&format!("req{n}___data__")) else {
             continue;
         };
         if map_id < maps.0 || maps.1.contains_key(&map_id) {
+            duplicates += 1;
             continue; // retried map
         }
         if map_id.saturating_sub(maps.0) > MAX_MAPS_PER_REQUEST {
@@ -1000,6 +1593,7 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
             ));
         }
         maps.1.insert(map_id, raw.clone());
+        accepted += 1;
     }
     // Drain the contiguous prefix.
     while let Some(raw) = maps.1.get(&maps.0).cloned() {
@@ -1020,6 +1614,17 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
         maps.1.remove(&done);
         maps.0 = done + 1;
     }
+    let event = TraceEvent::ForwardMaps {
+        session: session.trace_id,
+        offset: ofs,
+        declared: count,
+        accepted,
+        duplicates,
+        buffered: maps.1.len(),
+        next_expected: maps.0,
+    };
+    drop(maps);
+    session.trace_event(&event);
     Ok(())
 }
 
@@ -1043,7 +1648,9 @@ fn spawn_stream(
                 }
             };
             if pushed.is_err() {
-                trace("overflow", &pump_session.sid);
+                pump_session.trace_event(&TraceEvent::Overflow {
+                    session: pump_session.trace_id,
+                });
                 break;
             }
         }
@@ -1053,20 +1660,26 @@ fn spawn_stream(
         StreamKind::Listen => {
             let inbound = MappedStream {
                 inner: ReceiverStream::new(inbound_rx),
-                f: |r: Result<Value, Status>| {
+                f: move |r: Result<Value, Status>| {
                     r.and_then(|v| listen_request_from_json(&v).map_err(|e| bad_json(&e)))
                 },
             };
             let (tx, mut rx) = mpsc::channel::<Result<pb::ListenResponse, Status>>(256);
             tokio::spawn(async move {
                 while let Some(item) = rx.recv().await {
-                    let forwarded = item.map(|r| listen_response_to_json(&r));
+                    let forwarded = item.map(|response| listen_response_to_json(&response));
                     if out_tx.send(forwarded).await.is_err() {
                         break;
                     }
                 }
             });
-            tokio::spawn(listen_stream(ctx, inbound, tx));
+            let observer = trace_enabled().then(|| {
+                Arc::new(WebchannelListenObserver {
+                    session: session.clone(),
+                    state: Mutex::new(ListenTraceState::default()),
+                }) as Arc<dyn ListenObserver>
+            });
+            tokio::spawn(listen_stream_observed(ctx, inbound, tx, observer));
         }
         StreamKind::Write => {
             let inbound = MappedStream {
@@ -1138,10 +1751,177 @@ mod tests {
     use super::*;
 
     #[test]
+    fn trace_events_cannot_render_channel_capabilities_or_payloads() {
+        let rendered = format_trace_event(&TraceEvent::ArrayGenerated {
+            session: 7,
+            aid: 4,
+            bytes: 128,
+            queued_first: Some(2),
+            queued_last: Some(4),
+            queued_count: 3,
+        });
+
+        assert_eq!(
+            rendered,
+            "session=7 array=generated aid=4 bytes=128 queued=2..4 queued_count=3"
+        );
+        for secret in [
+            "session-capability-secret",
+            "projects/private-project",
+            "Bearer private-token",
+            "private-document-field",
+        ] {
+            assert!(!rendered.contains(secret));
+        }
+    }
+
+    #[test]
+    fn trace_rate_limiter_resets_after_its_bounded_window() {
+        let started = Instant::now();
+        let mut limiter = TraceRateLimiter {
+            window_started: started,
+            emitted: 0,
+        };
+
+        for _ in 0..MAX_TRACE_EVENTS_PER_SECOND {
+            assert!(limiter.allow(started));
+        }
+        assert!(!limiter.allow(started));
+        assert!(limiter.allow(started + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn listen_trace_assigns_a_new_lifetime_when_a_target_id_is_reused() {
+        let mut trace = ListenTraceState::default();
+
+        assert_eq!(trace.request_add(5), 1);
+        assert_eq!(trace.active_lifetime(5), Some(1));
+        assert_eq!(trace.request_remove(5), Some(1));
+        assert_eq!(trace.active_lifetime(5), None);
+        assert_eq!(trace.request_add(5), 2);
+        assert_eq!(trace.active_lifetime(5), Some(2));
+    }
+
+    #[test]
+    fn listen_trace_bounds_completed_target_history() {
+        let mut trace = ListenTraceState::default();
+        let newest = i32::try_from(MAX_TRACE_COMPLETED_TARGETS).expect("small trace cap") + 17;
+        for target in 1..=newest {
+            let lifetime = trace.request_add(target);
+            assert_eq!(trace.request_remove(target), Some(lifetime));
+        }
+
+        assert!(trace.completed.len() <= MAX_TRACE_COMPLETED_TARGETS);
+        assert_eq!(trace.latest_lifetime(1), None);
+        assert!(trace.latest_lifetime(newest).is_some());
+    }
+
+    #[test]
+    fn listen_trace_records_only_accepted_adds_and_keeps_pipelined_lifetimes_distinct() {
+        let add = |target_id| pb::ListenRequest {
+            target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
+                target_id,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let remove = |target_id| pb::ListenRequest {
+            target_change: Some(pb::listen_request::TargetChange::RemoveTarget(target_id)),
+            ..Default::default()
+        };
+        let response = |kind, target_id| pb::ListenResponse {
+            response_type: Some(pb::listen_response::ResponseType::TargetChange(
+                pb::TargetChange {
+                    target_change_type: kind as i32,
+                    target_ids: vec![target_id],
+                    ..Default::default()
+                },
+            )),
+        };
+        let mut trace = ListenTraceState::default();
+
+        let rejected = trace.exchange_events(
+            1,
+            Some(&add(7)),
+            &[response(pb::target_change::TargetChangeType::Remove, 7)],
+            usize::MAX,
+        );
+        assert_eq!(trace.latest_lifetime(7), None);
+        assert!(format_trace_event(&rejected[0]).ends_with("target=7@unknown"));
+
+        let first = trace.exchange_events(
+            1,
+            Some(&add(9)),
+            &[response(pb::target_change::TargetChangeType::Add, 9)],
+            usize::MAX,
+        );
+        let removed = trace.exchange_events(
+            1,
+            Some(&remove(9)),
+            &[response(pb::target_change::TargetChangeType::Remove, 9)],
+            usize::MAX,
+        );
+        let replacement = trace.exchange_events(
+            1,
+            Some(&add(9)),
+            &[response(pb::target_change::TargetChangeType::Add, 9)],
+            usize::MAX,
+        );
+
+        assert!(format_trace_event(&first[0]).ends_with("target=9@1"));
+        assert!(format_trace_event(&removed[0]).ends_with("target=9@1"));
+        assert!(format_trace_event(&replacement[0]).ends_with("target=9@2"));
+
+        let bounded = trace.exchange_events(
+            1,
+            None,
+            &[
+                response(pb::target_change::TargetChangeType::NoChange, 9),
+                response(pb::target_change::TargetChangeType::Current, 9),
+                response(pb::target_change::TargetChangeType::Reset, 9),
+            ],
+            2,
+        );
+        assert_eq!(bounded.len(), 2);
+    }
+
+    #[test]
+    fn listen_response_trace_contains_only_response_shape_and_target_lifetimes() {
+        let mut trace = ListenTraceState::default();
+        let lifetime = trace.request_add(9);
+        let response = pb::ListenResponse {
+            response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                pb::DocumentChange {
+                    document: Some(pb::Document {
+                        name: "projects/private-project/databases/(default)/documents/users/private-user"
+                            .to_owned(),
+                        ..Default::default()
+                    }),
+                    target_ids: vec![9],
+                    removed_target_ids: vec![],
+                },
+            )),
+        };
+
+        let event = trace.response_event(3, &response);
+        let rendered = format_trace_event(&event);
+
+        assert_eq!(lifetime, 1);
+        assert_eq!(
+            rendered,
+            "session=3 listen=response kind=document_change targets=9@1"
+        );
+        assert!(!rendered.contains("private-project"));
+        assert!(!rendered.contains("private-user"));
+    }
+
+    #[test]
     fn pending_chunk_starts_after_the_backchannel_cursor() {
         let (inbound, _inbound_rx) = mpsc::channel(1);
         let session = Session {
             sid: "session-one".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
@@ -1175,6 +1955,8 @@ mod tests {
         let (inbound, _inbound_rx) = mpsc::channel(1);
         let session = Session {
             sid: "session-one".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
@@ -1216,6 +1998,8 @@ mod tests {
         let (inbound, _inbound_rx) = mpsc::channel(1);
         let session = Session {
             sid: "session-one".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
             kind: StreamKind::Listen,
             origin: None,
             inbound: Mutex::new(Some(inbound)),
@@ -1244,6 +2028,7 @@ mod tests {
         assert!(!commit_backchannel_chunk(
             &session,
             1,
+            1,
             old_permit,
             bytes::Bytes::from_static(b"old"),
         ));
@@ -1253,6 +2038,7 @@ mod tests {
         assert!(commit_backchannel_chunk(
             &session,
             replacement_generation,
+            1,
             replacement_permit,
             bytes::Bytes::from_static(b"new"),
         ));

@@ -66,6 +66,13 @@ suite) needs, and what leaves the other smokes working without attaching a token
   that the old listener receives no later snapshot while the replacement receives the initial
   and updated revisions exactly once. The same script can be run against Firebase CLI with
   `firebase emulators:exec --project demo-app --only firestore --config listener-replacement.firebase.json 'npm run smoke:listener-replacement'` from this directory. The harness supports Node.js 20 or newer and checks the runtime before opening a listener.
+- `web/listener-lifecycle.html`: the browser Web SDK records one ledger across SSR-like initial
+  markup, Auth readiness, overlapping user listeners, a project listener, a one-shot mail read,
+  a destination query, route ownership replacement and one live write. It fails when a callback
+  reaches an unsubscribed listener or more than one setting form is connected. Serve `web/` from
+  a `fireemu exec --firebase-json tools/sdk-smoke/listener-lifecycle.firebase.json` child and open
+  `listener-lifecycle.html?fs=<firestore port>&auth=<auth port>&project=demo-app`. The same file and
+  rules run unchanged with the official Local Emulator Suite for differential checks.
 - `web/index.html`: the browser build of the web SDK (WebChannel transport). Serve the
   directory (`python3 -m http.server 8765 --bind 127.0.0.1` in `web/`) from a `fireemu exec`
   child and open `http://127.0.0.1:8765/index.html?fs=<firestore port>&auth=<http port>&token=<FIREEMU_CONTROL_TOKEN>`; the page prints its checks as JSON. The variable is scoped to the child and is not printed by the daemon. `FIREEMU_TRACE_WEBCHANNEL=1` on the daemon traces the channel protocol.

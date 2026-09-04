@@ -50,6 +50,8 @@ use crate::streams::{listen_stream_observed, write_stream, ListenObserver, Strea
 /// Sessions without an attached back channel and without requests longer than this are
 /// closed.
 const SESSION_IDLE_TTL: Duration = Duration::from_secs(120);
+/// A terminal array cannot retain an abandoned session indefinitely.
+const TERMINAL_DELIVERY_TTL: Duration = Duration::from_secs(120);
 /// Default long-polling wait (`TO` overrides it, bounded).
 const LONG_POLL_WAIT: Duration = Duration::from_secs(30);
 /// Upper bound on `TO`.
@@ -684,8 +686,16 @@ struct Session {
     /// nothing binds it: the service is `off` or `unenforced`, or the opening request
     /// presented a privileged credential instead of an App Check token.
     app_check: Option<ChannelApp>,
-    /// The stream ended (error already queued) or the session was closed.
-    closed: AtomicBool,
+    /// The application stream has ended. Its final array remains readable until acknowledged.
+    stream_end: Mutex<Option<StreamEnd>>,
+    /// The transport is no longer available for any request.
+    terminated: AtomicBool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StreamEnd {
+    ended_at: Instant,
+    terminal_aid: u64,
 }
 
 struct BackchannelOwner {
@@ -870,6 +880,14 @@ impl Session {
             queued_last,
             queued_count,
         });
+        if self
+            .stream_end
+            .lock()
+            .is_ok_and(|ended| ended.is_some_and(|ended| aid >= ended.terminal_aid))
+        {
+            self.terminated.store(true, Ordering::SeqCst);
+            self.notify.notify_waiters();
+        }
         Ok(())
     }
 
@@ -903,14 +921,38 @@ impl Session {
         }
     }
 
-    fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
+    fn is_stream_ended(&self) -> bool {
+        self.stream_end.lock().is_ok_and(|ended| ended.is_some())
     }
 
-    /// Ends the session: the stream task sees EOF; the attached back channel delivers what
-    /// is still queued (a stream error, typically) and then exits.
-    fn close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
+    fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::SeqCst)
+    }
+
+    fn terminal_delivery_expired(&self) -> bool {
+        self.stream_end.lock().map_or(true, |ended| {
+            ended.is_some_and(|ended| ended.ended_at.elapsed() >= TERMINAL_DELIVERY_TTL)
+        })
+    }
+
+    /// Ends the application stream while preserving its final numbered array for delivery.
+    fn end_stream(&self) {
+        if let Ok(mut ended) = self.stream_end.lock() {
+            ended.get_or_insert(StreamEnd {
+                ended_at: Instant::now(),
+                terminal_aid: self.last_aid(),
+            });
+        }
+        if let Ok(mut inbound) = self.inbound.lock() {
+            inbound.take();
+        }
+        self.notify.notify_waiters();
+        self.notify.notify_one();
+    }
+
+    /// Permanently ends both the application stream and the `WebChannel` transport.
+    fn terminate(&self) {
+        self.terminated.store(true, Ordering::SeqCst);
         if let Ok(mut inbound) = self.inbound.lock() {
             inbound.take();
         }
@@ -1076,7 +1118,12 @@ impl Hub {
                     .lock()
                     .is_ok_and(|t| t.elapsed() >= SESSION_IDLE_TTL);
                 let live = s.backchannel_attached();
-                let keep = (!idle || live) && !s.is_closed();
+                let keep = !s.is_terminated()
+                    && if s.is_stream_ended() {
+                        !s.terminal_delivery_expired()
+                    } else {
+                        !idle || live
+                    };
                 if !keep {
                     gone.push((sid.clone(), s.clone()));
                 }
@@ -1088,7 +1135,7 @@ impl Hub {
             s.trace_event(&TraceEvent::SessionPurged {
                 session: s.trace_id,
             });
-            s.close();
+            s.terminate();
         }
     }
 
@@ -1098,7 +1145,7 @@ impl Hub {
             .lock()
             .ok()
             .and_then(|m| m.get(sid).cloned())
-            .filter(|s| !s.is_closed())
+            .filter(|s| !s.is_terminated())
             .ok_or_else(unknown_session)?;
         // A session answers only the origin and stream kind that opened it.
         if s.kind != req.kind || s.origin != req.origin {
@@ -1111,7 +1158,7 @@ impl Hub {
     fn remove(&self, sid: &str) {
         let removed = self.sessions.lock().ok().and_then(|mut m| m.remove(sid));
         if let Some(s) = removed {
-            s.close();
+            s.terminate();
         }
     }
 
@@ -1287,7 +1334,8 @@ impl Hub {
             maps: Mutex::new((0, BTreeMap::new())),
             project: project.clone(),
             app_check: bound,
-            closed: AtomicBool::new(false),
+            stream_end: Mutex::new(None),
+            terminated: AtomicBool::new(false),
         });
         {
             let Ok(mut sessions) = self.sessions.lock() else {
@@ -1350,6 +1398,14 @@ impl Hub {
             if let Err(e) = session.acknowledge(aid) {
                 return error_chunk(&e);
             }
+        }
+        if session.is_stream_ended()
+            && form
+                .get("count")
+                .and_then(|count| count.parse::<u64>().ok())
+                .is_some_and(|count| count > 0)
+        {
+            return error_chunk(&Status::unavailable("the stream has ended"));
         }
         if let Err(e) = session_deliver(&session, &form) {
             return error_chunk(&e);
@@ -1522,8 +1578,8 @@ async fn backchannel_loop(
                 return "long poll batch";
             }
         }
-        if session.is_closed() && pending.is_none() {
-            return "session closed";
+        if (session.is_stream_ended() || session.is_terminated()) && pending.is_none() {
+            return "session ended";
         }
         let idle = if long_poll { wait } else { KEEPALIVE };
         let waited = tokio::select! {
@@ -1654,7 +1710,7 @@ fn spawn_stream(
                 break;
             }
         }
-        pump_session.close();
+        pump_session.end_stream();
     });
     match kind {
         StreamKind::Listen => {
@@ -1940,7 +1996,8 @@ mod tests {
             maps: Mutex::new((0, BTreeMap::new())),
             project: "demo-app".to_owned(),
             app_check: None,
-            closed: AtomicBool::new(false),
+            stream_end: Mutex::new(None),
+            terminated: AtomicBool::new(false),
         };
 
         assert_eq!(
@@ -1948,6 +2005,41 @@ mod tests {
             Some((3, 2, "[[2,[\"second\"]],[3,[\"third\"]]]".to_owned()))
         );
         assert_eq!(session.pending_chunk_after(3), None);
+    }
+
+    #[test]
+    fn terminal_delivery_deadline_is_independent_of_request_activity() {
+        let (inbound, _inbound_rx) = mpsc::channel(1);
+        let session = Session {
+            sid: "terminal-session".to_owned(),
+            trace_id: 1,
+            trace_events: AtomicU64::new(0),
+            kind: StreamKind::Write,
+            origin: None,
+            inbound: Mutex::new(Some(inbound)),
+            outbound: Mutex::new(VecDeque::from([(2, "[2,[{\"error\":{}}]]".to_owned())])),
+            next_aid: AtomicU64::new(2),
+            backchannel_owner: Mutex::new(BackchannelOwner {
+                generation: 0,
+                cancel: None,
+            }),
+            notify: Notify::new(),
+            last_seen: Mutex::new(Instant::now()),
+            maps: Mutex::new((2, BTreeMap::new())),
+            project: "demo-app".to_owned(),
+            app_check: None,
+            stream_end: Mutex::new(Some(StreamEnd {
+                ended_at: Instant::now()
+                    .checked_sub(TERMINAL_DELIVERY_TTL)
+                    .expect("test instant must support the terminal TTL"),
+                terminal_aid: 2,
+            })),
+            terminated: AtomicBool::new(false),
+        };
+
+        session.touch();
+        assert!(session.terminal_delivery_expired());
+        assert!(!session.is_terminated());
     }
 
     #[tokio::test]
@@ -1971,7 +2063,8 @@ mod tests {
             maps: Mutex::new((0, BTreeMap::new())),
             project: "demo-app".to_owned(),
             app_check: None,
-            closed: AtomicBool::new(false),
+            stream_end: Mutex::new(None),
+            terminated: AtomicBool::new(false),
         };
         let (tx, mut rx) = mpsc::channel(1);
         let (_cancel_tx, mut cancelled) = oneshot::channel();
@@ -2014,7 +2107,8 @@ mod tests {
             maps: Mutex::new((0, BTreeMap::new())),
             project: "demo-app".to_owned(),
             app_check: None,
-            closed: AtomicBool::new(false),
+            stream_end: Mutex::new(None),
+            terminated: AtomicBool::new(false),
         };
         let (tx, mut rx) = mpsc::channel(1);
         let old_permit = tx.reserve().await.unwrap();

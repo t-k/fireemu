@@ -1946,7 +1946,9 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [],
-      "gaps": [],
+      "gaps": [
+        "the emulator-internal trigger registration, removal and getTriggers management routes"
+      ],
       "prohibitedClaimTerms": [],
       "claims": [
         {
@@ -1997,7 +1999,9 @@
         "docs.local/issues/open/implement-event-infrastructure-emulator-compatibility.md"
       ],
       "notes": [],
-      "gaps": [],
+      "gaps": [
+        "the emulator-internal queueStats diagnostic route"
+      ],
       "prohibitedClaimTerms": [],
       "claims": [
         {

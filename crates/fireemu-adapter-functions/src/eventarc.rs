@@ -2,9 +2,8 @@
 //! `CloudEvent` an `onCustomEventPublished` function receives.
 //!
 //! The official Local Emulator Suite runs an Eventarc emulator of its own on port 9299 and
-//! points `CLOUD_EVENTARC_EMULATOR_HOST` at it. fireemu serves the same route on the
-//! functions port instead -- a custom event has nowhere to go without functions -- and
-//! exports the variable accordingly, so the Admin SDK reaches it unchanged.
+//! points `CLOUD_EVENTARC_EMULATOR_HOST` at it. fireemu binds the same dedicated support
+//! listener whenever a Functions runtime is loaded, so the Admin SDK reaches it unchanged.
 //!
 //! Two shapes are involved, and they are not the same:
 //!

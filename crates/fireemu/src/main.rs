@@ -64,7 +64,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|firebase] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities");
@@ -491,6 +491,8 @@ struct RawOptions {
     http_port: Option<u16>,
     storage_port: Option<u16>,
     functions_port: Option<u16>,
+    eventarc_port: Option<u16>,
+    tasks_port: Option<u16>,
     pubsub_port: Option<u16>,
     hub_port: Option<u16>,
     ui_port: Option<u16>,
@@ -596,6 +598,14 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
             }
             "--functions-port" => {
                 raw.functions_port = Some(port_arg(args, i, "--functions-port")?);
+                i += 2;
+            }
+            "--eventarc-port" => {
+                raw.eventarc_port = Some(port_arg(args, i, "--eventarc-port")?);
+                i += 2;
+            }
+            "--tasks-port" => {
+                raw.tasks_port = Some(port_arg(args, i, "--tasks-port")?);
                 i += 2;
             }
             "--ui-port" => {
@@ -754,6 +764,16 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     if let Some(p) = raw.functions_port {
         cfg.functions_addr = with_port(&cfg.functions_addr, p);
     }
+    if let Some(p) = raw.eventarc_port {
+        cfg.eventarc_addr = with_port(&cfg.eventarc_addr, p);
+        cfg.eventarc_enabled = true;
+        cfg.eventarc_addr_explicit = true;
+    }
+    if let Some(p) = raw.tasks_port {
+        cfg.tasks_addr = with_port(&cfg.tasks_addr, p);
+        cfg.tasks_enabled = true;
+        cfg.tasks_addr_explicit = true;
+    }
     if let Some(p) = raw.pubsub_port {
         cfg.pubsub_addr = with_port(&cfg.pubsub_addr, p);
         cfg.pubsub_enabled = true;
@@ -774,6 +794,49 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
 }
 
+fn load_project_config(
+    raw: &RawOptions,
+    only: &Selection,
+) -> Result<(RuntimeConfig, PathBuf), CliError> {
+    // `--config` carries either the canonical configuration or a firebase.json.
+    let (mut cfg, firebase_from_config) = match &raw.config_path {
+        Some(path) => {
+            let (json, canonical) = read_config_file(path)?;
+            if canonical {
+                let config = RuntimeConfig::from_json(&json)?;
+                let firebase = if raw.firebase_json.is_none() {
+                    config::firebase_json_reference(&json)?
+                        .map(|reference| project_dir(path).join(reference))
+                        .map(|firebase_path| read_firebase_json(&firebase_path))
+                        .transpose()?
+                } else {
+                    None
+                };
+                (config, firebase)
+            } else {
+                (RuntimeConfig::default(), Some((json, path.clone())))
+            }
+        }
+        None => (RuntimeConfig::default(), None),
+    };
+    // A firebase.json from `--firebase-json` wins over one that reached `--config`.
+    let firebase = match &raw.firebase_json {
+        Some(path) => Some(read_firebase_json(path)?),
+        None => firebase_from_config,
+    };
+    let mut project_root = PathBuf::from(".");
+    if let Some((json, path)) = &firebase {
+        project_root = project_dir(path);
+        let report = cfg.apply_firebase_json(json, &project_root, only)?;
+        if raw.verbosity > Verbosity::Quiet {
+            for notice in &report.notices {
+                eprintln!("note: {}: {notice}", diagnostic_path(path));
+            }
+        }
+    }
+    Ok((cfg, project_root))
+}
+
 fn parse_options(
     args: &[String],
     context: OptionContext,
@@ -781,42 +844,7 @@ fn parse_options(
     let raw = parse_raw_options(args, context)?;
     let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
-    // `--config` carries either the canonical configuration or a firebase.json.
-    let (mut cfg, firebase_from_config) = match &raw.config_path {
-        Some(p) => {
-            let (json, canonical) = read_config_file(p)?;
-            if canonical {
-                let config = RuntimeConfig::from_json(&json)?;
-                let firebase = if raw.firebase_json.is_none() {
-                    config::firebase_json_reference(&json)?
-                        .map(|reference| project_dir(p).join(reference))
-                        .map(|path| read_firebase_json(&path))
-                        .transpose()?
-                } else {
-                    None
-                };
-                (config, firebase)
-            } else {
-                (RuntimeConfig::default(), Some((json, p.clone())))
-            }
-        }
-        None => (RuntimeConfig::default(), None),
-    };
-    // A firebase.json from `--firebase-json` wins over one that reached `--config`.
-    let firebase = match &raw.firebase_json {
-        Some(p) => Some(read_firebase_json(p)?),
-        None => firebase_from_config,
-    };
-    let mut project_root = PathBuf::from(".");
-    if let Some((json, path)) = &firebase {
-        project_root = project_dir(path);
-        let report = cfg.apply_firebase_json(json, &project_root, &only)?;
-        if raw.verbosity > Verbosity::Quiet {
-            for notice in &report.notices {
-                eprintln!("note: {}: {notice}", diagnostic_path(path));
-            }
-        }
-    }
+    let (mut cfg, project_root) = load_project_config(&raw, &only)?;
     let rc = read_firebaserc(&project_root)?;
     if let Some(project) = resolve_project(rc.as_ref(), raw.project.as_deref())? {
         // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
@@ -853,6 +881,20 @@ fn parse_options(
         // `--functions <dir>` names exactly one codebase, whatever `firebase.json` declares.
         cfg.functions_source = Some(dir);
         cfg.functions_loaded.clear();
+    }
+    let primary_selected = only.firestore
+        || only.auth
+        || only.storage
+        || only.functions
+        || only.pubsub
+        || only.appcheck;
+    let configured_support_selected =
+        (only.eventarc && cfg.eventarc_enabled) || (only.tasks && cfg.tasks_enabled);
+    if only.explicit && !primary_selected && !configured_support_selected {
+        return Err(CliError::refused(
+            "No emulators to start: Eventarc and Cloud Tasks are support emulators and a standalone --only selection must name a configured emulators.eventarc or emulators.tasks entry"
+                .to_owned(),
+        ));
     }
     if raw.inspect_functions.is_some() || raw.inspect_functions_dynamic {
         apply_inspect_functions(&mut cfg, raw.inspect_functions)?;
@@ -964,6 +1006,10 @@ struct BoundAddrs {
     storage: Option<std::net::SocketAddr>,
     /// Functions HTTP.
     functions: Option<std::net::SocketAddr>,
+    /// Eventarc HTTP, present only as a dependency of a loaded Functions runtime.
+    eventarc: Option<std::net::SocketAddr>,
+    /// Cloud Tasks HTTP, present only as a dependency of a loaded Functions runtime.
+    tasks: Option<std::net::SocketAddr>,
     /// Pub/Sub gRPC.
     pubsub: Option<std::net::SocketAddr>,
     /// The Emulator Hub, when its port could be bound.
@@ -1036,14 +1082,14 @@ fn child_environment(
     }
     if let Some(addr) = addrs.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), addr.to_string()));
-        // Eventarc's publishEvents route is served on the functions port. The variable
-        // carries the scheme, as `setEnvVarsForEmulators` gives it one; without it the Admin
-        // SDK publishes to production, which is a network call a local run must never make.
+    }
+    if let Some(addr) = addrs.eventarc {
         env.push((
             "CLOUD_EVENTARC_EMULATOR_HOST".to_owned(),
             format!("http://{addr}"),
         ));
-        // Cloud Tasks' variable carries no scheme, unlike Eventarc's.
+    }
+    if let Some(addr) = addrs.tasks {
         env.push(("CLOUD_TASKS_EMULATOR_HOST".to_owned(), addr.to_string()));
     }
     if let Some(addr) = addrs.pubsub {
@@ -1670,6 +1716,8 @@ struct Listeners {
     auth_selected: bool,
     storage: Option<tokio::net::TcpListener>,
     functions: Option<tokio::net::TcpListener>,
+    eventarc: Option<tokio::net::TcpListener>,
+    tasks: Option<tokio::net::TcpListener>,
     pubsub: Option<tokio::net::TcpListener>,
     hub: Option<tokio::net::TcpListener>,
     /// The Logging emulator WebSocket, when its port could be bound. Best effort like the Hub
@@ -1677,15 +1725,45 @@ struct Listeners {
     logging: Option<tokio::net::TcpListener>,
 }
 
-async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
-    let bind = |addr: &str| {
-        let addr = addr.to_owned();
-        async move {
-            tokio::net::TcpListener::bind(&addr)
-                .await
-                .map_err(|e| format!("bind {addr}: {e}"))
+async fn bind_listener(addr: &str) -> Result<tokio::net::TcpListener, String> {
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|error| format!("bind {addr}: {error}"))
+}
+
+async fn bind_relocatable_listener(
+    addr: &str,
+    explicit: bool,
+    service: &'static str,
+) -> Result<tokio::net::TcpListener, String> {
+    if explicit || addr.ends_with(":0") {
+        return bind_listener(addr).await;
+    }
+    let (host, port) = addr
+        .rsplit_once(':')
+        .and_then(|(host, port)| port.parse::<u16>().ok().map(|port| (host, port)))
+        .ok_or_else(|| format!("bind {addr}: invalid address"))?;
+    for candidate in port..=u16::MAX {
+        let candidate_addr = format!("{host}:{candidate}");
+        match tokio::net::TcpListener::bind(&candidate_addr).await {
+            Ok(listener) => {
+                if candidate != port {
+                    eprintln!(
+                        "warning: {service} unable to start on port {port}, starting on {candidate} instead"
+                    );
+                }
+                return Ok(listener);
+            }
+            Err(_) if candidate < u16::MAX => {}
+            Err(error) => return Err(format!("bind {candidate_addr}: {error}")),
         }
-    };
+    }
+    Err(format!(
+        "could not find an open {service} port in {port}-65535"
+    ))
+}
+
+async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listeners, String> {
     // An explicit Hub address wins over every port-zero listener. The default remains late
     // and best effort: a selected product configured on 4400 must win and disable discovery.
     let prebound_hub = if cfg.hub_addr_explicit {
@@ -1694,30 +1772,57 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         None
     };
     let firestore = if only.firestore {
-        Some(bind(&cfg.firestore_addr).await?)
+        Some(bind_listener(&cfg.firestore_addr).await?)
     } else {
         None
     };
     let control = if only.auth {
-        bind(&cfg.http_addr).await?
+        bind_listener(&cfg.http_addr).await?
     } else {
         // Loopback, ephemeral: the configured Auth port belongs to whoever wants it.
-        bind("127.0.0.1:0").await?
+        bind_listener("127.0.0.1:0").await?
     };
     let storage = if only.storage {
-        Some(bind(&cfg.storage_addr).await?)
+        Some(bind_listener(&cfg.storage_addr).await?)
     } else {
         None
     };
     let functions = if only.functions && cfg.functions_source.is_some() {
-        Some(bind(&cfg.functions_addr).await?)
+        Some(bind_listener(&cfg.functions_addr).await?)
+    } else {
+        None
+    };
+    // The pinned Firebase CLI starts both support emulators whenever a Functions backend is
+    // loaded, even if `--only` did not name them. Naming either one without Functions is an
+    // accepted no-op and binds neither listener.
+    let eventarc = if functions.is_some() {
+        Some(
+            bind_relocatable_listener(
+                &cfg.eventarc_addr,
+                cfg.eventarc_addr_explicit,
+                "Eventarc emulator",
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let tasks = if functions.is_some() {
+        Some(
+            bind_relocatable_listener(
+                &cfg.tasks_addr,
+                cfg.tasks_addr_explicit,
+                "Cloud Tasks emulator",
+            )
+            .await?,
+        )
     } else {
         None
     };
     // Like the official suite, Pub/Sub starts only when it was configured or explicitly asked
     // for, rather than binding port 8085 on every run.
     let pubsub = if only.pubsub && (cfg.pubsub_enabled || only.explicit) {
-        Some(bind(&cfg.pubsub_addr).await?)
+        Some(bind_listener(&cfg.pubsub_addr).await?)
     } else {
         None
     };
@@ -1740,6 +1845,8 @@ async fn bind_listeners(cfg: &RuntimeConfig, only: &Selection) -> Result<Listene
         auth_selected: only.auth,
         storage,
         functions,
+        eventarc,
+        tasks,
         pubsub,
         hub,
         logging,
@@ -1775,6 +1882,8 @@ fn hub_emulators(addrs: &BoundAddrs) -> Vec<hub::EmulatorInfo> {
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("eventarc", addrs.eventarc),
+        ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
         ("hub", addrs.hub),
         ("ui", addrs.ui),
@@ -1840,6 +1949,14 @@ fn print_banner(
         None => {
             println!("  functions:        not configured (functions.source or --functions <dir>)");
         }
+    }
+    match addrs.eventarc {
+        Some(a) => println!("  eventarc (HTTP):  {a}   CLOUD_EVENTARC_EMULATOR_HOST=http://{a}"),
+        None => println!("  eventarc:         not started (requires a Functions codebase)"),
+    }
+    match addrs.tasks {
+        Some(a) => println!("  tasks (HTTP):     {a}   CLOUD_TASKS_EMULATOR_HOST={a}"),
+        None => println!("  tasks:            not started (requires a Functions codebase)"),
     }
     match addrs.pubsub {
         Some(a) => println!("  pubsub (gRPC):    {a}   PUBSUB_EMULATOR_HOST={a}"),
@@ -2196,6 +2313,29 @@ mod config_reload_tests {
         assert!(runtime_thread_counts(8, Some("many"), None).is_err());
     }
 
+    #[test]
+    fn support_service_cli_ports_override_configured_addresses() {
+        let mut cfg = RuntimeConfig {
+            eventarc_addr: "localhost:9300".to_owned(),
+            tasks_addr: "localhost:9500".to_owned(),
+            ..RuntimeConfig::default()
+        };
+        let raw = RawOptions {
+            eventarc_port: Some(9301),
+            tasks_port: Some(9501),
+            ..RawOptions::default()
+        };
+
+        apply_port_overrides(&mut cfg, &raw);
+
+        assert_eq!(cfg.eventarc_addr, "localhost:9301");
+        assert!(cfg.eventarc_enabled);
+        assert!(cfg.eventarc_addr_explicit);
+        assert_eq!(cfg.tasks_addr, "localhost:9501");
+        assert!(cfg.tasks_enabled);
+        assert!(cfg.tasks_addr_explicit);
+    }
+
     #[tokio::test]
     async fn a_selected_product_wins_a_port_shared_with_the_default_hub() {
         let only = Selection {
@@ -2203,6 +2343,8 @@ mod config_reload_tests {
             auth: false,
             storage: false,
             functions: false,
+            eventarc: false,
+            tasks: false,
             pubsub: false,
             appcheck: false,
             explicit: true,

@@ -292,6 +292,10 @@ fn exec_command_with_logging_port(
         "0",
         "--functions-port",
         "0",
+        "--eventarc-port",
+        "0",
+        "--tasks-port",
+        "0",
         "--ui-port",
         "0",
         "--hub-port",
@@ -332,6 +336,10 @@ fn exec_command_with_inspector_port(
         "0",
         "--functions-port",
         "0",
+        "--eventarc-port",
+        "0",
+        "--tasks-port",
+        "0",
         "--ui-port",
         "0",
         "--hub-port",
@@ -356,6 +364,166 @@ fn exec_command_with_inspector_port(
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn functions_starts_eventarc_and_tasks_on_dedicated_ports() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke/functions-project");
+    let dir = scratch("support-services");
+    let env_path = dir.join("env.txt");
+    let script = format!(
+        "printf '%s\\n' \"$FIREEMU_FUNCTIONS_HOST\" \"$CLOUD_EVENTARC_EMULATOR_HOST\" \"$CLOUD_TASKS_EMULATOR_HOST\" > {}",
+        env_path.display()
+    );
+    let output = exec_command(&source, None, &["sh", "-c", &script]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let env = std::fs::read_to_string(&env_path).unwrap();
+    let mut values = env.lines();
+    let functions = values.next().expect("Functions host is exported");
+    let eventarc = values
+        .next()
+        .expect("Eventarc host is exported")
+        .strip_prefix("http://")
+        .expect("Eventarc uses the official URL spelling");
+    let tasks = values.next().expect("Tasks host is exported");
+    assert!(values.next().is_none(), "only the three hosts are recorded");
+    assert_ne!(eventarc, functions);
+    assert_ne!(tasks, functions);
+    assert_ne!(eventarc, tasks);
+    for (service, address) in [
+        ("functions", functions),
+        ("eventarc", eventarc),
+        ("tasks", tasks),
+    ] {
+        assert!(
+            TcpStream::connect(address).is_err(),
+            "{service} listener {address} survived exec"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn occupied_eventarc_or_tasks_port_fails_before_the_exec_command_runs() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke/functions-project");
+    for service in ["eventarc", "tasks"] {
+        let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = reserved.local_addr().unwrap().port().to_string();
+        let eventarc_port = if service == "eventarc" { &port } else { "0" };
+        let tasks_port = if service == "tasks" { &port } else { "0" };
+        let dir = scratch(&format!("occupied-{service}"));
+        let marker = dir.join("command-ran");
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .args([
+                "exec",
+                "--project",
+                "demo-support-occupied",
+                "--only",
+                "functions",
+                "--firestore-port",
+                "0",
+                "--http-port",
+                "0",
+                "--storage-port",
+                "0",
+                "--functions-port",
+                "0",
+                "--eventarc-port",
+                eventarc_port,
+                "--tasks-port",
+                tasks_port,
+                "--hub-port",
+                "0",
+                "--logging-port",
+                "0",
+                "--ui-port",
+                "0",
+                "--functions",
+                source.to_str().unwrap(),
+                "--",
+                "touch",
+                marker.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{service}: {}",
+            stderr(&output)
+        );
+        assert!(
+            !marker.exists(),
+            "{service}: exec command ran after bind failure"
+        );
+        drop(reserved);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn occupied_default_support_ports_relocate_and_export_the_selected_addresses() {
+    let eventarc_default = std::net::TcpListener::bind("127.0.0.1:9299").unwrap();
+    let tasks_default = std::net::TcpListener::bind("127.0.0.1:9499").unwrap();
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke/functions-project");
+    let dir = scratch("support-relocation");
+    let addresses = dir.join("addresses.txt");
+    let script = format!(
+        "printf '%s\\n' \"$CLOUD_EVENTARC_EMULATOR_HOST\" \"$CLOUD_TASKS_EMULATOR_HOST\" > {}",
+        addresses.display()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args([
+            "exec",
+            "--project",
+            "demo-support-relocation",
+            "--only",
+            "functions",
+            "--firestore-port",
+            "0",
+            "--http-port",
+            "0",
+            "--storage-port",
+            "0",
+            "--functions-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--functions",
+            source.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            &script,
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let values = std::fs::read_to_string(&addresses).unwrap();
+    let mut values = values.lines();
+    let eventarc = values.next().unwrap();
+    let tasks = values.next().unwrap();
+    assert_ne!(eventarc, "http://127.0.0.1:9299");
+    assert_ne!(tasks, "127.0.0.1:9499");
+    assert!(eventarc.starts_with("http://127.0.0.1:"));
+    assert!(tasks.starts_with("127.0.0.1:"));
+    assert!(values.next().is_none());
+    drop(eventarc_default);
+    drop(tasks_default);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -545,6 +713,10 @@ fn assert_signal_shutdown(signal: &str, label: &str) {
                 "0",
                 "--functions-port",
                 &functions_port_text,
+                "--eventarc-port",
+                "0",
+                "--tasks-port",
+                "0",
                 "--pubsub-port",
                 "0",
                 "--ui-port",

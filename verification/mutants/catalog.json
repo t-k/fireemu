@@ -432,6 +432,31 @@
       "id": "M-APPCHECK-016",
       "fault": "a resumable upload session accepts a continuation from another app",
       "critical": true
+    },
+    {
+      "id": "M-WEBCHANNEL-EXPIRY-001",
+      "fault": "terminal acknowledgement or termination leaves its expiry task sleeping",
+      "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-BYTE-001",
+      "fault": "an outbound array is inserted before the retained-byte limit is checked",
+      "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-COPY-001",
+      "fault": "a replay response releases its concurrent-copy permit before the response bytes are dropped",
+      "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-NOOP-001",
+      "fault": "a keepalive commits the newest generated AID instead of the last AID sent by that back channel",
+      "critical": false
+    },
+    {
+      "id": "M-WEBCHANNEL-COMMIT-001",
+      "fault": "a serialized replay batch commits after acknowledgement removed one of its AIDs",
+      "critical": false
     }
   ]
 }

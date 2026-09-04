@@ -148,6 +148,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         auth_selected,
         storage: storage_listener,
         functions: functions_listener,
+        eventarc: eventarc_listener,
+        tasks: tasks_listener,
         pubsub: pubsub_listener,
         hub: hub_listener,
         logging: logging_listener,
@@ -333,6 +335,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+            eventarc: eventarc_listener,
+            tasks: tasks_listener,
             pubsub: pubsub_listener,
             hub: hub_listener,
             logging: logging_listener,
@@ -581,52 +585,93 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         auth_selected: _,
         storage: storage_listener,
         functions: functions_listener,
+        eventarc: eventarc_listener,
+        tasks: tasks_listener,
         pubsub: pubsub_listener,
         hub: hub_listener,
         logging: logging_listener,
     } = listeners;
-    let grpc = match grpc_listener {
-        Some(listener) => tokio::spawn(serve_multiplexed(
-            listener,
-            FirestoreServer::new(firestore_service)
-                .max_decoding_message_size(10 * 1024 * 1024)
-                .max_encoding_message_size(10 * 1024 * 1024),
-            rest.clone(),
-        )),
-        None => tokio::spawn(std::future::pending()),
-    };
-    let http = tokio::spawn(fireemu_adapter_http::server::serve_with_control(
-        http_listener,
-        auth.clone(),
-        control.clone(),
-    ));
-    let storage_server = match storage_listener {
-        Some(listener) => tokio::spawn(fireemu_adapter_http::storage_server::serve_storage(
-            listener,
-            storage.clone(),
-        )),
-        None => tokio::spawn(std::future::pending()),
-    };
-    let hub_server = match hub_listener {
-        Some(listener) => tokio::spawn(hub::serve(listener, hub_state.clone())),
-        None => tokio::spawn(std::future::pending()),
-    };
-    let functions_server = match (functions_listener, functions_runtime.clone()) {
-        (Some(listener), Some(runtime)) => tokio::spawn(
-            fireemu_adapter_functions::http::serve_functions(listener, runtime),
-        ),
-        _ => tokio::spawn(std::future::pending()),
-    };
-    let pubsub_server = match pubsub_listener {
-        Some(listener) => tokio::spawn(fireemu_adapter_pubsub::serve_pubsub(listener, pubsub)),
-        None => tokio::spawn(std::future::pending()),
-    };
+    let mut servers = tokio::task::JoinSet::<(&'static str, String)>::new();
+    macro_rules! spawn_server {
+        ($name:literal, $future:expr) => {
+            let future = $future;
+            servers.spawn(async move { ($name, format!("{:?}", future.await)) });
+        };
+    }
+    if let Some(listener) = grpc_listener {
+        spawn_server!(
+            "gRPC",
+            serve_multiplexed(
+                listener,
+                FirestoreServer::new(firestore_service)
+                    .max_decoding_message_size(10 * 1024 * 1024)
+                    .max_encoding_message_size(10 * 1024 * 1024),
+                rest.clone(),
+            )
+        );
+    }
+    spawn_server!(
+        "HTTP",
+        fireemu_adapter_http::server::serve_with_control(
+            http_listener,
+            auth.clone(),
+            control.clone(),
+        )
+    );
+    if let Some(listener) = storage_listener {
+        spawn_server!(
+            "Storage",
+            fireemu_adapter_http::storage_server::serve_storage(listener, storage.clone())
+        );
+    }
+    if let Some(listener) = hub_listener {
+        spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
+    }
+    let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
+    if let (Some(listener), Some(runtime)) = (functions_listener, functions_runtime.clone()) {
+        spawn_server!(
+            "Functions",
+            fireemu_adapter_functions::http::serve_functions(
+                listener,
+                runtime,
+                functions_http_admission.clone(),
+            )
+        );
+    }
+    if let (Some(listener), Some(runtime)) = (eventarc_listener, functions_runtime.clone()) {
+        spawn_server!(
+            "Eventarc",
+            fireemu_adapter_functions::http::serve_eventarc(
+                listener,
+                runtime,
+                functions_http_admission.clone(),
+            )
+        );
+    }
+    if let (Some(listener), Some(runtime)) = (tasks_listener, functions_runtime.clone()) {
+        spawn_server!(
+            "Cloud Tasks",
+            fireemu_adapter_functions::http::serve_tasks(
+                listener,
+                runtime,
+                functions_http_admission,
+            )
+        );
+    }
+    if let Some(listener) = pubsub_listener {
+        spawn_server!(
+            "Pub/Sub",
+            fireemu_adapter_pubsub::serve_pubsub(listener, pubsub)
+        );
+    }
     let log_bus = fireemu_adapter_logging::LogBus::new();
     for (name, addr) in [
         ("firestore", addrs.firestore),
         ("auth", addrs.auth),
         ("storage", addrs.storage),
         ("functions", addrs.functions),
+        ("eventarc", addrs.eventarc),
+        ("tasks", addrs.tasks),
         ("pubsub", addrs.pubsub),
     ] {
         if let Some(addr) = addr {
@@ -688,38 +733,34 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
             }
         })
     });
-    let logging_server = match logging_listener {
-        Some(listener) => tokio::spawn(fireemu_adapter_logging::serve_logging(
-            listener,
-            log_bus.clone(),
-        )),
-        None => tokio::spawn(std::future::pending()),
-    };
-    let ui_server = match (ui_listener, addrs.ui) {
-        (Some(listener), Some(addr)) => {
-            let state = ui::state(ui::Parts {
-                cfg: &cfg,
-                only: &only,
-                control_token: control_token.clone(),
-                rest: rest.clone(),
-                backend: backend.clone(),
-                auth: auth.clone(),
-                storage: storage.clone(),
-                control: control.clone(),
-                functions: functions_runtime.clone(),
-                app_check,
-                addrs: (
-                    addrs.firestore.unwrap_or(addrs.control),
-                    addrs.control,
-                    addrs.storage.unwrap_or(addrs.control),
-                    addrs.functions,
-                    addr,
-                ),
-            });
-            tokio::spawn(fireemu_adapter_ui::server::serve_ui(listener, state))
-        }
-        _ => tokio::spawn(std::future::pending()),
-    };
+    if let Some(listener) = logging_listener {
+        spawn_server!(
+            "Logging emulator",
+            fireemu_adapter_logging::serve_logging(listener, log_bus.clone())
+        );
+    }
+    if let (Some(listener), Some(addr)) = (ui_listener, addrs.ui) {
+        let state = ui::state(ui::Parts {
+            cfg: &cfg,
+            only: &only,
+            control_token: control_token.clone(),
+            rest: rest.clone(),
+            backend: backend.clone(),
+            auth: auth.clone(),
+            storage: storage.clone(),
+            control: control.clone(),
+            functions: functions_runtime.clone(),
+            app_check,
+            addrs: (
+                addrs.firestore.unwrap_or(addrs.control),
+                addrs.control,
+                addrs.storage.unwrap_or(addrs.control),
+                addrs.functions,
+                addr,
+            ),
+        });
+        spawn_server!("UI", fireemu_adapter_ui::server::serve_ui(listener, state));
+    }
     // Every listener is now served, so an exec child can safely use all advertised endpoints.
     let mut child = match &exec {
         Some(plan) => {
@@ -740,14 +781,11 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     let child_pid = child.as_ref().and_then(super::child_id);
     let mut terminated = false;
     let outcome = tokio::select! {
-        r = grpc => Err(format!("gRPC server stopped: {r:?}")),
-        r = http => Err(format!("HTTP server stopped: {r:?}")),
-        r = storage_server => Err(format!("Storage server stopped: {r:?}")),
-        r = functions_server => Err(format!("Functions server stopped: {r:?}")),
-        r = pubsub_server => Err(format!("Pub/Sub server stopped: {r:?}")),
-        r = ui_server => Err(format!("UI server stopped: {r:?}")),
-        r = hub_server => Err(format!("Emulator Hub stopped: {r:?}")),
-        r = logging_server => Err(format!("Logging emulator stopped: {r:?}")),
+        result = servers.join_next() => match result {
+            Some(Ok((name, result))) => Err(format!("{name} server stopped: {result}")),
+            Some(Err(error)) => Err(format!("server task stopped: {error}")),
+            None => Err("all server tasks stopped".to_owned()),
+        },
         status = wait_child(child.as_mut()) => match status {
             Ok(status) => Ok(Some(exit_code(status))),
             Err(e) => Err(format!("waiting for the command: {e}")),
@@ -767,7 +805,8 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         }
     };
     // Keep services and the Hub locator alive through child cleanup, export, and Functions
-    // shutdown. The runtime tears down the detached server tasks only after this returns.
+    // shutdown. Every remaining server is then aborted and joined before its listener can leave
+    // this function.
     if let Some(pump) = &functions_log_pump {
         pump.abort();
     }
@@ -799,6 +838,8 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     if let Some(runtime) = functions_runtime {
         runtime.shutdown().await;
     }
+    servers.abort_all();
+    while servers.join_next().await.is_some() {}
     outcome.map(|_| code)
 }
 
@@ -951,6 +992,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth_selected,
             storage: storage_listener,
             functions: functions_listener,
+            eventarc: eventarc_listener,
+            tasks: tasks_listener,
             pubsub: pubsub_listener,
             hub: hub_listener,
             logging: logging_listener,
@@ -967,6 +1010,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let functions_addr = functions_listener
             .as_ref()
             .and_then(|l| l.local_addr().ok());
+        let eventarc_addr = eventarc_listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok());
+        let tasks_addr = tasks_listener.as_ref().and_then(|l| l.local_addr().ok());
         let pubsub_addr = pubsub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let hub_addr = hub_listener.as_ref().and_then(|l| l.local_addr().ok());
         let logging_addr = logging_listener.as_ref().and_then(|l| l.local_addr().ok());
@@ -981,6 +1028,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
             functions: functions_addr,
+            eventarc: eventarc_addr,
+            tasks: tasks_addr,
             pubsub: pubsub_addr,
             hub: hub_addr,
             ui: ui_addr,
@@ -1025,6 +1074,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         auth: addrs.auth.map(|a| a.to_string()),
                         storage: storage_addr.map(|a| a.to_string()),
                         functions: functions_addr.map(|a| a.to_string()),
+                        eventarc: eventarc_addr.map(|a| a.to_string()),
+                        tasks: tasks_addr.map(|a| a.to_string()),
                         logging: logging_addr.map(|a| a.to_string()),
                     },
                     &runner_secret,
@@ -1077,6 +1128,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                     auth_selected,
                     storage: storage_listener,
                     functions: functions_listener,
+                    eventarc: eventarc_listener,
+                    tasks: tasks_listener,
                     pubsub: pubsub_listener,
                     hub: hub_listener,
                     logging: logging_listener,

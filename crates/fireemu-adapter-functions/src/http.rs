@@ -60,6 +60,30 @@ struct RequestPermit {
     _bytes: OwnedSemaphorePermit,
 }
 
+/// One process-wide ingress budget shared by the Functions, Eventarc and Tasks listeners.
+#[derive(Clone)]
+pub struct HttpAdmission {
+    requests: RequestAdmission,
+    connections: Arc<Semaphore>,
+}
+
+impl HttpAdmission {
+    /// Creates the bounded ingress budget for one Functions runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            requests: RequestAdmission::new(),
+            connections: Arc::new(Semaphore::new(MAX_FUNCTION_CONNECTIONS)),
+        }
+    }
+}
+
+impl Default for HttpAdmission {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RequestAdmission {
     fn new() -> Self {
         Self::with_limits(MAX_CONCURRENT_BODY_READS, MAX_RESERVED_BODY_BYTES)
@@ -94,8 +118,8 @@ impl RequestAdmission {
     }
 }
 
-fn request_body_limit(path: &str) -> usize {
-    if crate::tasks::route(path).is_some() {
+fn request_body_limit(surface: HttpSurface, path: &str) -> usize {
+    if surface == HttpSurface::Tasks && crate::tasks::route(path).is_some() {
         MAX_TASK_BODY_BYTES
     } else {
         MAX_FUNCTION_BODY_BYTES
@@ -1056,6 +1080,43 @@ async fn drain_refused_body(mut body: Incoming) {
     let _ = tokio::time::timeout(REQUEST_READ_TIMEOUT, drain).await;
 }
 
+async fn respond_support_surface(
+    runtime: Arc<FunctionsRuntime>,
+    req: Request<Incoming>,
+    body_limit: usize,
+    surface: HttpSurface,
+) -> Response<OutBody> {
+    let path = req.uri().path().to_owned();
+    match surface {
+        HttpSurface::Eventarc => {
+            if req.method() != hyper::Method::POST {
+                drain_refused_body(req.into_body()).await;
+                return simple(StatusCode::NOT_FOUND, "Not Found");
+            }
+            let Some(channel) = crate::eventarc::publish_channel(&path) else {
+                drain_refused_body(req.into_body()).await;
+                return simple(StatusCode::NOT_FOUND, "Not Found");
+            };
+            match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => publish_events(&runtime, &channel, &body),
+                Err(answer) => *answer,
+            }
+        }
+        HttpSurface::Tasks => {
+            let Some(route) = crate::tasks::route(&path) else {
+                drain_refused_body(req.into_body()).await;
+                return simple(StatusCode::NOT_FOUND, "Not Found");
+            };
+            let method = req.method().clone();
+            match collect_body(req.into_body(), body_limit).await {
+                Ok(body) => task_route(&runtime, &route, &method, &body),
+                Err(answer) => *answer,
+            }
+        }
+        HttpSurface::Functions => simple(StatusCode::NOT_FOUND, "Not Found"),
+    }
+}
+
 fn buffered_response(
     response: ProxiedResponse,
     plain_http: bool,
@@ -1104,6 +1165,7 @@ async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
     body_limit: usize,
+    surface: HttpSurface,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
@@ -1117,30 +1179,15 @@ async fn respond(
         Ok(origin) => origin,
         Err(refusal) => return Ok(*refusal),
     };
-    // Eventarc's `publishEvents` shares this port. The official suite gives Eventarc a port
-    // of its own; a custom event has nowhere to go without functions, so fireemu serves the
-    // route here and points `CLOUD_EVENTARC_EMULATOR_HOST` at this listener. The path forms
-    // cannot collide with a function route: both are rooted at a literal segment no project
-    // ID reaches, and both end in a literal the function route does not have.
-    if req.method() == hyper::Method::POST {
-        if let Some(channel) = crate::eventarc::publish_channel(&path) {
-            return Ok(match collect_body(req.into_body(), body_limit).await {
-                Ok(body) => publish_events(&runtime, &channel, &body),
-                Err(answer) => *answer,
-            });
-        }
-    }
-    // Cloud Tasks shares this port for the same reason Eventarc does.
-    if let Some(route) = crate::tasks::route(&path) {
-        let method = req.method().clone();
-        return Ok(match collect_body(req.into_body(), body_limit).await {
-            Ok(body) => task_route(&runtime, &route, &method, &body),
-            Err(answer) => *answer,
-        });
+    if surface != HttpSurface::Functions {
+        return Ok(respond_support_surface(runtime, req, body_limit, surface).await);
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,
-        Err(answer) => return Ok(*answer),
+        Err(answer) => {
+            drain_refused_body(req.into_body()).await;
+            return Ok(*answer);
+        }
     };
     if let Err(error) = header_map_connection_tokens(req.headers()) {
         drain_refused_body(req.into_body()).await;
@@ -1338,22 +1385,29 @@ fn callable_preflight(headers: &hyper::HeaderMap) -> Option<Response<OutBody>> {
     builder.body(full(Bytes::new())).ok()
 }
 
-/// Serves the functions port.
-pub async fn serve_functions(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HttpSurface {
+    Functions,
+    Eventarc,
+    Tasks,
+}
+
+async fn serve_surface(
     listener: TcpListener,
     runtime: Arc<FunctionsRuntime>,
+    surface: HttpSurface,
+    admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    let request_admission = RequestAdmission::new();
-    let connection_slots = Arc::new(Semaphore::new(MAX_FUNCTION_CONNECTIONS));
     loop {
         let (stream, _) = listener.accept().await?;
-        let connection = connection_slots
+        let connection = admission
+            .connections
             .clone()
             .acquire_owned()
             .await
             .expect("the connection semaphore is never closed");
         let runtime = runtime.clone();
-        let request_admission = request_admission.clone();
+        let request_admission = admission.requests.clone();
         tokio::spawn(async move {
             let _connection = connection;
             let io = TokioIo::new(stream);
@@ -1361,10 +1415,10 @@ pub async fn serve_functions(
                 let runtime = runtime.clone();
                 let request_admission = request_admission.clone();
                 async move {
-                    let body_limit = request_body_limit(req.uri().path());
+                    let body_limit = request_body_limit(surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
-                    respond(runtime, req, body_limit).await
+                    respond(runtime, req, body_limit, surface).await
                 }
             });
             let mut builder = http1::Builder::new();
@@ -1377,21 +1431,58 @@ pub async fn serve_functions(
     }
 }
 
+/// Serves HTTPS and callable functions on the Functions listener.
+pub async fn serve_functions(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+) -> std::io::Result<()> {
+    serve_surface(listener, runtime, HttpSurface::Functions, admission).await
+}
+
+/// Serves only the Eventarc channel publication routes on the official Eventarc listener.
+pub async fn serve_eventarc(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+) -> std::io::Result<()> {
+    serve_surface(listener, runtime, HttpSurface::Eventarc, admission).await
+}
+
+/// Serves only the Cloud Tasks queue routes on the official Tasks listener.
+pub async fn serve_tasks(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+) -> std::io::Result<()> {
+    serve_surface(listener, runtime, HttpSurface::Tasks, admission).await
+}
+
 #[cfg(test)]
 mod admission_tests {
     use super::{
-        request_body_limit, RequestAdmission, MAX_FUNCTION_BODY_BYTES, MAX_TASK_BODY_BYTES,
+        request_body_limit, HttpAdmission, HttpSurface, RequestAdmission, MAX_FUNCTION_BODY_BYTES,
+        MAX_TASK_BODY_BYTES,
     };
     use std::time::Duration;
 
     #[test]
-    fn task_routes_use_the_official_json_body_limit() {
+    fn task_routes_use_the_official_json_body_limit_only_on_the_tasks_surface() {
+        let route = "/projects/demo-app/locations/us-central1/queues/work/tasks";
         assert_eq!(
-            request_body_limit("/projects/demo-app/locations/us-central1/queues/work/tasks"),
+            request_body_limit(HttpSurface::Tasks, route),
             MAX_TASK_BODY_BYTES
         );
         assert_eq!(
-            request_body_limit("/demo-app/us-central1/ordinary"),
+            request_body_limit(HttpSurface::Functions, route),
+            MAX_FUNCTION_BODY_BYTES
+        );
+        assert_eq!(
+            request_body_limit(HttpSurface::Eventarc, route),
+            MAX_FUNCTION_BODY_BYTES
+        );
+        assert_eq!(
+            request_body_limit(HttpSurface::Functions, "/demo-app/us-central1/ordinary"),
             MAX_FUNCTION_BODY_BYTES
         );
     }
@@ -1410,6 +1501,30 @@ mod admission_tests {
             .await
             .expect("dropping an admitted request releases both permits");
         drop(second);
+    }
+
+    #[tokio::test]
+    async fn cloned_surface_admission_shares_one_process_budget() {
+        let admission = HttpAdmission {
+            requests: RequestAdmission::with_limits(1, 8),
+            connections: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+        };
+        let other_surface = admission.clone();
+        let request = admission.requests.acquire(8).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), other_surface.requests.acquire(1))
+                .await
+                .is_err()
+        );
+        drop(request);
+        let connection = admission.connections.acquire().await.unwrap();
+        assert!(tokio::time::timeout(
+            Duration::from_millis(20),
+            other_surface.connections.acquire()
+        )
+        .await
+        .is_err());
+        drop(connection);
     }
 
     #[tokio::test]

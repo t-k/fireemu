@@ -53,7 +53,7 @@ const ALERT_EVENT_TYPE: &str = "google.firebase.firebasealerts.alerts.v1.publish
 
 /// Publishes a Firebase alert the way the official Emulator Suite UI does: it builds the
 /// `CloudEvent` an alert carries and POSTs it to the Eventarc emulator's `/google/publishEvents`
-/// route. fireemu serves that route on the functions port; this front reaches the same code
+/// route. fireemu serves that route on the Eventarc port; this front reaches the same code
 /// in process (`accept_verbatim` + `publish_custom_event` on the sentinel `google` channel),
 /// so a registered `onAlertPublished` handler fires exactly as it would for the Admin SDK.
 /// This is the official mechanism, not a fireemu-only injection.

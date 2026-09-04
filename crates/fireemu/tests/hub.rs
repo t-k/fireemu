@@ -646,6 +646,10 @@ fn the_hub_switches_background_triggers_and_says_so() {
             functions.to_str().unwrap(),
             "--functions-port",
             "0",
+            "--eventarc-port",
+            "0",
+            "--tasks-port",
+            "0",
         ],
     );
     let port = daemon.hub_port();
@@ -669,6 +673,14 @@ fn the_hub_switches_background_triggers_and_says_so() {
     // The Functions emulator is discoverable while it runs.
     let emulators = json(port, "GET", "/emulators");
     assert_eq!(emulators["functions"]["name"], "functions");
+    assert_eq!(emulators["eventarc"]["name"], "eventarc");
+    assert_eq!(emulators["tasks"]["name"], "tasks");
+    assert_ne!(
+        emulators["functions"]["port"],
+        emulators["eventarc"]["port"]
+    );
+    assert_ne!(emulators["functions"]["port"], emulators["tasks"]["port"]);
+    assert_ne!(emulators["eventarc"]["port"], emulators["tasks"]["port"]);
     let _ = scratch("triggers");
     daemon.stop();
 }

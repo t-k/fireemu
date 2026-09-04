@@ -1015,6 +1015,27 @@
       }
     },
     {
+      "id": "FS-WEB-BOUND-001",
+      "statement": "Firestore WebChannel bounds every outbound array, each session's and Hub's unacknowledged bytes, every framed response batch, each session's and Hub's concurrently owned replay copies, and terminal-expiry work while preserving contiguous AIDs and exact response-loss replay.",
+      "criticality": "important",
+      "owner": "adapter-grpc",
+      "status": "implemented",
+      "note": "The byte ceilings are explicit fireemu-only resource-safety limits rather than inferred production protocol limits. Admission happens before queue mutation against both the session and Hub budgets, acknowledgement refunds retained bytes, response chunks own both semaphore permits for their complete lifetime, stale serialized batches cannot commit after acknowledgement, keepalives cannot acknowledge newly queued data, and every early terminal path cancels its expiry task.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/src/webchannel.rs",
+          "crates/fireemu-adapter-grpc/tests/webchannel.rs"
+        ],
+        "mutation": [
+          "M-WEBCHANNEL-EXPIRY-001",
+          "M-WEBCHANNEL-BYTE-001",
+          "M-WEBCHANNEL-COPY-001",
+          "M-WEBCHANNEL-NOOP-001",
+          "M-WEBCHANNEL-COMMIT-001"
+        ]
+      }
+    },
+    {
       "id": "AC-ST-001",
       "statement": "Storage metadata, list, upload, resumable continuation and finalization, download, update, delete, the JSON API bypass and the download-token bypass are explicit.",
       "criticality": "critical",
@@ -1576,6 +1597,20 @@
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-functions/src/eventarc.rs"
+        ]
+      }
+    },
+    {
+      "id": "FN-SUPPORT-LISTENERS-001",
+      "statement": "A configured Functions runtime starts separate Eventarc and Cloud Tasks listeners, advertises both through the Hub, exports their canonical environment variables, isolates their route families from the Functions listener, and releases all three listeners together.",
+      "criticality": "important",
+      "owner": "adapter-functions",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+          "crates/fireemu/tests/functions_discovery.rs",
+          "crates/fireemu/tests/hub.rs"
         ]
       }
     },

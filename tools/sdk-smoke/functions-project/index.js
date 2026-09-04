@@ -184,7 +184,7 @@ exports.onThingDoneInEmea = onCustomEventPublished(
 // Firebase alerts. The official emulator has no alert-injection route of its own: the alert
 // providers register an ordinary event trigger with no channel, its Eventarc emulator indexes
 // them under `<eventType>-google`, and its UI fires one by POSTing the CloudEvent to
-// /google/publishEvents. fireemu serves that same route on the functions port.
+// /google/publishEvents. fireemu serves that route on the dedicated Eventarc port.
 const { onNewFatalIssuePublished } = require("firebase-functions/v2/alerts/crashlytics");
 exports.onFatalIssue = onNewFatalIssuePublished(async (event) => {
   await db.doc(`alerts/${event.data.payload.issue.id}`).set({

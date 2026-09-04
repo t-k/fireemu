@@ -479,7 +479,7 @@
         },
         {
           "id": "FS-CLAIM-WEBCHANNEL",
-          "statement": "The browser web SDK's WebChannel v8 transport is served on the Firestore port, and a target refused on its own merits is removed without closing the channel.",
+          "statement": "The browser web SDK's WebChannel v8 transport is served on the Firestore port, and a target refused on its own merits is removed without closing the channel. Unacknowledged arrays remain replayable by their original AIDs while explicit local byte budgets bound retained data, each response batch, and concurrently owned replay copies per session and per Hub.",
           "capabilities": [
             {
               "id": "FS-WEB-1",
@@ -498,6 +498,10 @@
             {
               "behaviour": "a target removed with its own cause (a missing composite index, a malformed query, a Rules denial) while the channel keeps serving its other targets",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "local memory-safety limits of 2 MiB per outbound array, 16 MiB of unacknowledged arrays per session, 4 MiB per framed backchannel batch, 4 MiB of concurrently owned replay copies per session, 64 MiB of unacknowledged arrays per Hub and 16 MiB of replay copies per Hub; overflow closes only the affected channel without weakening Security Rules",
+              "precision": "resource-safety-divergence"
             }
           ],
           "productionOnly": [],
@@ -1937,8 +1941,8 @@
         "service",
         "supportedByFunctions"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open gap: no Eventarc channel surface is served.",
+      "state": "claimed",
+      "decision": "Active supported surface. A configured Functions runtime starts a dedicated Eventarc listener on port 9299 and exports its URL to Functions codebases.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/connect_eventarc"
       ],
@@ -1947,10 +1951,37 @@
       ],
       "notes": [],
       "gaps": [
-        "custom event channels and the CloudEvent publish route"
+        "the emulator-internal trigger registration, removal and getTriggers management routes"
       ],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "EVENTARC-CLAIM-LOCAL-PUBLISH",
+          "statement": "When a Functions codebase is loaded, the Eventarc support emulator has an independently bound listener advertised by the Hub and CLOUD_EVENTARC_EMULATOR_HOST; custom channel and google-channel publications are accepted only on that listener and dispatched to matching Functions triggers.",
+          "capabilities": [
+            {
+              "id": "FN-EVT-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "support_service_routes_are_isolated_from_the_functions_listener",
+              "functions_starts_eventarc_and_tasks_on_dedicated_ports"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+              "crates/fireemu/tests/functions_discovery.rs",
+              "tools/sdk-smoke/functions.mjs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "tasks",
@@ -1963,8 +1994,8 @@
         "service",
         "supportedByFunctions"
       ],
-      "state": "gap",
-      "decision": "Active supported surface with an open orchestration gap: queue create and enqueue routes are served on the Functions listener rather than a dedicated Tasks emulator listener.",
+      "state": "claimed",
+      "decision": "Active supported surface. A configured Functions runtime starts a dedicated Cloud Tasks listener on port 9499 and exports its host to Functions codebases.",
       "docs": [
         "https://firebase.google.com/docs/functions/task-functions"
       ],
@@ -1973,10 +2004,37 @@
       ],
       "notes": [],
       "gaps": [
-        "dedicated port 9499 listener, Hub registration and independent Tasks emulator lifecycle"
+        "the emulator-internal queueStats diagnostic route"
       ],
       "prohibitedClaimTerms": [],
-      "claims": []
+      "claims": [
+        {
+          "id": "TASKS-CLAIM-LOCAL-QUEUE",
+          "statement": "When a Functions codebase is loaded, the Cloud Tasks support emulator has an independently bound listener advertised by the Hub and CLOUD_TASKS_EMULATOR_HOST; queue creation and task enqueue routes are accepted only on that listener and feed matching task queue Functions.",
+          "capabilities": [
+            {
+              "id": "FN-EVT-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "support_service_routes_are_isolated_from_the_functions_listener",
+              "functions_starts_eventarc_and_tasks_on_dedicated_ports"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+              "crates/fireemu/tests/functions_discovery.rs",
+              "tools/sdk-smoke/functions.mjs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [],
+          "productionOnly": [],
+          "preview": []
+        }
+      ]
     },
     {
       "id": "dataconnect",

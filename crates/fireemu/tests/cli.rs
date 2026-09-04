@@ -56,7 +56,7 @@ fn run_in(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
 }
 
 /// The port arguments every successful scenario needs.
-const PORTS: [&str; 14] = [
+const PORTS: [&str; 18] = [
     "--firestore-port",
     "0",
     "--http-port",
@@ -64,6 +64,10 @@ const PORTS: [&str; 14] = [
     "--storage-port",
     "0",
     "--pubsub-port",
+    "0",
+    "--eventarc-port",
+    "0",
+    "--tasks-port",
     "0",
     "--ui-port",
     "0",

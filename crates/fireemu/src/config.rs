@@ -165,6 +165,20 @@ pub struct RuntimeConfig {
     pub rules_enforced: bool,
     /// Functions HTTP bind address.
     pub functions_addr: String,
+    /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
+    /// when a Functions codebase is loaded; its default port is 9299.
+    pub eventarc_addr: String,
+    /// Whether an Eventarc emulator entry or port was configured independently of Functions.
+    pub eventarc_enabled: bool,
+    /// Whether the Eventarc port is fixed rather than dynamically relocatable.
+    pub eventarc_addr_explicit: bool,
+    /// Cloud Tasks HTTP bind address. The pinned official suite starts this dependency only
+    /// when a Functions codebase is loaded; its default port is 9499.
+    pub tasks_addr: String,
+    /// Whether a Cloud Tasks emulator entry or port was configured independently of Functions.
+    pub tasks_enabled: bool,
+    /// Whether the Cloud Tasks port is fixed rather than dynamically relocatable.
+    pub tasks_addr_explicit: bool,
     /// Pub/Sub gRPC bind address (`emulators.pubsub`, `daemon.pubsubPort`). The official
     /// emulator default port is 8085.
     pub pubsub_addr: String,
@@ -392,6 +406,12 @@ impl Default for RuntimeConfig {
             storage_buckets_by_target: BTreeMap::new(),
             rules_enforced: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
+            eventarc_addr: "127.0.0.1:9299".to_owned(),
+            eventarc_enabled: false,
+            eventarc_addr_explicit: false,
+            tasks_addr: "127.0.0.1:9499".to_owned(),
+            tasks_enabled: false,
+            tasks_addr_explicit: false,
             pubsub_addr: "127.0.0.1:8085".to_owned(),
             pubsub_enabled: false,
             hub_addr: format!("127.0.0.1:{DEFAULT_HUB_PORT}"),
@@ -438,11 +458,13 @@ const AUTH_KEYS: [&str; 5] = [
 pub struct ConfigError(pub String);
 
 /// The service emulators fireemu serves, in `--only` spelling.
-pub const SERVED_SERVICES: [&str; 6] = [
+pub const SERVED_SERVICES: [&str; 8] = [
     "auth",
     "firestore",
     "storage",
     "functions",
+    "eventarc",
+    "tasks",
     "pubsub",
     "appcheck",
 ];
@@ -453,7 +475,7 @@ pub const SERVED_SERVICES: [&str; 6] = [
 ///
 /// `deferred` products have an open compatibility issue and no implementation; `planned`
 /// products are on the active list; `not planned` is a closed product decision.
-pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 7] = [
+pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 5] = [
     (
         "database",
         "deferred: the Realtime Database emulator is not in the active supported surface",
@@ -465,14 +487,6 @@ pub const UNSERVED_OFFICIAL_SERVICES: [(&str, &str); 7] = [
     (
         "apphosting",
         "deferred: the App Hosting emulator is not in the active supported surface",
-    ),
-    (
-        "eventarc",
-        "planned: the Eventarc emulator is not implemented yet",
-    ),
-    (
-        "tasks",
-        "planned: the Cloud Tasks emulator is not implemented yet",
     ),
     (
         "dataconnect",
@@ -510,6 +524,10 @@ pub struct Selection {
     pub storage: bool,
     /// The functions codebase is loaded and `FIREEMU_FUNCTIONS_HOST` exported.
     pub functions: bool,
+    /// Whether `--only` named the Eventarc support emulator.
+    pub eventarc: bool,
+    /// Whether `--only` named the Cloud Tasks support emulator.
+    pub tasks: bool,
     /// The Pub/Sub gRPC emulator is served and `PUBSUB_EMULATOR_HOST` exported.
     pub pubsub: bool,
     /// App Check: a logical selection, because the exchange and the JWKS share the
@@ -532,6 +550,8 @@ impl Default for Selection {
             auth: true,
             storage: true,
             functions: true,
+            eventarc: false,
+            tasks: false,
             pubsub: true,
             appcheck: true,
             explicit: false,
@@ -552,6 +572,8 @@ impl Selection {
             auth: false,
             storage: false,
             functions: false,
+            eventarc: false,
+            tasks: false,
             pubsub: false,
             appcheck: false,
             explicit: true,
@@ -590,6 +612,11 @@ impl Selection {
                 "auth" => sel.auth = true,
                 "storage" => sel.storage = true,
                 "functions" => sel.functions = true,
+                // The official controller accepts these names but creates both listeners
+                // only when at least one Functions backend is loaded. They therefore do not
+                // select Functions or carry independent Selection flags.
+                "eventarc" => sel.eventarc = true,
+                "tasks" => sel.tasks = true,
                 "pubsub" => sel.pubsub = true,
                 "appcheck" => sel.appcheck = true,
                 other => {
@@ -818,6 +845,20 @@ impl RuntimeConfig {
                     }
                     "functions" => {
                         self.functions_addr = emulator_addr(entry, name, &self.functions_addr)?;
+                    }
+                    "eventarc" => {
+                        self.eventarc_addr = emulator_addr(entry, name, &self.eventarc_addr)?;
+                        self.eventarc_enabled = true;
+                        self.eventarc_addr_explicit = entry
+                            .as_object()
+                            .is_some_and(|entry| entry.contains_key("port"));
+                    }
+                    "tasks" => {
+                        self.tasks_addr = emulator_addr(entry, name, &self.tasks_addr)?;
+                        self.tasks_enabled = true;
+                        self.tasks_addr_explicit = entry
+                            .as_object()
+                            .is_some_and(|entry| entry.contains_key("port"));
                     }
                     "pubsub" => {
                         self.pubsub_addr = emulator_addr(entry, name, &self.pubsub_addr)?;
@@ -1417,6 +1458,8 @@ impl RuntimeConfig {
                 "storagePort",
                 "httpPort",
                 "functionsPort",
+                "eventarcPort",
+                "tasksPort",
                 "pubsubPort",
                 "hubPort",
                 "uiPort",
@@ -1455,6 +1498,16 @@ impl RuntimeConfig {
         }
         if let Some(port) = d.get("functionsPort").and_then(Value::as_u64) {
             cfg.functions_addr = format!("127.0.0.1:{port}");
+        }
+        if let Some(port) = d.get("eventarcPort").and_then(Value::as_u64) {
+            cfg.eventarc_addr = format!("127.0.0.1:{port}");
+            cfg.eventarc_enabled = true;
+            cfg.eventarc_addr_explicit = true;
+        }
+        if let Some(port) = d.get("tasksPort").and_then(Value::as_u64) {
+            cfg.tasks_addr = format!("127.0.0.1:{port}");
+            cfg.tasks_enabled = true;
+            cfg.tasks_addr_explicit = true;
         }
         if let Some(port) = d.get("pubsubPort").and_then(Value::as_u64) {
             cfg.pubsub_addr = format!("127.0.0.1:{port}");
@@ -2266,6 +2319,21 @@ mod tests {
     }
 
     #[test]
+    fn canonical_support_service_ports_are_loaded_as_explicit_addresses() {
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "daemon": {"eventarcPort": 9300, "tasksPort": 9500}
+        }))
+        .unwrap();
+        assert_eq!(cfg.eventarc_addr, "127.0.0.1:9300");
+        assert!(cfg.eventarc_enabled);
+        assert!(cfg.eventarc_addr_explicit);
+        assert_eq!(cfg.tasks_addr, "127.0.0.1:9500");
+        assert!(cfg.tasks_enabled);
+        assert!(cfg.tasks_addr_explicit);
+    }
+
+    #[test]
     fn only_instance_rsa_signing_is_accepted_and_unsigned_modes_are_refused() {
         assert_eq!(
             app_check(&json!({"enabled": true, "tokenSigning": "instance-rsa"}))
@@ -2927,6 +2995,8 @@ mod tests {
                 "auth": {"port": 9100},
                 "storage": {"port": 9200},
                 "functions": {"port": 5002},
+                "eventarc": {"port": 9300},
+                "tasks": {"port": 9500},
                 "hub": {"port": 4401},
                 "ui": {"port": 4001, "enabled": false}
             }
@@ -2940,6 +3010,12 @@ mod tests {
         assert_eq!(cfg.http_addr, "127.0.0.1:9100");
         assert_eq!(cfg.storage_addr, "127.0.0.1:9200");
         assert_eq!(cfg.functions_addr, "127.0.0.1:5002");
+        assert_eq!(cfg.eventarc_addr, "127.0.0.1:9300");
+        assert!(cfg.eventarc_enabled);
+        assert!(cfg.eventarc_addr_explicit);
+        assert_eq!(cfg.tasks_addr, "127.0.0.1:9500");
+        assert!(cfg.tasks_enabled);
+        assert!(cfg.tasks_addr_explicit);
         assert_eq!(cfg.hub_addr, "127.0.0.1:4401");
         assert!(
             cfg.hub_addr_explicit,
@@ -2998,6 +3074,18 @@ mod tests {
         let storage = Selection::parse("storage:uploads").unwrap();
         assert!(storage.storage);
         assert_eq!(storage.functions_codebase, None);
+        // Eventarc and Tasks are valid official service names, but the pinned CLI starts
+        // their listeners only as Functions dependencies. Naming either alone is therefore
+        // accepted without selecting Functions or another product.
+        for service in ["eventarc", "tasks"] {
+            let selected = Selection::parse(service).unwrap();
+            assert!(selected.explicit, "{service}");
+            assert!(!selected.functions, "{service}");
+            assert!(!selected.firestore, "{service}");
+            assert!(!selected.auth, "{service}");
+            assert!(!selected.storage, "{service}");
+            assert!(!selected.pubsub, "{service}");
+        }
         // Every official service fireemu does not serve is refused with its status.
         for (name, status) in UNSERVED_OFFICIAL_SERVICES {
             let message = Selection::parse(&format!("firestore,{name}"))

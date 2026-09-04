@@ -3,10 +3,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use fireemu_adapter_http::identity_toolkit::{handle, handle_with, AuthState, RequestHeaders};
+use fireemu_adapter_http::identity_toolkit::{
+    handle, handle_with, AuthBlockingHook, AuthState, BlockingFunctionFailure, RequestHeaders,
+};
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
+use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -15,6 +18,18 @@ use serde_json::{json, Value};
 const V1: &str = "/identitytoolkit.googleapis.com/v1";
 const V2: &str = "/identitytoolkit.googleapis.com/v2";
 const EMU: &str = "/emulator/v1/projects/demo-app";
+
+struct PassThroughBlockingHook;
+
+impl AuthBlockingHook for PassThroughBlockingHook {
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+}
 
 fn state() -> AuthState {
     AuthState {
@@ -1772,6 +1787,36 @@ fn a_saml_assertion_without_attribute_statements_omits_sign_in_attributes() {
     assert_eq!(status, 200, "{signed}");
     let token = claims(signed["idToken"].as_str().unwrap());
     assert!(token["firebase"].get("sign_in_attributes").is_none());
+}
+
+#[test]
+fn blocking_auth_reissue_preserves_saml_sign_in_attributes() {
+    let mut s = state();
+    s.blocking = Some(Arc::new(PassThroughBlockingHook));
+    let saml = json!({
+        "assertion": {
+            "subject": {"nameId": "blocking@saml.example.com"},
+            "attributeStatements": {"access": ["billing"]}
+        }
+    });
+    let post_body = format!(
+        "providerId=saml.myidp&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub": "saml-blocking-user"}).to_string()),
+        percent(&saml.to_string())
+    );
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({"postBody": post_body, "requestUri": DUMMY_URI}),
+    );
+
+    assert_eq!(status, 200, "{signed}");
+    let token = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(
+        token["firebase"]["sign_in_attributes"],
+        saml["assertion"]["attributeStatements"]
+    );
 }
 
 #[test]
